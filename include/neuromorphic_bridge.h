@@ -1,7 +1,7 @@
-// Minimal C ABI for neuromorphic_demo FFI bridge (Linux/C++/Clang)
+// Minimal C ABI for aarnn_rust FFI bridge (Linux/C++/Clang)
 // Build the shared library with:
 //   cargo build --release --features ffi_bridge
-// The resulting lib: target/release/libneuromorphic_demo.so
+// The resulting lib: target/release/libaarnn_rust.so
 //
 // Threading model:
 // - All functions are non-reentrant. Call from a single thread.

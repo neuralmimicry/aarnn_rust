@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-NIR Importer for Neuromorphic Demo
+NIR Importer for AARNN
 
 This script converts a Neuromorphic Intermediate Representation (NIR) JSON file
-into a network snapshot JSON compatible with the Neuromorphic Demo Runner.
+into a network snapshot JSON compatible with the AARNN Runner.
 
 NIR is a standardized format for exchanging spiking neural network models.
 This importer allows models trained in other frameworks (and exported to NIR)

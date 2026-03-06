@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tonic::Request;
 use tokio::sync::RwLock;
 use tokio::fs;
-use neuromorphic_demo::distributed::proto::{
+use aarnn_rust::distributed::proto::{
     distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
     control_update, ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
     NetworkUpdateRequest, StatusRequest,

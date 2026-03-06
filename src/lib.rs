@@ -1,4 +1,4 @@
-//! # Neuromorphic Demo Library
+//! # AARNN Library
 //!
 //! This library provides the core engine for the neuromorphic simulation project.
 //! While the primary entry point is the binary in `src/main.rs`, this library

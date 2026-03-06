@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ONNX Exporter for Neuromorphic Demo
+ONNX Exporter for AARNN
 
-This script converts a Neuromorphic Demo network snapshot (JSON) into a
+This script converts a AARNN network snapshot (JSON) into a
 standardized ONNX model.
 
 The resulting ONNX model represents the spiking neural network as a
@@ -101,7 +101,7 @@ def main():
     nodes.append(helper.make_node('Gemm', [previous_output_name, weight_name_out, bias_name_out], ['Y'], alpha=1.0, beta=1.0, transB=0))
 
     graph = helper.make_graph(nodes, 'neuromorphic_mlp', inputs, outputs, initializer=initializers)
-    onn_model = helper.make_model(graph, producer_name='neuromorphic_demo')
+    onn_model = helper.make_model(graph, producer_name='aarnn_rust')
     onnx.checker.check_model(onn_model)
     onnx.save(onn_model, args.output_onnx_path)
     print(f"Wrote ONNX: {args.output_onnx_path}")

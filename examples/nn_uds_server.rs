@@ -9,7 +9,7 @@
 //!
 //! Run (release recommended):
 //!   cargo run --release --features ui,robot_io --example nn_uds_server -- \
-//!     --socket /tmp/neuromorphic_demo.nn --sensory 25 --output 11 --threshold 0.2 [--ui]
+//!     --socket /tmp/aarnn_rust.nn --sensory 25 --output 11 --threshold 0.2 [--ui]
 //!
 //! The optional --ui flag opens a lightweight window (eframe) showing last inputs/outputs.
 
@@ -20,13 +20,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
-use neuromorphic_demo::aer::{decode_spikes, encode_spikes};
+use aarnn_rust::aer::{decode_spikes, encode_spikes};
 #[cfg(all(feature = "ui", feature = "robot_io"))]
-use neuromorphic_demo::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
+use aarnn_rust::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
 #[cfg(feature = "ui")]
-use neuromorphic_demo::config::{LIFParams, NetworkConfig, STDPParams};
+use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};
 #[cfg(feature = "ui")]
-use neuromorphic_demo::runner::Runner;
+use aarnn_rust::runner::Runner;
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ struct ServerArgs {
 #[cfg(all(feature = "ui", feature = "robot_io"))]
 fn parse_server_args() -> ServerArgs {
     // Minimal, manual parsing to avoid pulling clap in examples
-    let mut socket_path = "/tmp/neuromorphic_demo.nn".to_string();
+    let mut socket_path = "/tmp/aarnn_rust.nn".to_string();
     let mut num_sensory_neurons = 25usize;
     let mut num_output_neurons = 11usize;
     let mut spike_threshold = 0.5f32;
@@ -83,7 +83,7 @@ fn build_runner(num_sensory_neurons: usize, num_output_neurons: usize) -> Runner
     let lif_params = LIFParams::default();
     let stdp_params = STDPParams::default();
     let network_config = NetworkConfig { num_sensory_neurons: num_sensory_neurons, num_hidden_layers: 2, num_hidden_per_layer_initial: 32, num_output_neurons: num_output_neurons, ..NetworkConfig::default() };
-    Runner::new(lif_params, stdp_params, network_config, neuromorphic_demo::sim::NeuronModel::Lif, neuromorphic_demo::sim::Learning::Stdp)
+    Runner::new(lif_params, stdp_params, network_config, aarnn_rust::sim::NeuronModel::Lif, aarnn_rust::sim::Learning::Stdp)
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]

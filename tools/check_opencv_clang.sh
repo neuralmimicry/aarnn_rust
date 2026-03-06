@@ -29,7 +29,7 @@ done
 IS_SOURCED=0
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then IS_SOURCED=1; fi
 
-echo "== Neuromorphic Demo — OpenCV/libclang diagnostics =="
+echo "== AARNN — OpenCV/libclang diagnostics =="
 date
 echo "uname: $(uname -a || true)"
 echo

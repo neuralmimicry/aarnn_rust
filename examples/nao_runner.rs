@@ -28,10 +28,10 @@
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
 fn main() {
-    use neuromorphic_demo::bridge::{ExternalRunnerBridge, InMemoryAdapter, IoMapping, PortKind, PortSpec, Quantizer};
-    use neuromorphic_demo::config::{LIFParams, NetworkConfig, STDPParams};
-    use neuromorphic_demo::runner::Runner;
-    use neuromorphic_demo::sim::{Learning, NeuronModel};
+    use aarnn_rust::bridge::{ExternalRunnerBridge, InMemoryAdapter, IoMapping, PortKind, PortSpec, Quantizer};
+    use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};
+    use aarnn_rust::runner::Runner;
+    use aarnn_rust::sim::{Learning, NeuronModel};
 
     // --- Build a compact NAO-inspired mapping (matches examples/nao_mapping.rs layout) ---
     let sensory_size = 25usize; // see nao_mapping.rs
@@ -78,7 +78,7 @@ fn main() {
 
     // Helper to push sensor values into the bridge’s sensor adapter (via in_mem_adapter snapshot)
     fn copy_inputs_to_bridge(src: &InMemoryAdapter, dst: &mut InMemoryAdapter) {
-        use neuromorphic_demo::bridge::SensorSource;
+        use aarnn_rust::bridge::SensorSource;
         // Use the trait to copy flattened buffers
         let mut tmp_buffer = vec![0.0f32; src.mapping().sensory_size];
         let mut src_clone = src.clone();

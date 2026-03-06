@@ -7,7 +7,7 @@
 
 #[cfg(feature = "robot_io")]
 fn main() {
-    use neuromorphic_demo::bridge::{IoMapping, PortKind, PortSpec};
+    use aarnn_rust::bridge::{IoMapping, PortKind, PortSpec};
 
     // Sensor channels (rough mirror of the NAO demo snippet)
     // Sonar L/R (2), Accelerometer (3), Gyro (2), GPS (3), Inertial Unit RPY (3),

@@ -31,7 +31,7 @@
 #   1) Build the Rust cdylib with feature `ffi_bridge` into target/<profile>
 #   2) Compile the C++ controllers and link them against:
 #        - Webots libCppController + libController
-#        - For FFI variant: the exact libneuromorphic_demo.so just built
+#        - For FFI variant: the exact libaarnn_rust.so just built
 #      rpath is set so the executable can find both at runtime.
 # =================================================================================
 
@@ -57,10 +57,10 @@ WEBOTS_LIB := -L$(WEBOTS_HOME)/lib/controller -lCppController -lController
 # Rust FFI header and library
 INC := -I$(REPO_ROOT)/include
 # Link against the exact .so to avoid lib resolution ambiguity on some setups
-LIB_SO := $(TARGET_DIR)/libneuromorphic_demo.so
+LIB_SO := $(TARGET_DIR)/libaarnn_rust.so
 
 # rpath setup:
-#  - $$ORIGIN so the executable can find libneuromorphic_demo.so placed next to it
+#  - $$ORIGIN so the executable can find libaarnn_rust.so placed next to it
 #  - Absolute path to Webots lib/controller for standalone runs outside Webots
 RPATH_SELF := -Wl,-rpath,'$$ORIGIN'
 RPATH_WEBOTS := -Wl,-rpath,$(WEBOTS_HOME)/lib/controller
@@ -81,7 +81,7 @@ install: nao_nn_controller_uds
 	cp $(TARGET_DIR)/nao_nn_controller_uds $(WEBOTS_PROJECT)/controllers/nao_nn_controller_uds/
 	@echo "Successfully installed to $(WEBOTS_PROJECT)/controllers/nao_nn_controller_uds"
 
-$(TARGET_DIR)/libneuromorphic_demo.so:
+$(TARGET_DIR)/libaarnn_rust.so:
 	@echo "[Rust] Building cdylib (profile=$(PROFILE))..."
 ifneq ($(PROFILE),release)
 	cargo build --features $(RUST_FEATURES)
@@ -90,17 +90,17 @@ else
 endif
 	@# Verify FFI symbols are exported (best-effort)
 	@if command -v nm >/dev/null 2>&1; then \
-	  if ! nm -D $(TARGET_DIR)/libneuromorphic_demo.so | grep -q " nm_init$$"; then \
-	    echo "[Error] nm_init not found in $(TARGET_DIR)/libneuromorphic_demo.so. Did the build include --features ffi_bridge?"; \
+	  if ! nm -D $(TARGET_DIR)/libaarnn_rust.so | grep -q " nm_init$$"; then \
+	    echo "[Error] nm_init not found in $(TARGET_DIR)/libaarnn_rust.so. Did the build include --features ffi_bridge?"; \
 	    exit 2; \
 	  fi; \
 	fi
 
-nao_nn_controller: $(TARGET_DIR)/libneuromorphic_demo.so
+nao_nn_controller: $(TARGET_DIR)/libaarnn_rust.so
 	@mkdir -p $(TARGET_DIR)
 	@# Ensure the cdylib actually exports the FFI symbols; if not, (re)build with features
 	@if ! nm -D $(LIB_SO) 2>/dev/null | grep -q " nm_init$$"; then \
-	  echo "[Rust] libneuromorphic_demo.so missing nm_init; rebuilding with --features $(RUST_FEATURES)..."; \
+	  echo "[Rust] libaarnn_rust.so missing nm_init; rebuilding with --features $(RUST_FEATURES)..."; \
 	  if [ "$(PROFILE)" = "release" ]; then cargo build --release --features $(RUST_FEATURES); else cargo build --features $(RUST_FEATURES); fi; \
 	  if ! nm -D $(LIB_SO) 2>/dev/null | grep -q " nm_init$$"; then \
 	    echo "[Error] nm_init still missing from $(LIB_SO). Please ensure feature 'ffi_bridge' is enabled."; \

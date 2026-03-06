@@ -81,14 +81,14 @@ def main():
         socket_path = args.socket
     elif home_directory:
         if args.brain_id == "default":
-            socket_path = os.path.join(home_directory, "neuromorphic_demo.nn")
+            socket_path = os.path.join(home_directory, "aarnn_rust.nn")
         else:
-            socket_path = os.path.join(home_directory, f"neuromorphic_demo.{args.brain_id}.nn")
+            socket_path = os.path.join(home_directory, f"aarnn_rust.{args.brain_id}.nn")
     else:
         if args.brain_id == "default":
-            socket_path = "/tmp/neuromorphic_demo.nn"
+            socket_path = "/tmp/aarnn_rust.nn"
         else:
-            socket_path = f"/tmp/neuromorphic_demo.{args.brain_id}.nn"
+            socket_path = f"/tmp/aarnn_rust.{args.brain_id}.nn"
     
     # Use a unique client path including PID to avoid conflicts and stale files
     client_socket_path = socket_path + f".diag_{os.getpid()}.sock"

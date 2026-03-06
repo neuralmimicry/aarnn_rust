@@ -1694,15 +1694,15 @@ impl App {
             ipc_sock_path: {
                 if let Ok(home) = std::env::var("HOME") {
                     if brain_id == "default" {
-                        format!("{}/neuromorphic_demo.nn", home)
+                        format!("{}/aarnn_rust.nn", home)
                     } else {
-                        format!("{}/neuromorphic_demo.{}.nn", home, brain_id)
+                        format!("{}/aarnn_rust.{}.nn", home, brain_id)
                     }
                 } else {
                     if brain_id == "default" {
-                        "/tmp/neuromorphic_demo.nn".to_string()
+                        "/tmp/aarnn_rust.nn".to_string()
                     } else {
-                        format!("/tmp/neuromorphic_demo.{}.nn", brain_id)
+                        format!("/tmp/aarnn_rust.{}.nn", brain_id)
                     }
                 }
             },

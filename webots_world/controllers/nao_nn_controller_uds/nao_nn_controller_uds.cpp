@@ -8,7 +8,7 @@
 //   - Set the NAO robot's Controller to "nao_nn_controller_uds"
 //   - Start the NN server in a terminal first, e.g.:
 //       cargo run --release --features ui,robot_io --example nn_uds_server --
-//         --socket /tmp/neuromorphic_demo.nn --sensory 25 --output 11 --threshold 0.2 --ui
+//         --socket /tmp/aarnn_rust.nn --sensory 25 --output 11 --threshold 0.2 --ui
 //   - Play the simulation.
 
 #include <webots/Robot.hpp>
@@ -201,9 +201,9 @@ int main(int argc, char** argv) {
         BrainInstance b;
         b.id = id;
         if (id == "default") {
-            b.sock_path = home_str + "/neuromorphic_demo.nn";
+            b.sock_path = home_str + "/aarnn_rust.nn";
         } else {
-            b.sock_path = home_str + "/neuromorphic_demo." + id + ".nn";
+            b.sock_path = home_str + "/aarnn_rust." + id + ".nn";
         }
         brains.push_back(std::move(b));
     }

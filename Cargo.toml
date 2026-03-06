@@ -1,5 +1,5 @@
 [package]
-name = "neuromorphic_demo"
+name = "aarnn_rust"
 version = "0.1.0"
 edition = "2021"
 
@@ -156,7 +156,7 @@ rdma = [
 ]
 
 [lib]
-name = "neuromorphic_demo"
+name = "aarnn_rust"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 

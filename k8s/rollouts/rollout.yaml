@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: ghcr.io/neuralmimicry/neuromorphic_demo:brainregions
+          image: ghcr.io/neuralmimicry/aarnn_rust:brainregions
           ports:
             - containerPort: 8000
           readinessProbe:

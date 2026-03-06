@@ -18,7 +18,7 @@ This repository integrates the existing neuromorphic build and container workflo
 ### Build locally
 
 ```bash
-scripts/build_container.sh ghcr.io/neuralmimicry/neuromorphic_demo brainregions false
+scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust brainregions false
 ```
 
 ### Train a sample model artefact

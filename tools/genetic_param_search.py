@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Genetic Parameter Search for Neuromorphic Demo
+Genetic Parameter Search for AARNN
 
 This script implements a Genetic Algorithm (GA) to automatically find optimal
 simulation parameters (e.g., tau_m, v_th, learning rate) for the spiking neural network.
@@ -93,7 +93,7 @@ MUTATION_RATE = 0.2
 N_WORKERS = min(POP_SIZE, mp.cpu_count())
 
 CONFIG_PATH = 'config.json'
-SIM_BIN = './target/release/neuromorphic_demo'
+SIM_BIN = './target/release/aarnn_rust'
 REBUILD_CMD = ['cargo', 'build', '--release', '--all-features']
 
 # Simulation time settings (increased for meaningful growth)

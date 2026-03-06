@@ -1,7 +1,7 @@
 // Unix Domain Socket (UDS) latency demo - server side (echo).
 //
 // Usage:
-//   cargo run --example uds_latency_server -- /tmp/neuromorphic_demo.rtt
+//   cargo run --example uds_latency_server -- /tmp/aarnn_rust.rtt
 // The server will bind the socket path and echo back any datagrams it receives.
 
 use std::env;
@@ -11,7 +11,7 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 
 fn main() -> io::Result<()> {
-    let socket_path = env::args().nth(1).unwrap_or_else(|| "/tmp/neuromorphic_demo.rtt".to_string());
+    let socket_path = env::args().nth(1).unwrap_or_else(|| "/tmp/aarnn_rust.rtt".to_string());
     let path_ref = Path::new(&socket_path);
     // Remove stale socket if present
     if path_ref.exists() { let _ = fs::remove_file(path_ref); }

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/neuromorphic_demo"}
+IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
 IMAGE_TAG=${2:-"brainregions"}
 PUSH=${3:-"false"}
 

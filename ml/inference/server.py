@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 MODEL_PATH = Path("ml/models/demo_model.json")
 
-app = FastAPI(title="Neuromorphic Demo Inference API", version="1.0.0")
+app = FastAPI(title="AARNN Inference API", version="1.0.0")
 
 class PredictionRequest(BaseModel):
     inputs: List[float] = Field(..., min_length=1)

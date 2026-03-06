@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Export a Neuromorphic Intermediate Representation (NIR) JSON from a
-neuromorphic_demo Runner snapshot (network.json produced by export_network_json).
+aarnn_rust Runner snapshot (network.json produced by export_network_json).
 
 Usage:
   python3 tools/export_nir.py --in-network network.json --out-nir model.nir.json
 
 NIR schema v0.1 (subset):
 {
-  "meta": { "nir_version": "0.1", "producer": "neuromorphic_demo", "created_at": ISO8601 },
+  "meta": { "nir_version": "0.1", "producer": "aarnn_rust", "created_at": ISO8601 },
   "config": { ... subset of NetworkConfig ... },
   "weights": { "w_in": M, "w_hh_fwd": [M...], "w_hh_bwd": [M...], "w_out": M },
   "topology": { "layers": [ [ {x,y,z,layer}, ... ], ... ] },   (optional)
@@ -38,7 +38,7 @@ def main():
     nir_output = {
         'meta': {
             'nir_version': '0.1',
-            'producer': 'neuromorphic_demo',
+            'producer': 'aarnn_rust',
             'created_at': datetime.now(timezone.utc).isoformat(),
         },
         'config': {

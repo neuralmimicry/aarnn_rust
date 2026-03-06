@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Multi-arch Container Build Script for Neuromorphic Demo
+# Multi-arch Container Build Script for AARNN
 # Requires: podman with qemu-user-static or docker buildx
 
-IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/neuromorphic_demo"}
+IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
 REQUESTED_TAG=${2:-"brainregions"}
 IMAGE_TAG="brainregions"
 PUSH=${3:-"false"}

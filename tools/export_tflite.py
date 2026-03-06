@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Convert neuromorphic_demo JSON snapshot (Runner::export_network_json)
+Convert aarnn_rust JSON snapshot (Runner::export_network_json)
 to a TFLite MLP with Dense(linear) layers.
 
 Usage:
