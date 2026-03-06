@@ -27,7 +27,9 @@ impl RdmaContext {
                     let ctx_res: Result<ibverbs::Context, _> = dev.open();
                     if let Ok(ctx) = ctx_res {
                         nm_log!("[info] RDMA device found and opened: {:?}", dev.name());
-                        return Self { _context: Some(ctx) };
+                        return Self {
+                            _context: Some(ctx),
+                        };
                     }
                 }
             }

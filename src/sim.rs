@@ -16,10 +16,10 @@
 use ndarray::{s, Array1, Array2};
 use rand::{Rng, RngExt};
 
-use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
-use crate::network::BuiltNetwork;
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{get_global_cl_manager, OpenCLManager};
+use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
+use crate::network::BuiltNetwork;
 #[cfg(feature = "opencl")]
 use opencl3::kernel::ExecuteKernel;
 #[cfg(feature = "opencl")]
@@ -140,9 +140,14 @@ pub struct SimOut {
 /// 1. `spikes`: The binary spike raster (Time × Neurons).
 /// 2. `pattern_id`: The ID of the active burst group at each time step.
 /// 3. `groups`: Indices of neurons belonging to each pattern group.
-pub fn poisson_input_patterns<TR: Rng>(t_ms: f64, num_sensory_neurons: usize, dt: f64, rng: &mut TR) -> (Array2<i8>, Array1<i8>, Vec<Vec<usize>>) {
+pub fn poisson_input_patterns<TR: Rng>(
+    t_ms: f64,
+    num_sensory_neurons: usize,
+    dt: f64,
+    rng: &mut TR,
+) -> (Array2<i8>, Array1<i8>, Vec<Vec<usize>>) {
     let steps = (t_ms / dt).round() as usize;
-    let base_rate = 2.0_f64;   // Hz
+    let base_rate = 2.0_f64; // Hz
     let burst_rate = 25.0_f64; // Hz
     let base_spike_probability = base_rate * dt / 1000.0;
     let burst_spike_probability = burst_rate * dt / 1000.0;
@@ -150,19 +155,25 @@ pub fn poisson_input_patterns<TR: Rng>(t_ms: f64, num_sensory_neurons: usize, dt
     let mut pattern_id = Array1::<i8>::zeros(steps);
     // Split into three groups
     let mut groups: Vec<Vec<usize>> = vec![Vec::new(), Vec::new(), Vec::new()];
-    for (i, idx) in (0..num_sensory_neurons).enumerate() { groups[i % 3].push(idx); }
+    for (i, idx) in (0..num_sensory_neurons).enumerate() {
+        groups[i % 3].push(idx);
+    }
     let chunk = (steps / 6).max(1);
-    let schedule = [0usize,1,2,0,2,1];
+    let schedule = [0usize, 1, 2, 0, 2, 1];
     for (k, &pat) in schedule.iter().enumerate() {
-        let start = k*chunk;
-        let end = if k < schedule.len()-1 { (k+1)*chunk } else { steps };
+        let start = k * chunk;
+        let end = if k < schedule.len() - 1 {
+            (k + 1) * chunk
+        } else {
+            steps
+        };
         for t in start..end {
             pattern_id[t] = pat as i8;
             for i in 0..num_sensory_neurons {
-                spikes[(t,i)] = (rng.random::<f64>() < base_spike_probability) as i8;
+                spikes[(t, i)] = (rng.random::<f64>() < base_spike_probability) as i8;
             }
             for &i in &groups[pat] {
-                spikes[(t,i)] = (rng.random::<f64>() < burst_spike_probability) as i8;
+                spikes[(t, i)] = (rng.random::<f64>() < burst_spike_probability) as i8;
             }
         }
     }
@@ -173,7 +184,14 @@ pub fn poisson_input_patterns<TR: Rng>(t_ms: f64, num_sensory_neurons: usize, dt
 ///
 /// This produces a global oscillatory drive with optional per-neuron phase jitter.
 /// The duty cycle controls the active window of each theta cycle.
-pub fn theta_input_patterns(t_ms: f64, num_sensory_neurons: usize, dt: f64, freq_hz: f32, duty: f32, phase_jitter: f32) -> (Array2<i8>, Array1<i8>, Vec<Vec<usize>>) {
+pub fn theta_input_patterns(
+    t_ms: f64,
+    num_sensory_neurons: usize,
+    dt: f64,
+    freq_hz: f32,
+    duty: f32,
+    phase_jitter: f32,
+) -> (Array2<i8>, Array1<i8>, Vec<Vec<usize>>) {
     let steps = (t_ms / dt).round() as usize;
     let mut spikes = Array2::<i8>::zeros((steps, num_sensory_neurons));
     let mut pattern_id = Array1::<i8>::zeros(steps);
@@ -193,11 +211,13 @@ pub fn theta_input_patterns(t_ms: f64, num_sensory_neurons: usize, dt: f64, freq
     let thresh = 1.0 - duty;
 
     let mut phase = 0.0f64;
-    let offsets: Vec<f64> = (0..num_sensory_neurons).map(|i| {
-        let h = (i as u64).wrapping_mul(6364136223846793005) & 0xffff;
-        let base = (h as f64) / 65535.0;
-        base * std::f64::consts::TAU * phase_jitter
-    }).collect();
+    let offsets: Vec<f64> = (0..num_sensory_neurons)
+        .map(|i| {
+            let h = (i as u64).wrapping_mul(6364136223846793005) & 0xffff;
+            let base = (h as f64) / 65535.0;
+            base * std::f64::consts::TAU * phase_jitter
+        })
+        .collect();
 
     for t in 0..steps {
         phase = (phase + step) % std::f64::consts::TAU;
@@ -280,32 +300,102 @@ impl ClStpContext {
         num_hidden_layers: usize,
         stp_u: f64,
     ) -> opencl3::Result<Self> {
-        let pre_spk_s = unsafe { Buffer::create(&cl.context, CL_MEM_READ_ONLY, num_sensory * std::mem::size_of::<i8>(), ptr::null_mut())? };
-        let mut u_s = unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_sensory * std::mem::size_of::<f64>(), ptr::null_mut())? };
-        let mut x_s = unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_sensory * std::mem::size_of::<f64>(), ptr::null_mut())? };
-        let rel_s = unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_sensory * std::mem::size_of::<f64>(), ptr::null_mut())? };
-        let pre_spk_h = unsafe { Buffer::create(&cl.context, CL_MEM_READ_ONLY, num_hidden * std::mem::size_of::<i8>(), ptr::null_mut())? };
+        let pre_spk_s = unsafe {
+            Buffer::create(
+                &cl.context,
+                CL_MEM_READ_ONLY,
+                num_sensory * std::mem::size_of::<i8>(),
+                ptr::null_mut(),
+            )?
+        };
+        let mut u_s = unsafe {
+            Buffer::create(
+                &cl.context,
+                CL_MEM_READ_WRITE,
+                num_sensory * std::mem::size_of::<f64>(),
+                ptr::null_mut(),
+            )?
+        };
+        let mut x_s = unsafe {
+            Buffer::create(
+                &cl.context,
+                CL_MEM_READ_WRITE,
+                num_sensory * std::mem::size_of::<f64>(),
+                ptr::null_mut(),
+            )?
+        };
+        let rel_s = unsafe {
+            Buffer::create(
+                &cl.context,
+                CL_MEM_READ_WRITE,
+                num_sensory * std::mem::size_of::<f64>(),
+                ptr::null_mut(),
+            )?
+        };
+        let pre_spk_h = unsafe {
+            Buffer::create(
+                &cl.context,
+                CL_MEM_READ_ONLY,
+                num_hidden * std::mem::size_of::<i8>(),
+                ptr::null_mut(),
+            )?
+        };
         let mut u_h = Vec::with_capacity(num_hidden_layers);
         let mut x_h = Vec::with_capacity(num_hidden_layers);
         let mut rel_h = Vec::with_capacity(num_hidden_layers);
         for _ in 0..num_hidden_layers {
-            u_h.push(unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_hidden * std::mem::size_of::<f64>(), ptr::null_mut())? });
-            x_h.push(unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_hidden * std::mem::size_of::<f64>(), ptr::null_mut())? });
-            rel_h.push(unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, num_hidden * std::mem::size_of::<f64>(), ptr::null_mut())? });
+            u_h.push(unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    num_hidden * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )?
+            });
+            x_h.push(unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    num_hidden * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )?
+            });
+            rel_h.push(unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    num_hidden * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )?
+            });
         }
         let u_s_init = vec![stp_u; num_sensory];
         let x_s_init = vec![1.0_f64; num_sensory];
         unsafe {
-            cl.queue.enqueue_write_buffer(&mut u_s, CL_TRUE, 0, &u_s_init, &[])?;
-            cl.queue.enqueue_write_buffer(&mut x_s, CL_TRUE, 0, &x_s_init, &[])?;
+            cl.queue
+                .enqueue_write_buffer(&mut u_s, CL_TRUE, 0, &u_s_init, &[])?;
+            cl.queue
+                .enqueue_write_buffer(&mut x_s, CL_TRUE, 0, &x_s_init, &[])?;
             for l in 0..num_hidden_layers {
                 let u_h_init = vec![stp_u; num_hidden];
                 let x_h_init = vec![1.0_f64; num_hidden];
-                cl.queue.enqueue_write_buffer(&mut u_h[l], CL_TRUE, 0, &u_h_init, &[])?;
-                cl.queue.enqueue_write_buffer(&mut x_h[l], CL_TRUE, 0, &x_h_init, &[])?;
+                cl.queue
+                    .enqueue_write_buffer(&mut u_h[l], CL_TRUE, 0, &u_h_init, &[])?;
+                cl.queue
+                    .enqueue_write_buffer(&mut x_h[l], CL_TRUE, 0, &x_h_init, &[])?;
             }
         }
-        Ok(Self { cl, pre_spk_s, u_s, x_s, rel_s, pre_spk_h, u_h, x_h, rel_h })
+        Ok(Self {
+            cl,
+            pre_spk_s,
+            u_s,
+            x_s,
+            rel_s,
+            pre_spk_h,
+            u_h,
+            x_h,
+            rel_h,
+        })
     }
 
     fn update_sensory(
@@ -339,9 +429,15 @@ impl ClStpContext {
         stp_rec_decay: f64,
         stp_facil_decay: f64,
     ) -> opencl3::Result<()> {
-        let u_buf = self.u_h.get_mut(layer).ok_or_else(|| opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE))?;
-        let x_buf = self.x_h.get_mut(layer).ok_or_else(|| opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE))?;
-        let rel_buf = self.rel_h.get_mut(layer).ok_or_else(|| opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE))?;
+        let u_buf = self.u_h.get_mut(layer).ok_or_else(|| {
+            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
+        })?;
+        let x_buf = self.x_h.get_mut(layer).ok_or_else(|| {
+            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
+        })?;
+        let rel_buf = self.rel_h.get_mut(layer).ok_or_else(|| {
+            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
+        })?;
         cl_stp_update(
             &self.cl,
             &mut self.pre_spk_h,
@@ -365,15 +461,33 @@ impl ClStpContext {
     ) -> opencl3::Result<()> {
         if let (Some(u_s_slice), Some(x_s_slice)) = (u_s.as_slice_mut(), x_s.as_slice_mut()) {
             unsafe {
-                self.cl.queue.enqueue_read_buffer(&mut self.u_s, CL_TRUE, 0, u_s_slice, &[])?;
-                self.cl.queue.enqueue_read_buffer(&mut self.x_s, CL_TRUE, 0, x_s_slice, &[])?;
+                self.cl
+                    .queue
+                    .enqueue_read_buffer(&mut self.u_s, CL_TRUE, 0, u_s_slice, &[])?;
+                self.cl
+                    .queue
+                    .enqueue_read_buffer(&mut self.x_s, CL_TRUE, 0, x_s_slice, &[])?;
             }
         }
         for l in 0..u_h.len() {
-            if let (Some(u_h_slice), Some(x_h_slice)) = (u_h[l].as_slice_mut(), x_h[l].as_slice_mut()) {
+            if let (Some(u_h_slice), Some(x_h_slice)) =
+                (u_h[l].as_slice_mut(), x_h[l].as_slice_mut())
+            {
                 unsafe {
-                    self.cl.queue.enqueue_read_buffer(&mut self.u_h[l], CL_TRUE, 0, u_h_slice, &[])?;
-                    self.cl.queue.enqueue_read_buffer(&mut self.x_h[l], CL_TRUE, 0, x_h_slice, &[])?;
+                    self.cl.queue.enqueue_read_buffer(
+                        &mut self.u_h[l],
+                        CL_TRUE,
+                        0,
+                        u_h_slice,
+                        &[],
+                    )?;
+                    self.cl.queue.enqueue_read_buffer(
+                        &mut self.x_h[l],
+                        CL_TRUE,
+                        0,
+                        x_h_slice,
+                        &[],
+                    )?;
                 }
             }
         }
@@ -395,7 +509,8 @@ fn cl_stp_update(
     stp_facil_decay: f64,
 ) -> opencl3::Result<()> {
     unsafe {
-        cl.queue.enqueue_write_buffer(pre_buf, CL_TRUE, 0, pre_spks, &[])?;
+        cl.queue
+            .enqueue_write_buffer(pre_buf, CL_TRUE, 0, pre_spks, &[])?;
         let kernel = cl.kernel_stp_update.lock().unwrap();
         ExecuteKernel::new(&kernel)
             .set_arg(u_buf)
@@ -407,7 +522,8 @@ fn cl_stp_update(
             .set_arg(&stp_facil_decay)
             .set_global_work_size(release_out.len())
             .enqueue_nd_range(&cl.queue)?;
-        cl.queue.enqueue_read_buffer(rel_buf, CL_TRUE, 0, release_out, &[])?;
+        cl.queue
+            .enqueue_read_buffer(rel_buf, CL_TRUE, 0, release_out, &[])?;
     }
     Ok(())
 }
@@ -481,37 +597,66 @@ pub fn run_snn(
     let bio = cfg.aarnn_bio.clone();
     let use_synaptic_filter = use_aarnn_bio && aarnn_depth >= 1;
     let use_stp = use_aarnn_bio && aarnn_depth >= 1 && bio.stp_enabled;
-    let use_adaptive_threshold = use_aarnn_bio && aarnn_depth >= 2 && bio.adaptive_threshold_enabled;
+    let use_adaptive_threshold =
+        use_aarnn_bio && aarnn_depth >= 2 && bio.adaptive_threshold_enabled;
     let use_homeostasis = use_aarnn_bio && aarnn_depth >= 2 && bio.homeostasis_gain > 0.0;
     let use_izh_refractory = use_aarnn_bio && aarnn_depth >= 2 && bio.izh_refractory_ms > 0.0;
 
     // Identify which hidden layers connect to Sensory inputs and Output nodes.
-    let in_l = cfg.sensory_target_layer.unwrap_or_else(|| {
-        if matches!(neuron_model, NeuronModel::Aarnn) {
-            if num_hidden_layers > 1 { 1 } else { 0 }
-        } else {
-            0
-        }
-    }).min(num_hidden_layers.saturating_sub(1));
+    let in_l = cfg
+        .sensory_target_layer
+        .unwrap_or_else(|| {
+            if matches!(neuron_model, NeuronModel::Aarnn) {
+                if num_hidden_layers > 1 {
+                    1
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        })
+        .min(num_hidden_layers.saturating_sub(1));
 
-    let out_l = cfg.output_source_layer.unwrap_or_else(|| {
-        if matches!(neuron_model, NeuronModel::Aarnn) {
-            if num_hidden_layers > 4 { 4 } else { num_hidden_layers.saturating_sub(1) }
-        } else {
-            num_hidden_layers.saturating_sub(1)
-        }
-    }).min(num_hidden_layers.saturating_sub(1));
+    let out_l = cfg
+        .output_source_layer
+        .unwrap_or_else(|| {
+            if matches!(neuron_model, NeuronModel::Aarnn) {
+                if num_hidden_layers > 4 {
+                    4
+                } else {
+                    num_hidden_layers.saturating_sub(1)
+                }
+            } else {
+                num_hidden_layers.saturating_sub(1)
+            }
+        })
+        .min(num_hidden_layers.saturating_sub(1));
 
-    let mut hidden_membrane_potentials: Vec<Array1<f64>> = (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect();
+    let mut hidden_membrane_potentials: Vec<Array1<f64>> = (0..num_hidden_layers)
+        .map(|_| Array1::zeros(num_hidden_per_layer))
+        .collect();
     let mut hidden_recovery_variables: Option<Vec<Array1<f64>>> = if izh_params.is_some() {
-        Some((0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect())
-    } else { None };
+        Some(
+            (0..num_hidden_layers)
+                .map(|_| Array1::zeros(num_hidden_per_layer))
+                .collect(),
+        )
+    } else {
+        None
+    };
     let mut output_membrane_potentials = Array1::<f64>::zeros(num_output_neurons);
     let mut output_recovery_variables: Option<Array1<f64>> = if izh_params.is_some() {
         Some(Array1::zeros(num_output_neurons))
-    } else { None };
+    } else {
+        None
+    };
     let mut hidden_refractory_counters: Option<Vec<Array1<i32>>> = match neuron_model {
-        NeuronModel::Lif => Some((0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()),
+        NeuronModel::Lif => Some(
+            (0..num_hidden_layers)
+                .map(|_| Array1::zeros(num_hidden_per_layer))
+                .collect(),
+        ),
         _ => None,
     };
     let mut output_refractory_counters: Option<Array1<i32>> = match neuron_model {
@@ -521,22 +666,32 @@ pub fn run_snn(
 
     // traces
     let mut sensory_pre_synaptic_traces = Array1::<f64>::zeros(num_sensory_neurons);
-    let mut hidden_post_synaptic_traces: Vec<Array1<f64>> = (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect();
-    let mut hidden_pre_synaptic_traces: Vec<Array1<f64>> = (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect();
+    let mut hidden_post_synaptic_traces: Vec<Array1<f64>> = (0..num_hidden_layers)
+        .map(|_| Array1::zeros(num_hidden_per_layer))
+        .collect();
+    let mut hidden_pre_synaptic_traces: Vec<Array1<f64>> = (0..num_hidden_layers)
+        .map(|_| Array1::zeros(num_hidden_per_layer))
+        .collect();
     let mut output_post_synaptic_traces = Array1::<f64>::zeros(num_output_neurons);
 
     let mut syn_ampa_h: Vec<Array1<f64>> = if use_synaptic_filter {
-        (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::zeros(num_hidden_per_layer))
+            .collect()
     } else {
         Vec::new()
     };
     let mut syn_nmda_h: Vec<Array1<f64>> = if use_synaptic_filter {
-        (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::zeros(num_hidden_per_layer))
+            .collect()
     } else {
         Vec::new()
     };
     let mut syn_gaba_h: Vec<Array1<f64>> = if use_synaptic_filter {
-        (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::zeros(num_hidden_per_layer))
+            .collect()
     } else {
         Vec::new()
     };
@@ -556,7 +711,9 @@ pub fn run_snn(
         Array1::<f64>::zeros(0)
     };
     let mut thr_offset_h: Vec<Array1<f64>> = if use_adaptive_threshold || use_homeostasis {
-        (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::zeros(num_hidden_per_layer))
+            .collect()
     } else {
         Vec::new()
     };
@@ -566,7 +723,9 @@ pub fn run_snn(
         Array1::<f64>::zeros(0)
     };
     let mut rate_ema_h: Vec<Array1<f64>> = if use_homeostasis {
-        (0..num_hidden_layers).map(|_| Array1::zeros(num_hidden_per_layer)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::zeros(num_hidden_per_layer))
+            .collect()
     } else {
         Vec::new()
     };
@@ -586,17 +745,25 @@ pub fn run_snn(
         None
     };
     let mut stp_u_hidden: Vec<Array1<f64>> = if use_stp {
-        (0..num_hidden_layers).map(|_| Array1::<f64>::from_elem(num_hidden_per_layer, bio.stp_u)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::<f64>::from_elem(num_hidden_per_layer, bio.stp_u))
+            .collect()
     } else {
         Vec::new()
     };
     let mut stp_x_hidden: Vec<Array1<f64>> = if use_stp {
-        (0..num_hidden_layers).map(|_| Array1::<f64>::from_elem(num_hidden_per_layer, 1.0)).collect()
+        (0..num_hidden_layers)
+            .map(|_| Array1::<f64>::from_elem(num_hidden_per_layer, 1.0))
+            .collect()
     } else {
         Vec::new()
     };
     let mut hidden_izh_refractory: Option<Vec<Array1<i32>>> = if use_izh_refractory {
-        Some((0..num_hidden_layers).map(|_| Array1::<i32>::zeros(num_hidden_per_layer)).collect())
+        Some(
+            (0..num_hidden_layers)
+                .map(|_| Array1::<i32>::zeros(num_hidden_per_layer))
+                .collect(),
+        )
     } else {
         None
     };
@@ -607,7 +774,9 @@ pub fn run_snn(
     };
 
     // recordings
-    let mut hidden_spike_recordings: Vec<Array2<i8>> = (0..num_hidden_layers).map(|_| Array2::<i8>::zeros((steps, num_hidden_per_layer))).collect();
+    let mut hidden_spike_recordings: Vec<Array2<i8>> = (0..num_hidden_layers)
+        .map(|_| Array2::<i8>::zeros((steps, num_hidden_per_layer)))
+        .collect();
     let mut output_spike_recordings = Array2::<i8>::zeros((steps, num_output_neurons));
 
     // decays
@@ -629,7 +798,13 @@ pub fn run_snn(
     #[cfg(feature = "opencl")]
     if use_stp {
         if let Some(cl) = get_global_cl_manager() {
-            match ClStpContext::new(cl, num_sensory_neurons, num_hidden_per_layer, num_hidden_layers, bio.stp_u) {
+            match ClStpContext::new(
+                cl,
+                num_sensory_neurons,
+                num_hidden_per_layer,
+                num_hidden_layers,
+                bio.stp_u,
+            ) {
                 Ok(ctx) => cl_stp = Some(ctx),
                 Err(e) => nm_log!("[warn] OpenCL STP init failed: {:?}", e),
             }
@@ -687,16 +862,31 @@ pub fn run_snn(
     let progress_interval = (steps / 10).max(1);
     // --- Longterm connection tracking ---
     // For each connection, track how many steps it is present (weight > 1e-8)
-    let mut conn_presence_in = vec![vec![0; cfg.num_sensory_neurons]; cfg.num_hidden_per_layer_initial];
-    let mut conn_presence_fwd = vec![vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_layers.saturating_sub(1)];
-    let mut conn_presence_bwd = vec![vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_layers.saturating_sub(1)];
-    let mut conn_presence_out = vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_output_neurons];
+    let mut conn_presence_in =
+        vec![vec![0; cfg.num_sensory_neurons]; cfg.num_hidden_per_layer_initial];
+    let mut conn_presence_fwd =
+        vec![
+            vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_per_layer_initial];
+            cfg.num_hidden_layers.saturating_sub(1)
+        ];
+    let mut conn_presence_bwd =
+        vec![
+            vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_hidden_per_layer_initial];
+            cfg.num_hidden_layers.saturating_sub(1)
+        ];
+    let mut conn_presence_out =
+        vec![vec![0; cfg.num_hidden_per_layer_initial]; cfg.num_output_neurons];
 
     for t in 0..steps {
         if t % progress_interval == 0 {
-            nm_log!("[info] Simulation progress: {}% (step {}/{})", (t * 100) / steps, t, steps);
+            nm_log!(
+                "[info] Simulation progress: {}% (step {}/{})",
+                (t * 100) / steps,
+                t,
+                steps
+            );
         }
-        
+
         // --- 1. Current Step Inputs ---
         // Fetch input spikes from the sensory layer for the current time step.
         let sensory_spikes_at_step = sensory_spikes.slice(s![t, ..]);
@@ -706,7 +896,9 @@ pub fn run_snn(
             Array1::<f64>::zeros(0)
         };
         let mut stp_release_hidden: Vec<Array1<f64>> = if use_stp {
-            (0..num_hidden_layers).map(|_| Array1::<f64>::zeros(num_hidden_per_layer)).collect()
+            (0..num_hidden_layers)
+                .map(|_| Array1::<f64>::zeros(num_hidden_per_layer))
+                .collect()
         } else {
             Vec::new()
         };
@@ -718,9 +910,21 @@ pub fn run_snn(
             if let Some(ctx) = cl_stp.as_mut() {
                 let pre_slice = sensory_spikes_at_step.as_slice().unwrap();
                 let rel_slice = sensory_release.as_slice_mut().unwrap();
-                if let Err(e) = ctx.update_sensory(pre_slice, rel_slice, bio.stp_u, stp_rec_decay, stp_facil_decay) {
+                if let Err(e) = ctx.update_sensory(
+                    pre_slice,
+                    rel_slice,
+                    bio.stp_u,
+                    stp_rec_decay,
+                    stp_facil_decay,
+                ) {
                     nm_log!("[warn] OpenCL STP sensory update failed: {:?}", e);
-                    disable_cl_stp(&mut cl_stp, &mut stp_u_sensory, &mut stp_x_sensory, &mut stp_u_hidden, &mut stp_x_hidden);
+                    disable_cl_stp(
+                        &mut cl_stp,
+                        &mut stp_u_sensory,
+                        &mut stp_x_sensory,
+                        &mut stp_u_hidden,
+                        &mut stp_x_hidden,
+                    );
                 } else {
                     use_cpu = false;
                 }
@@ -755,14 +959,16 @@ pub fn run_snn(
 
         // --- 2. Trace Updates (for Learning) ---
         // Decay existing synaptic traces and increment based on new activity.
-        sensory_pre_synaptic_traces.mapv_inplace(|x| x* pre_synaptic_trace_decay_factor);
-        for l in 0..num_hidden_layers { 
-            hidden_post_synaptic_traces[l].mapv_inplace(|x| x* post_synaptic_trace_decay_factor); 
-            hidden_pre_synaptic_traces[l].mapv_inplace(|x| x* pre_synaptic_trace_decay_factor); 
+        sensory_pre_synaptic_traces.mapv_inplace(|x| x * pre_synaptic_trace_decay_factor);
+        for l in 0..num_hidden_layers {
+            hidden_post_synaptic_traces[l].mapv_inplace(|x| x * post_synaptic_trace_decay_factor);
+            hidden_pre_synaptic_traces[l].mapv_inplace(|x| x * pre_synaptic_trace_decay_factor);
         }
-        output_post_synaptic_traces.mapv_inplace(|x| x* post_synaptic_trace_decay_factor);
-        for i in 0..num_sensory_neurons { 
-            if sensory_spikes_at_step[i] != 0 { sensory_pre_synaptic_traces[i] += 1.0; } 
+        output_post_synaptic_traces.mapv_inplace(|x| x * post_synaptic_trace_decay_factor);
+        for i in 0..num_sensory_neurons {
+            if sensory_spikes_at_step[i] != 0 {
+                sensory_pre_synaptic_traces[i] += 1.0;
+            }
         }
 
         // --- 3. Hidden Layer 0 Update ---
@@ -771,7 +977,7 @@ pub fn run_snn(
         if in_l == 0 {
             for j in 0..num_hidden_per_layer {
                 let mut acc = 0.0;
-                for i in 0..num_sensory_neurons { 
+                for i in 0..num_sensory_neurons {
                     let spike_val = if use_stp {
                         sensory_release[i]
                     } else if sensory_spikes[(t, i)] != 0 {
@@ -806,15 +1012,16 @@ pub fn run_snn(
                 let mut r = Array1::<i8>::zeros(num_hidden_per_layer);
                 let refh = hidden_refractory_counters.as_mut().unwrap();
                 for j in 0..num_hidden_per_layer {
-                    let v = hidden_membrane_potentials[0][j] * membrane_decay_factor + hidden_layer_0_currents[j];
+                    let v = hidden_membrane_potentials[0][j] * membrane_decay_factor
+                        + hidden_layer_0_currents[j];
                     hidden_membrane_potentials[0][j] = v.clamp(-5.0, 5.0);
                     let active = refh[0][j] <= 0;
                     let fired = active && hidden_membrane_potentials[0][j] >= lif.v_th;
-                    if fired { 
-                        hidden_membrane_potentials[0][j] = lif.v_reset; 
-                        refh[0][j] = lif.refractory as i32; 
-                    } else { 
-                        refh[0][j] = (refh[0][j]-1).max(0); 
+                    if fired {
+                        hidden_membrane_potentials[0][j] = lif.v_reset;
+                        refh[0][j] = lif.refractory as i32;
+                    } else {
+                        refh[0][j] = (refh[0][j] - 1).max(0);
                     }
                     r[j] = fired as i8;
                 }
@@ -828,11 +1035,14 @@ pub fn run_snn(
                     let v = hidden_membrane_potentials[0][j];
                     let u = u0[0][j];
                     // Euler integration of Izhikevich dynamics
-                    let nv = v + p.dt * (0.04*v*v + 5.0*v + 140.0 - u + hidden_layer_0_currents[j]);
-                    let nu = u + p.dt * (p.recovery_time_constant_a * (p.recovery_sensitivity_b*nv - u));
+                    let nv = v + p.dt
+                        * (0.04 * v * v + 5.0 * v + 140.0 - u + hidden_layer_0_currents[j]);
+                    let nu = u + p.dt
+                        * (p.recovery_time_constant_a * (p.recovery_sensitivity_b * nv - u));
                     let mut fired = nv >= p.v_th;
                     if use_adaptive_threshold {
-                        let thr_offset = thr_offset_h[0][j].clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
+                        let thr_offset = thr_offset_h[0][j]
+                            .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
                         fired = nv >= (p.v_th + thr_offset);
                     }
                     if let Some(refh) = hidden_izh_refractory.as_mut() {
@@ -841,16 +1051,17 @@ pub fn run_snn(
                             fired = false;
                         }
                     }
-                    let (nv2, nu2) = if fired { 
-                        (p.membrane_reset_potential_c, nu + p.recovery_increment_d) 
-                    } else { 
-                        (nv, nu) 
+                    let (nv2, nu2) = if fired {
+                        (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
+                    } else {
+                        (nv, nu)
                     };
                     hidden_membrane_potentials[0][j] = nv2;
                     u0[0][j] = nu2;
                     r[j] = fired as i8;
                     if fired && use_adaptive_threshold {
-                        thr_offset_h[0][j] = (thr_offset_h[0][j] + bio.adaptive_threshold_increment)
+                        thr_offset_h[0][j] = (thr_offset_h[0][j]
+                            + bio.adaptive_threshold_increment)
                             .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
                     }
                     if fired {
@@ -863,12 +1074,12 @@ pub fn run_snn(
             }
         };
         // Record spikes and update traces for H0.
-        for j in 0..num_hidden_per_layer { 
-            hidden_spike_recordings[0][(t, j)] = hidden_layer_0_spikes_at_step[j]; 
-            if hidden_layer_0_spikes_at_step[j]!=0 { 
-                hidden_post_synaptic_traces[0][j]+=1.0; 
-                hidden_pre_synaptic_traces[0][j]+=1.0; 
-            } 
+        for j in 0..num_hidden_per_layer {
+            hidden_spike_recordings[0][(t, j)] = hidden_layer_0_spikes_at_step[j];
+            if hidden_layer_0_spikes_at_step[j] != 0 {
+                hidden_post_synaptic_traces[0][j] += 1.0;
+                hidden_pre_synaptic_traces[0][j] += 1.0;
+            }
         }
         if use_stp {
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -877,9 +1088,22 @@ pub fn run_snn(
             if let Some(ctx) = cl_stp.as_mut() {
                 let pre_slice = hidden_layer_0_spikes_at_step.as_slice().unwrap();
                 let rel_slice = stp_release_hidden[0].as_slice_mut().unwrap();
-                if let Err(e) = ctx.update_hidden(0, pre_slice, rel_slice, bio.stp_u, stp_rec_decay, stp_facil_decay) {
+                if let Err(e) = ctx.update_hidden(
+                    0,
+                    pre_slice,
+                    rel_slice,
+                    bio.stp_u,
+                    stp_rec_decay,
+                    stp_facil_decay,
+                ) {
                     nm_log!("[warn] OpenCL STP hidden[0] update failed: {:?}", e);
-                    disable_cl_stp(&mut cl_stp, &mut stp_u_sensory, &mut stp_x_sensory, &mut stp_u_hidden, &mut stp_x_hidden);
+                    disable_cl_stp(
+                        &mut cl_stp,
+                        &mut stp_u_sensory,
+                        &mut stp_x_sensory,
+                        &mut stp_u_hidden,
+                        &mut stp_x_hidden,
+                    );
                 } else {
                     use_cpu = false;
                 }
@@ -916,8 +1140,16 @@ pub fn run_snn(
                 for j in 0..num_hidden_per_layer {
                     let mut acc = 0.0;
                     for i in 0..num_sensory_neurons {
-                        let spike_val = if use_stp { sensory_release[i] } else if sensory_spikes[(t, i)] != 0 { 1.0 } else { 0.0 };
-                        if spike_val != 0.0 { acc += built.w_in[(j, i)] * spike_val; }
+                        let spike_val = if use_stp {
+                            sensory_release[i]
+                        } else if sensory_spikes[(t, i)] != 0 {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        if spike_val != 0.0 {
+                            acc += built.w_in[(j, i)] * spike_val;
+                        }
                     }
                     forward_currents_at_step[j] = acc;
                 }
@@ -928,23 +1160,32 @@ pub fn run_snn(
                 for i in 0..num_hidden_per_layer {
                     let spike_val = if use_stp {
                         stp_release_hidden[l - 1][i]
-                    } else if hidden_spike_recordings[l-1][(t, i)] != 0 {
+                    } else if hidden_spike_recordings[l - 1][(t, i)] != 0 {
                         1.0
                     } else {
                         0.0
                     };
                     if spike_val != 0.0 {
-                        acc += built.w_hh_fwd[l-1][(j, i)] * spike_val;
+                        acc += built.w_hh_fwd[l - 1][(j, i)] * spike_val;
                     }
                 }
                 forward_currents_at_step[j] = acc;
             }
             // backward from prev step of l+1
             let mut backward_currents_at_step = Array1::<f64>::zeros(num_hidden_per_layer);
-            if l < num_hidden_layers -1 {
+            if l < num_hidden_layers - 1 {
                 for j in 0..num_hidden_per_layer {
                     let mut acc = 0.0;
-                    for k in 0..num_hidden_per_layer { let prv = if t>0 { hidden_spike_recordings[l+1][(t-1, k)] != 0 } else { false }; if prv { acc += built.w_hh_bwd[l][(j, k)]; } }
+                    for k in 0..num_hidden_per_layer {
+                        let prv = if t > 0 {
+                            hidden_spike_recordings[l + 1][(t - 1, k)] != 0
+                        } else {
+                            false
+                        };
+                        if prv {
+                            acc += built.w_hh_bwd[l][(j, k)];
+                        }
+                    }
                     backward_currents_at_step[j] = acc;
                 }
             }
@@ -974,12 +1215,18 @@ pub fn run_snn(
                 NeuronModel::Lif => {
                     let refh = hidden_refractory_counters.as_mut().unwrap();
                     for j in 0..num_hidden_per_layer {
-                        let v = hidden_membrane_potentials[l][j] * membrane_decay_factor + forward_currents_at_step[j] + backward_currents_at_step[j];
+                        let v = hidden_membrane_potentials[l][j] * membrane_decay_factor
+                            + forward_currents_at_step[j]
+                            + backward_currents_at_step[j];
                         hidden_membrane_potentials[l][j] = v.clamp(-5.0, 5.0);
                         let active = refh[l][j] <= 0;
                         let fired = active && hidden_membrane_potentials[l][j] >= lif.v_th;
-                        if fired { hidden_membrane_potentials[l][j] = lif.v_reset; refh[l][j] = lif.refractory as i32; }
-                        else { refh[l][j] = (refh[l][j]-1).max(0); }
+                        if fired {
+                            hidden_membrane_potentials[l][j] = lif.v_reset;
+                            refh[l][j] = lif.refractory as i32;
+                        } else {
+                            refh[l][j] = (refh[l][j] - 1).max(0);
+                        }
                         spk[j] = fired as i8;
                     }
                 }
@@ -989,11 +1236,16 @@ pub fn run_snn(
                     for j in 0..num_hidden_per_layer {
                         let v = hidden_membrane_potentials[l][j];
                         let u = uh[l][j];
-                        let nv = v + p.dt * (0.04*v*v + 5.0*v + 140.0 - u + forward_currents_at_step[j] + backward_currents_at_step[j]);
-                        let nu = u + p.dt * (p.recovery_time_constant_a * (p.recovery_sensitivity_b*nv - u));
+                        let nv = v + p.dt
+                            * (0.04 * v * v + 5.0 * v + 140.0 - u
+                                + forward_currents_at_step[j]
+                                + backward_currents_at_step[j]);
+                        let nu = u + p.dt
+                            * (p.recovery_time_constant_a * (p.recovery_sensitivity_b * nv - u));
                         let mut fired = nv >= p.v_th;
                         if use_adaptive_threshold {
-                            let thr_offset = thr_offset_h[l][j].clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
+                            let thr_offset = thr_offset_h[l][j]
+                                .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
                             fired = nv >= (p.v_th + thr_offset);
                         }
                         if let Some(refh) = hidden_izh_refractory.as_mut() {
@@ -1002,10 +1254,17 @@ pub fn run_snn(
                                 fired = false;
                             }
                         }
-                        let (nv2, nu2) = if fired { (p.membrane_reset_potential_c, nu + p.recovery_increment_d) } else { (nv, nu) };
-                        hidden_membrane_potentials[l][j] = nv2; uh[l][j] = nu2; spk[j] = fired as i8;
+                        let (nv2, nu2) = if fired {
+                            (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
+                        } else {
+                            (nv, nu)
+                        };
+                        hidden_membrane_potentials[l][j] = nv2;
+                        uh[l][j] = nu2;
+                        spk[j] = fired as i8;
                         if fired && use_adaptive_threshold {
-                            thr_offset_h[l][j] = (thr_offset_h[l][j] + bio.adaptive_threshold_increment)
+                            thr_offset_h[l][j] = (thr_offset_h[l][j]
+                                + bio.adaptive_threshold_increment)
                                 .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
                         }
                         if fired {
@@ -1016,7 +1275,13 @@ pub fn run_snn(
                     }
                 }
             }
-            for j in 0..num_hidden_per_layer { hidden_spike_recordings[l][(t, j)] = spk[j]; if spk[j]!=0 { hidden_post_synaptic_traces[l][j]+=1.0; hidden_pre_synaptic_traces[l][j]+=1.0; } }
+            for j in 0..num_hidden_per_layer {
+                hidden_spike_recordings[l][(t, j)] = spk[j];
+                if spk[j] != 0 {
+                    hidden_post_synaptic_traces[l][j] += 1.0;
+                    hidden_pre_synaptic_traces[l][j] += 1.0;
+                }
+            }
             if use_stp {
                 #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
                 let mut use_cpu = true;
@@ -1024,9 +1289,22 @@ pub fn run_snn(
                 if let Some(ctx) = cl_stp.as_mut() {
                     let pre_slice = spk.as_slice().unwrap();
                     let rel_slice = stp_release_hidden[l].as_slice_mut().unwrap();
-                    if let Err(e) = ctx.update_hidden(l, pre_slice, rel_slice, bio.stp_u, stp_rec_decay, stp_facil_decay) {
+                    if let Err(e) = ctx.update_hidden(
+                        l,
+                        pre_slice,
+                        rel_slice,
+                        bio.stp_u,
+                        stp_rec_decay,
+                        stp_facil_decay,
+                    ) {
                         nm_log!("[warn] OpenCL STP hidden[{}] update failed: {:?}", l, e);
-                        disable_cl_stp(&mut cl_stp, &mut stp_u_sensory, &mut stp_x_sensory, &mut stp_u_hidden, &mut stp_x_hidden);
+                        disable_cl_stp(
+                            &mut cl_stp,
+                            &mut stp_u_sensory,
+                            &mut stp_x_sensory,
+                            &mut stp_u_hidden,
+                            &mut stp_x_hidden,
+                        );
                     } else {
                         use_cpu = false;
                     }
@@ -1090,12 +1368,17 @@ pub fn run_snn(
                 let mut r = Array1::<i8>::zeros(num_output_neurons);
                 let ro = output_refractory_counters.as_mut().unwrap();
                 for k in 0..num_output_neurons {
-                    let v = output_membrane_potentials[k] * membrane_decay_factor + output_layer_currents_at_step[k];
+                    let v = output_membrane_potentials[k] * membrane_decay_factor
+                        + output_layer_currents_at_step[k];
                     output_membrane_potentials[k] = v.clamp(-5.0, 5.0);
                     let active = ro[k] <= 0;
                     let fired = active && output_membrane_potentials[k] >= lif.v_th;
-                    if fired { output_membrane_potentials[k] = lif.v_reset; ro[k] = lif.refractory as i32; }
-                    else { ro[k] = (ro[k]-1).max(0); }
+                    if fired {
+                        output_membrane_potentials[k] = lif.v_reset;
+                        ro[k] = lif.refractory as i32;
+                    } else {
+                        ro[k] = (ro[k] - 1).max(0);
+                    }
                     r[k] = fired as i8;
                 }
                 r
@@ -1107,11 +1390,15 @@ pub fn run_snn(
                 for k in 0..num_output_neurons {
                     let v = output_membrane_potentials[k];
                     let uu = u[k];
-                    let nv = v + p.dt*(0.04*v*v + 5.0*v + 140.0 - uu + output_layer_currents_at_step[k]);
-                    let nu = uu + p.dt*(p.recovery_time_constant_a*(p.recovery_sensitivity_b*nv - uu));
+                    let nv = v + p.dt
+                        * (0.04 * v * v + 5.0 * v + 140.0 - uu + output_layer_currents_at_step[k]);
+                    let nu = uu
+                        + p.dt
+                            * (p.recovery_time_constant_a * (p.recovery_sensitivity_b * nv - uu));
                     let mut fired = nv >= p.v_th;
                     if use_adaptive_threshold {
-                        let thr_offset = thr_offset_o[k].clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
+                        let thr_offset = thr_offset_o[k]
+                            .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
                         fired = nv >= (p.v_th + thr_offset);
                     }
                     if let Some(ro) = output_izh_refractory.as_mut() {
@@ -1120,8 +1407,14 @@ pub fn run_snn(
                             fired = false;
                         }
                     }
-                    let (nv2, nu2) = if fired { (p.membrane_reset_potential_c, nu + p.recovery_increment_d) } else { (nv, nu) };
-                    output_membrane_potentials[k] = nv2; u[k] = nu2; r[k] = fired as i8;
+                    let (nv2, nu2) = if fired {
+                        (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
+                    } else {
+                        (nv, nu)
+                    };
+                    output_membrane_potentials[k] = nv2;
+                    u[k] = nu2;
+                    r[k] = fired as i8;
                     if fired && use_adaptive_threshold {
                         thr_offset_o[k] = (thr_offset_o[k] + bio.adaptive_threshold_increment)
                             .clamp(bio.adaptive_threshold_min, bio.adaptive_threshold_max);
@@ -1135,7 +1428,12 @@ pub fn run_snn(
                 r
             }
         };
-        for k in 0..num_output_neurons { output_spike_recordings[(t, k)] = output_layer_spikes_at_step[k]; if output_layer_spikes_at_step[k]!=0 { output_post_synaptic_traces[k]+=1.0; } }
+        for k in 0..num_output_neurons {
+            output_spike_recordings[(t, k)] = output_layer_spikes_at_step[k];
+            if output_layer_spikes_at_step[k] != 0 {
+                output_post_synaptic_traces[k] += 1.0;
+            }
+        }
         if use_homeostasis {
             for k in 0..num_output_neurons {
                 if output_layer_spikes_at_step[k] != 0 {
@@ -1149,71 +1447,160 @@ pub fn run_snn(
         // learning
         let eta = stdp.eta * neuromod_plasticity_gain;
         // W_in (targets in_l)
-        for j in 0..num_hidden_per_layer { for i in 0..num_sensory_neurons {
-            let pre = if sensory_spikes[(t,i)]!=0 { 1.0 } else { 0.0 };
-            let post = if hidden_spike_recordings[in_l][(t, j)]!=0 { 1.0 } else { 0.0 };
-            let dw = match learning {
-                Learning::Stdp | Learning::Aarnn => eta*((post* sensory_pre_synaptic_traces[i]) - (pre*hidden_post_synaptic_traces[in_l][j])),
-                Learning::Hebb => eta*(post*pre),
-                Learning::Oja => eta*((post*pre) - (post*post)*built.w_in[(j,i)]),
-            };
-            built.w_in[(j,i)] = (built.w_in[(j,i)] + dw).clamp(stdp.w_min, stdp.w_max);
-            if built.w_in[(j,i)].abs() > 1e-8 { conn_presence_in[j][i] += 1; }
-        }}
+        for j in 0..num_hidden_per_layer {
+            for i in 0..num_sensory_neurons {
+                let pre = if sensory_spikes[(t, i)] != 0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let post = if hidden_spike_recordings[in_l][(t, j)] != 0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let dw = match learning {
+                    Learning::Stdp | Learning::Aarnn => {
+                        eta * ((post * sensory_pre_synaptic_traces[i])
+                            - (pre * hidden_post_synaptic_traces[in_l][j]))
+                    }
+                    Learning::Hebb => eta * (post * pre),
+                    Learning::Oja => eta * ((post * pre) - (post * post) * built.w_in[(j, i)]),
+                };
+                built.w_in[(j, i)] = (built.w_in[(j, i)] + dw).clamp(stdp.w_min, stdp.w_max);
+                if built.w_in[(j, i)].abs() > 1e-8 {
+                    conn_presence_in[j][i] += 1;
+                }
+            }
+        }
         // Hidden forward/backward
-        for l in 0..num_hidden_layers -1 {
-            for j in 0..num_hidden_per_layer { for i in 0..num_hidden_per_layer {
-                let pre = if hidden_spike_recordings[l][(t, i)]!=0 { 1.0 } else { 0.0 };
-                let post = if hidden_spike_recordings[l+1][(t, j)]!=0 { 1.0 } else { 0.0 };
-                let dwf = match learning {
-                    Learning::Stdp | Learning::Aarnn => eta*((post* hidden_pre_synaptic_traces[l][i]) - (pre*hidden_post_synaptic_traces[l+1][j])),
-                    Learning::Hebb => eta*(post*pre),
-                    Learning::Oja => eta*((post*pre) - (post*post)*built.w_hh_fwd[l][(j,i)]),
-                };
-                built.w_hh_fwd[l][(j,i)] = (built.w_hh_fwd[l][(j,i)] + dwf).clamp(stdp.w_min, stdp.w_max);
-                if built.w_hh_fwd[l][(j,i)].abs() > 1e-8 { conn_presence_fwd[l][j][i] += 1; }
-                let dwb = match learning {
-                    Learning::Stdp | Learning::Aarnn => eta*((pre* hidden_pre_synaptic_traces[l+1][j]) - (post*hidden_post_synaptic_traces[l][i])),
-                    Learning::Hebb => eta*(post*pre),
-                    Learning::Oja => eta*((post*pre) - (post*post)*built.w_hh_bwd[l][(i,j)]),
-                };
-                built.w_hh_bwd[l][(i,j)] = (built.w_hh_bwd[l][(i,j)] + dwb).clamp(stdp.w_min, stdp.w_max);
-                if built.w_hh_bwd[l][(i,j)].abs() > 1e-8 { conn_presence_bwd[l][i][j] += 1; }
-            }}
+        for l in 0..num_hidden_layers - 1 {
+            for j in 0..num_hidden_per_layer {
+                for i in 0..num_hidden_per_layer {
+                    let pre = if hidden_spike_recordings[l][(t, i)] != 0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let post = if hidden_spike_recordings[l + 1][(t, j)] != 0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let dwf = match learning {
+                        Learning::Stdp | Learning::Aarnn => {
+                            eta * ((post * hidden_pre_synaptic_traces[l][i])
+                                - (pre * hidden_post_synaptic_traces[l + 1][j]))
+                        }
+                        Learning::Hebb => eta * (post * pre),
+                        Learning::Oja => {
+                            eta * ((post * pre) - (post * post) * built.w_hh_fwd[l][(j, i)])
+                        }
+                    };
+                    built.w_hh_fwd[l][(j, i)] =
+                        (built.w_hh_fwd[l][(j, i)] + dwf).clamp(stdp.w_min, stdp.w_max);
+                    if built.w_hh_fwd[l][(j, i)].abs() > 1e-8 {
+                        conn_presence_fwd[l][j][i] += 1;
+                    }
+                    let dwb = match learning {
+                        Learning::Stdp | Learning::Aarnn => {
+                            eta * ((pre * hidden_pre_synaptic_traces[l + 1][j])
+                                - (post * hidden_post_synaptic_traces[l][i]))
+                        }
+                        Learning::Hebb => eta * (post * pre),
+                        Learning::Oja => {
+                            eta * ((post * pre) - (post * post) * built.w_hh_bwd[l][(i, j)])
+                        }
+                    };
+                    built.w_hh_bwd[l][(i, j)] =
+                        (built.w_hh_bwd[l][(i, j)] + dwb).clamp(stdp.w_min, stdp.w_max);
+                    if built.w_hh_bwd[l][(i, j)].abs() > 1e-8 {
+                        conn_presence_bwd[l][i][j] += 1;
+                    }
+                }
+            }
         }
         // W_out (sourced from out_l)
-        for k in 0..num_output_neurons { for j in 0..num_hidden_per_layer {
-            let pre = if hidden_spike_recordings[out_l][(t, j)]!=0 { 1.0 } else { 0.0 };
-            let post = if output_layer_spikes_at_step[k]!=0 { 1.0 } else { 0.0 };
-            let dw = match learning {
-                Learning::Stdp | Learning::Aarnn => eta*((post* hidden_pre_synaptic_traces[out_l][j]) - (pre*output_post_synaptic_traces[k])),
-                Learning::Hebb => eta*(post*pre),
-                Learning::Oja => eta*((post*pre) - (post*post)*built.w_out[(k,j)]),
-            };
-            built.w_out[(k,j)] = (built.w_out[(k,j)] + dw).clamp(stdp.w_min, stdp.w_max);
-            if built.w_out[(k,j)].abs() > 1e-8 { conn_presence_out[k][j] += 1; }
-        }}
+        for k in 0..num_output_neurons {
+            for j in 0..num_hidden_per_layer {
+                let pre = if hidden_spike_recordings[out_l][(t, j)] != 0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let post = if output_layer_spikes_at_step[k] != 0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let dw = match learning {
+                    Learning::Stdp | Learning::Aarnn => {
+                        eta * ((post * hidden_pre_synaptic_traces[out_l][j])
+                            - (pre * output_post_synaptic_traces[k]))
+                    }
+                    Learning::Hebb => eta * (post * pre),
+                    Learning::Oja => eta * ((post * pre) - (post * post) * built.w_out[(k, j)]),
+                };
+                built.w_out[(k, j)] = (built.w_out[(k, j)] + dw).clamp(stdp.w_min, stdp.w_max);
+                if built.w_out[(k, j)].abs() > 1e-8 {
+                    conn_presence_out[k][j] += 1;
+                }
+            }
+        }
     }
 
     // --- Compute longterm connections ---
     let min_steps = (steps as f32 * 0.75).ceil() as usize;
     let mut longterm = 0;
     let mut total = 0;
-    for j in 0..num_hidden_per_layer { for i in 0..num_sensory_neurons {
-        if conn_presence_in[j][i] > 0 { total += 1; if conn_presence_in[j][i] >= min_steps { longterm += 1; } }
-    }}
-    for l in 0..num_hidden_layers.saturating_sub(1) { for j in 0..num_hidden_per_layer { for i in 0..num_hidden_per_layer {
-        if conn_presence_fwd[l][j][i] > 0 { total += 1; if conn_presence_fwd[l][j][i] >= min_steps { longterm += 1; } }
-        if conn_presence_bwd[l][j][i] > 0 { total += 1; if conn_presence_bwd[l][j][i] >= min_steps { longterm += 1; } }
-    }}}
-    for k in 0..num_output_neurons { for j in 0..num_hidden_per_layer {
-        if conn_presence_out[k][j] > 0 { total += 1; if conn_presence_out[k][j] >= min_steps { longterm += 1; } }
-    }}
+    for j in 0..num_hidden_per_layer {
+        for i in 0..num_sensory_neurons {
+            if conn_presence_in[j][i] > 0 {
+                total += 1;
+                if conn_presence_in[j][i] >= min_steps {
+                    longterm += 1;
+                }
+            }
+        }
+    }
+    for l in 0..num_hidden_layers.saturating_sub(1) {
+        for j in 0..num_hidden_per_layer {
+            for i in 0..num_hidden_per_layer {
+                if conn_presence_fwd[l][j][i] > 0 {
+                    total += 1;
+                    if conn_presence_fwd[l][j][i] >= min_steps {
+                        longterm += 1;
+                    }
+                }
+                if conn_presence_bwd[l][j][i] > 0 {
+                    total += 1;
+                    if conn_presence_bwd[l][j][i] >= min_steps {
+                        longterm += 1;
+                    }
+                }
+            }
+        }
+    }
+    for k in 0..num_output_neurons {
+        for j in 0..num_hidden_per_layer {
+            if conn_presence_out[k][j] > 0 {
+                total += 1;
+                if conn_presence_out[k][j] >= min_steps {
+                    longterm += 1;
+                }
+            }
+        }
+    }
 
     SimOut {
         spikes_h: hidden_spike_recordings,
         spikes_o: output_spike_recordings,
-        weights: WeightsOut { w_in: built.w_in, w_hh_fwd: built.w_hh_fwd, w_hh_bwd: built.w_hh_bwd, w_out: built.w_out },
+        weights: WeightsOut {
+            w_in: built.w_in,
+            w_hh_fwd: built.w_hh_fwd,
+            w_hh_bwd: built.w_hh_bwd,
+            w_out: built.w_out,
+        },
         longterm_conn: longterm,
         total_conn: total,
     }
@@ -1250,8 +1637,10 @@ mod tests {
         let mut ampa = Array1::zeros(2);
         let mut nmda = Array1::zeros(2);
         let mut gaba = Array1::zeros(2);
-        let out = apply_synaptic_filter(&raw, &mut ampa, &mut nmda, &mut gaba, 0.9, 0.9, 0.9, 0.25, 1.0);
-        
+        let out = apply_synaptic_filter(
+            &raw, &mut ampa, &mut nmda, &mut gaba, 0.9, 0.9, 0.9, 0.25, 1.0,
+        );
+
         // Index 0: raw=1.0 (excitatory)
         // ampa[0] = 0*0.9 + 1.0*(1-0.25) = 0.75
         // nmda[0] = 0*0.9 + 1.0*0.25 = 0.25
@@ -1274,11 +1663,11 @@ mod tests {
         let mut x = Array1::from(vec![1.0, 1.0]);
         let mut release = Array1::zeros(2);
         stp_update_cpu(&pre_spks, &mut u, &mut x, &mut release, 0.2, 0.9, 0.9);
-        
+
         // Spike at index 0
         assert!(release[0] > 0.0);
         assert!(x[0] < 1.0);
-        
+
         // No spike at index 1
         assert_eq!(release[1], 0.0);
         assert_eq!(x[1], 1.0);
@@ -1292,9 +1681,18 @@ mod tests {
         let stdp = STDPParams::default();
         let built = build_network(&cfg, &mut rng);
         let sensory_spikes = Array2::<i8>::zeros((10, cfg.num_sensory_neurons));
-        
-        let out = run_snn(10.0, &lif, &stdp, &cfg, built, &sensory_spikes, NeuronModel::Lif, Learning::Stdp);
-        
+
+        let out = run_snn(
+            10.0,
+            &lif,
+            &stdp,
+            &cfg,
+            built,
+            &sensory_spikes,
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+
         assert_eq!(out.spikes_h.len(), cfg.num_hidden_layers);
         assert_eq!(out.spikes_o.shape(), &[10, cfg.num_output_neurons]);
     }
