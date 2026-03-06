@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: neuromorphic-platform
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/neuralmimicry/neuromorphic_demo.git
+    targetRevision: HEAD
+    path: deploy/overlays/developer
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: neuromorphic
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

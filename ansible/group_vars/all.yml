@@ -1,0 +1,47 @@
+---
+# Local project root (controller)
+project_root: "{{ playbook_dir }}/.."
+
+# Remote repo path on qc01
+repo_path: "/home/{{ ansible_user }}/Developer/neuralmimicry/neuromorphic_demo"
+
+# Deployment method: rsync (syncs current working tree) or git (clones/pulls)
+deploy_method: git
+
+# Git deployment settings
+# Set git_use_ssh=true to use git_repo_url_ssh and SSH agent forwarding.
+git_use_ssh: false
+git_repo_url: "https://github.com/neuralmimicry/neuromorphic_demo.git"
+git_repo_url_ssh: "git@github.com:neuralmimicry/neuromorphic_demo.git"
+git_branch: "brainregions"
+git_accept_hostkey: true
+git_update: true
+git_depth: 1
+git_single_branch: true
+
+# Local test command (override with -e local_test_command=...)
+run_local_tests: true
+local_test_command: "cargo test --all-features"
+
+# Container build settings
+image_name: ghcr.io/neuralmimicry/neuromorphic_demo
+image_tag: brainregions
+cargo_features: all
+python_min_version: "3.12"
+python_full_version: "3.12.2"
+no_cache: false
+skip_remote_manifest: true
+push_image: false
+
+# Validation command on qc01
+validate_command: "podman run --rm {{ image_name }}:{{ image_tag }}-{{ image_arch }} --help"
+
+# Rsync exclusions (when deploy_method=rsync)
+rsync_excludes:
+  - "target"
+  - ".venv"
+  - "outputs"
+  - "logs"
+  - "__pycache__"
+  - "*.log"
+  - "*.tmp"

@@ -1,0 +1,22 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: neuromorphic
+  namespace: neuromorphic
+spec:
+  hosts:
+    - neuromorphic.example.internal
+  gateways:
+    - mesh
+  http:
+    - route:
+        - destination:
+            host: neuromorphic-stable
+          weight: 100
+        - destination:
+            host: neuromorphic-canary
+          weight: 0
+      mirror:
+        host: neuromorphic-shadow
+      mirrorPercentage:
+        value: 10.0

@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: neuromorphic
+  namespace: neuromorphic
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: neuromorphic
+  template:
+    metadata:
+      labels:
+        app: neuromorphic
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/neuralmimicry/neuromorphic_demo:brainregions
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+  strategy:
+    canary:
+      stableService: neuromorphic-stable
+      canaryService: neuromorphic-canary
+      steps:
+        - setWeight: 10
+        - pause: {duration: 60}
+        - setWeight: 25
+        - pause: {duration: 60}
+        - setWeight: 50
+        - pause: {duration: 60}
+        - setWeight: 100

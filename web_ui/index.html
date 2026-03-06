@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neuromorphic Remote UI</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="title">Neuromorphic Network</div>
+          <div class="subtitle">Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)</div>
+        </div>
+        <div class="topbar-right">
+          <span id="user-status">Signed out</span>
+          <button class="btn ghost small" id="logout-btn" type="button">Logout</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <main class="main">
+          <section class="network-panel">
+            <div class="panel-header">
+              <div class="panel-left">
+                <div class="panel-title">Network</div>
+                <div class="panel-hint">Right-click a node or edge to add a probe</div>
+              </div>
+              <div class="panel-actions">
+                <div class="panel-select">
+                  <label>Network</label>
+                  <select id="network-select"></select>
+                </div>
+                <div class="panel-select">
+                  <label>Node</label>
+                  <select id="node-select"></select>
+                </div>
+              </div>
+            </div>
+            <div class="panel-controls">
+              <label class="check">
+                <input type="checkbox" id="full-topology" />
+                Full topology
+              </label>
+              <div class="control-group layout-group">
+                <span>Layout</span>
+                <div class="segmented compact">
+                  <button class="seg layout-toggle" data-layout="conventional" type="button">Conventional</button>
+                  <button class="seg layout-toggle" data-layout="aarnn" type="button">AARNN</button>
+                </div>
+              </div>
+              <div class="control-group">
+                <span>Edge limit</span>
+                <input type="range" id="edge-limit" min="200" max="20000" step="200" value="6000" />
+                <span id="edge-limit-value">6000</span>
+              </div>
+              <div class="control-group">
+                <span>Weight threshold</span>
+                <input type="range" id="weight-threshold" min="0" max="1" step="0.01" value="0.35" />
+                <span id="weight-threshold-value">0.35</span>
+              </div>
+              <div class="panel-metric">Edges drawn: <span id="edge-count">0</span></div>
+            </div>
+            <div class="network-view">
+              <div class="network-orbit"></div>
+              <canvas id="network-canvas" width="700" height="520"></canvas>
+              <svg class="network-graph" viewBox="0 0 200 200" aria-hidden="true">
+                <g stroke="#19e073" stroke-width="1.4" opacity="0.9" fill="#ffb84d">
+                  <circle cx="100" cy="78" r="3" fill="#ff7f2a"/>
+                  <circle cx="84" cy="92" r="3" fill="#ff7f2a"/>
+                  <circle cx="116" cy="92" r="3" fill="#ff7f2a"/>
+                  <circle cx="72" cy="110" r="3" fill="#ff7f2a"/>
+                  <circle cx="128" cy="110" r="3" fill="#ff7f2a"/>
+                  <circle cx="90" cy="124" r="3" fill="#ff7f2a"/>
+                  <circle cx="110" cy="124" r="3" fill="#ff7f2a"/>
+                  <line x1="100" y1="78" x2="84" y2="92" />
+                  <line x1="100" y1="78" x2="116" y2="92" />
+                  <line x1="84" y1="92" x2="72" y2="110" />
+                  <line x1="116" y1="92" x2="128" y2="110" />
+                  <line x1="72" y1="110" x2="90" y2="124" />
+                  <line x1="128" y1="110" x2="110" y2="124" />
+                  <line x1="90" y1="124" x2="110" y2="124" />
+                  <line x1="84" y1="92" x2="116" y2="92" />
+                </g>
+              </svg>
+            </div>
+          </section>
+
+          <section class="bottom-panels">
+            <div class="small-panel">
+              <div class="panel-title">Graphic EQ</div>
+              <div class="panel-body muted">No data</div>
+            </div>
+            <div class="small-panel">
+              <div class="panel-title">Oscilloscope</div>
+              <div class="panel-body muted">No probes</div>
+            </div>
+            <div class="small-panel">
+              <div class="panel-title">Output raster</div>
+              <div class="panel-body muted">No spikes</div>
+            </div>
+          </section>
+        </main>
+
+        <aside class="sidebar">
+          <section class="panel">
+            <div class="panel-title">Controls</div>
+            <div class="panel-row">
+              <button class="btn ghost" id="start-stop" title="Start or stop simulation stepping" disabled>Start</button>
+              <button class="btn ghost" id="repeat" title="Reset state and start from t=0" disabled>Repeat</button>
+              <button class="btn ghost" id="reset" title="Reset to startup state (stopped)" disabled>Reset</button>
+              <button class="btn ghost" id="new" title="Create a fresh single-neuron network (clears loaded snapshot)" disabled>New</button>
+            </div>
+          </section>
+
+          <section class="panel" id="resource-panel">
+            <div class="panel-title">Resources &amp; Performance</div>
+            <div class="panel-list">
+              <div>CPU: <span id="cpu">0.0%</span></div>
+              <div>RAM: <span id="ram">0 MB</span></div>
+              <div>Temp: <span id="temp">n/a</span></div>
+              <div>GPU: <span id="gpu">Detected (OpenCL)</span></div>
+              <div>GPU Status: <span id="gpu-status">Inactive</span></div>
+              <div>Threads: <span id="threads">-</span></div>
+              <div>GA Running: <span id="ga-running">No</span></div>
+              <div>GA Pacing: <span id="ga-pacing">No</span></div>
+              <div>GA Ramp: <span id="ga-ramp">No</span></div>
+              <div>Generation / Progress: <span id="ga-progress">-</span></div>
+              <div>Best Fitness: <span id="ga-best">-</span></div>
+              <div>Step time: <span id="step-time">0.00 ms</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Remote Orchestrators</div>
+            <div class="panel-row">
+              <input id="addr" type="text" placeholder="http://host:50051" />
+              <button class="btn" id="add">Add</button>
+            </div>
+            <div id="targets" class="targets"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Network Architecture</div>
+            <div class="panel-row">
+              <label>Neuron model</label>
+              <div class="segmented" id="model-selector">
+                <button class="seg" data-model="lif">LIF</button>
+                <button class="seg" data-model="izh">Izh</button>
+                <button class="seg active" data-model="aarnn">AARNN</button>
+              </div>
+            </div>
+            <div class="panel-row">
+              <label>Learning rule</label>
+              <div class="segmented" id="learning-selector">
+                <button class="seg" data-learning="stdp">STDP</button>
+                <button class="seg" data-learning="hebb">Hebb</button>
+                <button class="seg" data-learning="oja">Oja</button>
+                <button class="seg active" data-learning="aarnn">AARNN</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">AARNN Bio Dynamics</div>
+            <div class="panel-row">
+              <label>Synaptic Energy Randomness</label>
+              <input type="range" id="aarnn-randomness" min="0" max="1" step="0.01" value="0.10" />
+              <span id="aarnn-randomness-value">0.10</span>
+            </div>
+            <div class="panel-row">
+              <label>Algorithm Realism Depth</label>
+              <input type="range" id="aarnn-depth" min="0" max="5" step="1" value="5" />
+              <span id="aarnn-depth-value">5</span>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Conduction / Neuromod</div>
+            <div class="panel-row">
+              <label class="check"><input type="checkbox" id="use-delays" checked /> Use Conduction Delays</label>
+              <label class="check"><input type="checkbox" id="use-morphology" checked /> Use morphology</label>
+              <label class="check"><input type="checkbox" id="use-stp" checked /> STP</label>
+              <label class="check"><input type="checkbox" id="use-neuromod" checked /> Neuromodulation</label>
+              <button class="btn ghost" id="reset-bio">Reset Bio defaults</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Topology / Morphology</div>
+            <div class="panel-row">
+              <label>Clumping Design</label>
+              <select id="clumping-design">
+                <option value="None">None</option>
+                <option value="HumanBrain" selected>Human Brain</option>
+                <option value="FruitFly">Fruit Fly (Adult)</option>
+                <option value="FruitFlyLarva">Fruit Fly (Larva)</option>
+                <option value="ZebraFish">Zebra Fish</option>
+                <option value="NematodeWorm">Nematode Worm</option>
+              </select>
+            </div>
+            <div class="panel-row">
+              <label class="check"><input type="checkbox" id="evolution-3d" checked /> Topology Evolution (3D)</label>
+              <label class="check"><input type="checkbox" id="growth-3d" checked /> Enable growth 3D topology</label>
+              <label class="check"><input type="checkbox" id="show-region-labels" checked /> Show region labels</label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Tools &amp; Model I/O</div>
+            <div class="panel-row">
+              <button class="btn" id="export-neuroml">Export NeuroML</button>
+              <button class="btn" id="export-pynn">Export PyNN</button>
+            </div>
+          </section>
+
+          <section class="panel" id="cluster-panel">
+            <div class="panel-title">Cluster Dashboard</div>
+            <div class="panel-list" id="cluster-summary">
+              <div>Nodes connected: <span id="nodes-count">0</span></div>
+              <div>Active networks: <span id="networks-count">0</span></div>
+            </div>
+            <div id="cluster-nodes" class="panel-sublist"></div>
+            <div id="cluster-networks" class="panel-sublist"></div>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <template id="target-row">
+      <div class="target-row">
+        <button class="target-btn"></button>
+        <button class="target-remove">Remove</button>
+      </div>
+    </template>
+
+    <footer class="footer">
+      <span>Polling every 2 seconds</span>
+    </footer>
+
+    <div id="auth-overlay" class="auth-overlay hidden">
+      <div class="auth-card">
+        <div class="auth-title">Sign in</div>
+        <div class="auth-subtitle" id="auth-message">Authentication required.</div>
+        <form id="login-form" class="auth-form">
+          <label for="login-username">Username</label>
+          <input id="login-username" type="text" autocomplete="username" />
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" autocomplete="current-password" />
+          <div class="auth-actions">
+            <button class="btn" id="login-submit" type="submit">Login</button>
+            <button class="btn ghost" id="signup-btn" type="button">Sign up</button>
+          </div>
+          <div class="auth-error" id="login-error"></div>
+        </form>
+        <div class="auth-divider">or</div>
+        <a class="btn" id="oidc-login" href="/auth/oidc/login">Continue with SSO</a>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

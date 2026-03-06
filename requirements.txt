@@ -1,0 +1,18 @@
+# Use full tensorflow on aarch64 because tensorflow-cpu wheels are missing for cp39.
+# On other platforms, tensorflow-cpu is used to reduce image size.
+tensorflow; platform_machine == "aarch64"
+tensorflow-cpu; platform_machine != "aarch64"
+numpy<=2.4.2
+matplotlib
+soundfile
+sounddevice
+PyQt6>=6.7.1
+# Model I/O (export/import)
+onnx<=1.20.1
+onnxruntime<=1.24.1
+# For FlatBuffer fallback parsing of TFLite models
+flatbuffers
+# Preferred TFLite schema bindings for FlatBuffer parsing (Python < 3.12)
+tflite-support<=0.4.4; python_version < "3.12"
+# TFLite schema bindings for Python 3.12+ (tflite-support uses the removed imp module)
+tflite; python_version >= "3.12"

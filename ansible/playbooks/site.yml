@@ -1,0 +1,131 @@
+---
+- name: Test local source (controller)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Verify current branch is expected
+      ansible.builtin.command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ project_root }}"
+      register: local_branch
+      changed_when: false
+      failed_when: local_branch.stdout != git_branch
+
+    - name: Run local tests
+      ansible.builtin.shell: "{{ local_test_command }}"
+      args:
+        chdir: "{{ project_root }}"
+      when: run_local_tests | bool
+
+- name: Deploy and build on qc01
+  hosts: qc01
+  gather_facts: true
+  tasks:
+    - name: Select git repo URL
+      ansible.builtin.set_fact:
+        effective_git_repo_url: "{{ git_repo_url_ssh if git_use_ssh | bool else git_repo_url }}"
+        git_ssh_command: "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o IdentityAgent=$SSH_AUTH_SOCK"
+    - name: Ensure repo path exists
+      ansible.builtin.file:
+        path: "{{ repo_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure git is installed on qc01
+      ansible.builtin.command: git --version
+      changed_when: false
+      when: deploy_method == "git"
+
+    - name: Check GitHub reachability (quick fail)
+      ansible.builtin.shell: "timeout 20s git ls-remote {{ effective_git_repo_url }} refs/heads/{{ git_branch }} >/dev/null"
+      changed_when: false
+      when: deploy_method == "git"
+      environment:
+        GIT_SSH_COMMAND: "{{ git_ssh_command if (git_use_ssh | bool) else omit }}"
+
+    - name: Clone or update repo on qc01 (git)
+      ansible.builtin.git:
+        repo: "{{ effective_git_repo_url }}"
+        dest: "{{ repo_path }}"
+        version: "{{ git_branch }}"
+        update: "{{ git_update | bool }}"
+        accept_hostkey: "{{ git_accept_hostkey | bool }}"
+        depth: "{{ git_depth }}"
+        single_branch: "{{ git_single_branch | bool }}"
+        username: "{{ (lookup('env', 'GITHUB_USERNAME') | default('x-access-token', true)) if not (git_use_ssh | bool) else omit }}"
+        password: "{{ (lookup('env', 'GITHUB_TOKEN') | default('', true)) if not (git_use_ssh | bool) else omit }}"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_SSH_COMMAND: "{{ git_ssh_command if (git_use_ssh | bool) else omit }}"
+      when: deploy_method == "git"
+      no_log: "{{ not (git_use_ssh | bool) }}"
+
+    - name: Check rsync on controller
+      ansible.builtin.command: rsync --version
+      delegate_to: localhost
+      changed_when: false
+      when: deploy_method == "rsync"
+
+    - name: Check rsync on qc01
+      ansible.builtin.command: rsync --version
+      changed_when: false
+      when: deploy_method == "rsync"
+
+    - name: Sync source to qc01 (rsync)
+      ansible.posix.synchronize:
+        src: "{{ project_root }}/"
+        dest: "{{ repo_path }}/"
+        archive: true
+        delete: true
+        rsync_opts: "{{ rsync_excludes | map('regex_replace', '^(.*)$', '--exclude=\\1') | list }}"
+      delegate_to: localhost
+      when: deploy_method == "rsync"
+
+    - name: Verify remote branch is expected
+      ansible.builtin.command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ repo_path }}"
+      register: remote_branch
+      changed_when: false
+      failed_when: remote_branch.stdout != git_branch
+
+    - name: Ensure build script is executable
+      ansible.builtin.file:
+        path: "{{ repo_path }}/build_container.sh"
+        mode: "0755"
+
+    - name: Check podman availability
+      ansible.builtin.command: podman --version
+      register: podman_version
+      changed_when: false
+
+    - name: Map architecture to image suffix
+      ansible.builtin.set_fact:
+        image_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+
+    - name: Build container image on qc01
+      ansible.builtin.command: >-
+        ./build_container.sh
+        {{ image_name }}
+        {{ image_tag }}
+        {{ 'true' if push_image | bool else 'false' }}
+        {{ cargo_features }}
+      args:
+        chdir: "{{ repo_path }}"
+      environment:
+        NO_CACHE: "{{ 'true' if no_cache | bool else 'false' }}"
+        SKIP_REMOTE_MANIFEST: "{{ 'true' if skip_remote_manifest | bool else 'false' }}"
+        PYTHON_MIN_VERSION: "{{ python_min_version }}"
+        PYTHON_FULL_VERSION: "{{ python_full_version }}"
+
+    - name: Validate image exists
+      ansible.builtin.command: "podman image exists {{ image_name }}:{{ image_tag }}-{{ image_arch }}"
+      register: image_exists
+      changed_when: false
+      failed_when: image_exists.rc != 0
+
+    - name: Validate image can run
+      ansible.builtin.command: "{{ validate_command }}"
+      register: validate_run
+      changed_when: false

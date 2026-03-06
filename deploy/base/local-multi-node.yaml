@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-multi-node
+  labels:
+    app: neuromorphic
+    role: local-cluster
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neuromorphic
+      role: local-cluster
+  template:
+    metadata:
+      labels:
+        app: neuromorphic
+        role: local-cluster
+    spec:
+      containers:
+        - name: orchestrator
+          image: neuromorphic-demo:latest
+          args: ["--orchestrator", "--grpc-addr", "0.0.0.0:50051"]
+          ports:
+            - containerPort: 50051
+        - name: node-1
+          image: neuromorphic-demo:latest
+          args: ["--node", "--orchestrator-addr", "http://localhost:50051", "--brain-id", "node-1"]
+        - name: node-2
+          image: neuromorphic-demo:latest
+          args: ["--node", "--orchestrator-addr", "http://localhost:50051", "--brain-id", "node-2"]

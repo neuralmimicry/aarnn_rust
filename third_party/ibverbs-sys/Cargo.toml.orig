@@ -1,0 +1,33 @@
+[package]
+name = "ibverbs-sys"
+version = "0.3.2+55.0"
+edition = "2021"
+rust-version = "1.82" # unsafe extern in generated bindings
+
+description = "Raw, FFI bindings for RDMA ibverbs through rdma-core"
+readme = "../README.md"
+authors = [
+    "Jon Gjengset <jon@thesquareplanet.com>",
+    "Jonathan Behrens <fintelia@gmail.com>"
+]
+build = "build.rs"
+links = "ibverbs"
+
+homepage = "https://github.com/jonhoo/rust-ibverbs"
+repository = "https://github.com/jonhoo/rust-ibverbs.git"
+
+keywords = ["rdma", "ibverbs", "networking", "ffi"]
+categories = ["network-programming", "api-bindings"]
+
+license = "MIT OR Apache-2.0"
+
+exclude = ["vendor/rdma-core/build/"]
+
+[build-dependencies]
+bindgen = "0.71.1"
+cmake = "0.1.50"
+
+# to make -Zminimal-versions work
+[target.'cfg(any())'.dependencies]
+# https://github.com/rust-lang/rust-bindgen/pull/3048
+proc-macro2 = { version = "1.0.80", optional = true }

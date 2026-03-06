@@ -1,0 +1,261 @@
+warning: unused variable: `sy`
+    --> src/ui.rs:5612:30
+     |
+5612 |                         let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                              ^^ help: if this is intentional, prefix it with an underscore: `_sy`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `cy`
+    --> src/ui.rs:5612:34
+     |
+5612 |                         let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                                  ^^ help: if this is intentional, prefix it with an underscore: `_cy`
+
+warning: unused variable: `ui_snapshot_opt`
+    --> src/ui.rs:5880:21
+     |
+5880 |                 let ui_snapshot_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
+     |                     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ui_snapshot_opt`
+
+warning: unused variable: `x_ref`
+    --> src/ui.rs:5883:21
+     |
+5883 |                 let x_ref = panel_rect.center().x;
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_x_ref`
+
+warning: unused variable: `y_ref`
+    --> src/ui.rs:5884:21
+     |
+5884 |                 let y_ref = top + height * 0.5;
+     |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_y_ref`
+
+warning: unused variable: `sy`
+    --> src/ui.rs:5887:22
+     |
+5887 |                 let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                      ^^ help: if this is intentional, prefix it with an underscore: `_sy`
+
+warning: unused variable: `cy`
+    --> src/ui.rs:5887:26
+     |
+5887 |                 let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                          ^^ help: if this is intentional, prefix it with an underscore: `_cy`
+
+warning: unused variable: `sp`
+    --> src/ui.rs:5888:22
+     |
+5888 |                 let (sp, cp) = (pitch.sin(), pitch.cos());
+     |                      ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `cp`
+    --> src/ui.rs:5888:26
+     |
+5888 |                 let (sp, cp) = (pitch.sin(), pitch.cos());
+     |                          ^^ help: if this is intentional, prefix it with an underscore: `_cp`
+
+warning: unused variable: `scale_x`
+    --> src/ui.rs:5890:21
+     |
+5890 |                 let scale_x = panel_rect.width() * 0.3 * zoom;
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scale_x`
+
+warning: unused variable: `scale_y`
+    --> src/ui.rs:5891:21
+     |
+5891 |                 let scale_y = height * 0.45 * zoom;
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scale_y`
+
+warning: unused variable: `use_aarnn_layout`
+    --> src/ui.rs:5900:21
+     |
+5900 |                 let use_aarnn_layout = matches!(self.network_layout, NetworkLayout::Aarnn)
+     |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_use_aarnn_layout`
+
+warning: unused variable: `growth_enabled`
+    --> src/ui.rs:6088:17
+     |
+6088 |             let growth_enabled: bool = false;
+     |                 ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_growth_enabled`
+
+warning: unused variable: `x_ref`
+    --> src/ui.rs:6097:18
+     |
+6097 | ...   let (x_ref, y_ref) = (panel_rect.center().x, (panel_rect.top() + 30.0) + ((panel_rect.bottom() - 150.0).max(100.0) - (panel_...
+     |            ^^^^^ help: if this is intentional, prefix it with an underscore: `_x_ref`
+
+warning: unused variable: `y_ref`
+    --> src/ui.rs:6097:25
+     |
+6097 | ...   let (x_ref, y_ref) = (panel_rect.center().x, (panel_rect.top() + 30.0) + ((panel_rect.bottom() - 150.0).max(100.0) - (panel_...
+     |                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_y_ref`
+
+warning: unused variable: `sy`
+    --> src/ui.rs:6100:18
+     |
+6100 |             let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                  ^^ help: if this is intentional, prefix it with an underscore: `_sy`
+
+warning: unused variable: `cy`
+    --> src/ui.rs:6100:22
+     |
+6100 |             let (sy, cy) = (yaw.sin(), yaw.cos());
+     |                      ^^ help: if this is intentional, prefix it with an underscore: `_cy`
+
+warning: unused variable: `sp`
+    --> src/ui.rs:6101:18
+     |
+6101 |             let (sp, cp) = (pitch.sin(), pitch.cos());
+     |                  ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `cp`
+    --> src/ui.rs:6101:22
+     |
+6101 |             let (sp, cp) = (pitch.sin(), pitch.cos());
+     |                      ^^ help: if this is intentional, prefix it with an underscore: `_cp`
+
+warning: unused variable: `scale_x`
+    --> src/ui.rs:6102:17
+     |
+6102 |             let scale_x = panel_rect.width() * 0.3 * self.camera_zoom;
+     |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scale_x`
+
+warning: unused variable: `scale_y`
+    --> src/ui.rs:6103:17
+     |
+6103 |             let scale_y = ((panel_rect.bottom() - 150.0).max(100.0) - (panel_rect.top() + 30.0)) * 0.45 * self.camera_zoom;
+     |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scale_y`
+
+warning: unused variable: `show_morpho_overlays`
+    --> src/ui.rs:6113:18
+     |
+6113 |             let (show_morpho_overlays, morpho_opacity, show_transmissions, transmissions_opacity) = (false, 0.0f32, false, 0.0f32);
+     |                  ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_show_morpho_overlays`
+
+warning: unused variable: `morpho_opacity`
+    --> src/ui.rs:6113:40
+     |
+6113 |             let (show_morpho_overlays, morpho_opacity, show_transmissions, transmissions_opacity) = (false, 0.0f32, false, 0.0f32);
+     |                                        ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_morpho_opacity`
+
+warning: unused variable: `show_transmissions`
+    --> src/ui.rs:6113:56
+     |
+6113 |             let (show_morpho_overlays, morpho_opacity, show_transmissions, transmissions_opacity) = (false, 0.0f32, false, 0.0f32);
+     |                                                        ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_show_transmissions`
+
+warning: unused variable: `transmissions_opacity`
+    --> src/ui.rs:6113:76
+     |
+6113 |             let (show_morpho_overlays, morpho_opacity, show_transmissions, transmissions_opacity) = (false, 0.0f32, false, 0.0f32);
+     |                                                                            ^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_transmissions_opacity`
+
+warning: unused variable: `hidden_layers_len`
+    --> src/ui.rs:7553:17
+     |
+7553 |             let hidden_layers_len = self.hidden_positions.len();
+     |                 ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_hidden_layers_len`
+
+warning: unused variable: `raster_outputs`
+    --> src/ui.rs:7554:17
+     |
+7554 |             let raster_outputs = self.raster_outputs.clone();
+     |                 ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_raster_outputs`
+
+warning: multiple fields are never read
+   --> src/ui.rs:207:5
+    |
+206 | struct IpcStats {
+    |        -------- fields in this struct
+207 |     connected: bool,
+    |     ^^^^^^^^^
+208 |     frame_count: u64,
+    |     ^^^^^^^^^^^
+209 |     drop_count: u64,
+    |     ^^^^^^^^^^
+210 |     size_mismatch_count: u64,
+    |     ^^^^^^^^^^^^^^^^^^^
+211 |     last_peer: Option<String>,
+    |     ^^^^^^^^^
+212 |     last_receive_time: Option<std::time::Instant>,
+    |     ^^^^^^^^^^^^^^^^^
+213 |     last_steps: usize,
+    |     ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variants `SetDt`, `ResizeOutput`, `BindIpc`, `SetIpcNeuronsPerValue`, `SetIpcThreshold`, and `Shutdown` are never constructed
+   --> src/ui.rs:224:5
+    |
+217 | enum SimControl {
+    |      ---------- variants in this enum
+...
+224 |     SetDt(f64),
+    |     ^^^^^
+225 |     ResizeSensory(usize),
+226 |     ResizeOutput(usize),
+    |     ^^^^^^^^^^^^
+...
+231 |     BindIpc(String, usize, usize),
+    |     ^^^^^^^
+232 |     SetIpcNeuronsPerValue(usize),
+    |     ^^^^^^^^^^^^^^^^^^^^^
+233 |     SetIpcThreshold(f32),
+    |     ^^^^^^^^^^^^^^^
+234 |     SetFeedback(bool),
+235 |     Shutdown,
+    |     ^^^^^^^^
+
+warning: field `overlay_density` is never read
+   --> src/ui.rs:266:5
+    |
+265 | struct EdgeCacheRequest {
+    |        ---------------- field in this struct
+266 |     overlay_density: usize,
+    |     ^^^^^^^^^^^^^^^
+
+warning: fields `ipc_stats`, `ga_leaderboard_idx`, `boost_connectivity_count`, `last_step_duration`, and `last_ui_render_time` are never read
+   --> src/ui.rs:335:5
+    |
+317 | struct App {
+    |        --- fields in this struct
+...
+335 |     ipc_stats: Arc<RwLock<IpcStats>>,
+    |     ^^^^^^^^^
+...
+354 |     ga_leaderboard_idx: Option<usize>,
+    |     ^^^^^^^^^^^^^^^^^^
+...
+430 |     boost_connectivity_count: usize,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+487 |     last_step_duration: std::time::Duration,
+    |     ^^^^^^^^^^^^^^^^^^
+...
+521 |     last_ui_render_time: std::time::Instant,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `runner_try_r`, `show_layer_connection_summary`, and `get_incoming_synapses` are never used
+   --> src/ui.rs:586:8
+    |
+582 | impl App {
+    | -------- methods in this implementation
+...
+586 |     fn runner_try_r(&self) -> Option<tokio::sync::RwLockReadGuard<'_, Runner>> {
+    |        ^^^^^^^^^^^^
+...
+654 |         fn show_layer_connection_summary(&self, ui: &mut egui::Ui) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+662 |     fn get_incoming_synapses(&self, runner: &Runner, pick: ContextPick) -> Vec<(isize, usize, usize)> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `SnapshotTopo` is never constructed
+    --> src/ui.rs:2233:8
+     |
+2233 | struct SnapshotTopo {
+     |        ^^^^^^^^^^^^
+
+warning: `neuromorphic_demo` (lib) generated 33 warnings (run `cargo fix --lib -p neuromorphic_demo` to apply 27 suggestions)
+warning: `neuromorphic_demo` (bin "neuromorphic_demo") generated 33 warnings (33 duplicates)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s

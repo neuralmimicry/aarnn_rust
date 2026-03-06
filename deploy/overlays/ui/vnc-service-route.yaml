@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: standalone-ui
+  labels:
+    app: neuromorphic
+    role: standalone
+spec:
+  ports:
+    - name: novnc
+      port: 8080
+      targetPort: novnc
+  selector:
+    app: neuromorphic
+    role: standalone
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: standalone-ui
+  labels:
+    app: neuromorphic
+    role: standalone
+spec:
+  to:
+    kind: Service
+    name: standalone-ui
+    weight: 100
+  port:
+    targetPort: novnc
+  tls:
+    termination: edge
