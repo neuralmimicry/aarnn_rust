@@ -1,0 +1,21 @@
+# Build outputs and caches
+target
+logs
+**/__pycache__
+*.pyc
+
+# VCS and editor files
+.git
+.github
+.gitignore
+.vscode
+.idea
+
+# Local runtime junk
+outputs
+*.log
+*.tmp
+
+# Large local/generated content not needed for the container build
+webots_world/controllers/**/build
+examples/build
