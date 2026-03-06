@@ -1,0 +1,222 @@
+[package]
+name = "opencv"
+description = "Rust bindings for OpenCV"
+documentation = "https://docs.rs/opencv"
+repository = "https://github.com/twistedfall/opencv-rust"
+readme = "README.md"
+keywords = ["opencv", "vision", "cv"]
+categories = ["api-bindings", "computer-vision", "external-ffi-bindings", "multimedia"]
+license = "MIT"
+version = "0.98.1"
+# bump edition to 2024 when MSRV is 1.85
+edition = "2021"
+rust-version = "1.82.0"
+authors = ["Pro <twisted.fall@gmail.com>", "Mathieu Poumeyrol <kali@zoy.org>"]
+exclude = ["/.github", "/ci", "/tools", "/.editorconfig", "/.gitattributes", "/release.toml", "/rustfmt.toml", ".gitignore"]
+
+[lib]
+doctest = false
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[workspace]
+members = ["binding-generator"]
+
+[dependencies]
+half = { version = "2", optional = true }
+libc = "0.2"
+num-traits = "0.2"
+# version 0.8.20 doesn't contain the deficiency mentioned in https://deps.rs/crate/opencv/0.59.0#vulnerabilities
+rgb = { version = "0.8.20", default-features = false, features = ["argb"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# windows-0.60+ breaks the build in some cases: https://github.com/twistedfall/opencv-rust/issues/660
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D9", "Win32_Graphics_Direct3D10", "Win32_Graphics_Direct3D11"] }
+
+[build-dependencies]
+opencv-binding-generator = { version = "0.100.0", path = "binding-generator" }
+cc = { version = "1.0.83", features = ["parallel"] }
+dunce = "1"
+# jobserver-0.1.25 is the first one that has Client::available() method
+jobserver = "0.1.25"
+pkg-config = "0.3"
+semver = "1"
+shlex = { version = "1.3", default-features = false }
+# vcpkg-0.2.9 is the first one that has accessible find_vcpkg_root()
+vcpkg = "0.2.9"
+
+[dev-dependencies]
+matches = "0.1"
+# copy of build-dependencies because we need to test methods of the build script
+opencv-binding-generator = { version = "0.100.0", path = "binding-generator" }
+cc = { version = "1.0.83", features = ["parallel"] }
+dunce = "1"
+# jobserver-0.1.25 is the first one that has Client::available() method
+jobserver = "0.1.25"
+pkg-config = "0.3"
+semver = "1"
+shlex = { version = "1.3", default-features = false }
+# vcpkg-0.2.9 is the first one that has accessible find_vcpkg_root()
+vcpkg = "0.2.9"
+
+[features]
+default = [
+	"3d",
+	"alphamat",
+	"aruco",
+	"aruco_detector",
+	"barcode",
+	"bgsegm",
+	"bioinspired",
+	"calib",
+	"calib3d",
+	#"cannops",
+	"ccalib",
+	"cudaarithm",
+	"cudabgsegm",
+	"cudacodec",
+	"cudafeatures2d",
+	"cudafilters",
+	"cudaimgproc",
+	"cudalegacy",
+	"cudaobjdetect",
+	"cudaoptflow",
+	"cudastereo",
+	"cudawarping",
+	#"cudev",
+	"cvv",
+	"dnn",
+	"dnn_superres",
+	"dpm",
+	"face",
+	"features",
+	"features2d",
+	"flann",
+	"freetype",
+	"fuzzy",
+	"gapi",
+	"hdf",
+	"hfs",
+	"highgui",
+	"img_hash",
+	"imgcodecs",
+	"imgproc",
+	"intensity_transform",
+	"line_descriptor",
+	"mcc",
+	"ml",
+	"objdetect",
+	"optflow",
+	"ovis",
+	"phase_unwrapping",
+	"photo",
+	"plot",
+	"quality",
+	"rapid",
+	"rgbd",
+	"saliency",
+	"sfm",
+	"shape",
+	"signal",
+	"stereo",
+	"stitching",
+	"structured_light",
+	"superres",
+	"surface_matching",
+	"text",
+	"tracking",
+	"video",
+	"videoio",
+	"videostab",
+	"viz",
+	"wechat_qrcode",
+	"xfeatures2d",
+	"ximgproc",
+	"xobjdetect",
+	"xphoto",
+	"xstereo",
+]
+
+# OpenCV module features
+3d = []
+alphamat = []
+aruco = []
+aruco_detector = ["aruco"]
+barcode = []
+bgsegm = ["video"]
+bioinspired = []
+calib = ["features"]
+calib3d = ["features2d"]
+#cannops = []
+ccalib = ["features2d"]
+cudaarithm = []
+cudabgsegm = ["video"]
+cudacodec = []
+cudafeatures2d = ["features2d"]
+cudafilters = []
+cudaimgproc = ["imgproc"]
+cudalegacy = []
+cudaobjdetect = ["objdetect"]
+cudaoptflow = []
+cudastereo = ["calib3d"]
+cudawarping = []
+#cudev = []
+cvv = []
+dnn = []
+dnn_superres = []
+dpm = []
+face = ["objdetect"]
+features = ["flann"]
+features2d = ["flann"]
+flann = []
+freetype = []
+fuzzy = []
+gapi = []
+hdf = []
+hfs = []
+highgui = []
+img_hash = []
+imgcodecs = []
+imgproc = []
+intensity_transform = []
+line_descriptor = []
+mcc = ["dnn"]
+ml = []
+objdetect = []
+optflow = ["video"]
+ovis = []
+phase_unwrapping = []
+photo = []
+plot = []
+quality = ["ml"]
+rapid = []
+rgbd = []
+saliency = []
+sfm = []
+shape = []
+signal = []
+stereo = []
+stitching = ["features2d", "imgproc"]
+structured_light = []
+superres = []
+surface_matching = []
+text = []
+tracking = ["video"]
+video = ["dnn"]
+videoio = []
+videostab = ["features2d"]
+viz = []
+wechat_qrcode = []
+xfeatures2d = ["features2d"]
+ximgproc = ["calib3d"]
+xobjdetect = []
+xphoto = ["photo"]
+xstereo = []
+
+# General features
+clang-runtime = ["opencv-binding-generator/clang-runtime"]
+f16 = ["dep:half"]
+
+[package.metadata.docs.rs]
+no-default-features = true

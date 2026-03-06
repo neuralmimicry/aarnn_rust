@@ -1,0 +1,248 @@
+syntax = "proto3";
+
+package distributed;
+
+service DistributedNeuromorphic {
+  // A node calls this to join a cluster managed by an orchestrator
+  rpc Join(JoinRequest) returns (JoinResponse);
+  
+  // Periodic heartbeat with resource updates
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Bi-directional stream for spikes between nodes
+  rpc StreamSpikes(stream SpikeBatch) returns (stream SpikeBatch);
+  
+  // Control and growth updates
+  rpc UpdateNetwork(NetworkUpdateRequest) returns (NetworkUpdateResponse);
+  
+  // Get overall cluster status for dashboard
+  rpc GetSystemStatus(StatusRequest) returns (StatusResponse);
+
+  // Run a GA individual evaluation
+  rpc RunGAEvaluation(GAEvaluationRequest) returns (GAEvaluationResponse);
+
+  // Fetch a full network snapshot (weights/topology) as JSON
+  rpc GetNetworkSnapshot(NetworkSnapshotRequest) returns (NetworkSnapshotResponse);
+
+  // Fetch latest spike activity for a network
+  rpc GetNetworkActivity(NetworkActivityRequest) returns (NetworkActivityResponse);
+}
+
+message GAEvaluationRequest {
+  string config_json = 1;
+  double sim_time_ms = 2;
+  uint64 seed = 3;
+}
+
+message GAEvaluationResponse {
+  double fitness = 1;
+}
+
+message NetworkSnapshotRequest {
+  string network_id = 1;
+}
+
+message NetworkSnapshotResponse {
+  string network_id = 1;
+  string snapshot_json = 2;
+}
+
+message SpikeIndices {
+  repeated uint32 indices = 1;
+  // Optional AER-encoded payload (preferred for interoperability)
+  bytes aer_payload = 2;
+  // Base address for decoding (0 means addresses are relative)
+  uint32 aer_base = 3;
+}
+
+message NetworkActivityRequest {
+  string network_id = 1;
+}
+
+message NetworkActivityResponse {
+  string network_id = 1;
+  SpikeIndices sensory = 2;
+  repeated SpikeIndices hidden = 3;
+  SpikeIndices output = 4;
+}
+message NetworkResources {
+  uint64 num_neurons = 1;
+  map<uint32, uint64> layer_neuron_counts = 2;
+  float avg_step_time_ms = 3;
+}
+message JoinRequest {
+  string node_id = 1;
+  string address = 2;
+  Resources resources = 3;
+  map<string, NetworkResources> network_resources = 4;
+}
+
+message JoinResponse {
+  bool success = 1;
+  string manager_id = 2;
+  // If orchestrator wants to assign specific network parts immediately
+  repeated NetworkAssignment initial_assignments = 3;
+}
+
+message NetworkAssignment {
+  string network_id = 1;
+  repeated uint32 layers = 2;
+}
+
+message Resources {
+  float cpu_usage = 1;
+  uint64 total_ram = 2;
+  uint64 available_ram = 3;
+  uint32 num_gpus = 4;
+  uint32 num_tpus = 5;
+  uint32 num_fpgas = 6;
+  float capacity_score = 7; // Heuristic based on resource types
+  double desired_dt = 8;    // Target dt based on local compute speed
+  uint64 num_neurons = 9;
+  uint64 redundant_neurons = 10;
+  uint32 current_aarnn_depth = 11;
+  uint32 desired_aarnn_depth = 12;
+  float avg_step_time_ms = 13;
+  bool ga_running = 14;
+  uint32 ga_generation = 15;
+  double ga_best_fitness = 16;
+  string ga_best_config_json = 17;
+  bool ga_evaluating = 18;
+  float ga_eval_progress = 19;
+  float temperature_c = 20;
+  bool ga_pacing = 21;
+  string ga_pacing_reason = 22;
+  uint64 ga_total_evaluations = 23;
+  uint64 ga_active_eval_seed = 24;
+  bool ga_ramp_active = 25;
+  uint32 ga_ramp_population = 26;
+  uint32 ga_ramp_worker_cap = 27;
+  double ga_ramp_sim_time_ms = 28;
+  uint64 ga_ramp_eval_ms = 29;
+  uint64 ga_ramp_eval_neurons = 30;
+  uint64 ga_ramp_eval_conns = 31;
+}
+message HeartbeatRequest {
+  string node_id = 1;
+  Resources resources = 2;
+  map<string, NetworkResources> network_resources = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  repeated NetworkCommand commands = 2;
+  // node_id -> address
+  map<string, string> peers = 3;
+  // network_id -> participating node ids
+  map<string, NetworkPeerList> network_peers = 4;
+}
+
+message NetworkPeerList {
+  repeated string node_ids = 1;
+}
+
+message NetworkCommand {
+  enum CommandType {
+    LOAD_NETWORK = 0;
+    UNLOAD_NETWORK = 1;
+    REPARTITION = 2;
+    STOP = 3;
+    START = 4;
+    RESET = 5;
+    REPEAT = 6;
+  }
+  CommandType type = 1;
+  string network_id = 2;
+  bytes config_json = 3;
+  repeated uint32 layers = 4;
+  repeated uint32 redundant_layers = 5;
+  uint32 desired_aarnn_depth = 6;
+  string neuron_model = 7;
+  string learning_rule = 8;
+}
+
+message SpikeBatch {
+  string network_id = 1;
+  uint32 layer_index = 2; // Source layer index
+  int64 step_index = 3;
+  repeated uint32 spike_indices = 4;
+  bool is_backward = 5;
+  // Optional AER-encoded payload (preferred for interoperability)
+  bytes aer_payload = 6;
+  // Base address for decoding (0 means addresses are relative)
+  uint32 aer_base = 7;
+}
+
+message NetworkUpdateRequest {
+  string network_id = 1;
+  oneof update {
+    GrowthEvent growth = 2;
+    WeightUpdate weights = 3;
+    ConfigUpdate config = 4;
+    ControlUpdate control = 5;
+  }
+}
+
+message ControlUpdate {
+  enum Action {
+    START = 0;
+    STOP = 1;
+    REPEAT = 2;
+    RESET = 3;
+    NEW = 4;
+  }
+  Action action = 1;
+}
+
+message ConfigUpdate {
+  bytes config_json = 1;
+  string neuron_model = 2;
+  string learning_rule = 3;
+}
+
+message GrowthEvent {
+  uint32 layer = 1;
+  uint32 parent_index = 2;
+  uint32 new_neuron_index = 3;
+  // ... position, etc.
+}
+
+message WeightUpdate {
+  // ... sparse weight updates
+}
+
+message NetworkUpdateResponse {
+  bool success = 1;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  repeated NodeStatus nodes = 1;
+  repeated NetworkStatus networks = 2;
+}
+
+message NodeStatus {
+  string node_id = 1;
+  string address = 2;
+  Resources resources = 3;
+  repeated string active_networks = 4;
+}
+
+message NetworkStatus {
+  string network_id = 1;
+  map<string, LayerRange> distribution = 2; // node_id -> layers
+  double current_dt = 3;
+  uint64 total_neurons = 4;
+  uint32 num_layers = 5;
+  uint32 desired_aarnn_depth = 6;
+  string config_json = 7;
+  string neuron_model = 8;
+  string learning_rule = 9;
+  bool playing = 10;
+}
+
+message LayerRange {
+  repeated uint32 layers = 1;
+  map<uint32, uint64> layer_neuron_counts = 2;
+}

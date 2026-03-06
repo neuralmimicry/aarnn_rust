@@ -1,0 +1,254 @@
+<?xml version="1.0" ?>
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 https://raw.github.com/NeuroML/NeuroML2/development/Schemas/NeuroML2/NeuroML_v2.3.1.xsd" id="exported_network">
+    <expTwoSynapse id="synapse_generic" gbase="1nS" erev="0mV" tauDecay="10ms" tauRise="3ms"/>
+    <iafCell id="cell" leakReversal="-70mV" thresh="-50mV" reset="-70mV" C="1nF" leakConductance="10nS"/>
+    <network id="net">
+        <population id="Sensory" component="cell" size="10" type="populationList"/>
+        <population id="Hidden_0" component="cell" size="2" type="populationList"/>
+        <population id="Hidden_1" component="cell" size="2" type="populationList"/>
+        <population id="Hidden_2" component="cell" size="2" type="populationList"/>
+        <population id="Hidden_3" component="cell" size="2" type="populationList"/>
+        <population id="Hidden_4" component="cell" size="2" type="populationList"/>
+        <population id="Hidden_5" component="cell" size="3" type="populationList"/>
+        <population id="Output" component="cell" size="10" type="populationList"/>
+        <projection id="Proj_In" presynapticPopulation="Sensory" postsynapticPopulation="Hidden_0" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Sensory/1/cell" postCellId="../Hidden_0/0/cell" weight="0.554221898317337" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Sensory/2/cell" postCellId="../Hidden_0/0/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Sensory/3/cell" postCellId="../Hidden_0/0/cell" weight="0.4585502743721008" delay="1ms"/>
+            <connectionWD id="3" preCellId="../Sensory/4/cell" postCellId="../Hidden_0/0/cell" weight="0.5223385095596313" delay="1ms"/>
+            <connectionWD id="4" preCellId="../Sensory/5/cell" postCellId="../Hidden_0/0/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="5" preCellId="../Sensory/6/cell" postCellId="../Hidden_0/0/cell" weight="0.49055665731430054" delay="1ms"/>
+            <connectionWD id="6" preCellId="../Sensory/8/cell" postCellId="../Hidden_0/0/cell" weight="0.415644884109497" delay="1ms"/>
+            <connectionWD id="7" preCellId="../Sensory/9/cell" postCellId="../Hidden_0/0/cell" weight="0.5007290542125702" delay="1ms"/>
+            <connectionWD id="8" preCellId="../Sensory/1/cell" postCellId="../Hidden_0/1/cell" weight="0.44577810168266296" delay="1ms"/>
+            <connectionWD id="9" preCellId="../Sensory/2/cell" postCellId="../Hidden_0/1/cell" weight="0.1680427702796321" delay="1ms"/>
+            <connectionWD id="10" preCellId="../Sensory/3/cell" postCellId="../Hidden_0/1/cell" weight="0.5414497256278992" delay="1ms"/>
+            <connectionWD id="11" preCellId="../Sensory/4/cell" postCellId="../Hidden_0/1/cell" weight="0.47766149044036865" delay="1ms"/>
+            <connectionWD id="12" preCellId="../Sensory/5/cell" postCellId="../Hidden_0/1/cell" weight="0.05084579388103103" delay="1ms"/>
+            <connectionWD id="13" preCellId="../Sensory/6/cell" postCellId="../Hidden_0/1/cell" weight="0.5094433426856995" delay="1ms"/>
+            <connectionWD id="14" preCellId="../Sensory/7/cell" postCellId="../Hidden_0/1/cell" weight="0.06067704807033878" delay="1ms"/>
+            <connectionWD id="15" preCellId="../Sensory/8/cell" postCellId="../Hidden_0/1/cell" weight="0.5843551158905029" delay="1ms"/>
+            <connectionWD id="16" preCellId="../Sensory/9/cell" postCellId="../Hidden_0/1/cell" weight="0.4992709457874298" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Fwd_0" presynapticPopulation="Hidden_0" postsynapticPopulation="Hidden_1" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_0/1/cell" postCellId="../Hidden_1/0/cell" weight="0.33877602321572553" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_0/2/cell" postCellId="../Hidden_1/0/cell" weight="0.016516958674874262" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Hidden_0/3/cell" postCellId="../Hidden_1/0/cell" weight="0.026799499848454113" delay="1ms"/>
+            <connectionWD id="3" preCellId="../Hidden_0/4/cell" postCellId="../Hidden_1/0/cell" weight="0.008003938584243583" delay="1ms"/>
+            <connectionWD id="4" preCellId="../Hidden_0/6/cell" postCellId="../Hidden_1/0/cell" weight="0.01890243733379239" delay="1ms"/>
+            <connectionWD id="5" preCellId="../Hidden_0/7/cell" postCellId="../Hidden_1/0/cell" weight="0.0023775785801970154" delay="1ms"/>
+            <connectionWD id="6" preCellId="../Hidden_0/8/cell" postCellId="../Hidden_1/0/cell" weight="0.06985699387856625" delay="1ms"/>
+            <connectionWD id="7" preCellId="../Hidden_0/9/cell" postCellId="../Hidden_1/0/cell" weight="0.01807605173214411" delay="1ms"/>
+            <connectionWD id="8" preCellId="../Hidden_0/10/cell" postCellId="../Hidden_1/0/cell" weight="0.004281787017898062" delay="1ms"/>
+            <connectionWD id="9" preCellId="../Hidden_0/11/cell" postCellId="../Hidden_1/0/cell" weight="0.014724726744228403" delay="1ms"/>
+            <connectionWD id="10" preCellId="../Hidden_0/12/cell" postCellId="../Hidden_1/0/cell" weight="0.0106353299959088" delay="1ms"/>
+            <connectionWD id="11" preCellId="../Hidden_0/13/cell" postCellId="../Hidden_1/0/cell" weight="0.009452265351089386" delay="1ms"/>
+            <connectionWD id="12" preCellId="../Hidden_0/14/cell" postCellId="../Hidden_1/0/cell" weight="0.06554878602709453" delay="1ms"/>
+            <connectionWD id="13" preCellId="../Hidden_0/15/cell" postCellId="../Hidden_1/0/cell" weight="0.004229414077354863" delay="1ms"/>
+            <connectionWD id="14" preCellId="../Hidden_0/16/cell" postCellId="../Hidden_1/0/cell" weight="0.007088250747332662" delay="1ms"/>
+            <connectionWD id="15" preCellId="../Hidden_0/17/cell" postCellId="../Hidden_1/0/cell" weight="0.0170933058020309" delay="1ms"/>
+            <connectionWD id="16" preCellId="../Hidden_0/18/cell" postCellId="../Hidden_1/0/cell" weight="0.054939882191162595" delay="1ms"/>
+            <connectionWD id="17" preCellId="../Hidden_0/19/cell" postCellId="../Hidden_1/0/cell" weight="0.0938049445165981" delay="1ms"/>
+            <connectionWD id="18" preCellId="../Hidden_0/20/cell" postCellId="../Hidden_1/0/cell" weight="0.00637244910411534" delay="1ms"/>
+            <connectionWD id="19" preCellId="../Hidden_0/21/cell" postCellId="../Hidden_1/0/cell" weight="0.005989107765033088" delay="1ms"/>
+            <connectionWD id="20" preCellId="../Hidden_0/22/cell" postCellId="../Hidden_1/0/cell" weight="0.003941464353636372" delay="1ms"/>
+            <connectionWD id="21" preCellId="../Hidden_0/23/cell" postCellId="../Hidden_1/0/cell" weight="0.1341490661175369" delay="1ms"/>
+            <connectionWD id="22" preCellId="../Hidden_0/24/cell" postCellId="../Hidden_1/0/cell" weight="0.013230885550615443" delay="1ms"/>
+            <connectionWD id="23" preCellId="../Hidden_0/25/cell" postCellId="../Hidden_1/0/cell" weight="0.014512473095484394" delay="1ms"/>
+            <connectionWD id="24" preCellId="../Hidden_0/26/cell" postCellId="../Hidden_1/0/cell" weight="0.006759042211492179" delay="1ms"/>
+            <connectionWD id="25" preCellId="../Hidden_0/27/cell" postCellId="../Hidden_1/0/cell" weight="0.00597346781529515" delay="1ms"/>
+            <connectionWD id="26" preCellId="../Hidden_0/28/cell" postCellId="../Hidden_1/0/cell" weight="0.026191403386652108" delay="1ms"/>
+            <connectionWD id="27" preCellId="../Hidden_0/29/cell" postCellId="../Hidden_1/0/cell" weight="0.0024143525222373712" delay="1ms"/>
+            <connectionWD id="28" preCellId="../Hidden_0/30/cell" postCellId="../Hidden_1/0/cell" weight="0.1882607740029009" delay="1ms"/>
+            <connectionWD id="29" preCellId="../Hidden_0/31/cell" postCellId="../Hidden_1/0/cell" weight="0.0015316851988566766" delay="1ms"/>
+            <connectionWD id="30" preCellId="../Hidden_0/32/cell" postCellId="../Hidden_1/0/cell" weight="0.002536518913800352" delay="1ms"/>
+            <connectionWD id="31" preCellId="../Hidden_0/33/cell" postCellId="../Hidden_1/0/cell" weight="0.002635106737394178" delay="1ms"/>
+            <connectionWD id="32" preCellId="../Hidden_0/34/cell" postCellId="../Hidden_1/0/cell" weight="0.027533413696856374" delay="1ms"/>
+            <connectionWD id="33" preCellId="../Hidden_0/35/cell" postCellId="../Hidden_1/0/cell" weight="0.13019080529119365" delay="1ms"/>
+            <connectionWD id="34" preCellId="../Hidden_0/36/cell" postCellId="../Hidden_1/0/cell" weight="0.16977926621507633" delay="1ms"/>
+            <connectionWD id="35" preCellId="../Hidden_0/37/cell" postCellId="../Hidden_1/0/cell" weight="0.021369167354408105" delay="1ms"/>
+            <connectionWD id="36" preCellId="../Hidden_0/38/cell" postCellId="../Hidden_1/0/cell" weight="0.0016928043015749447" delay="1ms"/>
+            <connectionWD id="37" preCellId="../Hidden_0/39/cell" postCellId="../Hidden_1/0/cell" weight="0.04404958470859131" delay="1ms"/>
+            <connectionWD id="38" preCellId="../Hidden_0/40/cell" postCellId="../Hidden_1/0/cell" weight="0.0013741534016647678" delay="1ms"/>
+            <connectionWD id="39" preCellId="../Hidden_0/41/cell" postCellId="../Hidden_1/0/cell" weight="0.015575907601127611" delay="1ms"/>
+            <connectionWD id="40" preCellId="../Hidden_0/42/cell" postCellId="../Hidden_1/0/cell" weight="0.16329382261178854" delay="1ms"/>
+            <connectionWD id="41" preCellId="../Hidden_0/43/cell" postCellId="../Hidden_1/0/cell" weight="0.24103642919228657" delay="1ms"/>
+            <connectionWD id="42" preCellId="../Hidden_0/44/cell" postCellId="../Hidden_1/0/cell" weight="0.03193024054080083" delay="1ms"/>
+            <connectionWD id="43" preCellId="../Hidden_0/45/cell" postCellId="../Hidden_1/0/cell" weight="0.14628942351081145" delay="1ms"/>
+            <connectionWD id="44" preCellId="../Hidden_0/46/cell" postCellId="../Hidden_1/0/cell" weight="0.014918137815502134" delay="1ms"/>
+            <connectionWD id="45" preCellId="../Hidden_0/47/cell" postCellId="../Hidden_1/0/cell" weight="0.13929459205662031" delay="1ms"/>
+            <connectionWD id="46" preCellId="../Hidden_0/48/cell" postCellId="../Hidden_1/0/cell" weight="0.17856116909215414" delay="1ms"/>
+            <connectionWD id="47" preCellId="../Hidden_0/49/cell" postCellId="../Hidden_1/0/cell" weight="0.009821118330518724" delay="1ms"/>
+            <connectionWD id="48" preCellId="../Hidden_0/50/cell" postCellId="../Hidden_1/0/cell" weight="0.04788527573900433" delay="1ms"/>
+            <connectionWD id="49" preCellId="../Hidden_0/51/cell" postCellId="../Hidden_1/0/cell" weight="0.0057454011506507755" delay="1ms"/>
+            <connectionWD id="50" preCellId="../Hidden_0/52/cell" postCellId="../Hidden_1/0/cell" weight="0.028548904178406755" delay="1ms"/>
+            <connectionWD id="51" preCellId="../Hidden_0/53/cell" postCellId="../Hidden_1/0/cell" weight="0.024823450420332356" delay="1ms"/>
+            <connectionWD id="52" preCellId="../Hidden_0/54/cell" postCellId="../Hidden_1/0/cell" weight="0.11196382893578348" delay="1ms"/>
+            <connectionWD id="53" preCellId="../Hidden_0/55/cell" postCellId="../Hidden_1/0/cell" weight="0.002844298655102702" delay="1ms"/>
+            <connectionWD id="54" preCellId="../Hidden_0/56/cell" postCellId="../Hidden_1/0/cell" weight="0.04131303030766535" delay="1ms"/>
+            <connectionWD id="55" preCellId="../Hidden_0/57/cell" postCellId="../Hidden_1/0/cell" weight="0.0011345540411402464" delay="1ms"/>
+            <connectionWD id="56" preCellId="../Hidden_0/58/cell" postCellId="../Hidden_1/0/cell" weight="0.027243600999774985" delay="1ms"/>
+            <connectionWD id="57" preCellId="../Hidden_0/59/cell" postCellId="../Hidden_1/0/cell" weight="0.019037913328609848" delay="1ms"/>
+            <connectionWD id="58" preCellId="../Hidden_0/60/cell" postCellId="../Hidden_1/0/cell" weight="0.03797438515130947" delay="1ms"/>
+            <connectionWD id="59" preCellId="../Hidden_0/61/cell" postCellId="../Hidden_1/0/cell" weight="0.08928381615555755" delay="1ms"/>
+            <connectionWD id="60" preCellId="../Hidden_0/62/cell" postCellId="../Hidden_1/0/cell" weight="0.0032730798452763263" delay="1ms"/>
+            <connectionWD id="61" preCellId="../Hidden_0/63/cell" postCellId="../Hidden_1/0/cell" weight="0.07201984583162985" delay="1ms"/>
+            <connectionWD id="62" preCellId="../Hidden_0/64/cell" postCellId="../Hidden_1/0/cell" weight="0.06933484769701365" delay="1ms"/>
+            <connectionWD id="63" preCellId="../Hidden_0/65/cell" postCellId="../Hidden_1/0/cell" weight="0.004933591611790261" delay="1ms"/>
+            <connectionWD id="64" preCellId="../Hidden_0/66/cell" postCellId="../Hidden_1/0/cell" weight="0.2046113986904139" delay="1ms"/>
+            <connectionWD id="65" preCellId="../Hidden_0/67/cell" postCellId="../Hidden_1/0/cell" weight="0.009383533969295251" delay="1ms"/>
+            <connectionWD id="66" preCellId="../Hidden_0/68/cell" postCellId="../Hidden_1/0/cell" weight="0.13748886275190875" delay="1ms"/>
+            <connectionWD id="67" preCellId="../Hidden_0/69/cell" postCellId="../Hidden_1/0/cell" weight="0.001621921863317615" delay="1ms"/>
+            <connectionWD id="68" preCellId="../Hidden_0/70/cell" postCellId="../Hidden_1/0/cell" weight="0.03126530294060469" delay="1ms"/>
+            <connectionWD id="69" preCellId="../Hidden_0/71/cell" postCellId="../Hidden_1/0/cell" weight="0.06261859314940346" delay="1ms"/>
+            <connectionWD id="70" preCellId="../Hidden_0/72/cell" postCellId="../Hidden_1/0/cell" weight="0.15373720163050664" delay="1ms"/>
+            <connectionWD id="71" preCellId="../Hidden_0/73/cell" postCellId="../Hidden_1/0/cell" weight="0.0036979770562131377" delay="1ms"/>
+            <connectionWD id="72" preCellId="../Hidden_0/74/cell" postCellId="../Hidden_1/0/cell" weight="0.0468738053980261" delay="1ms"/>
+            <connectionWD id="73" preCellId="../Hidden_0/75/cell" postCellId="../Hidden_1/0/cell" weight="0.10113672079283682" delay="1ms"/>
+            <connectionWD id="74" preCellId="../Hidden_0/76/cell" postCellId="../Hidden_1/0/cell" weight="0.1920145581341769" delay="1ms"/>
+            <connectionWD id="75" preCellId="../Hidden_0/77/cell" postCellId="../Hidden_1/0/cell" weight="0.07902539857325752" delay="1ms"/>
+            <connectionWD id="76" preCellId="../Hidden_0/78/cell" postCellId="../Hidden_1/0/cell" weight="0.03229672105859676" delay="1ms"/>
+            <connectionWD id="77" preCellId="../Hidden_0/79/cell" postCellId="../Hidden_1/0/cell" weight="0.21536345868429557" delay="1ms"/>
+            <connectionWD id="78" preCellId="../Hidden_0/80/cell" postCellId="../Hidden_1/0/cell" weight="0.09331583595935178" delay="1ms"/>
+            <connectionWD id="79" preCellId="../Hidden_0/81/cell" postCellId="../Hidden_1/0/cell" weight="0.01911289696192848" delay="1ms"/>
+            <connectionWD id="80" preCellId="../Hidden_0/82/cell" postCellId="../Hidden_1/0/cell" weight="0.003964135579712759" delay="1ms"/>
+            <connectionWD id="81" preCellId="../Hidden_0/84/cell" postCellId="../Hidden_1/0/cell" weight="0.1802381783112192" delay="1ms"/>
+            <connectionWD id="82" preCellId="../Hidden_0/85/cell" postCellId="../Hidden_1/0/cell" weight="0.024871972909632344" delay="1ms"/>
+            <connectionWD id="83" preCellId="../Hidden_0/86/cell" postCellId="../Hidden_1/0/cell" weight="0.008124423938724845" delay="1ms"/>
+            <connectionWD id="84" preCellId="../Hidden_0/0/cell" postCellId="../Hidden_1/1/cell" weight="0.09414656020356074" delay="1ms"/>
+            <connectionWD id="85" preCellId="../Hidden_0/1/cell" postCellId="../Hidden_1/1/cell" weight="0.2219058002886507" delay="1ms"/>
+            <connectionWD id="86" preCellId="../Hidden_0/2/cell" postCellId="../Hidden_1/1/cell" weight="0.14908001390047487" delay="1ms"/>
+            <connectionWD id="87" preCellId="../Hidden_0/3/cell" postCellId="../Hidden_1/1/cell" weight="0.1647017792128788" delay="1ms"/>
+            <connectionWD id="88" preCellId="../Hidden_0/4/cell" postCellId="../Hidden_1/1/cell" weight="0.20651303963806333" delay="1ms"/>
+            <connectionWD id="89" preCellId="../Hidden_0/5/cell" postCellId="../Hidden_1/1/cell" weight="0.06403737733333884" delay="1ms"/>
+            <connectionWD id="90" preCellId="../Hidden_0/6/cell" postCellId="../Hidden_1/1/cell" weight="0.24117497509954317" delay="1ms"/>
+            <connectionWD id="91" preCellId="../Hidden_0/7/cell" postCellId="../Hidden_1/1/cell" weight="0.0026350341961860063" delay="1ms"/>
+            <connectionWD id="92" preCellId="../Hidden_0/8/cell" postCellId="../Hidden_1/1/cell" weight="0.20944999856516935" delay="1ms"/>
+            <connectionWD id="93" preCellId="../Hidden_0/9/cell" postCellId="../Hidden_1/1/cell" weight="0.022023528125173077" delay="1ms"/>
+            <connectionWD id="94" preCellId="../Hidden_0/10/cell" postCellId="../Hidden_1/1/cell" weight="0.006329820450740293" delay="1ms"/>
+            <connectionWD id="95" preCellId="../Hidden_0/11/cell" postCellId="../Hidden_1/1/cell" weight="0.0697354667792935" delay="1ms"/>
+            <connectionWD id="96" preCellId="../Hidden_0/12/cell" postCellId="../Hidden_1/1/cell" weight="0.009674785400065842" delay="1ms"/>
+            <connectionWD id="97" preCellId="../Hidden_0/13/cell" postCellId="../Hidden_1/1/cell" weight="0.013725867287975214" delay="1ms"/>
+            <connectionWD id="98" preCellId="../Hidden_0/14/cell" postCellId="../Hidden_1/1/cell" weight="0.07952868903240821" delay="1ms"/>
+            <connectionWD id="99" preCellId="../Hidden_0/15/cell" postCellId="../Hidden_1/1/cell" weight="0.004004556497147017" delay="1ms"/>
+            <connectionWD id="100" preCellId="../Hidden_0/16/cell" postCellId="../Hidden_1/1/cell" weight="0.12428544099087747" delay="1ms"/>
+            <connectionWD id="101" preCellId="../Hidden_0/17/cell" postCellId="../Hidden_1/1/cell" weight="0.01797142812943647" delay="1ms"/>
+            <connectionWD id="102" preCellId="../Hidden_0/18/cell" postCellId="../Hidden_1/1/cell" weight="0.1223305608200808" delay="1ms"/>
+            <connectionWD id="103" preCellId="../Hidden_0/19/cell" postCellId="../Hidden_1/1/cell" weight="0.19344230587707903" delay="1ms"/>
+            <connectionWD id="104" preCellId="../Hidden_0/20/cell" postCellId="../Hidden_1/1/cell" weight="0.00583746147871188" delay="1ms"/>
+            <connectionWD id="105" preCellId="../Hidden_0/21/cell" postCellId="../Hidden_1/1/cell" weight="0.008258461472586832" delay="1ms"/>
+            <connectionWD id="106" preCellId="../Hidden_0/22/cell" postCellId="../Hidden_1/1/cell" weight="0.003339001316751072" delay="1ms"/>
+            <connectionWD id="107" preCellId="../Hidden_0/23/cell" postCellId="../Hidden_1/1/cell" weight="0.09542074021469504" delay="1ms"/>
+            <connectionWD id="108" preCellId="../Hidden_0/24/cell" postCellId="../Hidden_1/1/cell" weight="0.01237816417209851" delay="1ms"/>
+            <connectionWD id="109" preCellId="../Hidden_0/25/cell" postCellId="../Hidden_1/1/cell" weight="0.02105111636274833" delay="1ms"/>
+            <connectionWD id="110" preCellId="../Hidden_0/26/cell" postCellId="../Hidden_1/1/cell" weight="0.008257885400328978" delay="1ms"/>
+            <connectionWD id="111" preCellId="../Hidden_0/27/cell" postCellId="../Hidden_1/1/cell" weight="0.004957261240882524" delay="1ms"/>
+            <connectionWD id="112" preCellId="../Hidden_0/28/cell" postCellId="../Hidden_1/1/cell" weight="0.20782964089566144" delay="1ms"/>
+            <connectionWD id="113" preCellId="../Hidden_0/29/cell" postCellId="../Hidden_1/1/cell" weight="0.1157130760603116" delay="1ms"/>
+            <connectionWD id="114" preCellId="../Hidden_0/30/cell" postCellId="../Hidden_1/1/cell" weight="0.10166911346381684" delay="1ms"/>
+            <connectionWD id="115" preCellId="../Hidden_0/31/cell" postCellId="../Hidden_1/1/cell" weight="0.0013905405678779528" delay="1ms"/>
+            <connectionWD id="116" preCellId="../Hidden_0/32/cell" postCellId="../Hidden_1/1/cell" weight="0.0035476230566579836" delay="1ms"/>
+            <connectionWD id="117" preCellId="../Hidden_0/33/cell" postCellId="../Hidden_1/1/cell" weight="0.1332612881361715" delay="1ms"/>
+            <connectionWD id="118" preCellId="../Hidden_0/34/cell" postCellId="../Hidden_1/1/cell" weight="0.020011087421861643" delay="1ms"/>
+            <connectionWD id="119" preCellId="../Hidden_0/35/cell" postCellId="../Hidden_1/1/cell" weight="0.10836217109510568" delay="1ms"/>
+            <connectionWD id="120" preCellId="../Hidden_0/36/cell" postCellId="../Hidden_1/1/cell" weight="0.2329208037295379" delay="1ms"/>
+            <connectionWD id="121" preCellId="../Hidden_0/37/cell" postCellId="../Hidden_1/1/cell" weight="0.028713579043006827" delay="1ms"/>
+            <connectionWD id="122" preCellId="../Hidden_0/38/cell" postCellId="../Hidden_1/1/cell" weight="0.0015324813877714803" delay="1ms"/>
+            <connectionWD id="123" preCellId="../Hidden_0/39/cell" postCellId="../Hidden_1/1/cell" weight="0.07903081774149356" delay="1ms"/>
+            <connectionWD id="124" preCellId="../Hidden_0/40/cell" postCellId="../Hidden_1/1/cell" weight="0.0015907983293854122" delay="1ms"/>
+            <connectionWD id="125" preCellId="../Hidden_0/41/cell" postCellId="../Hidden_1/1/cell" weight="0.1745021850487216" delay="1ms"/>
+            <connectionWD id="126" preCellId="../Hidden_0/42/cell" postCellId="../Hidden_1/1/cell" weight="0.0956593876930906" delay="1ms"/>
+            <connectionWD id="127" preCellId="../Hidden_0/43/cell" postCellId="../Hidden_1/1/cell" weight="0.20322730438830555" delay="1ms"/>
+            <connectionWD id="128" preCellId="../Hidden_0/44/cell" postCellId="../Hidden_1/1/cell" weight="0.09738862937592022" delay="1ms"/>
+            <connectionWD id="129" preCellId="../Hidden_0/45/cell" postCellId="../Hidden_1/1/cell" weight="0.09032929328031036" delay="1ms"/>
+            <connectionWD id="130" preCellId="../Hidden_0/46/cell" postCellId="../Hidden_1/1/cell" weight="0.18708977606445776" delay="1ms"/>
+            <connectionWD id="131" preCellId="../Hidden_0/47/cell" postCellId="../Hidden_1/1/cell" weight="0.13782523479636546" delay="1ms"/>
+            <connectionWD id="132" preCellId="../Hidden_0/48/cell" postCellId="../Hidden_1/1/cell" weight="0.11721795330021063" delay="1ms"/>
+            <connectionWD id="133" preCellId="../Hidden_0/49/cell" postCellId="../Hidden_1/1/cell" weight="0.19680955660185656" delay="1ms"/>
+            <connectionWD id="134" preCellId="../Hidden_0/50/cell" postCellId="../Hidden_1/1/cell" weight="0.04502066747973702" delay="1ms"/>
+            <connectionWD id="135" preCellId="../Hidden_0/51/cell" postCellId="../Hidden_1/1/cell" weight="0.05563625616690504" delay="1ms"/>
+            <connectionWD id="136" preCellId="../Hidden_0/52/cell" postCellId="../Hidden_1/1/cell" weight="0.024649853579548377" delay="1ms"/>
+            <connectionWD id="137" preCellId="../Hidden_0/53/cell" postCellId="../Hidden_1/1/cell" weight="0.03233404719056459" delay="1ms"/>
+            <connectionWD id="138" preCellId="../Hidden_0/54/cell" postCellId="../Hidden_1/1/cell" weight="0.07897160728147375" delay="1ms"/>
+            <connectionWD id="139" preCellId="../Hidden_0/55/cell" postCellId="../Hidden_1/1/cell" weight="0.0022616314822629037" delay="1ms"/>
+            <connectionWD id="140" preCellId="../Hidden_0/56/cell" postCellId="../Hidden_1/1/cell" weight="0.03560608760600388" delay="1ms"/>
+            <connectionWD id="141" preCellId="../Hidden_0/57/cell" postCellId="../Hidden_1/1/cell" weight="0.0015046749950715411" delay="1ms"/>
+            <connectionWD id="142" preCellId="../Hidden_0/58/cell" postCellId="../Hidden_1/1/cell" weight="0.02056346520677715" delay="1ms"/>
+            <connectionWD id="143" preCellId="../Hidden_0/59/cell" postCellId="../Hidden_1/1/cell" weight="0.010287052204250215" delay="1ms"/>
+            <connectionWD id="144" preCellId="../Hidden_0/60/cell" postCellId="../Hidden_1/1/cell" weight="0.03439033116312395" delay="1ms"/>
+            <connectionWD id="145" preCellId="../Hidden_0/61/cell" postCellId="../Hidden_1/1/cell" weight="0.09050480273996572" delay="1ms"/>
+            <connectionWD id="146" preCellId="../Hidden_0/62/cell" postCellId="../Hidden_1/1/cell" weight="0.0032892913571777593" delay="1ms"/>
+            <connectionWD id="147" preCellId="../Hidden_0/63/cell" postCellId="../Hidden_1/1/cell" weight="0.2179311628643223" delay="1ms"/>
+            <connectionWD id="148" preCellId="../Hidden_0/64/cell" postCellId="../Hidden_1/1/cell" weight="0.06894962280048483" delay="1ms"/>
+            <connectionWD id="149" preCellId="../Hidden_0/65/cell" postCellId="../Hidden_1/1/cell" weight="0.19753886029566145" delay="1ms"/>
+            <connectionWD id="150" preCellId="../Hidden_0/66/cell" postCellId="../Hidden_1/1/cell" weight="0.2192549751861445" delay="1ms"/>
+            <connectionWD id="151" preCellId="../Hidden_0/67/cell" postCellId="../Hidden_1/1/cell" weight="0.012127802554178077" delay="1ms"/>
+            <connectionWD id="152" preCellId="../Hidden_0/68/cell" postCellId="../Hidden_1/1/cell" weight="0.1574089138835888" delay="1ms"/>
+            <connectionWD id="153" preCellId="../Hidden_0/69/cell" postCellId="../Hidden_1/1/cell" weight="0.0012328702790765627" delay="1ms"/>
+            <connectionWD id="154" preCellId="../Hidden_0/70/cell" postCellId="../Hidden_1/1/cell" weight="0.02403142321092532" delay="1ms"/>
+            <connectionWD id="155" preCellId="../Hidden_0/71/cell" postCellId="../Hidden_1/1/cell" weight="0.053240124391151" delay="1ms"/>
+            <connectionWD id="156" preCellId="../Hidden_0/72/cell" postCellId="../Hidden_1/1/cell" weight="0.05772721202001985" delay="1ms"/>
+            <connectionWD id="157" preCellId="../Hidden_0/73/cell" postCellId="../Hidden_1/1/cell" weight="0.119129995068703" delay="1ms"/>
+            <connectionWD id="158" preCellId="../Hidden_0/74/cell" postCellId="../Hidden_1/1/cell" weight="0.08992852265769496" delay="1ms"/>
+            <connectionWD id="159" preCellId="../Hidden_0/75/cell" postCellId="../Hidden_1/1/cell" weight="0.08747086775817413" delay="1ms"/>
+            <connectionWD id="160" preCellId="../Hidden_0/76/cell" postCellId="../Hidden_1/1/cell" weight="0.10683704882443967" delay="1ms"/>
+            <connectionWD id="161" preCellId="../Hidden_0/77/cell" postCellId="../Hidden_1/1/cell" weight="0.07171727867332192" delay="1ms"/>
+            <connectionWD id="162" preCellId="../Hidden_0/78/cell" postCellId="../Hidden_1/1/cell" weight="0.033795974187725224" delay="1ms"/>
+            <connectionWD id="163" preCellId="../Hidden_0/79/cell" postCellId="../Hidden_1/1/cell" weight="0.1050583814758661" delay="1ms"/>
+            <connectionWD id="164" preCellId="../Hidden_0/80/cell" postCellId="../Hidden_1/1/cell" weight="0.11152458557719842" delay="1ms"/>
+            <connectionWD id="165" preCellId="../Hidden_0/81/cell" postCellId="../Hidden_1/1/cell" weight="0.021866577023398257" delay="1ms"/>
+            <connectionWD id="166" preCellId="../Hidden_0/82/cell" postCellId="../Hidden_1/1/cell" weight="0.17644502935243517" delay="1ms"/>
+            <connectionWD id="167" preCellId="../Hidden_0/83/cell" postCellId="../Hidden_1/1/cell" weight="0.1398480805985192" delay="1ms"/>
+            <connectionWD id="168" preCellId="../Hidden_0/84/cell" postCellId="../Hidden_1/1/cell" weight="0.007095531032212378" delay="1ms"/>
+            <connectionWD id="169" preCellId="../Hidden_0/85/cell" postCellId="../Hidden_1/1/cell" weight="0.02429334196712243" delay="1ms"/>
+            <connectionWD id="170" preCellId="../Hidden_0/86/cell" postCellId="../Hidden_1/1/cell" weight="0.08902227790299508" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Fwd_1" presynapticPopulation="Hidden_1" postsynapticPopulation="Hidden_2" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_1/0/cell" postCellId="../Hidden_2/0/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_1/1/cell" postCellId="../Hidden_2/0/cell" weight="0.23931237508780612" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Hidden_1/0/cell" postCellId="../Hidden_2/1/cell" weight="0.17660920418792048" delay="1ms"/>
+            <connectionWD id="3" preCellId="../Hidden_1/1/cell" postCellId="../Hidden_2/1/cell" weight="0.06134066973279256" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Fwd_2" presynapticPopulation="Hidden_2" postsynapticPopulation="Hidden_3" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_2/0/cell" postCellId="../Hidden_3/0/cell" weight="0.2188205560681844" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_2/1/cell" postCellId="../Hidden_3/0/cell" weight="0.23610871927603583" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Hidden_2/0/cell" postCellId="../Hidden_3/1/cell" weight="0.26149518880867717" delay="1ms"/>
+            <connectionWD id="3" preCellId="../Hidden_2/1/cell" postCellId="../Hidden_3/1/cell" weight="0.2835755358471026" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Fwd_3" presynapticPopulation="Hidden_3" postsynapticPopulation="Hidden_4" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_3/1/cell" postCellId="../Hidden_4/0/cell" weight="0.20800664090423931" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_3/0/cell" postCellId="../Hidden_4/1/cell" weight="0.24992223435383945" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Hidden_3/1/cell" postCellId="../Hidden_4/1/cell" weight="0.1305555560261099" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Fwd_4" presynapticPopulation="Hidden_4" postsynapticPopulation="Hidden_5" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_4/0/cell" postCellId="../Hidden_5/2/cell" weight="0.18794252770178335" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_4/1/cell" postCellId="../Hidden_5/2/cell" weight="0.21302365253921485" delay="1ms"/>
+        </projection>
+        <projection id="Proj_Hidden_Rec_0" presynapticPopulation="Hidden_0" postsynapticPopulation="Hidden_0" synapse="synapse_generic"/>
+        <projection id="Proj_Hidden_Rec_1" presynapticPopulation="Hidden_1" postsynapticPopulation="Hidden_1" synapse="synapse_generic"/>
+        <projection id="Proj_Hidden_Rec_2" presynapticPopulation="Hidden_2" postsynapticPopulation="Hidden_2" synapse="synapse_generic"/>
+        <projection id="Proj_Hidden_Rec_3" presynapticPopulation="Hidden_3" postsynapticPopulation="Hidden_3" synapse="synapse_generic"/>
+        <projection id="Proj_Hidden_Rec_4" presynapticPopulation="Hidden_4" postsynapticPopulation="Hidden_4" synapse="synapse_generic"/>
+        <projection id="Proj_Hidden_Rec_5" presynapticPopulation="Hidden_5" postsynapticPopulation="Hidden_5" synapse="synapse_generic"/>
+        <projection id="Proj_Out" presynapticPopulation="Hidden_5" postsynapticPopulation="Output" synapse="synapse_generic">
+            <connectionWD id="0" preCellId="../Hidden_5/0/cell" postCellId="../Output/0/cell" weight="0.4033835530281067" delay="1ms"/>
+            <connectionWD id="1" preCellId="../Hidden_5/1/cell" postCellId="../Output/0/cell" weight="0.5966164469718933" delay="1ms"/>
+            <connectionWD id="2" preCellId="../Hidden_5/0/cell" postCellId="../Output/1/cell" weight="0.5243651270866394" delay="1ms"/>
+            <connectionWD id="3" preCellId="../Hidden_5/1/cell" postCellId="../Output/1/cell" weight="0.4756348729133606" delay="1ms"/>
+            <connectionWD id="4" preCellId="../Hidden_5/0/cell" postCellId="../Output/2/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="5" preCellId="../Hidden_5/1/cell" postCellId="../Output/2/cell" weight="0.22147857593924009" delay="1ms"/>
+            <connectionWD id="6" preCellId="../Hidden_5/0/cell" postCellId="../Output/3/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="7" preCellId="../Hidden_5/1/cell" postCellId="../Output/3/cell" weight="0.050116133220902095" delay="1ms"/>
+            <connectionWD id="8" preCellId="../Hidden_5/1/cell" postCellId="../Output/4/cell" weight="0.1817109537577651" delay="1ms"/>
+            <connectionWD id="9" preCellId="../Hidden_5/0/cell" postCellId="../Output/5/cell" weight="0.41795873641967773" delay="1ms"/>
+            <connectionWD id="10" preCellId="../Hidden_5/1/cell" postCellId="../Output/5/cell" weight="0.5820412635803223" delay="1ms"/>
+            <connectionWD id="11" preCellId="../Hidden_5/0/cell" postCellId="../Output/6/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="12" preCellId="../Hidden_5/1/cell" postCellId="../Output/6/cell" weight="0.2464257528170865" delay="1ms"/>
+            <connectionWD id="13" preCellId="../Hidden_5/1/cell" postCellId="../Output/7/cell" weight="0.16113998306926736" delay="1ms"/>
+            <connectionWD id="14" preCellId="../Hidden_5/0/cell" postCellId="../Output/8/cell" weight="1.0" delay="1ms"/>
+            <connectionWD id="15" preCellId="../Hidden_5/1/cell" postCellId="../Output/8/cell" weight="0.19824676225193544" delay="1ms"/>
+            <connectionWD id="16" preCellId="../Hidden_5/0/cell" postCellId="../Output/9/cell" weight="0.4244152903556824" delay="1ms"/>
+            <connectionWD id="17" preCellId="../Hidden_5/1/cell" postCellId="../Output/9/cell" weight="0.5755847096443176" delay="1ms"/>
+        </projection>
+    </network>
+</neuroml>

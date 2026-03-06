@@ -1,0 +1,11 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: neuromorphic-train-
+spec:
+  entrypoint: train
+  templates:
+    - name: train
+      container:
+        image: python:3.12-slim
+        command: ["python", "ml/training/train.py", "--output", "/workspace/demo_model.json"]

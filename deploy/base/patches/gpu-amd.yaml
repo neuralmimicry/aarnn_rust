@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node
+spec:
+  template:
+    spec:
+      containers:
+      - name: neuromorphic
+        resources:
+          limits:
+            amd.com/gpu: 1

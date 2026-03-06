@@ -1,0 +1,8 @@
+site_name: Neuromorphic Autonomous AI Platform
+theme:
+  name: material
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Operations: operations.md
+  - Operator: operator.md

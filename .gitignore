@@ -1,0 +1,54 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+.venv/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and performance reports
+*.log
+buildlog*.txt
+high_load_perf*.txt
+perf_report.txt
+.output.txt
+
+# Generated simulation outputs
+*.png
+*.onnx
+*.tflite
+*.nir.json
+network.json
+network_demo.json
+config_worker_*.json
+leaderboard.json
+probes.json
+input_output_block.txt
+network_architecture_block.txt
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Large files (prevent accidental inclusion of binaries/datasets)
+*.bin
+*.out
+*.exe
+*.so
+*.dll
+*.dylib
+*.zip
+*.tar.gz
+*.7z
+*.rar

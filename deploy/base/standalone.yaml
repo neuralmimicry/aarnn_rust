@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: standalone
+  labels:
+    app: neuromorphic
+    role: standalone
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neuromorphic
+      role: standalone
+  template:
+    metadata:
+      labels:
+        app: neuromorphic
+        role: standalone
+    spec:
+      containers:
+        - name: neuromorphic
+          image: ghcr.io/neuralmimicry/neuromorphic_demo:latest
+          args: ["--continuous", "--brain-id", "standalone-pod"]
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"

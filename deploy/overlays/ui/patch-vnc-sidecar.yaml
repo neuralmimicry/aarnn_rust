@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: standalone
+spec:
+  template:
+    spec:
+      containers:
+        - name: neuromorphic
+          env:
+            - name: DISPLAY
+              value: ":0"
+          # Enable UI and continuous mode
+          args: ["--ui", "--continuous"]
+          volumeMounts:
+            - name: x11-socket
+              mountPath: /tmp/.X11-unix
+        - name: vnc
+          # Sidecar providing Xvfb, x11vnc, and noVNC (web access)
+          # This image is a common community choice for adding web-based GUI access to pods.
+          image: docker.io/theasp/novnc:latest
+          env:
+            - name: DISPLAY
+              value: ":0"
+            - name: RESOLUTION
+              value: "1280x720"
+          ports:
+            - containerPort: 8080
+              name: novnc
+          volumeMounts:
+            - name: x11-socket
+              mountPath: /tmp/.X11-unix
+      volumes:
+        - name: x11-socket
+          emptyDir: {}

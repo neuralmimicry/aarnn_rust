@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  labels:
+    app: neuromorphic
+    role: orchestrator
+spec:
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+    - name: discovery
+      port: 50050
+      protocol: UDP
+      targetPort: 50050
+  selector:
+    app: neuromorphic
+    role: orchestrator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  labels:
+    app: neuromorphic
+    role: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neuromorphic
+      role: orchestrator
+  template:
+    metadata:
+      labels:
+        app: neuromorphic
+        role: orchestrator
+    spec:
+      containers:
+        - name: neuromorphic
+          image: ghcr.io/neuralmimicry/neuromorphic_demo:latest
+          args: ["--orchestrator", "--grpc-addr", "0.0.0.0:50051"]
+          ports:
+            - containerPort: 50051
+            - containerPort: 50050
+              protocol: UDP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: orchestrator
+  labels:
+    app: neuromorphic
+    role: orchestrator
+spec:
+  to:
+    kind: Service
+    name: orchestrator
+    weight: 100
+  port:
+    targetPort: grpc
+  tls:
+    termination: passthrough

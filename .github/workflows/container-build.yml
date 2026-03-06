@@ -1,0 +1,138 @@
+name: Container Build, Verify, and Promote
+
+on:
+  push:
+    branches: ["brainregions", "main", "master"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Immutable build ID to promote (defaults to current SHA)"
+        required: false
+      environment:
+        description: "Target environment"
+        required: false
+        type: choice
+        options: [developer, alpha, beta, canary, test, pre-prod, prod, release, ui]
+      track:
+        description: "Release track"
+        required: false
+        type: choice
+        options: [shadow, canary, blue, green]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: neuralmimicry/neuromorphic_demo
+
+jobs:
+  build:
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive immutable build id
+        id: buildmeta
+        run: |
+          echo "build_id=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push architecture image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.buildmeta.outputs.build_id }}-${{ matrix.arch }}
+          build-args: |
+            BUILD_ID=${{ steps.buildmeta.outputs.build_id }}
+            CARGO_FEATURES=all
+            PYTHON_MIN_VERSION=3.12
+            PYTHON_FULL_VERSION=3.12.2
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  manifest:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble multi-arch manifest
+        run: |
+          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          BUILD=${GITHUB_SHA}
+
+          docker buildx imagetools create \
+            -t ${IMAGE}:${BUILD} \
+            ${IMAGE}:${BUILD}-amd64 \
+            ${IMAGE}:${BUILD}-arm64
+
+      - name: Publish branch alias for developer flow
+        if: startsWith(github.ref, 'refs/heads/')
+        run: |
+          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          BUILD=${GITHUB_SHA}
+          BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          docker buildx imagetools create \
+            -t ${IMAGE}:${BRANCH_TAG} \
+            ${IMAGE}:${BUILD}
+
+  promote:
+    if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote immutable build
+        run: |
+          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          BUILD="${{ inputs.build_id || github.sha }}"
+          ENV="${{ inputs.environment }}"
+          TRACK="${{ inputs.track || 'blue' }}"
+          TARGET="${IMAGE}:${ENV}-${TRACK}"
+
+          docker buildx imagetools create \
+            -t "${TARGET}" \
+            "${IMAGE}:${BUILD}"
+
+          echo "Promoted ${IMAGE}:${BUILD} -> ${TARGET}"
