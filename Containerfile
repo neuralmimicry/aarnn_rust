@@ -79,8 +79,8 @@ RUN git clone --depth 1 -b 4.x https://github.com/opencv/opencv.git && \
     rm -rf /tmp/opencv_build
 
 # Set environment for Rust build to find OpenCV
-ENV PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig"
+ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib"
 
 # Install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -89,12 +89,14 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /build
 
 # Copy source code and build dependencies
+# Note: third_party is required because Cargo.toml patches ibverbs-sys to a local path.
 COPY Cargo.toml Cargo.lock config.json ./
 COPY proto ./proto
 COPY tools ./tools
 COPY build.rs ./
 COPY src ./src
 COPY web_ui ./web_ui
+COPY third_party ./third_party
 
 # Features to enable during build (can be overridden via --build-arg)
 # Use CARGO_FEATURES="all" or "all-features" to build with --all-features.
@@ -162,7 +164,7 @@ RUN mkdir -p /app/outputs && chmod 777 /app/outputs
 # Environment variables for Hardware Discovery
 # - LD_LIBRARY_PATH: Ensure libraries like libopencv are found
 # - NM_LOG_DIR: Custom env var if supported, otherwise use default
-ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:/usr/lib64:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:/usr/lib64"
 ENV OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
 # OpenShift/Kubernetes security: Run as a non-privileged user
