@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Import a TFLite MLP (as exported by tools/export_tflite.py) and emit a
-neuromorphic_demo Runner snapshot JSON ("network.json" shape) to the
+aarnn_rust Runner snapshot JSON ("network.json" shape) to the
 given path.
 
 Usage:

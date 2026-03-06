@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Import an ONNX MLP and emit a neuromorphic_demo Runner snapshot JSON
+Import an ONNX MLP and emit a aarnn_rust Runner snapshot JSON
 ("network.json" shape) to the given path.
 
 Usage:

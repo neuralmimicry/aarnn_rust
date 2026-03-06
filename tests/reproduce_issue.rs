@@ -1,9 +1,9 @@
 #[cfg(feature = "growth3d")]
-use neuromorphic_demo::runner::Runner;
+use aarnn_rust::runner::Runner;
 #[cfg(feature = "growth3d")]
-use neuromorphic_demo::config::{LIFParams, STDPParams, NetworkConfig};
+use aarnn_rust::config::{LIFParams, STDPParams, NetworkConfig};
 #[cfg(feature = "growth3d")]
-use neuromorphic_demo::sim::{NeuronModel, Learning};
+use aarnn_rust::sim::{NeuronModel, Learning};
 
 #[test]
 #[cfg(all(feature = "growth3d", feature = "morpho"))]
@@ -185,8 +185,8 @@ fn test_configurable_io_layers() {
     }
     
     // Now verify batch simulation path
-    use neuromorphic_demo::sim::run_snn;
-    use neuromorphic_demo::network::build_network;
+    use aarnn_rust::sim::run_snn;
+    use aarnn_rust::network::build_network;
     let mut rng = rand::rng();
     let built = build_network(&net, &mut rng);
     let sensory_spikes = ndarray::Array2::from_elem((10, 1), 1i8);

@@ -1,4 +1,4 @@
-//! Entry point and CLI for the neuromorphic demo.
+//! Entry point and CLI for the AARNN.
 //!
 //! Modes
 //! - Batch/CLI (this file): runs a fixed‑shape, matrix‑based simulation and
@@ -94,7 +94,7 @@ impl LearningRule {
     }
 }
 
-/// Command-Line Interface (CLI) arguments for the Neuromorphic Demo.
+/// Command-Line Interface (CLI) arguments for the AARNN.
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Neuromorphic simulation and visualization engine", long_about = None)]
 struct Cli {
@@ -239,7 +239,7 @@ struct Cli {
     aer_max_packet_bytes: usize,
 }
 
-/// Main entry point for the Neuromorphic Demo.
+/// Main entry point for the AARNN.
 ///
 /// This function coordinates configuration loading, network building, and simulation execution.
 /// It supports several distinct execution paths:

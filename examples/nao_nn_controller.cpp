@@ -4,9 +4,9 @@
 // Build notes:
 // - This file is meant to be copied into your Webots project under
 //   controllers/nao_nn_controller/ and built by Webots, linking against
-//   libneuromorphic_demo.so produced by this repo.
+//   libaarnn_rust.so produced by this repo.
 // - Provide the public header path with -I<repo>/include and the library path
-//   with -L<repo>/target/release -lneuromorphic_demo and set rpath to $ORIGIN
+//   with -L<repo>/target/release -laarnn_rust and set rpath to $ORIGIN
 //   so the controller binary finds the .so placed next to it.
 // - Example rpath: -Wl,-rpath,'$ORIGIN'
 //

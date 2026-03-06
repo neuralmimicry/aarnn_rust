@@ -1,4 +1,4 @@
-# Multi-arch Containerfile for Neuromorphic Demo
+# Multi-arch Containerfile for AARNN
 # Target Architectures: linux/amd64, linux/arm64
 # Base: CentOS Stream 9
 
@@ -102,9 +102,9 @@ COPY third_party ./third_party
 # Use CARGO_FEATURES="all" or "all-features" to build with --all-features.
 ARG CARGO_FEATURES="all"
 RUN if [ "${CARGO_FEATURES}" = "all" ] || [ "${CARGO_FEATURES}" = "all-features" ]; then \
-        cargo build --release --all-features --bin neuromorphic_demo --bin web_ui; \
+        cargo build --release --all-features --bin aarnn_rust --bin web_ui; \
     else \
-        cargo build --release --features "${CARGO_FEATURES}" --bin neuromorphic_demo --bin web_ui; \
+        cargo build --release --features "${CARGO_FEATURES}" --bin aarnn_rust --bin web_ui; \
     fi
 
 # --- Stage 2: Runtime ---
@@ -152,7 +152,7 @@ RUN python3.12 -m pip install --no-cache-dir --default-timeout=3600 --retries 10
 WORKDIR /app
 
 # Copy the compiled binary and necessary assets from the builder stage
-COPY --from=builder /build/target/release/neuromorphic_demo .
+COPY --from=builder /build/target/release/aarnn_rust .
 COPY --from=builder /build/target/release/web_ui .
 COPY --from=builder /build/config.json .
 COPY --from=builder /build/tools ./tools
@@ -179,10 +179,10 @@ EXPOSE 8080
 
 # Labels for OpenShift
 LABEL io.k8s.description="Neuromorphic simulation and visualization engine" \
-      io.k8s.display-name="Neuromorphic Demo" \
+      io.k8s.display-name="AARNN" \
       io.openshift.expose-services="50051:grpc,8080:http" \
       io.openshift.tags="neuromorphic,ai,distributed,rust,web"
 
 # Default entrypoint runs the help command to show available modes
-ENTRYPOINT ["./neuromorphic_demo"]
+ENTRYPOINT ["./aarnn_rust"]
 CMD ["--help"]

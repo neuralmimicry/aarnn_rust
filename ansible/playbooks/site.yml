@@ -53,8 +53,8 @@
         accept_hostkey: "{{ git_accept_hostkey | bool }}"
         depth: "{{ git_depth }}"
         single_branch: "{{ git_single_branch | bool }}"
-        username: "{{ (lookup('env', 'GITHUB_USERNAME') | default('x-access-token', true)) if not (git_use_ssh | bool) else omit }}"
-        password: "{{ (lookup('env', 'GITHUB_TOKEN') | default('', true)) if not (git_use_ssh | bool) else omit }}"
+        username: "{{ (lookup('env', 'X_GITHUB_USERNAME') | default('x-access-token', true)) if not (git_use_ssh | bool) else omit }}"
+        password: "{{ (lookup('env', 'X_GITHUB_TOKEN') | default('', true)) if not (git_use_ssh | bool) else omit }}"
       environment:
         GIT_TERMINAL_PROMPT: "0"
         GIT_SSH_COMMAND: "{{ git_ssh_command if (git_use_ssh | bool) else omit }}"

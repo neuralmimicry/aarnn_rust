@@ -3,7 +3,7 @@
 project_root: "{{ playbook_dir }}/.."
 
 # Remote repo path on qc01
-repo_path: "/home/{{ ansible_user }}/Developer/neuralmimicry/neuromorphic_demo"
+repo_path: "/home/{{ ansible_user }}/Developer/neuralmimicry/aarnn_rust"
 
 # Deployment method: rsync (syncs current working tree) or git (clones/pulls)
 deploy_method: git
@@ -11,8 +11,8 @@ deploy_method: git
 # Git deployment settings
 # Set git_use_ssh=true to use git_repo_url_ssh and SSH agent forwarding.
 git_use_ssh: false
-git_repo_url: "https://github.com/neuralmimicry/neuromorphic_demo.git"
-git_repo_url_ssh: "git@github.com:neuralmimicry/neuromorphic_demo.git"
+git_repo_url: "https://github.com/neuralmimicry/aarnn_rust.git"
+git_repo_url_ssh: "git@github.com:neuralmimicry/aarnn_rust.git"
 git_branch: "brainregions"
 git_accept_hostkey: true
 git_update: true
@@ -24,7 +24,7 @@ run_local_tests: true
 local_test_command: "cargo test --all-features"
 
 # Container build settings
-image_name: ghcr.io/neuralmimicry/neuromorphic_demo
+image_name: ghcr.io/neuralmimicry/aarnn_rust
 image_tag: brainregions
 cargo_features: all
 python_min_version: "3.12"

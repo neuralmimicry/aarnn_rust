@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/neuromorphic_demo:brainregions-arm64"}
+IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust:brainregions-arm64"}
 BRAIN_ID=${2:-"motor"}
 
 if ! command -v xauth >/dev/null 2>&1; then

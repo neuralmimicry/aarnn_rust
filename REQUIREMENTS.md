@@ -1,5 +1,5 @@
 # Software Requirements Specification (SRS)
-Neuromorphic Demo
+AARNN
 
 Version: 0.1
 Status: Draft
@@ -52,7 +52,7 @@ The system is a neuromorphic spiking neural network simulator with:
 
 ### 2.1 Product Perspective
 The system is a modular simulator. The Rust library exposes core SNN primitives,
-while binaries provide CLI execution (`neuromorphic_demo`) and web UI (`web_ui`).
+while binaries provide CLI execution (`aarnn_rust`) and web UI (`web_ui`).
 Optional feature flags enable UI, growth/morphology, OpenCL, and robotics bridges.
 Distributed operation is implemented over gRPC, with optional RDMA acceleration.
 

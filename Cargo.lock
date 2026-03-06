@@ -3,6 +3,61 @@
 version = 4
 
 [[package]]
+name = "aarnn_rust"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-stream",
+ "axum",
+ "axum-extra",
+ "bindgen 0.72.1",
+ "clap",
+ "cmake",
+ "core_affinity",
+ "cpal",
+ "eframe",
+ "egui",
+ "fastrand",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "ibverbs",
+ "image 0.25.9",
+ "memmap2",
+ "ndarray",
+ "ndarray-rand",
+ "nokhwa",
+ "num_cpus",
+ "opencl3",
+ "opencv",
+ "openidconnect",
+ "plotters",
+ "plotters-bitmap",
+ "plotters-svg",
+ "proc-macro2",
+ "prost",
+ "rand 0.10.0",
+ "rand_distr 0.6.0",
+ "rayon",
+ "rfd",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "sysinfo",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3542,61 +3597,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys",
-]
-
-[[package]]
-name = "neuromorphic_demo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-stream",
- "axum",
- "axum-extra",
- "bindgen 0.72.1",
- "clap",
- "cmake",
- "core_affinity",
- "cpal",
- "eframe",
- "egui",
- "fastrand",
- "futures-core",
- "futures-util",
- "hex",
- "ibverbs",
- "image 0.25.9",
- "memmap2",
- "ndarray",
- "ndarray-rand",
- "nokhwa",
- "num_cpus",
- "opencl3",
- "opencv",
- "openidconnect",
- "plotters",
- "plotters-bitmap",
- "plotters-svg",
- "proc-macro2",
- "prost",
- "rand 0.10.0",
- "rand_distr 0.6.0",
- "rayon",
- "rfd",
- "rustfft",
- "serde",
- "serde_json",
- "symphonia",
- "sysinfo",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
 ]
 
 [[package]]

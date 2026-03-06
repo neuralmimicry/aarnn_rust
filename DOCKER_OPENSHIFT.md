@@ -10,14 +10,14 @@ The project uses a multi-stage `Containerfile` based on CentOS Stream 9.
 
 ### Build with Podman (Recommended for OpenShift)
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/neuromorphic_demo v1.0.0 true
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust v1.0.0 true
 ```
 This script creates a manifest for `linux/amd64` and `linux/arm64`, builds both architectures (using QEMU if necessary), and pushes them to GHCR.
-The container build produces both binaries: `neuromorphic_demo` and `web_ui`.
+The container build produces both binaries: `aarnn_rust` and `web_ui`.
 
 ### Build with Docker Buildx
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/neuralmimicry/neuromorphic_demo:latest . --push
+docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/neuralmimicry/aarnn_rust:latest . --push
 ```
 
 ## 2. Deployment Architecture
@@ -125,7 +125,7 @@ By default, the container is built **with** the `ui` feature so the image can ru
 
 ```bash
 # Example building with a slimmer feature set (no UI)
-./build_container.sh ghcr.io/neuralmimicry/neuromorphic_demo v1.0.0 true "growth3d,sysinfo,opencl"
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust v1.0.0 true "growth3d,sysinfo,opencl"
 ```
 
 ### Deploying the UI to OpenShift
@@ -151,7 +151,7 @@ oc apply -k deploy/overlays/ui
     oc get route standalone-ui
     ```
 2.  Open the URL in your web browser.
-3.  You will see the desktop session where the `neuromorphic_demo` UI is running.
+3.  You will see the desktop session where the `aarnn_rust` UI is running.
 
 > **Tip**: If you prefer to use a local X server (like XQuartz or VcXsrv), you can modify the deployment to point the `DISPLAY` environment variable to your local machine's IP, though this often requires specific network and firewall configurations.
 
@@ -186,17 +186,17 @@ All modes use the same container image and differ only by command/args:
 
 ```bash
 # CLI-only (single host)
-podman run --rm ghcr.io/neuralmimicry/neuromorphic_demo:latest --t 2000
+podman run --rm ghcr.io/neuralmimicry/aarnn_rust:latest --t 2000
 
 # Rust UI (requires X11 or VNC sidecar)
-podman run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix ghcr.io/neuralmimicry/neuromorphic_demo:latest --ui
+podman run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix ghcr.io/neuralmimicry/aarnn_rust:latest --ui
 
 # Orchestrator
-podman run --rm -p 50051:50051 -p 50050:50050/udp ghcr.io/neuralmimicry/neuromorphic_demo:latest --orchestrator --grpc-addr 0.0.0.0:50051
+podman run --rm -p 50051:50051 -p 50050:50050/udp ghcr.io/neuralmimicry/aarnn_rust:latest --orchestrator --grpc-addr 0.0.0.0:50051
 
 # Node
-podman run --rm -p 50052:50052 ghcr.io/neuralmimicry/neuromorphic_demo:latest --node --orchestrator-addr http://<orchestrator-host>:50051 --grpc-addr 0.0.0.0:50052
+podman run --rm -p 50052:50052 ghcr.io/neuralmimicry/aarnn_rust:latest --node --orchestrator-addr http://<orchestrator-host>:50051 --grpc-addr 0.0.0.0:50052
 
 # Web UI server
-podman run --rm -p 8080:8080 ghcr.io/neuralmimicry/neuromorphic_demo:latest ./web_ui --listen 0.0.0.0:8080 --orchestrator http://<orchestrator-host>:50051
+podman run --rm -p 8080:8080 ghcr.io/neuralmimicry/aarnn_rust:latest ./web_ui --listen 0.0.0.0:8080 --orchestrator http://<orchestrator-host>:50051
 ```

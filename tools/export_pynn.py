@@ -17,7 +17,7 @@ def main():
     
     with open(args.out_pynn, 'w') as f:
         f.write("#!/usr/bin/env python3\n")
-        f.write("# Generated PyNN script from neuromorphic_demo\n\n")
+        f.write("# Generated PyNN script from aarnn_rust\n\n")
         f.write("import pyNN.neuron as sim\n")
         f.write("import numpy as np\n\n")
         

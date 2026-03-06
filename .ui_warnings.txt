@@ -256,6 +256,6 @@ warning: struct `SnapshotTopo` is never constructed
 2233 | struct SnapshotTopo {
      |        ^^^^^^^^^^^^
 
-warning: `neuromorphic_demo` (lib) generated 33 warnings (run `cargo fix --lib -p neuromorphic_demo` to apply 27 suggestions)
-warning: `neuromorphic_demo` (bin "neuromorphic_demo") generated 33 warnings (33 duplicates)
+warning: `aarnn_rust` (lib) generated 33 warnings (run `cargo fix --lib -p aarnn_rust` to apply 27 suggestions)
+warning: `aarnn_rust` (bin "aarnn_rust") generated 33 warnings (33 duplicates)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s

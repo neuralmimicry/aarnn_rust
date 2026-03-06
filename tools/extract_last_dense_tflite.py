@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Extract the last Dense-like head from a TFLite model and emit a minimal
-neuromorphic_demo Runner snapshot JSON (network.json) that preserves only
+aarnn_rust Runner snapshot JSON (network.json) that preserves only
 the final linear mapping as W_out. The hidden/input are synthesized to allow
 import into the app (identity W_in; no forward layers).
 

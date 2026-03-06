@@ -1,7 +1,7 @@
 // Unix Domain Socket (UDS) latency demo - client side.
 //
 // Usage:
-//   cargo run --example uds_latency_client -- /tmp/neuromorphic_demo.rtt 1000 256
+//   cargo run --example uds_latency_client -- /tmp/aarnn_rust.rtt 1000 256
 // Where args are: <socket_path> [iterations=1000] [payload_bytes=256]
 // The client will send timestamped pings and print RTT statistics.
 
@@ -12,13 +12,13 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn main() -> io::Result<()> {
-    let socket_path = env::args().nth(1).unwrap_or_else(|| "/tmp/neuromorphic_demo.rtt".to_string());
+    let socket_path = env::args().nth(1).unwrap_or_else(|| "/tmp/aarnn_rust.rtt".to_string());
     let num_iterations: usize = env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1000);
     let payload_size_bytes: usize = env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(256);
 
     let server_path = Path::new(&socket_path);
     // Bind to a unique client path so the server can reply
-    let client_socket_path = format!("/tmp/neuromorphic_demo.client.{}.sock", std::process::id());
+    let client_socket_path = format!("/tmp/aarnn_rust.client.{}.sock", std::process::id());
     let client_path = Path::new(&client_socket_path);
     if client_path.exists() { let _ = std::fs::remove_file(client_path); }
     let client_socket = UnixDatagram::bind(client_path)?;

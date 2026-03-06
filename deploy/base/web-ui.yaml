@@ -35,7 +35,7 @@ spec:
     spec:
       containers:
         - name: web-ui
-          image: ghcr.io/neuralmimicry/neuromorphic_demo:latest
+          image: ghcr.io/neuralmimicry/aarnn_rust:latest
           command: ["./web_ui"]
           args: ["--listen", "0.0.0.0:8080", "--orchestrator", "http://orchestrator:50051"]
           ports:

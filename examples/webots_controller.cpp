@@ -1,6 +1,6 @@
 /**
  * @file webots_controller.cpp
- * @brief C++ Webots Controller Example using the Neuromorphic Demo FFI Bridge.
+ * @brief C++ Webots Controller Example using the AARNN FFI Bridge.
  *
  * This example demonstrates how to integrate the Rust-based neuromorphic engine
  * into a C++ environment, such as a Webots robot controller. It uses the
@@ -19,7 +19,7 @@
  *
  * ## Compilation:
  * 1. Build the Rust shared library: `cargo build --release --features ffi_bridge`
- * 2. Compile this controller, linking against `libneuromorphic_demo.so` (or .dylib/.dll).
+ * 2. Compile this controller, linking against `libaarnn_rust.so` (or .dylib/.dll).
  */
 
 #include <cmath>

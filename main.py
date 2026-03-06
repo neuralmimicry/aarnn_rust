@@ -585,7 +585,7 @@ def run_snn(T, W_in, W_hh_fwd_list, W_hh_bwd_list, W_out, lif: LIFParams, stdp: 
     return spikes_h, spikes_o, W_in, W_hh_fwd_list, W_hh_bwd_list, W_out
 
 # -----------------------------
-# Interactive animation: live neuromorphic demo with controls
+# Interactive animation: live AARNN with controls
 # -----------------------------
 class SNNRunner:
     """Incremental SNN simulator (per-step) with optional output->input feedback.

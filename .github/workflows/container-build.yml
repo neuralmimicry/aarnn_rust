@@ -26,7 +26,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: neuralmimicry/neuromorphic_demo
+  IMAGE_NAME: neuralmimicry/aarnn_rust
 
 jobs:
   build:
@@ -54,7 +54,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.X_GITHUB_TOKEN }}
 
       - name: Derive immutable build id
         id: buildmeta
@@ -91,11 +91,11 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.X_GITHUB_TOKEN }}
 
       - name: Assemble multi-arch manifest
         run: |
-          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          IMAGE=ghcr.io/neuralmimicry/aarnn_rust
           BUILD=${GITHUB_SHA}
 
           docker buildx imagetools create             -t ${IMAGE}:${BUILD}             ${IMAGE}:${BUILD}-amd64             ${IMAGE}:${BUILD}-arm64
@@ -103,7 +103,7 @@ jobs:
       - name: Publish branch alias for developer flow
         if: startsWith(github.ref, 'refs/heads/')
         run: |
-          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          IMAGE=ghcr.io/neuralmimicry/aarnn_rust
           BUILD=${GITHUB_SHA}
           BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           docker buildx imagetools create             -t ${IMAGE}:${BRANCH_TAG}             ${IMAGE}:${BUILD}
@@ -120,11 +120,11 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.X_GITHUB_TOKEN }}
 
       - name: Promote immutable build
         run: |
-          IMAGE=ghcr.io/neuralmimicry/neuromorphic_demo
+          IMAGE=ghcr.io/neuralmimicry/aarnn_rust
           BUILD="${{ inputs.build_id || github.sha }}"
           ENV="${{ inputs.environment }}"
           TRACK="${{ inputs.track || 'blue' }}"

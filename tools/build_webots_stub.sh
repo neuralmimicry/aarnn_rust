@@ -25,7 +25,7 @@ else
   OUT_DIR="target/debug"
 fi
 
-LIB_SO="$OUT_DIR/libneuromorphic_demo.so"
+LIB_SO="$OUT_DIR/libaarnn_rust.so"
 if [[ ! -f "$LIB_SO" ]]; then
   echo "Error: $LIB_SO not found. Did the Rust build succeed and crate-type include cdylib?" >&2
   exit 2
@@ -47,7 +47,7 @@ fi
 echo "==> Building C++ stub with $CXX_CMD"
 set -x
 "$CXX_CMD" -std=c++17 -O2 -Iinclude examples/webots_controller.cpp \
-  -L "$OUT_DIR" -lneuromorphic_demo \
+  -L "$OUT_DIR" -laarnn_rust \
   -Wl,-rpath,'$ORIGIN' \
   -o "$OUT_DIR/webots_controller"
 set +x
