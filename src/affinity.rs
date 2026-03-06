@@ -1,7 +1,7 @@
 #[cfg(feature = "core_affinity")]
-use std::sync::OnceLock;
-#[cfg(feature = "core_affinity")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "core_affinity")]
+use std::sync::OnceLock;
 
 #[cfg(feature = "core_affinity")]
 fn parse_env_bool(name: &str, default: bool) -> bool {
@@ -28,7 +28,11 @@ fn parse_env_usize_list(name: &str) -> Option<Vec<usize>> {
             out.push(v);
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 #[cfg(feature = "core_affinity")]
@@ -95,7 +99,10 @@ pub fn apply_rotating_current_thread(_label: &str) -> Option<usize> {
     }
 }
 
-pub fn configure_tokio_runtime_affinity(builder: &mut tokio::runtime::Builder, _pool_label: &'static str) {
+pub fn configure_tokio_runtime_affinity(
+    builder: &mut tokio::runtime::Builder,
+    _pool_label: &'static str,
+) {
     #[cfg(feature = "core_affinity")]
     {
         if affinity_rotation_enabled() {

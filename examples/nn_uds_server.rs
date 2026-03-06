@@ -53,24 +53,66 @@ fn parse_server_args() -> ServerArgs {
     let mut args_iterator = std::env::args().skip(1);
     while let Some(arg) = args_iterator.next() {
         match arg.as_str() {
-            "--socket" => if let Some(value) = args_iterator.next() { socket_path = value; },
-            "--sensory" => if let Some(value) = args_iterator.next() { num_sensory_neurons = value.parse().unwrap_or(num_sensory_neurons); },
-            "--output" => if let Some(value) = args_iterator.next() { num_output_neurons = value.parse().unwrap_or(num_output_neurons); },
-            "--threshold" => if let Some(value) = args_iterator.next() { spike_threshold = value.parse().unwrap_or(spike_threshold); },
-            "--aer-sensory-base" => if let Some(value) = args_iterator.next() { aer_sensory_base = value.parse().unwrap_or(aer_sensory_base); },
-            "--aer-output-base" => if let Some(value) = args_iterator.next() { aer_output_base = value.parse().unwrap_or(aer_output_base); },
+            "--socket" => {
+                if let Some(value) = args_iterator.next() {
+                    socket_path = value;
+                }
+            }
+            "--sensory" => {
+                if let Some(value) = args_iterator.next() {
+                    num_sensory_neurons = value.parse().unwrap_or(num_sensory_neurons);
+                }
+            }
+            "--output" => {
+                if let Some(value) = args_iterator.next() {
+                    num_output_neurons = value.parse().unwrap_or(num_output_neurons);
+                }
+            }
+            "--threshold" => {
+                if let Some(value) = args_iterator.next() {
+                    spike_threshold = value.parse().unwrap_or(spike_threshold);
+                }
+            }
+            "--aer-sensory-base" => {
+                if let Some(value) = args_iterator.next() {
+                    aer_sensory_base = value.parse().unwrap_or(aer_sensory_base);
+                }
+            }
+            "--aer-output-base" => {
+                if let Some(value) = args_iterator.next() {
+                    aer_output_base = value.parse().unwrap_or(aer_output_base);
+                }
+            }
             "--ui" => enable_ui = true,
             _ => {}
         }
     }
-    ServerArgs { socket_path, num_sensory_neurons, num_output_neurons, spike_threshold, enable_ui, aer_sensory_base, aer_output_base }
+    ServerArgs {
+        socket_path,
+        num_sensory_neurons,
+        num_output_neurons,
+        spike_threshold,
+        enable_ui,
+        aer_sensory_base,
+        aer_output_base,
+    }
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
 fn build_mapping(num_sensory_neurons: usize, num_output_neurons: usize) -> IoMapping {
     let mut io_mapping = IoMapping::new(num_sensory_neurons, num_output_neurons);
-    io_mapping.add_port(PortSpec::new("__S_ALL__", PortKind::Sensor, 0, num_sensory_neurons));
-    io_mapping.add_port(PortSpec::new("__O_ALL__", PortKind::Actuator, 0, num_output_neurons));
+    io_mapping.add_port(PortSpec::new(
+        "__S_ALL__",
+        PortKind::Sensor,
+        0,
+        num_sensory_neurons,
+    ));
+    io_mapping.add_port(PortSpec::new(
+        "__O_ALL__",
+        PortKind::Actuator,
+        0,
+        num_output_neurons,
+    ));
     io_mapping
 }
 
@@ -82,8 +124,20 @@ fn unlink_if_exists(path: &str) {
 fn build_runner(num_sensory_neurons: usize, num_output_neurons: usize) -> Runner {
     let lif_params = LIFParams::default();
     let stdp_params = STDPParams::default();
-    let network_config = NetworkConfig { num_sensory_neurons: num_sensory_neurons, num_hidden_layers: 2, num_hidden_per_layer_initial: 32, num_output_neurons: num_output_neurons, ..NetworkConfig::default() };
-    Runner::new(lif_params, stdp_params, network_config, aarnn_rust::sim::NeuronModel::Lif, aarnn_rust::sim::Learning::Stdp)
+    let network_config = NetworkConfig {
+        num_sensory_neurons: num_sensory_neurons,
+        num_hidden_layers: 2,
+        num_hidden_per_layer_initial: 32,
+        num_output_neurons: num_output_neurons,
+        ..NetworkConfig::default()
+    };
+    Runner::new(
+        lif_params,
+        stdp_params,
+        network_config,
+        aarnn_rust::sim::NeuronModel::Lif,
+        aarnn_rust::sim::Learning::Stdp,
+    )
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
@@ -101,8 +155,14 @@ fn main() -> io::Result<()> {
     );
 
     // Build engine
-    let io_mapping = build_mapping(server_args.num_sensory_neurons, server_args.num_output_neurons);
-    let quantizer = Quantizer { threshold: server_args.spike_threshold, probabilistic: true };
+    let io_mapping = build_mapping(
+        server_args.num_sensory_neurons,
+        server_args.num_output_neurons,
+    );
+    let quantizer = Quantizer {
+        threshold: server_args.spike_threshold,
+        probabilistic: true,
+    };
 
     // Shared state for optional visualization
     let last_inputs = Arc::new(Mutex::new(vec![0f32; server_args.num_sensory_neurons]));
@@ -133,9 +193,13 @@ fn main() -> io::Result<()> {
         let mut out_buf = vec![0f32; io_mapping_srv.total_actuator_values()];
 
         loop {
-            let (bytes_received, peer_address) = match server_socket.recv_from(&mut request_buffer) {
+            let (bytes_received, peer_address) = match server_socket.recv_from(&mut request_buffer)
+            {
                 Ok(result) => result,
-                Err(error) => { eprintln!("[nn_uds_server] recv error: {error:?}"); continue; }
+                Err(error) => {
+                    eprintln!("[nn_uds_server] recv error: {error:?}");
+                    continue;
+                }
             };
             let payload = &request_buffer[..bytes_received];
             if payload.is_empty() {
@@ -162,10 +226,14 @@ fn main() -> io::Result<()> {
                 }
 
                 if let Ok(mut li) = last_inputs_for_viz.lock() {
-                    for (i, v) in spk_s.iter().enumerate() { li[i] = *v as f32; }
+                    for (i, v) in spk_s.iter().enumerate() {
+                        li[i] = *v as f32;
+                    }
                 }
                 if let Ok(mut lo) = last_outputs_for_viz.lock() {
-                    for (i, v) in out_vec.iter().enumerate() { lo[i] = *v as f32; }
+                    for (i, v) in out_vec.iter().enumerate() {
+                        lo[i] = *v as f32;
+                    }
                 }
 
                 match peer_address.as_pathname() {
@@ -182,7 +250,9 @@ fn main() -> io::Result<()> {
             }
 
             if bytes_received != expected_bytes {
-                eprintln!("[nn_uds_server] bad frame size: got {bytes_received}, want {expected_bytes}");
+                eprintln!(
+                    "[nn_uds_server] bad frame size: got {bytes_received}, want {expected_bytes}"
+                );
                 continue;
             }
 
@@ -205,11 +275,15 @@ fn main() -> io::Result<()> {
                 quantizer_srv.from_spikes(&io_mapping_srv, spk_o, &mut out_buf);
             }
 
-            if let Ok(mut li) = last_inputs_for_viz.lock() { *li = in_buf.clone(); }
-            if let Ok(mut lo) = last_outputs_for_viz.lock() { *lo = out_buf.clone(); }
+            if let Ok(mut li) = last_inputs_for_viz.lock() {
+                *li = in_buf.clone();
+            }
+            if let Ok(mut lo) = last_outputs_for_viz.lock() {
+                *lo = out_buf.clone();
+            }
 
             for (i, v) in out_buf.iter().enumerate() {
-                output_buffer[i*4..i*4+4].copy_from_slice(&v.to_le_bytes());
+                output_buffer[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
             }
             match peer_address.as_pathname() {
                 Some(path) => {
@@ -235,13 +309,20 @@ fn main() -> io::Result<()> {
                 "NN UDS Server",
                 options,
                 Box::new(move |_cc| {
-                    struct Viz { li: Arc<Mutex<Vec<f32>>>, lo: Arc<Mutex<Vec<f32>>> }
+                    struct Viz {
+                        li: Arc<Mutex<Vec<f32>>>,
+                        lo: Arc<Mutex<Vec<f32>>>,
+                    }
                     impl eframe::App for Viz {
                         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
                             egui::CentralPanel::default().show(ctx, |ui| {
                                 ui.heading("Inputs (S) and Outputs (O)");
-                                if let Ok(li) = self.li.lock() { draw_bars(ui, &li, "Inputs"); }
-                                if let Ok(lo) = self.lo.lock() { draw_bars(ui, &lo, "Outputs"); }
+                                if let Ok(li) = self.li.lock() {
+                                    draw_bars(ui, &li, "Inputs");
+                                }
+                                if let Ok(lo) = self.lo.lock() {
+                                    draw_bars(ui, &lo, "Outputs");
+                                }
                             });
                             ctx.request_repaint_after(Duration::from_millis(33));
                         }
@@ -250,24 +331,34 @@ fn main() -> io::Result<()> {
                         ui.label(title);
                         let w = ui.available_width();
                         let h = 120.0;
-                        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                        let (rect, _resp) =
+                            ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
                         let painter = ui.painter_at(rect);
                         let n = vals.len().max(1) as f32;
                         for (i, v) in vals.iter().enumerate() {
-                            let x0 = rect.left() + (i as f32)/n * rect.width();
-                            let x1 = rect.left() + ((i as f32)+1.0)/n * rect.width();
+                            let x0 = rect.left() + (i as f32) / n * rect.width();
+                            let x1 = rect.left() + ((i as f32) + 1.0) / n * rect.width();
                             let y1 = rect.bottom();
                             let y0 = rect.bottom() - (v.clamp(0.0, 1.0)) * rect.height();
-                            painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1-1.0, y1)), 0.0, egui::Color32::LIGHT_BLUE);
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(x0, y0),
+                                    egui::pos2(x1 - 1.0, y1),
+                                ),
+                                0.0,
+                                egui::Color32::LIGHT_BLUE,
+                            );
                         }
                     }
                     Ok(Box::new(Viz { li, lo }))
-                })
+                }),
             );
         }
     } else {
         // Park the main thread; the server thread runs indefinitely
-        loop { std::thread::sleep(Duration::from_secs(3600)); }
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
     }
 
     // Unreachable

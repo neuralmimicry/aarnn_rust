@@ -12,18 +12,31 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn main() -> io::Result<()> {
-    let socket_path = env::args().nth(1).unwrap_or_else(|| "/tmp/aarnn_rust.rtt".to_string());
-    let num_iterations: usize = env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1000);
-    let payload_size_bytes: usize = env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(256);
+    let socket_path = env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/aarnn_rust.rtt".to_string());
+    let num_iterations: usize = env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+    let payload_size_bytes: usize = env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256);
 
     let server_path = Path::new(&socket_path);
     // Bind to a unique client path so the server can reply
     let client_socket_path = format!("/tmp/aarnn_rust.client.{}.sock", std::process::id());
     let client_path = Path::new(&client_socket_path);
-    if client_path.exists() { let _ = std::fs::remove_file(client_path); }
+    if client_path.exists() {
+        let _ = std::fs::remove_file(client_path);
+    }
     let client_socket = UnixDatagram::bind(client_path)?;
     client_socket.connect(server_path)?;
-    println!("uds_latency_client: connected to {} (iters={}, payload={} B)", socket_path, num_iterations, payload_size_bytes);
+    println!(
+        "uds_latency_client: connected to {} (iters={}, payload={} B)",
+        socket_path, num_iterations, payload_size_bytes
+    );
 
     let mut send_buffer = vec![0u8; payload_size_bytes.max(16)];
     let mut receive_buffer = vec![0u8; send_buffer.len()];
@@ -45,9 +58,18 @@ fn main() -> io::Result<()> {
     let to_ms = |d: &Duration| d.as_nanos() as f64 / 1e6;
     let mean_ms = round_trip_times.iter().map(to_ms).sum::<f64>() / round_trip_times.len() as f64;
     let p50_ms = to_ms(&round_trip_times[round_trip_times.len() / 2]);
-    let p95_ms = to_ms(&round_trip_times[((round_trip_times.len() as f64 * 0.95) as usize).min(round_trip_times.len()-1)]);
-    let p99_ms = to_ms(&round_trip_times[((round_trip_times.len() as f64 * 0.99) as usize).min(round_trip_times.len()-1)]);
-    println!("RTT ms: mean={:.3} p50={:.3} p95={:.3} p99={:.3}", mean_ms, p50_ms, p95_ms, p99_ms);
+    let p95_ms = to_ms(
+        &round_trip_times
+            [((round_trip_times.len() as f64 * 0.95) as usize).min(round_trip_times.len() - 1)],
+    );
+    let p99_ms = to_ms(
+        &round_trip_times
+            [((round_trip_times.len() as f64 * 0.99) as usize).min(round_trip_times.len() - 1)],
+    );
+    println!(
+        "RTT ms: mean={:.3} p50={:.3} p95={:.3} p99={:.3}",
+        mean_ms, p50_ms, p95_ms, p99_ms
+    );
 
     Ok(())
 }

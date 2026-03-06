@@ -19,27 +19,31 @@ use opencl3::command_queue::CommandQueue;
 use opencl3::context::Context;
 use opencl3::device::{Device, CL_DEVICE_TYPE_GPU};
 use opencl3::kernel::Kernel;
-use opencl3::memory::{Buffer, CL_MEM_READ_WRITE, CL_MEM_READ_ONLY};
+use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
 use opencl3::platform::get_platforms;
 use opencl3::program::Program;
 use opencl3::types::cl_device_id;
 use std::ptr;
-use std::sync::{Mutex, Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static GLOBAL_CL_MANAGER: OnceLock<Option<Arc<OpenCLManager>>> = OnceLock::new();
 
 pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
-    GLOBAL_CL_MANAGER.get_or_init(|| {
-        // UI/global device selection: NM_UI_CL_DEVICE_INDEX or NM_CL_DEVICE_INDEX.
-        let idx = parse_env_usize("NM_UI_CL_DEVICE_INDEX")
-            .or_else(|| parse_env_usize("NM_CL_DEVICE_INDEX"))
-            .unwrap_or(0);
-        OpenCLManager::new_with_device_index(idx).ok().map(Arc::new)
-    }).clone()
+    GLOBAL_CL_MANAGER
+        .get_or_init(|| {
+            // UI/global device selection: NM_UI_CL_DEVICE_INDEX or NM_CL_DEVICE_INDEX.
+            let idx = parse_env_usize("NM_UI_CL_DEVICE_INDEX")
+                .or_else(|| parse_env_usize("NM_CL_DEVICE_INDEX"))
+                .unwrap_or(0);
+            OpenCLManager::new_with_device_index(idx).ok().map(Arc::new)
+        })
+        .clone()
 }
 
 fn parse_env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|v| v.parse::<usize>().ok())
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
 }
 
 fn gpu_device_ids() -> anyhow::Result<Vec<cl_device_id>> {
@@ -70,7 +74,9 @@ pub fn gpu_device_ids_for_indices(indices: Option<&[usize]>) -> anyhow::Result<V
             }
         }
         if selected.is_empty() {
-            return Err(anyhow::anyhow!("No matching GPU devices for requested indices"));
+            return Err(anyhow::anyhow!(
+                "No matching GPU devices for requested indices"
+            ));
         }
         return Ok(selected);
     }
@@ -88,19 +94,42 @@ pub struct CLBuffers {
 }
 
 impl CLBuffers {
-    pub fn create(context: &Context, size: usize, has_u: bool, has_refr: bool) -> opencl3::Result<Self> {
+    pub fn create(
+        context: &Context,
+        size: usize,
+        has_u: bool,
+        has_refr: bool,
+    ) -> opencl3::Result<Self> {
         let f64_size = size * std::mem::size_of::<f64>();
         let i32_size = size * std::mem::size_of::<i32>();
         let i8_size = size * std::mem::size_of::<i8>();
 
         let v = unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? };
-        let u = if has_u { Some(unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? }) } else { None };
-        let refr = if has_refr { Some(unsafe { Buffer::create(context, CL_MEM_READ_WRITE, i32_size, ptr::null_mut())? }) } else { None };
-        let i_total = unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? };
+        let u = if has_u {
+            Some(unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? })
+        } else {
+            None
+        };
+        let refr = if has_refr {
+            Some(unsafe { Buffer::create(context, CL_MEM_READ_WRITE, i32_size, ptr::null_mut())? })
+        } else {
+            None
+        };
+        let i_total =
+            unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? };
         let spk = unsafe { Buffer::create(context, CL_MEM_READ_WRITE, i8_size, ptr::null_mut())? };
-        let x_trace = unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? };
-        
-        Ok(Self { v, u, refr, i_total, spk, x_trace, size })
+        let x_trace =
+            unsafe { Buffer::create(context, CL_MEM_READ_WRITE, f64_size, ptr::null_mut())? };
+
+        Ok(Self {
+            v,
+            u,
+            refr,
+            i_total,
+            spk,
+            x_trace,
+            size,
+        })
     }
 }
 
@@ -116,16 +145,56 @@ pub struct CLSparseBuffers {
 
 impl CLSparseBuffers {
     #[allow(dead_code)]
-    pub fn create(context: &Context, n_syn: usize, n_post: usize, has_delays: bool) -> opencl3::Result<Self> {
-        let row_ptr = unsafe { Buffer::create(context, CL_MEM_READ_ONLY, (n_post + 1) * std::mem::size_of::<i32>(), ptr::null_mut())? };
-        let col_indices = unsafe { Buffer::create(context, CL_MEM_READ_ONLY, n_syn * std::mem::size_of::<i32>(), ptr::null_mut())? };
-        let weights = unsafe { Buffer::create(context, CL_MEM_READ_WRITE, n_syn * std::mem::size_of::<f64>(), ptr::null_mut())? };
+    pub fn create(
+        context: &Context,
+        n_syn: usize,
+        n_post: usize,
+        has_delays: bool,
+    ) -> opencl3::Result<Self> {
+        let row_ptr = unsafe {
+            Buffer::create(
+                context,
+                CL_MEM_READ_ONLY,
+                (n_post + 1) * std::mem::size_of::<i32>(),
+                ptr::null_mut(),
+            )?
+        };
+        let col_indices = unsafe {
+            Buffer::create(
+                context,
+                CL_MEM_READ_ONLY,
+                n_syn * std::mem::size_of::<i32>(),
+                ptr::null_mut(),
+            )?
+        };
+        let weights = unsafe {
+            Buffer::create(
+                context,
+                CL_MEM_READ_WRITE,
+                n_syn * std::mem::size_of::<f64>(),
+                ptr::null_mut(),
+            )?
+        };
         let delays = if has_delays {
-            Some(unsafe { Buffer::create(context, CL_MEM_READ_ONLY, n_syn * std::mem::size_of::<i32>(), ptr::null_mut())? })
+            Some(unsafe {
+                Buffer::create(
+                    context,
+                    CL_MEM_READ_ONLY,
+                    n_syn * std::mem::size_of::<i32>(),
+                    ptr::null_mut(),
+                )?
+            })
         } else {
             None
         };
-        Ok(Self { row_ptr, col_indices, weights, delays, n_syn, n_post })
+        Ok(Self {
+            row_ptr,
+            col_indices,
+            weights,
+            delays,
+            n_syn,
+            n_post,
+        })
     }
 }
 
@@ -498,30 +567,73 @@ impl OpenCLManager {
 
     pub fn new_with_device_index(index: usize) -> anyhow::Result<Self> {
         let devices = gpu_device_ids()?;
-        let device_id = *devices.get(index).ok_or_else(|| anyhow::anyhow!("GPU device index {} out of range", index))?;
+        let device_id = *devices
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("GPU device index {} out of range", index))?;
         Self::new_with_device_id(device_id)
     }
 
     pub fn new_with_device_id(device_id: cl_device_id) -> anyhow::Result<Self> {
         let device = Device::new(device_id);
-        let context = Context::from_device(&device).map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?;
-        let queue = unsafe { CommandQueue::create_with_properties(&context, device_id, 0, 0).map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))? };
+        let context =
+            Context::from_device(&device).map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?;
+        let queue = unsafe {
+            CommandQueue::create_with_properties(&context, device_id, 0, 0)
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?
+        };
 
-        let program = Program::create_and_build_from_source(&context, PROGRAM_SOURCE, "").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?;
-        
-        let kernel_lif_step = Mutex::new(Kernel::create(&program, "lif_step").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_izh_step = Mutex::new(Kernel::create(&program, "izh_step").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc = Mutex::new(Kernel::create(&program, "syn_acc_dense").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc_stp = Mutex::new(Kernel::create(&program, "syn_acc_dense_stp").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc_sparse = Mutex::new(Kernel::create(&program, "syn_acc_sparse").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc_sparse_stp = Mutex::new(Kernel::create(&program, "syn_acc_sparse_stp").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc_sparse_delay = Mutex::new(Kernel::create(&program, "syn_acc_sparse_delay").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_acc_sparse_delay_stp = Mutex::new(Kernel::create(&program, "syn_acc_sparse_delay_stp").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_syn_filter = Mutex::new(Kernel::create(&program, "syn_filter").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_stp_update = Mutex::new(Kernel::create(&program, "stp_update").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_plasticity_update = Mutex::new(Kernel::create(&program, "plasticity_update").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        let kernel_morpho_energy = Mutex::new(Kernel::create(&program, "morpho_energy").map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?);
-        
+        let program = Program::create_and_build_from_source(&context, PROGRAM_SOURCE, "")
+            .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?;
+
+        let kernel_lif_step = Mutex::new(
+            Kernel::create(&program, "lif_step")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_izh_step = Mutex::new(
+            Kernel::create(&program, "izh_step")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc = Mutex::new(
+            Kernel::create(&program, "syn_acc_dense")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc_stp = Mutex::new(
+            Kernel::create(&program, "syn_acc_dense_stp")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc_sparse = Mutex::new(
+            Kernel::create(&program, "syn_acc_sparse")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc_sparse_stp = Mutex::new(
+            Kernel::create(&program, "syn_acc_sparse_stp")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc_sparse_delay = Mutex::new(
+            Kernel::create(&program, "syn_acc_sparse_delay")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_acc_sparse_delay_stp = Mutex::new(
+            Kernel::create(&program, "syn_acc_sparse_delay_stp")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_syn_filter = Mutex::new(
+            Kernel::create(&program, "syn_filter")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_stp_update = Mutex::new(
+            Kernel::create(&program, "stp_update")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_plasticity_update = Mutex::new(
+            Kernel::create(&program, "plasticity_update")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+        let kernel_morpho_energy = Mutex::new(
+            Kernel::create(&program, "morpho_energy")
+                .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
+        );
+
         Ok(Self {
             device,
             context,

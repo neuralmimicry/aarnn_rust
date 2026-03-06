@@ -75,7 +75,12 @@ pub fn build_network<R: Rng>(cfg: &NetworkConfig, rng: &mut R) -> BuiltNetwork {
     if num_hidden_per_layer > 0 {
         for i in 0..num_sensory_neurons {
             if sensory_conn_counts[i] == 0 {
-                let j = if num_hidden_per_layer == 1 { 0 } else { ((rng.random::<f64>() * (num_hidden_per_layer as f64)) as usize).min(num_hidden_per_layer -1) };
+                let j = if num_hidden_per_layer == 1 {
+                    0
+                } else {
+                    ((rng.random::<f64>() * (num_hidden_per_layer as f64)) as usize)
+                        .min(num_hidden_per_layer - 1)
+                };
                 // Seed a small positive weight consistent with other initializations.
                 // We don't check for 6 here because it's only called if sensory_conn_counts[i] == 0.
                 w_in[(j, i)] = rng.random::<f64>() * 0.3 + 0.1;
@@ -130,15 +135,32 @@ pub fn build_network<R: Rng>(cfg: &NetworkConfig, rng: &mut R) -> BuiltNetwork {
 
     let n_in = w_in.iter().filter(|&&w| w > 0.0).count();
     let mut n_hh = 0;
-    for m in &w_hh_fwd { n_hh += m.iter().filter(|&&w| w > 0.0).count(); }
-    for m in &w_hh_bwd { n_hh += m.iter().filter(|&&w| w > 0.0).count(); }
-    for m in &w_hh_rec { n_hh += m.iter().filter(|&&w| w > 0.0).count(); }
+    for m in &w_hh_fwd {
+        n_hh += m.iter().filter(|&&w| w > 0.0).count();
+    }
+    for m in &w_hh_bwd {
+        n_hh += m.iter().filter(|&&w| w > 0.0).count();
+    }
+    for m in &w_hh_rec {
+        n_hh += m.iter().filter(|&&w| w > 0.0).count();
+    }
     let n_out = w_out.iter().filter(|&&w| w > 0.0).count();
-        if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-            nm_log!("[trace] network initialized with {} input, {} hidden, and {} output synapses", n_in, n_hh, n_out);
-        }
+    if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
+        nm_log!(
+            "[trace] network initialized with {} input, {} hidden, and {} output synapses",
+            n_in,
+            n_hh,
+            n_out
+        );
+    }
 
-    BuiltNetwork { w_in, w_hh_fwd, w_hh_bwd, w_hh_rec, w_out }
+    BuiltNetwork {
+        w_in,
+        w_hh_fwd,
+        w_hh_bwd,
+        w_hh_rec,
+        w_out,
+    }
 }
 
 #[cfg(test)]
@@ -181,7 +203,11 @@ mod tests {
         // Every sensory neuron must have at least one connection to H0
         for i in 0..cfg.num_sensory_neurons {
             let col = net.w_in.column(i);
-            assert!(col.iter().any(|&w| w > 0.0), "Sensory neuron {} has no connections", i);
+            assert!(
+                col.iter().any(|&w| w > 0.0),
+                "Sensory neuron {} has no connections",
+                i
+            );
         }
     }
 

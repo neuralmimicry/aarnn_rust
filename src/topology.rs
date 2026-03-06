@@ -14,7 +14,10 @@
 
 #![cfg(feature = "growth3d")]
 
-#[cfg_attr(any(feature = "ui", feature = "growth3d"), derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "ui", feature = "growth3d"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[derive(Clone, Debug, Default)]
 pub struct Node3D {
     pub x: f32,
@@ -25,7 +28,10 @@ pub struct Node3D {
     pub type_name: Option<String>,
 }
 
-#[cfg_attr(any(feature = "ui", feature = "growth3d"), derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "ui", feature = "growth3d"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[derive(Clone, Debug, Default)]
 pub struct Topology3D {
     pub layers: Vec<Vec<Node3D>>, // hidden layers only
@@ -41,7 +47,9 @@ impl Topology3D {
             output_nodes: Vec::new(),
         }
     }
-    pub fn add_layer(&mut self) { self.layers.push(Vec::new()); }
+    pub fn add_layer(&mut self) {
+        self.layers.push(Vec::new());
+    }
     pub fn add_neuron(&mut self, layer: usize, node: Node3D) {
         if layer >= self.layers.len() {
             self.layers.resize_with(layer + 1, Vec::new);
@@ -49,7 +57,9 @@ impl Topology3D {
         self.layers[layer].push(Node3D { layer, ..node });
     }
     #[allow(dead_code)]
-    pub fn len(&self, layer: usize) -> usize { self.layers.get(layer).map(|v| v.len()).unwrap_or(0) }
+    pub fn len(&self, layer: usize) -> usize {
+        self.layers.get(layer).map(|v| v.len()).unwrap_or(0)
+    }
 }
 
 // Simple orthographic projection helper (no rotation), with basic depth cue:

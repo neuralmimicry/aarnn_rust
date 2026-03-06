@@ -50,7 +50,13 @@ impl Default for LIFParams {
     /// * `refractory`: 5 steps
     /// * `dt`: 1.0 ms
     fn default() -> Self {
-        Self { tau_m: 20.0, v_reset: 0.0, v_th: 1.0, refractory: 5, dt: 1.0 }
+        Self {
+            tau_m: 20.0,
+            v_reset: 0.0,
+            v_th: 1.0,
+            refractory: 5,
+            dt: 1.0,
+        }
     }
 }
 
@@ -103,10 +109,10 @@ impl IzhikevichParams {
             "IB" => (0.02, 0.2, -55.0, 4.0),
             "CH" => (0.02, 0.2, -50.0, 2.0),
             "FS" => (0.1, 0.2, -65.0, 2.0),
-            "LTS"=> (0.02, 0.25, -65.0, 2.0),
+            "LTS" => (0.02, 0.25, -65.0, 2.0),
             "RZ" => (0.1, 0.26, -65.0, 2.0),
             "TC" => (0.02, 0.25, -65.0, 0.05),
-            "P"  => (0.02, 1.0, -60.0, 0.0),
+            "P" => (0.02, 1.0, -60.0, 0.0),
             _ => (0.02, 0.2, -65.0, 8.0),
         };
         Self {
@@ -137,7 +143,13 @@ pub struct STDPParams {
 
 impl Default for STDPParams {
     fn default() -> Self {
-        Self { tau_pre: 20.0, tau_post: 20.0, eta: 0.002, w_min: 0.0, w_max: 1.0 }
+        Self {
+            tau_pre: 20.0,
+            tau_post: 20.0,
+            eta: 0.002,
+            w_min: 0.0,
+            w_max: 1.0,
+        }
     }
 }
 
@@ -247,11 +259,28 @@ pub struct NeuronTypeConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum RegionShape {
-    Ellipsoid { center: [f32; 3], radii: [f32; 3] },
+    Ellipsoid {
+        center: [f32; 3],
+        radii: [f32; 3],
+    },
     #[allow(non_snake_case)]
-    Torus { center: [f32; 3], R: f32, r: f32, plane: String },
-    Tube { line_from: [f32; 3], line_to: [f32; 3], radius: f32 },
-    RepeatedEllipsoids { count: usize, center_start: [f32; 3], step: [f32; 3], radii: [f32; 3] },
+    Torus {
+        center: [f32; 3],
+        R: f32,
+        r: f32,
+        plane: String,
+    },
+    Tube {
+        line_from: [f32; 3],
+        line_to: [f32; 3],
+        radius: f32,
+    },
+    RepeatedEllipsoids {
+        count: usize,
+        center_start: [f32; 3],
+        step: [f32; 3],
+        radii: [f32; 3],
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -300,41 +329,56 @@ fn apply_human_brain_design(cfg: &mut NetworkConfig) {
         shape: None,
         center: [-35.0, 0.0, 25.0],
         radii: [35.0, 55.0, 30.0],
-        type_distribution: vec![("Pyramidal".to_string(), 0.8), ("Interneuron".to_string(), 0.2)],
+        type_distribution: vec![
+            ("Pyramidal".to_string(), 0.8),
+            ("Interneuron".to_string(), 0.2),
+        ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "Right Cortex".to_string(),
         shape: None,
         center: [35.0, 0.0, 25.0],
         radii: [35.0, 55.0, 30.0],
-        type_distribution: vec![("Pyramidal".to_string(), 0.8), ("Interneuron".to_string(), 0.2)],
+        type_distribution: vec![
+            ("Pyramidal".to_string(), 0.8),
+            ("Interneuron".to_string(), 0.2),
+        ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "Thalamus".to_string(),
         shape: None,
         center: [0.0, -5.0, 10.0],
         radii: [12.0, 10.0, 8.0],
-        type_distribution: vec![("Pyramidal".to_string(), 0.85), ("Interneuron".to_string(), 0.15)],
+        type_distribution: vec![
+            ("Pyramidal".to_string(), 0.85),
+            ("Interneuron".to_string(), 0.15),
+        ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "Hippocampus".to_string(),
         shape: None,
         center: [0.0, -25.0, 5.0],
         radii: [18.0, 8.0, 6.0],
-        type_distribution: vec![("Pyramidal".to_string(), 0.9), ("Interneuron".to_string(), 0.1)],
+        type_distribution: vec![
+            ("Pyramidal".to_string(), 0.9),
+            ("Interneuron".to_string(), 0.1),
+        ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "Cerebellum".to_string(),
         shape: None,
         center: [0.0, -55.0, 0.0],
         radii: [35.0, 20.0, 15.0],
-        type_distribution: vec![("Pyramidal".to_string(), 0.2), ("Interneuron".to_string(), 0.8)],
+        type_distribution: vec![
+            ("Pyramidal".to_string(), 0.2),
+            ("Interneuron".to_string(), 0.8),
+        ],
     });
 }
 
 fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
     cfg.max_total_neurons = 139_255;
-    
+
     let optic_types = vec![
         ("sensory_spn".to_string(), 0.55),
         ("local_interneuron".to_string(), 0.30),
@@ -343,14 +387,22 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "optic_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-28.0, 0.0, 0.0], radii: [14.0, 18.0, 14.0] }),
-        center: [-28.0, 0.0, 0.0], radii: [14.0, 18.0, 14.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-28.0, 0.0, 0.0],
+            radii: [14.0, 18.0, 14.0],
+        }),
+        center: [-28.0, 0.0, 0.0],
+        radii: [14.0, 18.0, 14.0],
         type_distribution: optic_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "optic_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [28.0, 0.0, 0.0], radii: [14.0, 18.0, 14.0] }),
-        center: [28.0, 0.0, 0.0], radii: [14.0, 18.0, 14.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [28.0, 0.0, 0.0],
+            radii: [14.0, 18.0, 14.0],
+        }),
+        center: [28.0, 0.0, 0.0],
+        radii: [14.0, 18.0, 14.0],
         type_distribution: optic_types,
     });
 
@@ -362,14 +414,22 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "antennal_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-12.0, 18.0, -2.0], radii: [7.0, 6.0, 6.0] }),
-        center: [-12.0, 18.0, -2.0], radii: [7.0, 6.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-12.0, 18.0, -2.0],
+            radii: [7.0, 6.0, 6.0],
+        }),
+        center: [-12.0, 18.0, -2.0],
+        radii: [7.0, 6.0, 6.0],
         type_distribution: antennal_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "antennal_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [12.0, 18.0, -2.0], radii: [7.0, 6.0, 6.0] }),
-        center: [12.0, 18.0, -2.0], radii: [7.0, 6.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [12.0, 18.0, -2.0],
+            radii: [7.0, 6.0, 6.0],
+        }),
+        center: [12.0, 18.0, -2.0],
+        radii: [7.0, 6.0, 6.0],
         type_distribution: antennal_types,
     });
 
@@ -381,14 +441,22 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "lateral_horn_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-14.0, 10.0, 6.0], radii: [6.0, 8.0, 6.0] }),
-        center: [-14.0, 10.0, 6.0], radii: [6.0, 8.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-14.0, 10.0, 6.0],
+            radii: [6.0, 8.0, 6.0],
+        }),
+        center: [-14.0, 10.0, 6.0],
+        radii: [6.0, 8.0, 6.0],
         type_distribution: lateral_horn_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "lateral_horn_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [14.0, 10.0, 6.0], radii: [6.0, 8.0, 6.0] }),
-        center: [14.0, 10.0, 6.0], radii: [6.0, 8.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [14.0, 10.0, 6.0],
+            radii: [6.0, 8.0, 6.0],
+        }),
+        center: [14.0, 10.0, 6.0],
+        radii: [6.0, 8.0, 6.0],
         type_distribution: lateral_horn_types,
     });
 
@@ -400,21 +468,33 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "mushroom_body_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-8.0, 5.0, 10.0], radii: [6.0, 10.0, 8.0] }),
-        center: [-8.0, 5.0, 10.0], radii: [6.0, 10.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-8.0, 5.0, 10.0],
+            radii: [6.0, 10.0, 8.0],
+        }),
+        center: [-8.0, 5.0, 10.0],
+        radii: [6.0, 10.0, 8.0],
         type_distribution: mushroom_body_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "mushroom_body_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [8.0, 5.0, 10.0], radii: [6.0, 10.0, 8.0] }),
-        center: [8.0, 5.0, 10.0], radii: [6.0, 10.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [8.0, 5.0, 10.0],
+            radii: [6.0, 10.0, 8.0],
+        }),
+        center: [8.0, 5.0, 10.0],
+        radii: [6.0, 10.0, 8.0],
         type_distribution: mushroom_body_types,
     });
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "central_complex".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 0.0, 8.0], radii: [10.0, 10.0, 6.0] }),
-        center: [0.0, 0.0, 8.0], radii: [10.0, 10.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 0.0, 8.0],
+            radii: [10.0, 10.0, 6.0],
+        }),
+        center: [0.0, 0.0, 8.0],
+        radii: [10.0, 10.0, 6.0],
         type_distribution: vec![
             ("local_interneuron".to_string(), 0.45),
             ("projection_pn".to_string(), 0.35),
@@ -425,8 +505,12 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "SEZ".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 15.0, -10.0], radii: [12.0, 10.0, 8.0] }),
-        center: [0.0, 15.0, -10.0], radii: [12.0, 10.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 15.0, -10.0],
+            radii: [12.0, 10.0, 8.0],
+        }),
+        center: [0.0, 15.0, -10.0],
+        radii: [12.0, 10.0, 8.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.35),
             ("local_interneuron".to_string(), 0.35),
@@ -438,8 +522,13 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "VNC".to_string(),
-        shape: Some(RegionShape::Tube { line_from: [0.0, -120.0, -8.0], line_to: [0.0, -40.0, -8.0], radius: 10.0 }),
-        center: [0.0, -80.0, -8.0], radii: [10.0, 40.0, 10.0],
+        shape: Some(RegionShape::Tube {
+            line_from: [0.0, -120.0, -8.0],
+            line_to: [0.0, -40.0, -8.0],
+            radius: 10.0,
+        }),
+        center: [0.0, -80.0, -8.0],
+        radii: [10.0, 40.0, 10.0],
         type_distribution: vec![
             ("motor_premotor".to_string(), 0.45),
             ("local_interneuron".to_string(), 0.25),
@@ -451,7 +540,7 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
 
 fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
     cfg.max_total_neurons = 3016;
-    
+
     let brain_types = vec![
         ("sensory_spn".to_string(), 0.20),
         ("local_interneuron".to_string(), 0.45),
@@ -461,14 +550,22 @@ fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "brain_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-8.0, 28.0, 4.0], radii: [7.0, 10.0, 7.0] }),
-        center: [-8.0, 28.0, 4.0], radii: [7.0, 10.0, 7.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-8.0, 28.0, 4.0],
+            radii: [7.0, 10.0, 7.0],
+        }),
+        center: [-8.0, 28.0, 4.0],
+        radii: [7.0, 10.0, 7.0],
         type_distribution: brain_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "brain_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [8.0, 28.0, 4.0], radii: [7.0, 10.0, 7.0] }),
-        center: [8.0, 28.0, 4.0], radii: [7.0, 10.0, 7.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [8.0, 28.0, 4.0],
+            radii: [7.0, 10.0, 7.0],
+        }),
+        center: [8.0, 28.0, 4.0],
+        radii: [7.0, 10.0, 7.0],
         type_distribution: brain_types,
     });
 
@@ -480,21 +577,33 @@ fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "MB_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-6.0, 30.0, 8.0], radii: [4.0, 6.0, 4.0] }),
-        center: [-6.0, 30.0, 8.0], radii: [4.0, 6.0, 4.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-6.0, 30.0, 8.0],
+            radii: [4.0, 6.0, 4.0],
+        }),
+        center: [-6.0, 30.0, 8.0],
+        radii: [4.0, 6.0, 4.0],
         type_distribution: mb_types.clone(),
     });
     cfg.brain_regions.push(BrainRegionConfig {
         name: "MB_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [6.0, 30.0, 8.0], radii: [4.0, 6.0, 4.0] }),
-        center: [6.0, 30.0, 8.0], radii: [4.0, 6.0, 4.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [6.0, 30.0, 8.0],
+            radii: [4.0, 6.0, 4.0],
+        }),
+        center: [6.0, 30.0, 8.0],
+        radii: [4.0, 6.0, 4.0],
         type_distribution: mb_types,
     });
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "SEZ".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 18.0, -4.0], radii: [10.0, 8.0, 7.0] }),
-        center: [0.0, 18.0, -4.0], radii: [10.0, 8.0, 7.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 18.0, -4.0],
+            radii: [10.0, 8.0, 7.0],
+        }),
+        center: [0.0, 18.0, -4.0],
+        radii: [10.0, 8.0, 7.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.35),
             ("local_interneuron".to_string(), 0.35),
@@ -506,8 +615,13 @@ fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "VNC".to_string(),
-        shape: Some(RegionShape::Tube { line_from: [0.0, -110.0, -3.0], line_to: [0.0, 10.0, -3.0], radius: 8.0 }),
-        center: [0.0, -50.0, -3.0], radii: [8.0, 60.0, 8.0],
+        shape: Some(RegionShape::Tube {
+            line_from: [0.0, -110.0, -3.0],
+            line_to: [0.0, 10.0, -3.0],
+            radius: 8.0,
+        }),
+        center: [0.0, -50.0, -3.0],
+        radii: [8.0, 60.0, 8.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.20),
             ("local_interneuron".to_string(), 0.30),
@@ -518,13 +632,14 @@ fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "segments".to_string(),
-        shape: Some(RegionShape::RepeatedEllipsoids { 
-            count: 10, 
-            center_start: [0.0, -100.0, -3.0], 
-            step: [0.0, 12.0, 0.0], 
-            radii: [6.0, 4.0, 5.0] 
+        shape: Some(RegionShape::RepeatedEllipsoids {
+            count: 10,
+            center_start: [0.0, -100.0, -3.0],
+            step: [0.0, 12.0, 0.0],
+            radii: [6.0, 4.0, 5.0],
         }),
-        center: [0.0, -46.0, -3.0], radii: [6.0, 54.0, 5.0],
+        center: [0.0, -46.0, -3.0],
+        radii: [6.0, 54.0, 5.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.15),
             ("local_interneuron".to_string(), 0.35),
@@ -539,8 +654,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "olfactory_bulbs".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 58.0, 0.0], radii: [6.0, 4.0, 5.0] }),
-        center: [0.0, 58.0, 0.0], radii: [6.0, 4.0, 5.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 58.0, 0.0],
+            radii: [6.0, 4.0, 5.0],
+        }),
+        center: [0.0, 58.0, 0.0],
+        radii: [6.0, 4.0, 5.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.40),
             ("local_interneuron".to_string(), 0.40),
@@ -551,8 +670,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "telencephalon".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 50.0, 4.0], radii: [12.0, 10.0, 10.0] }),
-        center: [0.0, 50.0, 4.0], radii: [12.0, 10.0, 10.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 50.0, 4.0],
+            radii: [12.0, 10.0, 10.0],
+        }),
+        center: [0.0, 50.0, 4.0],
+        radii: [12.0, 10.0, 10.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.20),
             ("local_interneuron".to_string(), 0.45),
@@ -563,8 +686,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "diencephalon".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 40.0, 0.0], radii: [12.0, 10.0, 10.0] }),
-        center: [0.0, 40.0, 0.0], radii: [12.0, 10.0, 10.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 40.0, 0.0],
+            radii: [12.0, 10.0, 10.0],
+        }),
+        center: [0.0, 40.0, 0.0],
+        radii: [12.0, 10.0, 10.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.15),
             ("local_interneuron".to_string(), 0.35),
@@ -575,8 +702,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "pretectum".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 34.0, 2.0], radii: [8.0, 6.0, 6.0] }),
-        center: [0.0, 34.0, 2.0], radii: [8.0, 6.0, 6.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 34.0, 2.0],
+            radii: [8.0, 6.0, 6.0],
+        }),
+        center: [0.0, 34.0, 2.0],
+        radii: [8.0, 6.0, 6.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.25),
             ("local_interneuron".to_string(), 0.45),
@@ -587,8 +718,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "tectum_L".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [-10.0, 26.0, 8.0], radii: [10.0, 10.0, 8.0] }),
-        center: [-10.0, 26.0, 8.0], radii: [10.0, 10.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [-10.0, 26.0, 8.0],
+            radii: [10.0, 10.0, 8.0],
+        }),
+        center: [-10.0, 26.0, 8.0],
+        radii: [10.0, 10.0, 8.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.45),
             ("local_interneuron".to_string(), 0.35),
@@ -599,8 +734,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "tectum_R".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [10.0, 26.0, 8.0], radii: [10.0, 10.0, 8.0] }),
-        center: [10.0, 26.0, 8.0], radii: [10.0, 10.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [10.0, 26.0, 8.0],
+            radii: [10.0, 10.0, 8.0],
+        }),
+        center: [10.0, 26.0, 8.0],
+        radii: [10.0, 10.0, 8.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.45),
             ("local_interneuron".to_string(), 0.35),
@@ -611,8 +750,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "cerebellum".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 18.0, 10.0], radii: [12.0, 8.0, 8.0] }),
-        center: [0.0, 18.0, 10.0], radii: [12.0, 8.0, 8.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 18.0, 10.0],
+            radii: [12.0, 8.0, 8.0],
+        }),
+        center: [0.0, 18.0, 10.0],
+        radii: [12.0, 8.0, 8.0],
         type_distribution: vec![
             ("granule_like".to_string(), 0.55),
             ("purkinje_like".to_string(), 0.05),
@@ -623,8 +766,12 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "hindbrain".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 8.0, 0.0], radii: [14.0, 12.0, 12.0] }),
-        center: [0.0, 8.0, 0.0], radii: [14.0, 12.0, 12.0],
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 8.0, 0.0],
+            radii: [14.0, 12.0, 12.0],
+        }),
+        center: [0.0, 8.0, 0.0],
+        radii: [14.0, 12.0, 12.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.15),
             ("local_interneuron".to_string(), 0.35),
@@ -636,8 +783,13 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 
     cfg.brain_regions.push(BrainRegionConfig {
         name: "spinal_cord".to_string(),
-        shape: Some(RegionShape::Tube { line_from: [0.0, -200.0, -2.0], line_to: [0.0, 0.0, -2.0], radius: 8.0 }),
-        center: [0.0, -100.0, -2.0], radii: [8.0, 100.0, 8.0],
+        shape: Some(RegionShape::Tube {
+            line_from: [0.0, -200.0, -2.0],
+            line_to: [0.0, 0.0, -2.0],
+            radius: 8.0,
+        }),
+        center: [0.0, -100.0, -2.0],
+        radii: [8.0, 100.0, 8.0],
         type_distribution: vec![
             ("sensory_spn".to_string(), 0.20),
             ("local_interneuron".to_string(), 0.30),
@@ -652,7 +804,10 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     // Head ganglia (ellipsoid): center (0,7,0), radii (6,8,6)
     cfg.brain_regions.push(BrainRegionConfig {
         name: "head_ganglia".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 7.0, 0.0], radii: [6.0, 8.0, 6.0] }),
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 7.0, 0.0],
+            radii: [6.0, 8.0, 6.0],
+        }),
         center: [0.0, 7.0, 0.0],
         radii: [6.0, 8.0, 6.0],
         type_distribution: vec![
@@ -665,9 +820,14 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     // Nerve ring (torus) around y ≈ 10, major R=6, minor r=1.5 in x–z plane
     cfg.brain_regions.push(BrainRegionConfig {
         name: "nerve_ring".to_string(),
-        shape: Some(RegionShape::Torus { center: [0.0, 10.0, 0.0], R: 6.0, r: 1.5, plane: "x-z".to_string() }),
+        shape: Some(RegionShape::Torus {
+            center: [0.0, 10.0, 0.0],
+            R: 6.0,
+            r: 1.5,
+            plane: "x-z".to_string(),
+        }),
         center: [0.0, 10.0, 0.0], // representative center
-        radii: [7.5, 1.5, 7.5],  // approximate for legacy ellipsoid logic
+        radii: [7.5, 1.5, 7.5],   // approximate for legacy ellipsoid logic
         type_distribution: vec![
             ("Sensory".to_string(), 0.15),
             ("Interneuron".to_string(), 0.75),
@@ -684,7 +844,11 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "ventral_nerve_cord".to_string(),
-        shape: Some(RegionShape::Tube { line_from: v_from, line_to: v_to, radius: 1.2 }),
+        shape: Some(RegionShape::Tube {
+            line_from: v_from,
+            line_to: v_to,
+            radius: 1.2,
+        }),
         center: v_mid,
         radii: [1.2, ((v_to[1] - v_from[1]).abs()) * 0.5, 1.2],
         type_distribution: vec![
@@ -704,7 +868,11 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     ];
     cfg.brain_regions.push(BrainRegionConfig {
         name: "dorsal_nerve_cord".to_string(),
-        shape: Some(RegionShape::Tube { line_from: d_from, line_to: d_to, radius: 1.0 }),
+        shape: Some(RegionShape::Tube {
+            line_from: d_from,
+            line_to: d_to,
+            radius: 1.0,
+        }),
         center: d_mid,
         radii: [1.0, ((d_to[1] - d_from[1]).abs()) * 0.5, 1.0],
         type_distribution: vec![
@@ -715,7 +883,10 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     // Tail ganglia (ellipsoid) center (0,95,0), radii (5,6,5)
     cfg.brain_regions.push(BrainRegionConfig {
         name: "tail_ganglia".to_string(),
-        shape: Some(RegionShape::Ellipsoid { center: [0.0, 95.0, 0.0], radii: [5.0, 6.0, 5.0] }),
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 95.0, 0.0],
+            radii: [5.0, 6.0, 5.0],
+        }),
         center: [0.0, 95.0, 0.0],
         radii: [5.0, 6.0, 5.0],
         type_distribution: vec![
@@ -733,7 +904,7 @@ pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
     ensure_default_neuron_types(cfg);
 
     match design {
-        ClumpingDesign::None => {},
+        ClumpingDesign::None => {}
         ClumpingDesign::HumanBrain => apply_human_brain_design(cfg),
         ClumpingDesign::FruitFly => apply_fruit_fly_adult_design(cfg),
         ClumpingDesign::FruitFlyLarva => apply_fruit_fly_larva_design(cfg),
@@ -838,7 +1009,11 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
             },
         });
     }
-    if !cfg.neuron_types.iter().any(|t| t.name == "local_interneuron") {
+    if !cfg
+        .neuron_types
+        .iter()
+        .any(|t| t.name == "local_interneuron")
+    {
         cfg.neuron_types.push(NeuronTypeConfig {
             name: "local_interneuron".to_string(),
             bio_params: AarnnBioParams {
@@ -913,7 +1088,11 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
             },
         });
     }
-    if !cfg.neuron_types.iter().any(|t| t.name == "descending_target") {
+    if !cfg
+        .neuron_types
+        .iter()
+        .any(|t| t.name == "descending_target")
+    {
         cfg.neuron_types.push(NeuronTypeConfig {
             name: "descending_target".to_string(),
             bio_params: AarnnBioParams {
@@ -1018,7 +1197,6 @@ pub struct NetworkConfig {
 
     // --- Growth (3D topology) Parameters ---
     // These are effective when the project is built with the "growth3d" feature.
-
     /// Master toggle for dynamic 3D growth in the Runner.
     pub growth_enabled: bool,
     /// Maximum number of hidden layers allowed when growing the network dynamically.
@@ -1048,7 +1226,6 @@ pub struct NetworkConfig {
     pub proximity_degree_cap: usize,
 
     // --- Morphology & AARNN (Adaptive Axonal-Relay Neural Network) Parameters ---
-
     /// Toggle for using the detailed morphological data model and AARNN conduction.
     pub use_morphology: bool,
     /// Default signal propagation velocity (units/ms) for axons/dendrites.
@@ -1067,7 +1244,6 @@ pub struct NetworkConfig {
     pub bouton_jitter_ms: f32,
 
     // --- Geometry & Physics Constraints ---
-
     /// If true, the system ensures neurons and segments do not occupy the same 3D space.
     pub enforce_unique_geometry: bool,
     /// Minimum allowed 3D distance between neurons within the same layer.
@@ -1090,7 +1266,6 @@ pub struct NetworkConfig {
     pub use_mid_bends: bool,
 
     // --- Morphological Development (AARNN-specific) ---
-
     /// Enable dynamic growth and retraction of axons and dendrites during simulation.
     pub morpho_growth_enabled: bool,
     /// EMA window (ms) for tracking synaptic activity, which drives morphological changes.
@@ -1243,7 +1418,6 @@ pub struct NetworkConfig {
     pub max_output_connections: usize,
 
     // --- AARNN Synaptic Dynamics & Search Optimization ---
-
     /// Threshold below which a synapse or segment is pruned.
     pub component_pruning_threshold: f32,
     /// Initial weight for newly formed synapses.
@@ -1254,14 +1428,12 @@ pub struct NetworkConfig {
     pub synaptic_consolidation_factor: f32,
 
     // --- AARNN Multi-scale Detail ---
-
     /// Depth level for AARNN simulation detail (0 = macro, higher = more micro-detail).
     pub aarnn_layer_depth: usize,
     /// Biologically motivated AARNN parameters (gated by `aarnn_layer_depth`).
     pub aarnn_bio: AarnnBioParams,
 
     // --- UI Configuration ---
-
     /// Target frame rate for the visualization engine.
     pub ui_target_fps: f32,
 }
