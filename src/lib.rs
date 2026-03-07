@@ -17,16 +17,16 @@
 /// Observability tools for logging, probing, and data export.
 pub mod obs;
 
+/// Address-Event Representation (AER) encoding/decoding.
+pub mod aer;
+/// Optional AER <-> CAN conversion helpers for robotic endpoints.
+pub mod aer_can;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
 /// Core neural network data structures including layers, neurons, and synapses.
 pub mod network;
 /// Simulation engine responsible for time-stepping and state updates.
 pub mod sim;
-/// Address-Event Representation (AER) encoding/decoding.
-pub mod aer;
-/// Optional AER <-> CAN conversion helpers for robotic endpoints.
-pub mod aer_can;
 /// UDP-based AER stimuli IO bridge.
 pub mod stimuli;
 
@@ -34,12 +34,12 @@ pub mod stimuli;
 /// Bridge for interfacing with external robotic systems or simulators (e.g., Webots).
 pub mod bridge;
 
-/// Orchestration logic for running simulations in various modes.
-pub mod runner;
 /// Components for distributed simulation across multiple nodes.
 pub mod distributed;
 /// Remote Direct Memory Access (RDMA) backend for low-latency distributed communication.
 pub mod rdma;
+/// Orchestration logic for running simulations in various modes.
+pub mod runner;
 
 #[cfg(feature = "growth3d")]
 /// Topological and spatial layout definitions for 3D neural growth.

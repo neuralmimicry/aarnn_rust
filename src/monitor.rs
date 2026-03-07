@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -89,10 +89,12 @@ static GPU_UPDATE_INFLIGHT: AtomicBool = AtomicBool::new(false);
 pub fn update_temp_cache() -> Option<f32> {
     #[cfg(feature = "sysinfo")]
     {
-        let cache = TEMP_CACHE.get_or_init(|| Mutex::new(TempCache {
-            last_update: Instant::now() - Duration::from_secs(10),
-            max_c: None,
-        }));
+        let cache = TEMP_CACHE.get_or_init(|| {
+            Mutex::new(TempCache {
+                last_update: Instant::now() - Duration::from_secs(10),
+                max_c: None,
+            })
+        });
 
         {
             let guard = cache.lock().expect("Temperature cache poisoned");
@@ -126,17 +128,24 @@ pub fn update_temp_cache() -> Option<f32> {
 pub fn update_sys_cache() -> (Option<f32>, Option<u64>, Option<u64>, Option<u64>) {
     #[cfg(feature = "sysinfo")]
     {
-        let cache = SYS_CACHE.get_or_init(|| Mutex::new(SysCache {
-            last_update: Instant::now() - Duration::from_secs(10),
-            cpu_usage_pct: None,
-            mem_free_mb: None,
-            proc_rss_mb: None,
-            total_mem_mb: None,
-        }));
+        let cache = SYS_CACHE.get_or_init(|| {
+            Mutex::new(SysCache {
+                last_update: Instant::now() - Duration::from_secs(10),
+                cpu_usage_pct: None,
+                mem_free_mb: None,
+                proc_rss_mb: None,
+                total_mem_mb: None,
+            })
+        });
         {
             let guard = cache.lock().expect("System cache poisoned");
             if guard.last_update.elapsed() < Duration::from_secs(1) {
-                return (guard.cpu_usage_pct, guard.mem_free_mb, guard.proc_rss_mb, guard.total_mem_mb);
+                return (
+                    guard.cpu_usage_pct,
+                    guard.mem_free_mb,
+                    guard.proc_rss_mb,
+                    guard.total_mem_mb,
+                );
             }
         }
         let mut sys = System::new();
@@ -148,26 +157,33 @@ pub fn update_sys_cache() -> (Option<f32>, Option<u64>, Option<u64>, Option<u64>
         let total_mb = sys_mb_from_raw(total_raw);
         let free_raw = sys.available_memory() as u64;
         let free_mb = sys_mb_from_raw(free_raw);
-        let rss_mb = sysinfo::get_current_pid()
-            .ok()
-            .and_then(|pid| {
-                sys.refresh_processes_specifics(
-                    ProcessesToUpdate::Some(&[pid]),
-                    true,
-                    ProcessRefreshKind::nothing().with_memory(),
-                );
-                sys.process(pid).map(|p| {
-                    let raw = p.memory() as u64;
-                    if scale_is_bytes { raw / 1024 / 1024 } else { raw / 1024 }
-                })
-            });
+        let rss_mb = sysinfo::get_current_pid().ok().and_then(|pid| {
+            sys.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[pid]),
+                true,
+                ProcessRefreshKind::nothing().with_memory(),
+            );
+            sys.process(pid).map(|p| {
+                let raw = p.memory() as u64;
+                if scale_is_bytes {
+                    raw / 1024 / 1024
+                } else {
+                    raw / 1024
+                }
+            })
+        });
         let mut guard = cache.lock().expect("System cache poisoned");
         guard.last_update = Instant::now();
         guard.cpu_usage_pct = Some(cpu);
         guard.mem_free_mb = Some(free_mb);
         guard.proc_rss_mb = rss_mb;
         guard.total_mem_mb = Some(total_mb);
-        (guard.cpu_usage_pct, guard.mem_free_mb, guard.proc_rss_mb, guard.total_mem_mb)
+        (
+            guard.cpu_usage_pct,
+            guard.mem_free_mb,
+            guard.proc_rss_mb,
+            guard.total_mem_mb,
+        )
     }
     #[cfg(not(feature = "sysinfo"))]
     {
@@ -176,11 +192,13 @@ pub fn update_sys_cache() -> (Option<f32>, Option<u64>, Option<u64>, Option<u64>
 }
 
 pub fn update_gpu_cache() -> (Option<f32>, Option<u64>) {
-    let cache = GPU_CACHE.get_or_init(|| Mutex::new(GpuCache {
-        last_update: Instant::now() - Duration::from_secs(10),
-        gpu_util_pct: None,
-        gpu_vram_free_mb: None,
-    }));
+    let cache = GPU_CACHE.get_or_init(|| {
+        Mutex::new(GpuCache {
+            last_update: Instant::now() - Duration::from_secs(10),
+            gpu_util_pct: None,
+            gpu_vram_free_mb: None,
+        })
+    });
     {
         let guard = cache.lock().expect("GPU cache poisoned");
         if guard.last_update.elapsed() < Duration::from_secs(2) {
@@ -212,11 +230,13 @@ pub fn update_gpu_cache() -> (Option<f32>, Option<u64>) {
                 }
             }
         }
-        let cache = GPU_CACHE.get_or_init(|| Mutex::new(GpuCache {
-            last_update: Instant::now() - Duration::from_secs(10),
-            gpu_util_pct: None,
-            gpu_vram_free_mb: None,
-        }));
+        let cache = GPU_CACHE.get_or_init(|| {
+            Mutex::new(GpuCache {
+                last_update: Instant::now() - Duration::from_secs(10),
+                gpu_util_pct: None,
+                gpu_vram_free_mb: None,
+            })
+        });
         let mut guard = cache.lock().expect("GPU cache poisoned");
         guard.last_update = Instant::now();
         guard.gpu_util_pct = util;
@@ -232,7 +252,7 @@ pub fn get_safety_snapshot(ui_frame_ms: Option<f32>) -> SafetySnapshot {
     let (cpu, free, rss, total) = update_sys_cache();
     let temp = update_temp_cache();
     let (gpu_util, gpu_vram) = update_gpu_cache();
-    
+
     SafetySnapshot {
         cpu_usage_pct: cpu,
         mem_free_mb: free,
@@ -246,8 +266,14 @@ pub fn get_safety_snapshot(ui_frame_ms: Option<f32>) -> SafetySnapshot {
     }
 }
 
-pub async fn thermal_wait_if_hot(kind: &str, h: &MonitorHeuristics, abort_flag: &AtomicBool) -> Duration {
-    let Some(mut temp) = update_temp_cache() else { return Duration::ZERO; };
+pub async fn thermal_wait_if_hot(
+    kind: &str,
+    h: &MonitorHeuristics,
+    abort_flag: &AtomicBool,
+) -> Duration {
+    let Some(mut temp) = update_temp_cache() else {
+        return Duration::ZERO;
+    };
     if temp < h.temp_hot_c {
         return Duration::ZERO;
     }
@@ -281,8 +307,14 @@ pub async fn thermal_wait_if_hot(kind: &str, h: &MonitorHeuristics, abort_flag: 
     wait_start.elapsed()
 }
 
-pub fn thermal_wait_blocking(kind: &str, h: &MonitorHeuristics, abort_flag: &AtomicBool) -> Duration {
-    let Some(mut temp) = update_temp_cache() else { return Duration::ZERO; };
+pub fn thermal_wait_blocking(
+    kind: &str,
+    h: &MonitorHeuristics,
+    abort_flag: &AtomicBool,
+) -> Duration {
+    let Some(mut temp) = update_temp_cache() else {
+        return Duration::ZERO;
+    };
     if temp < h.temp_hot_c {
         return Duration::ZERO;
     }

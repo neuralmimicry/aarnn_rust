@@ -1,3 +1,13 @@
+use aarnn_rust::distributed::proto::{
+    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
+    NetworkSnapshotRequest, NetworkUpdateRequest, StatusRequest,
+};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use axum::{
     extract::{Form, Query, State},
     http::{HeaderValue, StatusCode},
@@ -8,32 +18,23 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use clap::Parser;
+use openidconnect::{
+    core::{
+        CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims,
+    },
+    reqwest, AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, TokenResponse,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tonic::Request;
-use tokio::sync::RwLock;
 use tokio::fs;
-use aarnn_rust::distributed::proto::{
-    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
-    control_update, ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
-    NetworkUpdateRequest, StatusRequest,
-};
-use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
-use openidconnect::{
-    core::{CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims},
-    reqwest,
-    AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    EndpointMaybeSet, EndpointNotSet, EndpointSet, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
-    Scope, TokenResponse,
-};
-use argon2::password_hash::rand_core::OsRng;
+use tokio::sync::RwLock;
+use tonic::Request;
 
 type OidcClient = CoreClient<
     EndpointSet,
@@ -154,8 +155,8 @@ fn apply_env_overrides(args: &mut Args) {
         args.oidc_client_secret = env_opt("NM_OIDC_CLIENT_SECRET");
     }
     if args.oidc_redirect_url.is_none() {
-        args.oidc_redirect_url = env_opt("NM_OIDC_REDIRECT_URI")
-            .or_else(|| env_opt("NM_OIDC_REDIRECT_URL"));
+        args.oidc_redirect_url =
+            env_opt("NM_OIDC_REDIRECT_URI").or_else(|| env_opt("NM_OIDC_REDIRECT_URL"));
     }
 
     if args.auth_mode.trim().eq_ignore_ascii_case("none") {
@@ -426,7 +427,8 @@ async fn main() -> anyhow::Result<()> {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         let provider_metadata =
-            CoreProviderMetadata::discover_async(IssuerUrl::new(issuer.clone())?, &http_client).await?;
+            CoreProviderMetadata::discover_async(IssuerUrl::new(issuer.clone())?, &http_client)
+                .await?;
         let client: OidcClient = CoreClient::from_provider_metadata(
             provider_metadata,
             ClientId::new(client_id),
@@ -531,7 +533,10 @@ async fn api_auth_middleware(
         return next.run(req).await;
     }
     let path = req.uri().path();
-    if matches!(path, "/api/auth/mode" | "/api/login" | "/api/signup" | "/api/me") {
+    if matches!(
+        path,
+        "/api/auth/mode" | "/api/login" | "/api/signup" | "/api/me"
+    ) {
         return next.run(req).await;
     }
     let jar = CookieJar::from_headers(req.headers());
@@ -539,7 +544,11 @@ async fn api_auth_middleware(
         req.extensions_mut().insert(AuthUser { username: user });
         return next.run(req).await;
     }
-    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized" })),
+    )
+        .into_response()
 }
 
 async fn auth_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -556,7 +565,11 @@ async fn me(State(state): State<Arc<AppState>>, jar: CookieJar) -> axum::respons
     if let Some(user) = session_user(&state, &jar).await {
         return Json(json!({ "authenticated": true, "username": user })).into_response();
     }
-    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized" })),
+    )
+        .into_response()
 }
 
 async fn login(
@@ -565,28 +578,48 @@ async fn login(
     Json(payload): Json<LoginPayload>,
 ) -> impl IntoResponse {
     if state.auth.mode != AuthMode::Local {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "local auth disabled" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "local auth disabled" })),
+        )
+            .into_response();
     }
     let username = payload.username.trim();
     let password = payload.password.trim();
     if username.is_empty() || password.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing credentials" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing credentials" })),
+        )
+            .into_response();
     }
     let users = state.users.read().await;
     let user = match users.find_by_username(username) {
         Some(u) => u,
         None => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid credentials" }))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid credentials" })),
+            )
+                .into_response();
         }
     };
     let hash = match user.password_hash.as_deref() {
         Some(h) => h,
         None => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid credentials" }))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid credentials" })),
+            )
+                .into_response();
         }
     };
     if !verify_password(hash, password) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid credentials" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid credentials" })),
+        )
+            .into_response();
     }
 
     let session_id = new_session_id();
@@ -608,25 +641,45 @@ async fn signup(
     Json(payload): Json<SignupPayload>,
 ) -> impl IntoResponse {
     if state.auth.mode != AuthMode::Local {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "local auth disabled" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "local auth disabled" })),
+        )
+            .into_response();
     }
     if !state.auth.allow_signup {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "signup disabled" }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "signup disabled" })),
+        )
+            .into_response();
     }
     let username = payload.username.trim();
     let password = payload.password.trim();
     if username.is_empty() || password.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing credentials" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing credentials" })),
+        )
+            .into_response();
     }
 
     let mut users = state.users.write().await;
     if users.find_by_username(username).is_some() {
-        return (StatusCode::CONFLICT, Json(json!({ "error": "user exists" }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "user exists" })),
+        )
+            .into_response();
     }
     let hash = match hash_password(password) {
         Ok(h) => h,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
         }
     };
     users.users.push(UserRecord {
@@ -662,9 +715,14 @@ async fn get_user_config(
     }
     let users = state.users.read().await;
     if let Some(rec) = users.find_by_username(&user.username) {
-        return Json(json!({ "config": rec.config.clone().unwrap_or_else(|| json!({})) })).into_response();
+        return Json(json!({ "config": rec.config.clone().unwrap_or_else(|| json!({})) }))
+            .into_response();
     }
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "user not found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "user not found" })),
+    )
+        .into_response()
 }
 
 async fn set_user_config(
@@ -706,7 +764,11 @@ async fn oidc_login(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let oidc = match state.auth.oidc.as_ref() {
         Some(oidc) => oidc.clone(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "oidc disabled" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "oidc disabled" })),
+            )
+                .into_response();
         }
     };
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -741,7 +803,11 @@ async fn oidc_callback(
     let oidc = match state.auth.oidc.as_ref() {
         Some(oidc) => oidc.clone(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "oidc disabled" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "oidc disabled" })),
+            )
+                .into_response();
         }
     };
     let pending = {
@@ -751,11 +817,18 @@ async fn oidc_callback(
     let pending = match pending {
         Some(p) => p,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid state" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid state" })),
+            )
+                .into_response();
         }
     };
 
-    let token_req = match oidc.client.exchange_code(AuthorizationCode::new(query.code)) {
+    let token_req = match oidc
+        .client
+        .exchange_code(AuthorizationCode::new(query.code))
+    {
         Ok(req) => req,
         Err(e) => {
             return (
@@ -772,20 +845,32 @@ async fn oidc_callback(
     {
         Ok(resp) => resp,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("token exchange failed: {}", e) }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("token exchange failed: {}", e) })),
+            )
+                .into_response();
         }
     };
 
     let id_token = match token_resp.id_token() {
         Some(token) => token,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing id_token" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing id_token" })),
+            )
+                .into_response();
         }
     };
     let claims = match id_token.claims(&oidc.client.id_token_verifier(), &pending.nonce) {
         Ok(c) => c,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("invalid id_token: {}", e) }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("invalid id_token: {}", e) })),
+            )
+                .into_response();
         }
     };
     let subject = claims.subject().as_str().to_string();
@@ -836,12 +921,20 @@ async fn oidc_exchange(
     Form(payload): Form<OidcExchangePayload>,
 ) -> impl IntoResponse {
     if state.auth.mode != AuthMode::Oidc {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "oidc disabled" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "oidc disabled" })),
+        )
+            .into_response();
     }
     let oidc = match state.auth.oidc.as_ref() {
         Some(oidc) => oidc.clone(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "oidc disabled" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "oidc disabled" })),
+            )
+                .into_response();
         }
     };
     let next_path = safe_next_path(payload.next);
@@ -858,11 +951,7 @@ async fn oidc_exchange(
     {
         let access_token = AccessToken::new(token.to_string());
         let userinfo = match oidc.client.user_info(access_token, None) {
-            Ok(req) => {
-                req.request_async(&oidc.http_client)
-                    .await
-                    .ok()
-            }
+            Ok(req) => req.request_async(&oidc.http_client).await.ok(),
             Err(_) => None,
         };
         let userinfo: Option<CoreUserInfoClaims> = userinfo;
@@ -883,14 +972,22 @@ async fn oidc_exchange(
             let id_token = match CoreIdToken::from_str(raw) {
                 Ok(token) => token,
                 Err(_) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid id_token" }))).into_response();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "invalid id_token" })),
+                    )
+                        .into_response();
                 }
             };
             let verifier = oidc.client.id_token_verifier();
             let claims = match id_token.claims(&verifier, |_: Option<&Nonce>| Ok(())) {
                 Ok(claims) => claims,
                 Err(_) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid id_token" }))).into_response();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "invalid id_token" })),
+                    )
+                        .into_response();
                 }
             };
             subject = Some(claims.subject().as_str().to_string());
@@ -902,7 +999,11 @@ async fn oidc_exchange(
     let subject = match subject {
         Some(subject) => subject,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing token claims" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing token claims" })),
+            )
+                .into_response();
         }
     };
 
@@ -915,7 +1016,11 @@ async fn oidc_exchange(
     } else {
         let base = preferred_username
             .clone()
-            .or_else(|| email.as_ref().and_then(|e| e.split('@').next().map(|s| s.to_string())))
+            .or_else(|| {
+                email
+                    .as_ref()
+                    .and_then(|e| e.split('@').next().map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| "oidc".to_string());
         let username = users.ensure_unique_username(&base);
         users.users.push(UserRecord {
@@ -973,7 +1078,13 @@ async fn status(
             }
             addr
         }
-        Err(code) => return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response(),
+        Err(code) => {
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
+        }
     };
 
     let mut client = match DistributedNeuromorphicClient::connect(addr.clone()).await {
@@ -1083,7 +1194,11 @@ async fn snapshot(
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
     let Some(network_id) = query.network_id.clone() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing network_id" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing network_id" })),
+        )
+            .into_response();
     };
     let addr = query
         .addr
@@ -1097,13 +1212,20 @@ async fn snapshot(
             }
             addr
         }
-        Err(code) => return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response(),
+        Err(code) => {
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
+        }
     };
 
-    let target_addr = match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
-        Ok(a) => a,
-        Err(resp) => return resp.into_response(),
-    };
+    let target_addr =
+        match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
+            Ok(a) => a,
+            Err(resp) => return resp.into_response(),
+        };
 
     let mut client = match DistributedNeuromorphicClient::connect(target_addr.clone()).await {
         Ok(client) => client,
@@ -1117,7 +1239,9 @@ async fn snapshot(
     };
 
     let resp = match client
-        .get_network_snapshot(Request::new(NetworkSnapshotRequest { network_id: network_id.clone() }))
+        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+            network_id: network_id.clone(),
+        }))
         .await
     {
         Ok(resp) => resp.into_inner(),
@@ -1146,7 +1270,11 @@ async fn activity(
     Query(query): Query<ActivityQuery>,
 ) -> impl IntoResponse {
     let Some(network_id) = query.network_id.clone() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing network_id" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing network_id" })),
+        )
+            .into_response();
     };
     let addr = query
         .addr
@@ -1160,13 +1288,20 @@ async fn activity(
             }
             addr
         }
-        Err(code) => return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response(),
+        Err(code) => {
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
+        }
     };
 
-    let target_addr = match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
-        Ok(a) => a,
-        Err(resp) => return resp.into_response(),
-    };
+    let target_addr =
+        match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
+            Ok(a) => a,
+            Err(resp) => return resp.into_response(),
+        };
 
     let mut client = match DistributedNeuromorphicClient::connect(target_addr.clone()).await {
         Ok(client) => client,
@@ -1180,7 +1315,9 @@ async fn activity(
     };
 
     let resp = match client
-        .get_network_activity(Request::new(NetworkActivityRequest { network_id: network_id.clone() }))
+        .get_network_activity(Request::new(NetworkActivityRequest {
+            network_id: network_id.clone(),
+        }))
         .await
     {
         Ok(resp) => resp.into_inner(),
@@ -1227,7 +1364,11 @@ async fn update_network(
             addr
         }
         Err(code) => {
-            return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response()
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
         }
     };
 
@@ -1243,11 +1384,7 @@ async fn update_network(
     };
 
     let update = network_update_request::Update::Config(ConfigUpdate {
-        config_json: payload
-            .config_json
-            .unwrap_or_default()
-            .as_bytes()
-            .to_vec(),
+        config_json: payload.config_json.unwrap_or_default().as_bytes().to_vec(),
         neuron_model: payload.neuron_model.unwrap_or_default(),
         learning_rule: payload.learning_rule.unwrap_or_default(),
     });
@@ -1289,7 +1426,11 @@ async fn control_network(
             addr
         }
         Err(code) => {
-            return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response()
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
         }
     };
 
@@ -1348,7 +1489,11 @@ async fn export(
     Query(query): Query<ExportQuery>,
 ) -> impl IntoResponse {
     let Some(network_id) = query.network_id.clone() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing network_id" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing network_id" })),
+        )
+            .into_response();
     };
     let addr = query
         .addr
@@ -1362,7 +1507,13 @@ async fn export(
             }
             addr
         }
-        Err(code) => return (code, Json(json!({ "error": "missing orchestrator address" }))).into_response(),
+        Err(code) => {
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
+        }
     };
 
     let target_addr = match resolve_network_addr(addr.clone(), &network_id, None).await {
@@ -1382,7 +1533,9 @@ async fn export(
     };
 
     let resp = match client
-        .get_network_snapshot(Request::new(NetworkSnapshotRequest { network_id: network_id.clone() }))
+        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+            network_id: network_id.clone(),
+        }))
         .await
     {
         Ok(resp) => resp.into_inner(),
@@ -1397,18 +1550,28 @@ async fn export(
 
     let snapshot_json = resp.snapshot_json;
     let format = query.format.to_lowercase();
-    
+
     let (script, arg_in, arg_out, ext) = match format.as_str() {
         "neuroml" => ("export_neuroml.py", "--in-network", "--out-neuroml", "nml"),
         "pynn" => ("export_pynn.py", "--in-network", "--out-pynn", "py"),
-        _ => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "unsupported format" }))).into_response(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unsupported format" })),
+            )
+                .into_response()
+        }
     };
 
     let tmp_in = std::env::temp_dir().join(format!("network_{}.json", network_id));
     let tmp_out = std::env::temp_dir().join(format!("exported_{}.{}", network_id, ext));
 
     if let Err(e) = fs::write(&tmp_in, snapshot_json).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("write temp failed: {}", e) }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("write temp failed: {}", e) })),
+        )
+            .into_response();
     }
 
     let status = tokio::process::Command::new("python3")
@@ -1421,22 +1584,39 @@ async fn export(
         .await;
 
     match status {
-        Ok(s) if s.success() => {
-            match fs::read(&tmp_out).await {
-                Ok(content) => {
-                    let mut headers = axum::http::HeaderMap::new();
-                    headers.insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-                    headers.insert(
-                        axum::http::header::CONTENT_DISPOSITION,
-                        HeaderValue::from_str(&format!("attachment; filename=\"exported_{}.{}\"", network_id, ext)).unwrap()
-                    );
-                    (StatusCode::OK, headers, content).into_response()
-                }
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("read output failed: {}", e) }))).into_response(),
+        Ok(s) if s.success() => match fs::read(&tmp_out).await {
+            Ok(content) => {
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                );
+                headers.insert(
+                    axum::http::header::CONTENT_DISPOSITION,
+                    HeaderValue::from_str(&format!(
+                        "attachment; filename=\"exported_{}.{}\"",
+                        network_id, ext
+                    ))
+                    .unwrap(),
+                );
+                (StatusCode::OK, headers, content).into_response()
             }
-        }
-        Ok(s) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("export tool failed with status {}", s) }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("failed to run export tool: {}", e) }))).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("read output failed: {}", e) })),
+            )
+                .into_response(),
+        },
+        Ok(s) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("export tool failed with status {}", s) })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to run export tool: {}", e) })),
+        )
+            .into_response(),
     }
 }
 

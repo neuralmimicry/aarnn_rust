@@ -24,35 +24,43 @@
 
 use fastrand;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hasher, BuildHasherDefault};
+use std::hash::{BuildHasherDefault, Hasher};
 
 #[derive(Default)]
 pub(crate) struct NoHasher(u64);
 impl Hasher for NoHasher {
-    fn finish(&self) -> u64 { self.0 }
+    fn finish(&self) -> u64 {
+        self.0
+    }
     fn write(&mut self, _bytes: &[u8]) {}
-    fn write_u64(&mut self, i: u64) { self.0 = i; }
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
 }
 pub(crate) type FastHashMap<K, V> = HashMap<K, V, BuildHasherDefault<NoHasher>>;
-use std::sync::{Mutex, OnceLock};
-#[cfg(feature = "opencl")]
-use std::sync::Arc;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+#[cfg(feature = "opencl")]
+use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "opencl")]
 use crate::cl_compute::OpenCLManager;
 #[cfg(feature = "opencl")]
-use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
+use opencl3::error_codes::ClError;
 #[cfg(feature = "opencl")]
 use opencl3::kernel::ExecuteKernel;
 #[cfg(feature = "opencl")]
-use opencl3::types::CL_TRUE;
+use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
 #[cfg(feature = "opencl")]
-use opencl3::error_codes::ClError;
+use opencl3::types::CL_TRUE;
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct Point3 { pub x: f32, pub y: f32, pub z: f32 }
+pub struct Point3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
 
 impl Point3 {
     pub fn dist_sq(&self, other: Point3) -> f32 {
@@ -65,13 +73,25 @@ impl Point3 {
         self.dist_sq(other).sqrt()
     }
     pub fn add(&self, other: Point3) -> Point3 {
-        Point3 { x: self.x + other.x, y: self.y + other.y, z: self.z + other.z }
+        Point3 {
+            x: self.x + other.x,
+            y: self.y + other.y,
+            z: self.z + other.z,
+        }
     }
     pub fn sub(&self, other: Point3) -> Point3 {
-        Point3 { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+        Point3 {
+            x: self.x - other.x,
+            y: self.y - other.y,
+            z: self.z - other.z,
+        }
     }
     pub fn mul(&self, s: f32) -> Point3 {
-        Point3 { x: self.x * s, y: self.y * s, z: self.z * s }
+        Point3 {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
     }
     pub fn dot(&self, other: Point3) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
@@ -81,7 +101,11 @@ impl Point3 {
     }
     pub fn normalize(&self) -> Point3 {
         let m = self.mag();
-        if m > 1e-9 { self.mul(1.0 / m) } else { *self }
+        if m > 1e-9 {
+            self.mul(1.0 / m)
+        } else {
+            *self
+        }
     }
     pub fn lerp(&self, other: Point3, t: f32) -> Point3 {
         Point3 {
@@ -94,30 +118,44 @@ impl Point3 {
 
 #[inline(always)]
 pub fn dist2_point_to_segment(p: Point3, a: Point3, b: Point3) -> (f32, Point3) {
-    let dx = b.x - a.x; let dy = b.y - a.y; let dz = b.z - a.z;
-    let len2 = dx*dx + dy*dy + dz*dz;
-    if len2 < 1e-12 { return (p.dist_sq(a), a); }
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dz = b.z - a.z;
+    let len2 = dx * dx + dy * dy + dz * dz;
+    if len2 < 1e-12 {
+        return (p.dist_sq(a), a);
+    }
 
-    let t = ((p.x - a.x)*dx + (p.y - a.y)*dy + (p.z - a.z)*dz) / len2;
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy + (p.z - a.z) * dz) / len2;
     let t = t.clamp(0.0, 1.0);
 
-    let proj = Point3 { x: a.x + t*dx, y: a.y + t*dy, z: a.z + t*dz };
+    let proj = Point3 {
+        x: a.x + t * dx,
+        y: a.y + t * dy,
+        z: a.z + t * dz,
+    };
     (p.dist_sq(proj), proj)
 }
 
 #[inline(always)]
 pub(crate) fn seg_seg_min_dist_sq(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> f32 {
-    let ux = a1.x - a0.x; let uy = a1.y - a0.y; let uz = a1.z - a0.z;
-    let vx = b1.x - b0.x; let vy = b1.y - b0.y; let vz = b1.z - b0.z;
-    let wx0 = a0.x - b0.x; let wy0 = a0.y - b0.y; let wz0 = a0.z - b0.z;
+    let ux = a1.x - a0.x;
+    let uy = a1.y - a0.y;
+    let uz = a1.z - a0.z;
+    let vx = b1.x - b0.x;
+    let vy = b1.y - b0.y;
+    let vz = b1.z - b0.z;
+    let wx0 = a0.x - b0.x;
+    let wy0 = a0.y - b0.y;
+    let wz0 = a0.z - b0.z;
 
-    let a = ux*ux + uy*uy + uz*uz;
-    let b = ux*vx + uy*vy + uz*vz;
-    let c = vx*vx + vy*vy + vz*vz;
-    let d = ux*wx0 + uy*wy0 + uz*wz0;
-    let e = vx*wx0 + vy*wy0 + vz*wz0;
+    let a = ux * ux + uy * uy + uz * uz;
+    let b = ux * vx + uy * vy + uz * vz;
+    let c = vx * vx + vy * vy + vz * vz;
+    let d = ux * wx0 + uy * wy0 + uz * wz0;
+    let e = vx * wx0 + vy * wy0 + vz * wz0;
 
-    let denom = a*c - b*b;
+    let denom = a * c - b * b;
 
     // f32-friendly epsilon
     const EPS: f32 = 1e-6;
@@ -125,18 +163,24 @@ pub(crate) fn seg_seg_min_dist_sq(a0: Point3, a1: Point3, b0: Point3, b1: Point3
     let (mut s_n, mut s_d, mut t_n, mut t_d);
 
     if denom <= EPS {
-        s_n = 0.0; s_d = 1.0;
-        t_n = e;   t_d = c;
+        s_n = 0.0;
+        s_d = 1.0;
+        t_n = e;
+        t_d = c;
     } else {
-        s_n = b*e - c*d;
-        t_n = a*e - b*d;
+        s_n = b * e - c * d;
+        t_n = a * e - b * d;
         s_d = denom;
         t_d = denom;
 
         if s_n < 0.0 {
-            s_n = 0.0; t_n = e;     t_d = c;
+            s_n = 0.0;
+            t_n = e;
+            t_d = c;
         } else if s_n > s_d {
-            s_n = s_d; t_n = e + b; t_d = c;
+            s_n = s_d;
+            t_n = e + b;
+            t_d = c;
         }
     }
 
@@ -147,7 +191,8 @@ pub(crate) fn seg_seg_min_dist_sq(a0: Point3, a1: Point3, b0: Point3, b1: Point3
         } else if -d > a {
             s_n = s_d;
         } else {
-            s_n = -d; s_d = a;
+            s_n = -d;
+            s_d = a;
         }
     } else if t_n > t_d {
         t_n = t_d;
@@ -157,52 +202,86 @@ pub(crate) fn seg_seg_min_dist_sq(a0: Point3, a1: Point3, b0: Point3, b1: Point3
         } else if db > a {
             s_n = s_d;
         } else {
-            s_n = db; s_d = a;
+            s_n = db;
+            s_d = a;
         }
     }
 
-    let sc = if s_d.abs() <= EPS { 0.0 } else { s_n * (1.0 / s_d) };
-    let tc = if t_d.abs() <= EPS { 0.0 } else { t_n * (1.0 / t_d) };
+    let sc = if s_d.abs() <= EPS {
+        0.0
+    } else {
+        s_n * (1.0 / s_d)
+    };
+    let tc = if t_d.abs() <= EPS {
+        0.0
+    } else {
+        t_n * (1.0 / t_d)
+    };
 
-    let dx = wx0 + sc*ux - tc*vx;
-    let dy = wy0 + sc*uy - tc*vy;
-    let dz = wz0 + sc*uz - tc*vz;
+    let dx = wx0 + sc * ux - tc * vx;
+    let dy = wy0 + sc * uy - tc * vy;
+    let dz = wz0 + sc * uz - tc * vz;
 
-    dx.mul_add(dx, dy.mul_add(dy, dz*dz))
+    dx.mul_add(dx, dy.mul_add(dy, dz * dz))
 }
 
-
 fn aabb_overlap(a0: &Point3, a1: &Point3, b0: &Point3, b1: &Point3, pad: f32) -> bool {
-    let (ax0, ay0, az0) = (a0.x.min(a1.x)-pad, a0.y.min(a1.y)-pad, a0.z.min(a1.z)-pad);
-    let (ax1, ay1, az1) = (a0.x.max(a1.x)+pad, a0.y.max(a1.y)+pad, a0.z.max(a1.z)+pad);
-    let (bx0, by0, bz0) = (b0.x.min(b1.x)-pad, b0.y.min(b1.y)-pad, b0.z.min(b1.z)-pad);
-    let (bx1, by1, bz1) = (b0.x.max(b1.x)+pad, b0.y.max(b1.y)+pad, b0.z.max(b1.z)+pad);
+    let (ax0, ay0, az0) = (
+        a0.x.min(a1.x) - pad,
+        a0.y.min(a1.y) - pad,
+        a0.z.min(a1.z) - pad,
+    );
+    let (ax1, ay1, az1) = (
+        a0.x.max(a1.x) + pad,
+        a0.y.max(a1.y) + pad,
+        a0.z.max(a1.z) + pad,
+    );
+    let (bx0, by0, bz0) = (
+        b0.x.min(b1.x) - pad,
+        b0.y.min(b1.y) - pad,
+        b0.z.min(b1.z) - pad,
+    );
+    let (bx1, by1, bz1) = (
+        b0.x.max(b1.x) + pad,
+        b0.y.max(b1.y) + pad,
+        b0.z.max(b1.z) + pad,
+    );
     !(ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0 || az1 < bz0 || bz1 < az0)
 }
 
 #[inline(always)]
 fn near_colinear_overlap(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> bool {
-    let ux = a1.x - a0.x; let uy = a1.y - a0.y; let uz = a1.z - a0.z;
-    let vx = b1.x - b0.x; let vy = b1.y - b0.y; let vz = b1.z - b0.z;
+    let ux = a1.x - a0.x;
+    let uy = a1.y - a0.y;
+    let uz = a1.z - a0.z;
+    let vx = b1.x - b0.x;
+    let vy = b1.y - b0.y;
+    let vz = b1.z - b0.z;
 
-    let du2 = ux*ux + uy*uy + uz*uz;
-    let dv2 = vx*vx + vy*vy + vz*vz;
-    if du2 < 1e-12 || dv2 < 1e-12 { return false; }
+    let du2 = ux * ux + uy * uy + uz * uz;
+    let dv2 = vx * vx + vy * vy + vz * vz;
+    if du2 < 1e-12 || dv2 < 1e-12 {
+        return false;
+    }
 
-    let dot = ux*vx + uy*vy + uz*vz;
+    let dot = ux * vx + uy * vy + uz * vz;
     // |cos(theta)| > 0.995  <=>  dot^2 > (0.995^2) * du2 * dv2
     const C2: f32 = 0.995 * 0.995;
-    if dot*dot < C2 * du2 * dv2 { return false; }
+    if dot * dot < C2 * du2 * dv2 {
+        return false;
+    }
 
     // Project b endpoints onto a using du2 directly (no sqrt)
     #[inline(always)]
     fn proj(p: Point3, a0: Point3, ux: f32, uy: f32, uz: f32, du2: f32) -> f32 {
-        ((p.x - a0.x)*ux + (p.y - a0.y)*uy + (p.z - a0.z)*uz) / du2
+        ((p.x - a0.x) * ux + (p.y - a0.y) * uy + (p.z - a0.z) * uz) / du2
     }
 
     let mut t0 = proj(b0, a0, ux, uy, uz, du2);
     let mut t1 = proj(b1, a0, ux, uy, uz, du2);
-    if t0 > t1 { std::mem::swap(&mut t0, &mut t1); }
+    if t0 > t1 {
+        std::mem::swap(&mut t0, &mut t1);
+    }
 
     let lo = t0.max(0.0);
     let hi = t1.min(1.0);
@@ -210,10 +289,25 @@ fn near_colinear_overlap(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> bool
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SynKind { In, HiddenFwd, HiddenBwd, HiddenRec, Out }
+pub enum SynKind {
+    In,
+    HiddenFwd,
+    HiddenBwd,
+    HiddenRec,
+    Out,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum OrganelleKind { Mitochondria, Nucleus, #[allow(dead_code)] Ribosome, #[allow(dead_code)] Lysosome, GolgiApparatus, EndoplasmicReticulum }
+pub enum OrganelleKind {
+    Mitochondria,
+    Nucleus,
+    #[allow(dead_code)]
+    Ribosome,
+    #[allow(dead_code)]
+    Lysosome,
+    GolgiApparatus,
+    EndoplasmicReticulum,
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SkullMembrane {
@@ -236,11 +330,11 @@ pub struct Organelle {
 
 #[derive(Clone, Debug)]
 pub struct Soma {
-    pub id: usize,      // neuron index within its hidden layer
-    pub layer: usize,   // hidden layer index
-    pub pos: Point3,    // position in normalized coordinates
-    pub stimuli: f32,   // attractant release (neurotrophins)
-    pub atp: f32,       // metabolic energy level
+    pub id: usize,    // neuron index within its hidden layer
+    pub layer: usize, // hidden layer index
+    pub pos: Point3,  // position in normalized coordinates
+    pub stimuli: f32, // attractant release (neurotrophins)
+    pub atp: f32,     // metabolic energy level
     pub organelles: Vec<Organelle>,
     pub prev_err: Point3,     // for PID smoothing
     pub integral_err: Point3, // for PID smoothing
@@ -262,8 +356,16 @@ pub struct AxonSeg {
 impl Default for AxonSeg {
     fn default() -> Self {
         Self {
-            from: Point3 { x: 0.0, y: 0.0, z: 0.0 },
-            to: Point3 { x: 0.0, y: 0.0, z: 0.0 },
+            from: Point3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            to: Point3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
             length: 0.0,
             stimuli: 0.0,
             parent_idx: None,
@@ -298,8 +400,16 @@ pub struct DendSeg {
 impl Default for DendSeg {
     fn default() -> Self {
         Self {
-            from: Point3 { x: 0.0, y: 0.0, z: 0.0 },
-            to: Point3 { x: 0.0, y: 0.0, z: 0.0 },
+            from: Point3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            to: Point3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
             length: 0.0,
             stimuli: 0.0,
             parent_idx: None,
@@ -328,9 +438,9 @@ pub struct Dendrite {
 #[derive(Clone, Copy, Debug)]
 pub struct Synapse {
     pub kind: SynKind,
-    pub pre_layer: isize,   // -1 for sensory, L for output sinks
+    pub pre_layer: isize, // -1 for sensory, L for output sinks
     pub pre_id: usize,
-    pub post_layer: isize,  // -1 for sensory sources, L for output layer
+    pub post_layer: isize, // -1 for sensory sources, L for output layer
     pub post_id: usize,
     pub pre_site: Point3,
     pub post_site: Point3,
@@ -349,7 +459,13 @@ pub struct Synapse {
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 #[derive(Clone, Copy, Debug)]
-pub enum ReleasedKind { In, Fwd { layer: usize }, Bwd { layer: usize }, HiddenRec { layer: usize }, Out }
+pub enum ReleasedKind {
+    In,
+    Fwd { layer: usize },
+    Bwd { layer: usize },
+    HiddenRec { layer: usize },
+    Out,
+}
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 #[derive(Clone, Copy, Debug)]
@@ -366,9 +482,9 @@ pub struct ReleasedEvent {
 
 #[derive(Clone, Debug, Default)]
 pub struct Morphology {
-    pub somas: Vec<Vec<Soma>>,          // per hidden layer
-    pub axons: Vec<Vec<Axon>>,          // per hidden layer
-    pub dendrites: Vec<Vec<Dendrite>>,  // per hidden layer
+    pub somas: Vec<Vec<Soma>>,         // per hidden layer
+    pub axons: Vec<Vec<Axon>>,         // per hidden layer
+    pub dendrites: Vec<Vec<Dendrite>>, // per hidden layer
 
     pub sensory_somas: Vec<Soma>,
     pub sensory_axons: Vec<Axon>,
@@ -378,7 +494,7 @@ pub struct Morphology {
     pub output_axons: Vec<Axon>,
     pub output_dendrites: Vec<Dendrite>,
 
-    pub synapses: Vec<Synapse>,         // flat list of synapses
+    pub synapses: Vec<Synapse>, // flat list of synapses
     /// Spatial index for fast proximity lookups (grid or octree, populated on demand)
     pub(crate) spatial_index: Option<SpatialIndex>,
     pub skull_membrane: Option<SkullMembrane>,
@@ -458,7 +574,8 @@ impl AxonSegIndex {
         let cs = cell_size.max(0.01);
         let dim = (2.0 / cs).ceil() as usize;
         let num_cells = dim.saturating_mul(dim).saturating_mul(dim);
-        let use_octree = num_cells > 2_000_000 || (segs.len() > 512 && num_cells > segs.len().saturating_mul(64));
+        let use_octree = num_cells > 2_000_000
+            || (segs.len() > 512 && num_cells > segs.len().saturating_mul(64));
         if use_octree {
             return AxonSegIndex::Octree(OctreeSegIndex::build(segs, cs));
         }
@@ -480,21 +597,29 @@ impl AxonSegIndex {
             for gx in min_gx..=max_gx {
                 for gy in min_gy..=max_gy {
                     for gz in min_gz..=max_gz {
-                        let key = (((gx + 1048576) & 0x1FFFFF) as u64) |
-                                  ((((gy + 1048576) & 0x1FFFFF) as u64) << 21) |
-                                  ((((gz + 1048576) & 0x1FFFFF) as u64) << 42);
+                        let key = (((gx + 1048576) & 0x1FFFFF) as u64)
+                            | ((((gy + 1048576) & 0x1FFFFF) as u64) << 21)
+                            | ((((gz + 1048576) & 0x1FFFFF) as u64) << 42);
                         map.entry(key).or_default().push(idx);
                     }
                 }
             }
         }
 
-        AxonSegIndex::Grid { cell_size: cs, map, segs }
+        AxonSegIndex::Grid {
+            cell_size: cs,
+            map,
+            segs,
+        }
     }
 
     fn for_each_candidate<F: FnMut(SegRef) -> bool>(&self, p: Point3, r: f32, mut f: F) {
         match self {
-            AxonSegIndex::Grid { cell_size, map, segs } => {
+            AxonSegIndex::Grid {
+                cell_size,
+                map,
+                segs,
+            } => {
                 let cs = *cell_size;
                 let gx = (p.x / cs).floor() as i64;
                 let gy = (p.y / cs).floor() as i64;
@@ -503,9 +628,9 @@ impl AxonSegIndex {
                 for dx in -r_cells..=r_cells {
                     for dy in -r_cells..=r_cells {
                         for dz in -r_cells..=r_cells {
-                            let key = (((gx + dx + 1048576) & 0x1FFFFF) as u64) |
-                                      ((((gy + dy + 1048576) & 0x1FFFFF) as u64) << 21) |
-                                      ((((gz + dz + 1048576) & 0x1FFFFF) as u64) << 42);
+                            let key = (((gx + dx + 1048576) & 0x1FFFFF) as u64)
+                                | ((((gy + dy + 1048576) & 0x1FFFFF) as u64) << 21)
+                                | ((((gz + dz + 1048576) & 0x1FFFFF) as u64) << 42);
                             if let Some(list) = map.get(&key) {
                                 for &idx in list {
                                     if !f(segs[idx]) {
@@ -555,15 +680,36 @@ impl OctreeSegIndex {
         let max_leaf = 24usize;
         let indices: Vec<usize> = (0..segs.len()).collect();
         let root = OctreeSegNode::build(center, half, indices, 0, max_depth, max_leaf, &segs);
-        Self { segs, root, max_depth, max_leaf }
+        Self {
+            segs,
+            root,
+            max_depth,
+            max_leaf,
+        }
     }
 
     fn compute_bounds(segs: &[SegRef]) -> (Point3, f32) {
-        let mut min = Point3 { x: f32::INFINITY, y: f32::INFINITY, z: f32::INFINITY };
-        let mut max = Point3 { x: f32::NEG_INFINITY, y: f32::NEG_INFINITY, z: f32::NEG_INFINITY };
+        let mut min = Point3 {
+            x: f32::INFINITY,
+            y: f32::INFINITY,
+            z: f32::INFINITY,
+        };
+        let mut max = Point3 {
+            x: f32::NEG_INFINITY,
+            y: f32::NEG_INFINITY,
+            z: f32::NEG_INFINITY,
+        };
         if segs.is_empty() {
-            min = Point3 { x: -1.0, y: -1.0, z: -1.0 };
-            max = Point3 { x: 1.0, y: 1.0, z: 1.0 };
+            min = Point3 {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+            };
+            max = Point3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            };
         } else {
             for s in segs {
                 min.x = min.x.min(s.min.x);
@@ -580,7 +726,11 @@ impl OctreeSegIndex {
             max.y = max.y.max(1.0);
             max.z = max.z.max(1.0);
         }
-        let center = Point3 { x: 0.5 * (min.x + max.x), y: 0.5 * (min.y + max.y), z: 0.5 * (min.z + max.z) };
+        let center = Point3 {
+            x: 0.5 * (min.x + max.x),
+            y: 0.5 * (min.y + max.y),
+            z: 0.5 * (min.z + max.z),
+        };
         let span_x = (max.x - min.x).max(1e-6);
         let span_y = (max.y - min.y).max(1e-6);
         let span_z = (max.z - min.z).max(1e-6);
@@ -615,18 +765,42 @@ impl OctreeSegNode {
         for idx in indices {
             let seg = &segs[idx];
             let mut oct = 0usize;
-            if seg.min.x >= center.x { oct |= 1; }
-            if seg.min.y >= center.y { oct |= 2; }
-            if seg.min.z >= center.z { oct |= 4; }
+            if seg.min.x >= center.x {
+                oct |= 1;
+            }
+            if seg.min.y >= center.y {
+                oct |= 2;
+            }
+            if seg.min.z >= center.z {
+                oct |= 4;
+            }
 
             let child_center = Point3 {
-                x: center.x + if (oct & 1) != 0 { child_half } else { -child_half },
-                y: center.y + if (oct & 2) != 0 { child_half } else { -child_half },
-                z: center.z + if (oct & 4) != 0 { child_half } else { -child_half },
+                x: center.x
+                    + if (oct & 1) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
+                y: center.y
+                    + if (oct & 2) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
+                z: center.z
+                    + if (oct & 4) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
             };
-            let fits = seg.min.x >= child_center.x - child_half && seg.max.x <= child_center.x + child_half
-                && seg.min.y >= child_center.y - child_half && seg.max.y <= child_center.y + child_half
-                && seg.min.z >= child_center.z - child_half && seg.max.z <= child_center.z + child_half;
+            let fits = seg.min.x >= child_center.x - child_half
+                && seg.max.x <= child_center.x + child_half
+                && seg.min.y >= child_center.y - child_half
+                && seg.max.y <= child_center.y + child_half
+                && seg.min.z >= child_center.z - child_half
+                && seg.max.z <= child_center.z + child_half;
 
             if fits {
                 buckets[oct].push(idx);
@@ -637,11 +811,28 @@ impl OctreeSegNode {
 
         let mut children: [Option<Box<OctreeSegNode>>; 8] = std::array::from_fn(|_| None);
         for (oct, bucket) in buckets.into_iter().enumerate() {
-            if bucket.is_empty() { continue; }
+            if bucket.is_empty() {
+                continue;
+            }
             let child_center = Point3 {
-                x: center.x + if (oct & 1) != 0 { child_half } else { -child_half },
-                y: center.y + if (oct & 2) != 0 { child_half } else { -child_half },
-                z: center.z + if (oct & 4) != 0 { child_half } else { -child_half },
+                x: center.x
+                    + if (oct & 1) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
+                y: center.y
+                    + if (oct & 2) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
+                z: center.z
+                    + if (oct & 4) != 0 {
+                        child_half
+                    } else {
+                        -child_half
+                    },
             };
             children[oct] = Some(Box::new(OctreeSegNode::build(
                 child_center,
@@ -654,7 +845,12 @@ impl OctreeSegNode {
             )));
         }
 
-        OctreeSegNode { center, half, indices: keep, children }
+        OctreeSegNode {
+            center,
+            half,
+            indices: keep,
+            children,
+        }
     }
 
     #[inline(always)]
@@ -670,9 +866,27 @@ impl OctreeSegNode {
 
     #[inline(always)]
     fn point_aabb_dist2(p: Point3, min: Point3, max: Point3) -> f32 {
-        let dx = if p.x < min.x { min.x - p.x } else if p.x > max.x { p.x - max.x } else { 0.0 };
-        let dy = if p.y < min.y { min.y - p.y } else if p.y > max.y { p.y - max.y } else { 0.0 };
-        let dz = if p.z < min.z { min.z - p.z } else if p.z > max.z { p.z - max.z } else { 0.0 };
+        let dx = if p.x < min.x {
+            min.x - p.x
+        } else if p.x > max.x {
+            p.x - max.x
+        } else {
+            0.0
+        };
+        let dy = if p.y < min.y {
+            min.y - p.y
+        } else if p.y > max.y {
+            p.y - max.y
+        } else {
+            0.0
+        };
+        let dz = if p.z < min.z {
+            min.z - p.z
+        } else if p.z > max.z {
+            p.z - max.z
+        } else {
+            0.0
+        };
         dx.mul_add(dx, dy.mul_add(dy, dz * dz))
     }
 
@@ -683,7 +897,9 @@ impl OctreeSegNode {
         segs: &[SegRef],
         f: &mut F,
     ) -> bool {
-        if !self.intersects_sphere(p, r2) { return true; }
+        if !self.intersects_sphere(p, r2) {
+            return true;
+        }
         for &idx in &self.indices {
             let seg = segs[idx];
             if Self::point_aabb_dist2(p, seg.min, seg.max) <= r2 {
@@ -710,23 +926,45 @@ impl OctreeIndex {
         let max_leaf = 16usize;
         let indices: Vec<usize> = (0..entities.len()).collect();
         let root = OctreeNode::build(center, half, indices, 0, max_depth, max_leaf, &entities);
-        Self { entities, root, max_depth, max_leaf }
+        Self {
+            entities,
+            root,
+            max_depth,
+            max_leaf,
+        }
     }
 
     #[inline(always)]
     fn energy_at(&self, p: Point3, radius: f32, k: f32) -> f32 {
         let r2 = radius * radius;
         let mut total = 0.0;
-        self.root.accumulate_energy(p, r2, k, &self.entities, &mut total);
+        self.root
+            .accumulate_energy(p, r2, k, &self.entities, &mut total);
         total
     }
 
     fn compute_bounds(entities: &[GridEntity]) -> (Point3, f32) {
-        let mut min = Point3 { x: f32::INFINITY, y: f32::INFINITY, z: f32::INFINITY };
-        let mut max = Point3 { x: f32::NEG_INFINITY, y: f32::NEG_INFINITY, z: f32::NEG_INFINITY };
+        let mut min = Point3 {
+            x: f32::INFINITY,
+            y: f32::INFINITY,
+            z: f32::INFINITY,
+        };
+        let mut max = Point3 {
+            x: f32::NEG_INFINITY,
+            y: f32::NEG_INFINITY,
+            z: f32::NEG_INFINITY,
+        };
         if entities.is_empty() {
-            min = Point3 { x: -1.0, y: -1.0, z: -1.0 };
-            max = Point3 { x: 1.0, y: 1.0, z: 1.0 };
+            min = Point3 {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+            };
+            max = Point3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            };
         } else {
             for e in entities {
                 min.x = min.x.min(e.pos.x);
@@ -758,7 +996,9 @@ impl OctreeIndex {
 
     fn depth_for_leaf(root_half: f32, target_leaf: f32) -> u8 {
         let target = target_leaf.max(0.01);
-        if root_half <= target { return 1; }
+        if root_half <= target {
+            return 1;
+        }
         let ratio = (root_half / target).max(1.0);
         let depth = ratio.log2().ceil() as i32;
         depth.clamp(1, 10) as u8
@@ -788,20 +1028,44 @@ impl OctreeNode {
         for idx in indices {
             let p = entities[idx].pos;
             let mut oct = 0usize;
-            if p.x >= center.x { oct |= 1; }
-            if p.y >= center.y { oct |= 2; }
-            if p.z >= center.z { oct |= 4; }
+            if p.x >= center.x {
+                oct |= 1;
+            }
+            if p.y >= center.y {
+                oct |= 2;
+            }
+            if p.z >= center.z {
+                oct |= 4;
+            }
             buckets[oct].push(idx);
         }
 
         let mut children: [Option<Box<OctreeNode>>; 8] = std::array::from_fn(|_| None);
         let child_half = half * 0.5;
         for (oct, bucket) in buckets.into_iter().enumerate() {
-            if bucket.is_empty() { continue; }
-            let ox = if (oct & 1) != 0 { child_half } else { -child_half };
-            let oy = if (oct & 2) != 0 { child_half } else { -child_half };
-            let oz = if (oct & 4) != 0 { child_half } else { -child_half };
-            let child_center = Point3 { x: center.x + ox, y: center.y + oy, z: center.z + oz };
+            if bucket.is_empty() {
+                continue;
+            }
+            let ox = if (oct & 1) != 0 {
+                child_half
+            } else {
+                -child_half
+            };
+            let oy = if (oct & 2) != 0 {
+                child_half
+            } else {
+                -child_half
+            };
+            let oz = if (oct & 4) != 0 {
+                child_half
+            } else {
+                -child_half
+            };
+            let child_center = Point3 {
+                x: center.x + ox,
+                y: center.y + oy,
+                z: center.z + oz,
+            };
             children[oct] = Some(Box::new(OctreeNode::build(
                 child_center,
                 child_half,
@@ -845,7 +1109,9 @@ impl OctreeNode {
         entities: &[GridEntity],
         total: &mut f32,
     ) {
-        if !self.intersects_sphere(p, r2) { return; }
+        if !self.intersects_sphere(p, r2) {
+            return;
+        }
         if self.is_leaf() {
             for &idx in &self.indices {
                 let e = &entities[idx];
@@ -871,7 +1137,13 @@ impl SpatialGrid {
         let gx = ((p.x + 1.0) / self.cell_size).floor() as isize;
         let gy = ((p.y + 1.0) / self.cell_size).floor() as isize;
         let gz = ((p.z + 1.0) / self.cell_size).floor() as isize;
-        if gx < 0 || gx >= self.dim as isize || gy < 0 || gy >= self.dim as isize || gz < 0 || gz >= self.dim as isize {
+        if gx < 0
+            || gx >= self.dim as isize
+            || gy < 0
+            || gy >= self.dim as isize
+            || gz < 0
+            || gz >= self.dim as isize
+        {
             return None;
         }
         Some((gx as usize * self.dim + gy as usize) * self.dim + gz as usize)
@@ -879,7 +1151,13 @@ impl SpatialGrid {
 
     #[inline(always)]
     pub fn get_key_from_indices(&self, gx: isize, gy: isize, gz: isize) -> Option<usize> {
-        if gx < 0 || gx >= self.dim as isize || gy < 0 || gy >= self.dim as isize || gz < 0 || gz >= self.dim as isize {
+        if gx < 0
+            || gx >= self.dim as isize
+            || gy < 0
+            || gy >= self.dim as isize
+            || gz < 0
+            || gz >= self.dim as isize
+        {
             return None;
         }
         Some((gx as usize * self.dim + gy as usize) * self.dim + gz as usize)
@@ -899,10 +1177,10 @@ struct MorphoStats {
     dendrite_sprout_successes: usize,
     dendrite_sprout_low_energy: usize,
     dendrite_sprout_too_near: usize,
-    
+
     axon_sprout_attempts: usize,
     axon_sprout_successes: usize,
-    
+
     contact_checks: usize,
     contact_candidates: usize,
     contact_incompatible: usize,
@@ -932,13 +1210,31 @@ struct MorphoEnergyTuning {
 
 fn morpho_energy_tuning() -> &'static Mutex<MorphoEnergyTuning> {
     static TUNING: OnceLock<Mutex<MorphoEnergyTuning>> = OnceLock::new();
-    TUNING.get_or_init(|| Mutex::new(MorphoEnergyTuning { ema: 0.2, dev: 0.05, cap_scale: 1.0, skip_bias: 1.0 }))
+    TUNING.get_or_init(|| {
+        Mutex::new(MorphoEnergyTuning {
+            ema: 0.2,
+            dev: 0.05,
+            cap_scale: 1.0,
+            skip_bias: 1.0,
+        })
+    })
 }
 
 impl Morphology {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn add_hidden_neuron(&mut self, l: usize, j: usize, pos: Point3, synapse_offset: f32, start_empty: bool, region_name: Option<String>, type_name: Option<String>) {
+    pub fn add_hidden_neuron(
+        &mut self,
+        l: usize,
+        j: usize,
+        pos: Point3,
+        synapse_offset: f32,
+        start_empty: bool,
+        region_name: Option<String>,
+        type_name: Option<String>,
+    ) {
         if l >= self.somas.len() {
             self.somas.resize_with(l + 1, Vec::new);
             self.axons.resize_with(l + 1, Vec::new);
@@ -947,8 +1243,12 @@ impl Morphology {
 
         let seed = ((l as u64) << 32) ^ (j as u64) ^ 0x01020304;
         let mut organelles = Vec::new();
-        organelles.push(Organelle { kind: OrganelleKind::Nucleus, pos, activity: 1.0 });
-        
+        organelles.push(Organelle {
+            kind: OrganelleKind::Nucleus,
+            pos,
+            activity: 1.0,
+        });
+
         // Somas are added to layer l
         self.somas[l].push(Soma {
             id: j,
@@ -967,15 +1267,30 @@ impl Morphology {
         let mut axon_segments = Vec::new();
         if !start_empty {
             let (jx, jy) = (
-                ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32 / 32768.0 - 0.5,
-                ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32 / 32768.0 - 0.5,
+                ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32
+                    / 32768.0
+                    - 0.5,
+                ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32 / 32768.0
+                    - 0.5,
             );
             let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
             let mag = (synapse_offset * 0.8).max(0.004);
-            let to = Point3{ x: (pos.x + jx*mag).clamp(-1.0,1.0), y: (pos.y + jy*mag).clamp(-1.0,1.0), z: (pos.z + nz*mag).clamp(-1.0,1.0) };
-            axon_segments.push(AxonSeg { from: pos, to, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
+            let to = Point3 {
+                x: (pos.x + jx * mag).clamp(-1.0, 1.0),
+                y: (pos.y + jy * mag).clamp(-1.0, 1.0),
+                z: (pos.z + nz * mag).clamp(-1.0, 1.0),
+            };
+            axon_segments.push(AxonSeg {
+                from: pos,
+                to,
+                length: mag,
+                stimuli: 1.0,
+                parent_idx: None,
+                syn_index: None,
+                is_trunk: true,
+            });
         }
-        
+
         self.axons[l].push(Axon {
             neuron_layer: l,
             neuron_id: j,
@@ -991,20 +1306,38 @@ impl Morphology {
             for trunk_i in 0..2 {
                 let d_seed = (j as u64) ^ (0xD1D2D3D4 + trunk_i as u64);
                 let (jx, jy) = (
-                    ((d_seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32 / 32768.0 - 0.5,
-                    ((d_seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32 / 32768.0 - 0.5,
+                    ((d_seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
+                    ((d_seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
                 );
                 let nz = ((d_seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
                 let mag_d = (synapse_offset * 0.6).max(0.0035);
-                let from = Point3{ x: (pos.x + jx*mag_d).clamp(-1.0,1.0), y: (pos.y + jy*mag_d).clamp(-1.0,1.0), z: (pos.z + nz*mag_d).clamp(-1.0,1.0) };
-                dendrite_branches.push(DendSeg { from, to: pos, length: mag_d, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
+                let from = Point3 {
+                    x: (pos.x + jx * mag_d).clamp(-1.0, 1.0),
+                    y: (pos.y + jy * mag_d).clamp(-1.0, 1.0),
+                    z: (pos.z + nz * mag_d).clamp(-1.0, 1.0),
+                };
+                dendrite_branches.push(DendSeg {
+                    from,
+                    to: pos,
+                    length: mag_d,
+                    stimuli: 1.0,
+                    parent_idx: None,
+                    syn_index: None,
+                    is_trunk: true,
+                });
             }
         }
-        
+
         self.dendrites[l].push(Dendrite {
             neuron_layer: l,
             neuron_id: j,
-            tree: DendriticTree { branches: dendrite_branches },
+            tree: DendriticTree {
+                branches: dendrite_branches,
+            },
             stimuli: if start_empty { 0.0 } else { 1.0 },
             atp: 1.0,
             organelles: Vec::new(),
@@ -1042,17 +1375,22 @@ impl Morphology {
         // ------------------------------------------------------------------
         // Global uniqueness registry for sites (quantized grid)
         // Define before any calls to ensure uniqueness helpers are in scope.
-        let mut used_sites: HashSet<(i32,i32,i32)> = HashSet::new();
-        let quant = |p: &Point3| -> (i32,i32,i32) {
+        let mut used_sites: HashSet<(i32, i32, i32)> = HashSet::new();
+        let quant = |p: &Point3| -> (i32, i32, i32) {
             // quantize to 1e-3 grid
             let q = 1000.0f32;
-            ((p.x*q).round() as i32, (p.y*q).round() as i32, (p.z*q).round() as i32)
+            (
+                (p.x * q).round() as i32,
+                (p.y * q).round() as i32,
+                (p.z * q).round() as i32,
+            )
         };
         // Small deterministic jitter generator in [-1,1]
         let jitter2 = |seed: u64| -> (f32, f32) {
             // simple hash → two floats
             let mut x = seed.wrapping_mul(0x9E3779B185EBCA87);
-            x ^= x >> 33; x = x.wrapping_mul(0xff51afd7ed558ccd);
+            x ^= x >> 33;
+            x = x.wrapping_mul(0xff51afd7ed558ccd);
             let a = ((x as u128).wrapping_mul(48271) % 10_000) as f32 / 5000.0 - 1.0;
             let b = ((x as u128).wrapping_mul(69621) % 10_000) as f32 / 5000.0 - 1.0;
             (a.max(-1.0).min(1.0), b.max(-1.0).min(1.0))
@@ -1060,7 +1398,10 @@ impl Morphology {
         // Ensure uniqueness of a point by jittering slightly if needed
         let mut ensure_unique_point = |p: Point3, seed: u64| -> Point3 {
             let base_key = quant(&p);
-            if !used_sites.contains(&base_key) { used_sites.insert(base_key); return p; }
+            if !used_sites.contains(&base_key) {
+                used_sites.insert(base_key);
+                return p;
+            }
             // jitter attempts
             let tries = 8;
             for i in 1..=tries {
@@ -1068,108 +1409,245 @@ impl Morphology {
                 let mag = (synapse_offset * 0.35) * (i as f32 / tries as f32);
                 let nx = (p.x + jx * mag).clamp(-1.0, 1.0);
                 let ny = (p.y + jy * mag).clamp(-1.0, 1.0);
-                let nz = (p.z + (jx*jy) * mag * 0.5).clamp(-1.0, 1.0);
-                let cand = Point3 { x: nx, y: ny, z: nz };
+                let nz = (p.z + (jx * jy) * mag * 0.5).clamp(-1.0, 1.0);
+                let cand = Point3 {
+                    x: nx,
+                    y: ny,
+                    z: nz,
+                };
                 let key = quant(&cand);
-                if !used_sites.contains(&key) { used_sites.insert(key); return cand; }
+                if !used_sites.contains(&key) {
+                    used_sites.insert(key);
+                    return cand;
+                }
             }
             p
         };
         // Somas from topology
-        m.somas = topo_layers.iter().enumerate().map(|(l, nodes)|{
-            nodes.iter().enumerate().map(|(j, n)|{
-                let p = Point3 { x: n.x, y: n.y, z: n.z };
-                let seed = ((l as u64) << 32) ^ (j as u64) ^ 0x01020304;
-                let mut organelles = Vec::new();
-                // Nucleus at center
-                organelles.push(Organelle { kind: OrganelleKind::Nucleus, pos: p, activity: 1.0 });
-                // A few mitochondria nearby
-                for k in 0..3 {
-                    let (jx, jy) = jitter2(seed.wrapping_add(k as u64));
-                    organelles.push(Organelle {
-                        kind: OrganelleKind::Mitochondria,
-                        pos: Point3 { x: p.x + jx * 0.02, y: p.y + jy * 0.02, z: p.z + (jx*jy) * 0.01 },
-                        activity: 0.8,
-                    });
-                }
-                // Golgi and ER
-                let (jx, jy) = jitter2(seed.wrapping_add(100));
-                organelles.push(Organelle {
-                    kind: OrganelleKind::GolgiApparatus,
-                    pos: Point3 { x: p.x + jx * 0.015, y: p.y + jy * 0.015, z: p.z },
-                    activity: 0.7,
-                });
-                let (jx, jy) = jitter2(seed.wrapping_add(200));
-                organelles.push(Organelle {
-                    kind: OrganelleKind::EndoplasmicReticulum,
-                    pos: Point3 { x: p.x + jx * 0.01, y: p.y + jy * 0.01, z: p.z },
-                    activity: 0.6,
-                });
-                Soma {
-                    id: j,
-                    layer: l,
-                    pos: p,
-                    stimuli: 0.1,
-                    atp: 1.0,
-                    organelles,
-                    prev_err: Point3::default(),
-                    integral_err: Point3::default(),
-                    region_name: n.region_name.clone(),
-                    type_name: n.type_name.clone(),
-                }
-            }).collect::<Vec<_>>()
-        }).collect();
+        m.somas = topo_layers
+            .iter()
+            .enumerate()
+            .map(|(l, nodes)| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(j, n)| {
+                        let p = Point3 {
+                            x: n.x,
+                            y: n.y,
+                            z: n.z,
+                        };
+                        let seed = ((l as u64) << 32) ^ (j as u64) ^ 0x01020304;
+                        let mut organelles = Vec::new();
+                        // Nucleus at center
+                        organelles.push(Organelle {
+                            kind: OrganelleKind::Nucleus,
+                            pos: p,
+                            activity: 1.0,
+                        });
+                        // A few mitochondria nearby
+                        for k in 0..3 {
+                            let (jx, jy) = jitter2(seed.wrapping_add(k as u64));
+                            organelles.push(Organelle {
+                                kind: OrganelleKind::Mitochondria,
+                                pos: Point3 {
+                                    x: p.x + jx * 0.02,
+                                    y: p.y + jy * 0.02,
+                                    z: p.z + (jx * jy) * 0.01,
+                                },
+                                activity: 0.8,
+                            });
+                        }
+                        // Golgi and ER
+                        let (jx, jy) = jitter2(seed.wrapping_add(100));
+                        organelles.push(Organelle {
+                            kind: OrganelleKind::GolgiApparatus,
+                            pos: Point3 {
+                                x: p.x + jx * 0.015,
+                                y: p.y + jy * 0.015,
+                                z: p.z,
+                            },
+                            activity: 0.7,
+                        });
+                        let (jx, jy) = jitter2(seed.wrapping_add(200));
+                        organelles.push(Organelle {
+                            kind: OrganelleKind::EndoplasmicReticulum,
+                            pos: Point3 {
+                                x: p.x + jx * 0.01,
+                                y: p.y + jy * 0.01,
+                                z: p.z,
+                            },
+                            activity: 0.6,
+                        });
+                        Soma {
+                            id: j,
+                            layer: l,
+                            pos: p,
+                            stimuli: 0.1,
+                            atp: 1.0,
+                            organelles,
+                            prev_err: Point3::default(),
+                            integral_err: Point3::default(),
+                            region_name: n.region_name.clone(),
+                            type_name: n.type_name.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         m.update_skull_membrane(config, 1.0);
         // Axons/dendrites with minimal non-zero distinct endpoints from soma to avoid coincident geometry.
         // For AARNN, start hidden neurons with empty morphology so connections form over time.
         if is_aarnn {
-            m.axons = topo_layers.iter().enumerate().map(|(l, nodes)|{
-                nodes.iter().enumerate().map(|(j, _n)|{
-                    Axon { neuron_layer: l, neuron_id: j, segments: Vec::new(), stimuli: 0.0, atp: 1.0, organelles: Vec::new() }
-                }).collect::<Vec<_>>()
-            }).collect();
-            m.dendrites = topo_layers.iter().enumerate().map(|(l, nodes)|{
-                nodes.iter().enumerate().map(|(j, _n)|{
-                    Dendrite { neuron_layer: l, neuron_id: j, tree: DendriticTree{ branches: Vec::new() }, stimuli: 0.0, atp: 1.0, organelles: Vec::new() }
-                }).collect::<Vec<_>>()
-            }).collect();
+            m.axons = topo_layers
+                .iter()
+                .enumerate()
+                .map(|(l, nodes)| {
+                    nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(j, _n)| Axon {
+                            neuron_layer: l,
+                            neuron_id: j,
+                            segments: Vec::new(),
+                            stimuli: 0.0,
+                            atp: 1.0,
+                            organelles: Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            m.dendrites = topo_layers
+                .iter()
+                .enumerate()
+                .map(|(l, nodes)| {
+                    nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(j, _n)| Dendrite {
+                            neuron_layer: l,
+                            neuron_id: j,
+                            tree: DendriticTree {
+                                branches: Vec::new(),
+                            },
+                            stimuli: 0.0,
+                            atp: 1.0,
+                            organelles: Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
         } else {
-            m.axons = topo_layers.iter().enumerate().map(|(l, nodes)|{
-                nodes.iter().enumerate().map(|(j, n)|{
-                    let p = Point3{ x:n.x, y:n.y, z:n.z };
-                    // Seed a tiny direction using hash(l,j)
-                    let seed = ((l as u64) << 32) ^ (j as u64) ^ 0xA1A2A3A4;
-                    let (jx, jy) = (
-                        ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32 / 32768.0 - 0.5,
-                        ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32 / 32768.0 - 0.5,
-                    );
-                    let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
-                    let mag = (synapse_offset * 0.8).max(0.004);
-                    let mut to = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-                    // ensure uniqueness w.r.t. global used_sites
-                    to = ensure_unique_point(to, seed);
-                    Axon { neuron_layer: l, neuron_id: j, segments: vec![AxonSeg{ from:p, to, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true }], stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-                }).collect::<Vec<_>>()
-            }).collect();
-            m.dendrites = topo_layers.iter().enumerate().map(|(l, nodes)|{
-                nodes.iter().enumerate().map(|(j, n)|{
-                    let p = Point3{ x:n.x, y:n.y, z:n.z };
-                    let mut branches = Vec::new();
-                    for trunk_i in 0..3 {
-                        let seed = ((l as u64) << 32) ^ (j as u64) ^ (0xB1B2B3B4 + trunk_i);
-                        let (jx, jy) = (
-                            ((seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32 / 32768.0 - 0.5,
-                            ((seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32 / 32768.0 - 0.5,
-                        );
-                        let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                        let mag = (synapse_offset * 0.6).max(0.0035);
-                        let mut q = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-                        q = ensure_unique_point(q, seed);
-                        branches.push(DendSeg{ from:q, to:p, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
-                    }
-                    Dendrite { neuron_layer: l, neuron_id: j, tree: DendriticTree{ branches }, stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-                }).collect::<Vec<_>>()
-            }).collect();
+            m.axons = topo_layers
+                .iter()
+                .enumerate()
+                .map(|(l, nodes)| {
+                    nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(j, n)| {
+                            let p = Point3 {
+                                x: n.x,
+                                y: n.y,
+                                z: n.z,
+                            };
+                            // Seed a tiny direction using hash(l,j)
+                            let seed = ((l as u64) << 32) ^ (j as u64) ^ 0xA1A2A3A4;
+                            let (jx, jy) = (
+                                ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff)
+                                    as f32
+                                    / 32768.0
+                                    - 0.5,
+                                ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff)
+                                    as f32
+                                    / 32768.0
+                                    - 0.5,
+                            );
+                            let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
+                            let mag = (synapse_offset * 0.8).max(0.004);
+                            let mut to = Point3 {
+                                x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                                y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                                z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                            };
+                            // ensure uniqueness w.r.t. global used_sites
+                            to = ensure_unique_point(to, seed);
+                            Axon {
+                                neuron_layer: l,
+                                neuron_id: j,
+                                segments: vec![AxonSeg {
+                                    from: p,
+                                    to,
+                                    length: mag,
+                                    stimuli: 1.0,
+                                    parent_idx: None,
+                                    syn_index: None,
+                                    is_trunk: true,
+                                }],
+                                stimuli: 1.0,
+                                atp: 1.0,
+                                organelles: Vec::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            m.dendrites = topo_layers
+                .iter()
+                .enumerate()
+                .map(|(l, nodes)| {
+                    nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(j, n)| {
+                            let p = Point3 {
+                                x: n.x,
+                                y: n.y,
+                                z: n.z,
+                            };
+                            let mut branches = Vec::new();
+                            for trunk_i in 0..3 {
+                                let seed = ((l as u64) << 32) ^ (j as u64) ^ (0xB1B2B3B4 + trunk_i);
+                                let (jx, jy) = (
+                                    ((seed.wrapping_mul(4101842887655102017).rotate_left(11))
+                                        & 0xffff) as f32
+                                        / 32768.0
+                                        - 0.5,
+                                    ((seed.wrapping_mul(2685821657736338717).rotate_left(5))
+                                        & 0xffff) as f32
+                                        / 32768.0
+                                        - 0.5,
+                                );
+                                let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
+                                let mag = (synapse_offset * 0.6).max(0.0035);
+                                let mut q = Point3 {
+                                    x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                                    y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                                    z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                                };
+                                q = ensure_unique_point(q, seed);
+                                branches.push(DendSeg {
+                                    from: q,
+                                    to: p,
+                                    length: mag,
+                                    stimuli: 1.0,
+                                    parent_idx: None,
+                                    syn_index: None,
+                                    is_trunk: true,
+                                });
+                            }
+                            Dendrite {
+                                neuron_layer: l,
+                                neuron_id: j,
+                                tree: DendriticTree { branches },
+                                stimuli: 1.0,
+                                atp: 1.0,
+                                organelles: Vec::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
         }
 
         // Helper to compute delay (ms) from euclidean distance in normalized units
@@ -1188,342 +1666,651 @@ impl Morphology {
         };
 
         let sensory_pos = if !sensory_nodes.is_empty() {
-            sensory_nodes.iter().map(|n| Point3 { x: n.x, y: n.y, z: n.z }).collect::<Vec<_>>()
+            sensory_nodes
+                .iter()
+                .map(|n| Point3 {
+                    x: n.x,
+                    y: n.y,
+                    z: n.z,
+                })
+                .collect::<Vec<_>>()
         } else {
-            (0..num_sensory_neurons).map(|i|{
-                if is_aarnn {
-                    let angle = (i as f32) * 2.0 * std::f32::consts::PI / (num_sensory_neurons as f32);
-                    let r_base = (rx.min(rz) * 0.4).max(0.05);
-                    Point3 {
-                        x: cx - rx * 0.4 + angle.cos() * r_base * 0.2,
-                        y: cy - ry,
-                        z: cz + angle.sin() * r_base
+            (0..num_sensory_neurons)
+                .map(|i| {
+                    if is_aarnn {
+                        let angle =
+                            (i as f32) * 2.0 * std::f32::consts::PI / (num_sensory_neurons as f32);
+                        let r_base = (rx.min(rz) * 0.4).max(0.05);
+                        Point3 {
+                            x: cx - rx * 0.4 + angle.cos() * r_base * 0.2,
+                            y: cy - ry,
+                            z: cz + angle.sin() * r_base,
+                        }
+                    } else {
+                        let (y, z) = if num_sensory_neurons > 1 {
+                            let angle = (i as f32) * 2.0 * std::f32::consts::PI
+                                / (num_sensory_neurons as f32);
+                            let radius = 0.65;
+                            (radius * angle.cos(), radius * angle.sin())
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        Point3 { x: -0.7, y, z }
                     }
-                } else {
-                    let (y, z) = if num_sensory_neurons > 1 {
-                        let angle = (i as f32) * 2.0 * std::f32::consts::PI / (num_sensory_neurons as f32);
-                        let radius = 0.65;
-                        (radius * angle.cos(), radius * angle.sin())
-                    } else { (0.0, 0.0) };
-                    Point3 { x: -0.7, y, z }
-                }
-            }).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
 
-        m.sensory_somas = sensory_pos.iter().enumerate().map(|(i, &pos)| {
-            let seed = (i as u64) ^ 0x05060708;
-            let mut organelles = Vec::new();
-            organelles.push(Organelle { kind: OrganelleKind::Nucleus, pos, activity: 1.0 });
-            for k in 0..2 {
-                let (jx, jy) = jitter2(seed.wrapping_add(k as u64));
+        m.sensory_somas = sensory_pos
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let seed = (i as u64) ^ 0x05060708;
+                let mut organelles = Vec::new();
                 organelles.push(Organelle {
-                    kind: OrganelleKind::Mitochondria,
-                    pos: Point3 { x: pos.x + jx * 0.02, y: pos.y + jy * 0.02, z: pos.z + (jx*jy) * 0.01 },
-                    activity: 0.8,
+                    kind: OrganelleKind::Nucleus,
+                    pos,
+                    activity: 1.0,
                 });
-            }
-            // Golgi and ER
-            let (jx, jy) = jitter2(seed.wrapping_add(100));
-            organelles.push(Organelle {
-                kind: OrganelleKind::GolgiApparatus,
-                pos: Point3 { x: pos.x + jx * 0.015, y: pos.y + jy * 0.015, z: pos.z },
-                activity: 0.7,
-            });
-            let (jx, jy) = jitter2(seed.wrapping_add(200));
-            organelles.push(Organelle {
-                kind: OrganelleKind::EndoplasmicReticulum,
-                pos: Point3 { x: pos.x + jx * 0.01, y: pos.y + jy * 0.01, z: pos.z },
-                activity: 0.6,
-            });
-            let (region_name, type_name) = if i < sensory_nodes.len() {
-                (sensory_nodes[i].region_name.clone(), sensory_nodes[i].type_name.clone())
-            } else { (None, None) };
-            Soma {
-                id: i,
-                layer: usize::MAX,
-                pos,
-                stimuli: 0.1,
-                atp: 1.0,
-                organelles,
-                prev_err: Point3::default(),
-                integral_err: Point3::default(),
-                region_name,
-                type_name,
-            }
-        }).collect();
+                for k in 0..2 {
+                    let (jx, jy) = jitter2(seed.wrapping_add(k as u64));
+                    organelles.push(Organelle {
+                        kind: OrganelleKind::Mitochondria,
+                        pos: Point3 {
+                            x: pos.x + jx * 0.02,
+                            y: pos.y + jy * 0.02,
+                            z: pos.z + (jx * jy) * 0.01,
+                        },
+                        activity: 0.8,
+                    });
+                }
+                // Golgi and ER
+                let (jx, jy) = jitter2(seed.wrapping_add(100));
+                organelles.push(Organelle {
+                    kind: OrganelleKind::GolgiApparatus,
+                    pos: Point3 {
+                        x: pos.x + jx * 0.015,
+                        y: pos.y + jy * 0.015,
+                        z: pos.z,
+                    },
+                    activity: 0.7,
+                });
+                let (jx, jy) = jitter2(seed.wrapping_add(200));
+                organelles.push(Organelle {
+                    kind: OrganelleKind::EndoplasmicReticulum,
+                    pos: Point3 {
+                        x: pos.x + jx * 0.01,
+                        y: pos.y + jy * 0.01,
+                        z: pos.z,
+                    },
+                    activity: 0.6,
+                });
+                let (region_name, type_name) = if i < sensory_nodes.len() {
+                    (
+                        sensory_nodes[i].region_name.clone(),
+                        sensory_nodes[i].type_name.clone(),
+                    )
+                } else {
+                    (None, None)
+                };
+                Soma {
+                    id: i,
+                    layer: usize::MAX,
+                    pos,
+                    stimuli: 0.1,
+                    atp: 1.0,
+                    organelles,
+                    prev_err: Point3::default(),
+                    integral_err: Point3::default(),
+                    region_name,
+                    type_name,
+                }
+            })
+            .collect();
 
         // Output positions from Topology3D
         let out_pos = if !output_nodes.is_empty() {
-            output_nodes.iter().map(|n| Point3 { x: n.x, y: n.y, z: n.z }).collect::<Vec<_>>()
+            output_nodes
+                .iter()
+                .map(|n| Point3 {
+                    x: n.x,
+                    y: n.y,
+                    z: n.z,
+                })
+                .collect::<Vec<_>>()
         } else {
-            (0..num_output_neurons).map(|k|{
-                if is_aarnn {
-                    let angle = (k as f32) * 2.0 * std::f32::consts::PI / (num_output_neurons as f32);
-                    let r_base = (rx.min(rz) * 0.4).max(0.05);
-                    Point3 {
-                        x: cx + rx * 0.4 + angle.cos() * r_base * 0.2,
-                        y: cy - ry,
-                        z: cz + angle.sin() * r_base
+            (0..num_output_neurons)
+                .map(|k| {
+                    if is_aarnn {
+                        let angle =
+                            (k as f32) * 2.0 * std::f32::consts::PI / (num_output_neurons as f32);
+                        let r_base = (rx.min(rz) * 0.4).max(0.05);
+                        Point3 {
+                            x: cx + rx * 0.4 + angle.cos() * r_base * 0.2,
+                            y: cy - ry,
+                            z: cz + angle.sin() * r_base,
+                        }
+                    } else {
+                        let (y, z) = if num_output_neurons > 1 {
+                            let angle = (k as f32) * 2.0 * std::f32::consts::PI
+                                / (num_output_neurons as f32);
+                            let radius = 0.65;
+                            (radius * angle.cos(), radius * angle.sin())
+                        } else {
+                            (0.0, 0.0)
+                        };
+                        Point3 { x: 1.0, y, z }
                     }
-                } else {
-                    let (y, z) = if num_output_neurons > 1 {
-                        let angle = (k as f32) * 2.0 * std::f32::consts::PI / (num_output_neurons as f32);
-                        let radius = 0.65;
-                        (radius * angle.cos(), radius * angle.sin())
-                    } else { (0.0, 0.0) };
-                    Point3 { x: 1.0, y, z }
-                }
-            }).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
 
-        m.output_somas = out_pos.iter().enumerate().map(|(k, &pos)| {
-            let seed = (k as u64) ^ 0x090A0B0C;
-            let mut organelles = Vec::new();
-            organelles.push(Organelle { kind: OrganelleKind::Nucleus, pos, activity: 1.0 });
-            for i in 0..2 {
-                let (jx, jy) = jitter2(seed.wrapping_add(i as u64));
+        m.output_somas = out_pos
+            .iter()
+            .enumerate()
+            .map(|(k, &pos)| {
+                let seed = (k as u64) ^ 0x090A0B0C;
+                let mut organelles = Vec::new();
                 organelles.push(Organelle {
-                    kind: OrganelleKind::Mitochondria,
-                    pos: Point3 { x: pos.x + jx * 0.02, y: pos.y + jy * 0.02, z: pos.z + (jx*jy) * 0.01 },
-                    activity: 0.8,
+                    kind: OrganelleKind::Nucleus,
+                    pos,
+                    activity: 1.0,
                 });
-            }
-            // Golgi and ER
-            let (jx, jy) = jitter2(seed.wrapping_add(100));
-            organelles.push(Organelle {
-                kind: OrganelleKind::GolgiApparatus,
-                pos: Point3 { x: pos.x + jx * 0.015, y: pos.y + jy * 0.015, z: pos.z },
-                activity: 0.7,
-            });
-            let (jx, jy) = jitter2(seed.wrapping_add(200));
-            organelles.push(Organelle {
-                kind: OrganelleKind::EndoplasmicReticulum,
-                pos: Point3 { x: pos.x + jx * 0.01, y: pos.y + jy * 0.01, z: pos.z },
-                activity: 0.6,
-            });
-            let (region_name, type_name) = if k < output_nodes.len() {
-                (output_nodes[k].region_name.clone(), output_nodes[k].type_name.clone())
-            } else { (None, None) };
-            Soma {
-                id: k,
-                layer: usize::MAX - 1,
-                pos,
-                stimuli: 0.1,
-                atp: 1.0,
-                organelles,
-                prev_err: Point3::default(),
-                integral_err: Point3::default(),
-                region_name,
-                type_name,
-            }
-        }).collect();
+                for i in 0..2 {
+                    let (jx, jy) = jitter2(seed.wrapping_add(i as u64));
+                    organelles.push(Organelle {
+                        kind: OrganelleKind::Mitochondria,
+                        pos: Point3 {
+                            x: pos.x + jx * 0.02,
+                            y: pos.y + jy * 0.02,
+                            z: pos.z + (jx * jy) * 0.01,
+                        },
+                        activity: 0.8,
+                    });
+                }
+                // Golgi and ER
+                let (jx, jy) = jitter2(seed.wrapping_add(100));
+                organelles.push(Organelle {
+                    kind: OrganelleKind::GolgiApparatus,
+                    pos: Point3 {
+                        x: pos.x + jx * 0.015,
+                        y: pos.y + jy * 0.015,
+                        z: pos.z,
+                    },
+                    activity: 0.7,
+                });
+                let (jx, jy) = jitter2(seed.wrapping_add(200));
+                organelles.push(Organelle {
+                    kind: OrganelleKind::EndoplasmicReticulum,
+                    pos: Point3 {
+                        x: pos.x + jx * 0.01,
+                        y: pos.y + jy * 0.01,
+                        z: pos.z,
+                    },
+                    activity: 0.6,
+                });
+                let (region_name, type_name) = if k < output_nodes.len() {
+                    (
+                        output_nodes[k].region_name.clone(),
+                        output_nodes[k].type_name.clone(),
+                    )
+                } else {
+                    (None, None)
+                };
+                Soma {
+                    id: k,
+                    layer: usize::MAX - 1,
+                    pos,
+                    stimuli: 0.1,
+                    atp: 1.0,
+                    organelles,
+                    prev_err: Point3::default(),
+                    integral_err: Point3::default(),
+                    region_name,
+                    type_name,
+                }
+            })
+            .collect();
 
-        m.sensory_axons = m.sensory_somas.iter().map(|s| {
-            let p = s.pos;
-            let seed = (s.id as u64) ^ 0xC1C2C3C4;
-            let (jx, jy) = (
-                ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32 / 32768.0 - 0.5,
-                ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32 / 32768.0 - 0.5,
-            );
-            let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
-            let mag = (synapse_offset * 0.8).max(0.004);
-            let mut to = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-            to = ensure_unique_point(to, seed);
-            Axon { neuron_layer: usize::MAX, neuron_id: s.id, segments: vec![AxonSeg{ from:p, to, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true }], stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-        }).collect();
-
-        m.sensory_dendrites = m.sensory_somas.iter().map(|s| {
-            let p = s.pos;
-            let mut branches = Vec::new();
-            for trunk_i in 0..2 {
-                let seed = (s.id as u64) ^ (0xD1D2D3D4 + trunk_i);
+        m.sensory_axons = m
+            .sensory_somas
+            .iter()
+            .map(|s| {
+                let p = s.pos;
+                let seed = (s.id as u64) ^ 0xC1C2C3C4;
                 let (jx, jy) = (
-                    ((seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32 / 32768.0 - 0.5,
-                    ((seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32 / 32768.0 - 0.5,
+                    ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
+                    ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
                 );
-                let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                let mag = (synapse_offset * 0.6).max(0.0035);
-                let mut q = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-                q = ensure_unique_point(q, seed);
-                branches.push(DendSeg{ from:q, to:p, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
-            }
-            Dendrite { neuron_layer: usize::MAX, neuron_id: s.id, tree: DendriticTree{ branches }, stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-        }).collect();
+                let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
+                let mag = (synapse_offset * 0.8).max(0.004);
+                let mut to = Point3 {
+                    x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                    y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                    z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                };
+                to = ensure_unique_point(to, seed);
+                Axon {
+                    neuron_layer: usize::MAX,
+                    neuron_id: s.id,
+                    segments: vec![AxonSeg {
+                        from: p,
+                        to,
+                        length: mag,
+                        stimuli: 1.0,
+                        parent_idx: None,
+                        syn_index: None,
+                        is_trunk: true,
+                    }],
+                    stimuli: 1.0,
+                    atp: 1.0,
+                    organelles: Vec::new(),
+                }
+            })
+            .collect();
 
-        m.output_axons = m.output_somas.iter().map(|s| {
-            let p = s.pos;
-            let seed = (s.id as u64) ^ 0xE1E2E3E4;
-            let (jx, jy) = (
-                ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32 / 32768.0 - 0.5,
-                ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32 / 32768.0 - 0.5,
-            );
-            let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
-            let mag = (synapse_offset * 0.8).max(0.004);
-            let mut to = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-            to = ensure_unique_point(to, seed);
-            Axon { neuron_layer: usize::MAX - 1, neuron_id: s.id, segments: vec![AxonSeg{ from:p, to, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true }], stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-        }).collect();
+        m.sensory_dendrites = m
+            .sensory_somas
+            .iter()
+            .map(|s| {
+                let p = s.pos;
+                let mut branches = Vec::new();
+                for trunk_i in 0..2 {
+                    let seed = (s.id as u64) ^ (0xD1D2D3D4 + trunk_i);
+                    let (jx, jy) = (
+                        ((seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32
+                            / 32768.0
+                            - 0.5,
+                        ((seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32
+                            / 32768.0
+                            - 0.5,
+                    );
+                    let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
+                    let mag = (synapse_offset * 0.6).max(0.0035);
+                    let mut q = Point3 {
+                        x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                        y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                        z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                    };
+                    q = ensure_unique_point(q, seed);
+                    branches.push(DendSeg {
+                        from: q,
+                        to: p,
+                        length: mag,
+                        stimuli: 1.0,
+                        parent_idx: None,
+                        syn_index: None,
+                        is_trunk: true,
+                    });
+                }
+                Dendrite {
+                    neuron_layer: usize::MAX,
+                    neuron_id: s.id,
+                    tree: DendriticTree { branches },
+                    stimuli: 1.0,
+                    atp: 1.0,
+                    organelles: Vec::new(),
+                }
+            })
+            .collect();
 
-        m.output_dendrites = m.output_somas.iter().map(|s| {
-            let p = s.pos;
-            let mut branches = Vec::new();
-            for trunk_i in 0..2 {
-                let seed = (s.id as u64) ^ (0xF1F2F3F4 + trunk_i);
+        m.output_axons = m
+            .output_somas
+            .iter()
+            .map(|s| {
+                let p = s.pos;
+                let seed = (s.id as u64) ^ 0xE1E2E3E4;
                 let (jx, jy) = (
-                    ((seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32 / 32768.0 - 0.5,
-                    ((seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32 / 32768.0 - 0.5,
+                    ((seed.wrapping_mul(6364136223846793005).rotate_left(13)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
+                    ((seed.wrapping_mul(1442695040888963407).rotate_left(7)) & 0xffff) as f32
+                        / 32768.0
+                        - 0.5,
                 );
-                let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                let mag = (synapse_offset * 0.6).max(0.0035);
-                let mut q = Point3{ x: (p.x + jx*mag).clamp(-1.0,1.0), y: (p.y + jy*mag).clamp(-1.0,1.0), z: (p.z + nz*mag).clamp(-1.0,1.0) };
-                q = ensure_unique_point(q, seed);
-                branches.push(DendSeg{ from:q, to:p, length: mag, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
-            }
-            Dendrite { neuron_layer: usize::MAX - 1, neuron_id: s.id, tree: DendriticTree{ branches }, stimuli: 1.0, atp: 1.0, organelles: Vec::new() }
-        }).collect();
+                let nz = ((seed >> 17) & 0xffff) as f32 / 32768.0 - 0.5;
+                let mag = (synapse_offset * 0.8).max(0.004);
+                let mut to = Point3 {
+                    x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                    y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                    z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                };
+                to = ensure_unique_point(to, seed);
+                Axon {
+                    neuron_layer: usize::MAX - 1,
+                    neuron_id: s.id,
+                    segments: vec![AxonSeg {
+                        from: p,
+                        to,
+                        length: mag,
+                        stimuli: 1.0,
+                        parent_idx: None,
+                        syn_index: None,
+                        is_trunk: true,
+                    }],
+                    stimuli: 1.0,
+                    atp: 1.0,
+                    organelles: Vec::new(),
+                }
+            })
+            .collect();
+
+        m.output_dendrites = m
+            .output_somas
+            .iter()
+            .map(|s| {
+                let p = s.pos;
+                let mut branches = Vec::new();
+                for trunk_i in 0..2 {
+                    let seed = (s.id as u64) ^ (0xF1F2F3F4 + trunk_i);
+                    let (jx, jy) = (
+                        ((seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32
+                            / 32768.0
+                            - 0.5,
+                        ((seed.wrapping_mul(2685821657736338717).rotate_left(5)) & 0xffff) as f32
+                            / 32768.0
+                            - 0.5,
+                    );
+                    let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
+                    let mag = (synapse_offset * 0.6).max(0.0035);
+                    let mut q = Point3 {
+                        x: (p.x + jx * mag).clamp(-1.0, 1.0),
+                        y: (p.y + jy * mag).clamp(-1.0, 1.0),
+                        z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                    };
+                    q = ensure_unique_point(q, seed);
+                    branches.push(DendSeg {
+                        from: q,
+                        to: p,
+                        length: mag,
+                        stimuli: 1.0,
+                        parent_idx: None,
+                        syn_index: None,
+                        is_trunk: true,
+                    });
+                }
+                Dendrite {
+                    neuron_layer: usize::MAX - 1,
+                    neuron_id: s.id,
+                    tree: DendriticTree { branches },
+                    stimuli: 1.0,
+                    atp: 1.0,
+                    organelles: Vec::new(),
+                }
+            })
+            .collect();
 
         let num_layers = topo_layers.len();
-        let in_l = if is_aarnn { if num_layers > 1 { 1 } else { 0 } } else { 0 };
-        let out_l = if is_aarnn { if num_layers > 4 { 4 } else { num_layers.saturating_sub(1) } } else { num_layers.saturating_sub(1) };
+        let in_l = if is_aarnn {
+            if num_layers > 1 {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let out_l = if is_aarnn {
+            if num_layers > 4 {
+                4
+            } else {
+                num_layers.saturating_sub(1)
+            }
+        } else {
+            num_layers.saturating_sub(1)
+        };
 
         // Synapses: In (S -> target_in_layer)
         if !is_aarnn {
-        if let Some(layer_in) = topo_layers.get(in_l) {
-            let h_in_count = layer_in.len();
-            for j in 0..h_in_count {
-                for i in 0..num_sensory_neurons.min(w_in.ncols()) {
-                    let w = w_in[(j, i)];
-                    if w == 0.0 { continue; }
-                    let pre_soma = sensory_pos.get(i).cloned().unwrap_or(Point3{ x:-1.2, y:0.0, z:0.0 });
-                    let post_soma = Point3 { x: layer_in[j].x, y: layer_in[j].y, z: layer_in[j].z };
-                    let dx = pre_soma.x - post_soma.x; let dy = pre_soma.y - post_soma.y; let dz = pre_soma.z - post_soma.z;
-                    let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-                    // offset sites along connection direction: meet in the middle
-                    let mut pre = Point3{ x: pre_soma.x - dx*0.5, y: pre_soma.y - dy*0.5, z: pre_soma.z - dz*0.5 };
-                    let mut post = Point3{ x: post_soma.x + dx*0.5, y: post_soma.y + dy*0.5, z: post_soma.z + dz*0.5 };
-                    // ensure uniqueness with small jitter
-                    pre = ensure_unique_point(pre, ((i as u64) << 32) ^ (j as u64) ^ 0x11);
-                    post = ensure_unique_point(post, ((i as u64) << 32) ^ (j as u64) ^ 0x12);
-                    m.synapses.push(Synapse {
-                        kind: SynKind::In,
-                        pre_layer: -1, pre_id: i,
-                        post_layer: in_l as isize, post_id: j,
-                        pre_site: pre,
-                        post_site: post,
-                        axon_seg_idx: None,
-                        dend_seg_idx: None,
-                        bend: None,
-                        weight: w,
-                        p_release: 1.0,
-                        delay_ms: to_delay(dist),
-                        stimuli: 1.0,
-                    });
+            if let Some(layer_in) = topo_layers.get(in_l) {
+                let h_in_count = layer_in.len();
+                for j in 0..h_in_count {
+                    for i in 0..num_sensory_neurons.min(w_in.ncols()) {
+                        let w = w_in[(j, i)];
+                        if w == 0.0 {
+                            continue;
+                        }
+                        let pre_soma = sensory_pos.get(i).cloned().unwrap_or(Point3 {
+                            x: -1.2,
+                            y: 0.0,
+                            z: 0.0,
+                        });
+                        let post_soma = Point3 {
+                            x: layer_in[j].x,
+                            y: layer_in[j].y,
+                            z: layer_in[j].z,
+                        };
+                        let dx = pre_soma.x - post_soma.x;
+                        let dy = pre_soma.y - post_soma.y;
+                        let dz = pre_soma.z - post_soma.z;
+                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                        // offset sites along connection direction: meet in the middle
+                        let mut pre = Point3 {
+                            x: pre_soma.x - dx * 0.5,
+                            y: pre_soma.y - dy * 0.5,
+                            z: pre_soma.z - dz * 0.5,
+                        };
+                        let mut post = Point3 {
+                            x: post_soma.x + dx * 0.5,
+                            y: post_soma.y + dy * 0.5,
+                            z: post_soma.z + dz * 0.5,
+                        };
+                        // ensure uniqueness with small jitter
+                        pre = ensure_unique_point(pre, ((i as u64) << 32) ^ (j as u64) ^ 0x11);
+                        post = ensure_unique_point(post, ((i as u64) << 32) ^ (j as u64) ^ 0x12);
+                        m.synapses.push(Synapse {
+                            kind: SynKind::In,
+                            pre_layer: -1,
+                            pre_id: i,
+                            post_layer: in_l as isize,
+                            post_id: j,
+                            pre_site: pre,
+                            post_site: post,
+                            axon_seg_idx: None,
+                            dend_seg_idx: None,
+                            bend: None,
+                            weight: w,
+                            p_release: 1.0,
+                            delay_ms: to_delay(dist),
+                            stimuli: 1.0,
+                        });
+                    }
                 }
             }
-        }
         }
 
         // Synapses: Hidden forward/backward
         let l_count_topo = topo_layers.len();
         if !is_aarnn {
-        for l in 0..l_count_topo.saturating_sub(1) {
-            let rows = w_hh_fwd.get(l).map(|a| a.nrows()).unwrap_or(0);
-            let cols = w_hh_fwd.get(l).map(|a| a.ncols()).unwrap_or(0);
-            for j in 0..rows {
-                for i in 0..cols {
-                    let w = w_hh_fwd[l][(j,i)];
-                    if w == 0.0 { continue; }
-                    let pre_node = topo_layers.get(l).and_then(|v| v.get(i));
-                    let post_node = topo_layers.get(l+1).and_then(|v| v.get(j));
-                    if let (Some(a), Some(b)) = (pre_node, post_node) {
-                        let pre_soma = Point3{ x:a.x, y:a.y, z:a.z };
-                        let post_soma = Point3{ x:b.x, y:b.y, z:b.z };
-                        let dx = pre_soma.x - post_soma.x; let dy = pre_soma.y - post_soma.y; let dz = pre_soma.z - post_soma.z;
-                        let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-                        let mut pre = Point3{ x: pre_soma.x - dx*0.5, y: pre_soma.y - dy*0.5, z: pre_soma.z - dz*0.5 };
-                        let mut post = Point3{ x: post_soma.x + dx*0.5, y: post_soma.y + dy*0.5, z: post_soma.z + dz*0.5 };
-                        pre = ensure_unique_point(pre, ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x21);
-                        post = ensure_unique_point(post, ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x22);
-                        m.synapses.push(Synapse{
-                            kind: SynKind::HiddenFwd,
-                            pre_layer: l as isize, pre_id: i,
-                            post_layer: (l+1) as isize, post_id: j,
-                            pre_site: pre, post_site: post,
-                            axon_seg_idx: None,
-                            dend_seg_idx: None,
-                            bend: None,
-                            weight: w, p_release: 1.0, delay_ms: to_delay(dist),
-                            stimuli: 1.0,
-                        });
+            for l in 0..l_count_topo.saturating_sub(1) {
+                let rows = w_hh_fwd.get(l).map(|a| a.nrows()).unwrap_or(0);
+                let cols = w_hh_fwd.get(l).map(|a| a.ncols()).unwrap_or(0);
+                for j in 0..rows {
+                    for i in 0..cols {
+                        let w = w_hh_fwd[l][(j, i)];
+                        if w == 0.0 {
+                            continue;
+                        }
+                        let pre_node = topo_layers.get(l).and_then(|v| v.get(i));
+                        let post_node = topo_layers.get(l + 1).and_then(|v| v.get(j));
+                        if let (Some(a), Some(b)) = (pre_node, post_node) {
+                            let pre_soma = Point3 {
+                                x: a.x,
+                                y: a.y,
+                                z: a.z,
+                            };
+                            let post_soma = Point3 {
+                                x: b.x,
+                                y: b.y,
+                                z: b.z,
+                            };
+                            let dx = pre_soma.x - post_soma.x;
+                            let dy = pre_soma.y - post_soma.y;
+                            let dz = pre_soma.z - post_soma.z;
+                            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let mut pre = Point3 {
+                                x: pre_soma.x - dx * 0.5,
+                                y: pre_soma.y - dy * 0.5,
+                                z: pre_soma.z - dz * 0.5,
+                            };
+                            let mut post = Point3 {
+                                x: post_soma.x + dx * 0.5,
+                                y: post_soma.y + dy * 0.5,
+                                z: post_soma.z + dz * 0.5,
+                            };
+                            pre = ensure_unique_point(
+                                pre,
+                                ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x21,
+                            );
+                            post = ensure_unique_point(
+                                post,
+                                ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x22,
+                            );
+                            m.synapses.push(Synapse {
+                                kind: SynKind::HiddenFwd,
+                                pre_layer: l as isize,
+                                pre_id: i,
+                                post_layer: (l + 1) as isize,
+                                post_id: j,
+                                pre_site: pre,
+                                post_site: post,
+                                axon_seg_idx: None,
+                                dend_seg_idx: None,
+                                bend: None,
+                                weight: w,
+                                p_release: 1.0,
+                                delay_ms: to_delay(dist),
+                                stimuli: 1.0,
+                            });
+                        }
+                    }
+                }
+                // Backward matrix
+                let rows_b = w_hh_bwd.get(l).map(|a| a.nrows()).unwrap_or(0);
+                let cols_b = w_hh_bwd.get(l).map(|a| a.ncols()).unwrap_or(0);
+                for i in 0..rows_b {
+                    for j in 0..cols_b {
+                        let w = w_hh_bwd[l][(i, j)];
+                        if w == 0.0 {
+                            continue;
+                        }
+                        let pre_node = topo_layers.get(l + 1).and_then(|v| v.get(j));
+                        let post_node = topo_layers.get(l).and_then(|v| v.get(i));
+                        if let (Some(a), Some(b)) = (pre_node, post_node) {
+                            let pre_soma = Point3 {
+                                x: a.x,
+                                y: a.y,
+                                z: a.z,
+                            };
+                            let post_soma = Point3 {
+                                x: b.x,
+                                y: b.y,
+                                z: b.z,
+                            };
+                            let dx = pre_soma.x - post_soma.x;
+                            let dy = pre_soma.y - post_soma.y;
+                            let dz = pre_soma.z - post_soma.z;
+                            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let mut pre = Point3 {
+                                x: pre_soma.x - dx * 0.5,
+                                y: pre_soma.y - dy * 0.5,
+                                z: pre_soma.z - dz * 0.5,
+                            };
+                            let mut post = Point3 {
+                                x: post_soma.x + dx * 0.5,
+                                y: post_soma.y + dy * 0.5,
+                                z: post_soma.z + dz * 0.5,
+                            };
+                            pre = ensure_unique_point(
+                                pre,
+                                ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x31,
+                            );
+                            post = ensure_unique_point(
+                                post,
+                                ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x32,
+                            );
+                            m.synapses.push(Synapse {
+                                kind: SynKind::HiddenBwd,
+                                pre_layer: (l + 1) as isize,
+                                pre_id: j,
+                                post_layer: l as isize,
+                                post_id: i,
+                                pre_site: pre,
+                                post_site: post,
+                                axon_seg_idx: None,
+                                dend_seg_idx: None,
+                                bend: None,
+                                weight: w,
+                                p_release: 1.0,
+                                delay_ms: to_delay(dist),
+                                stimuli: 1.0,
+                            });
+                        }
                     }
                 }
             }
-            // Backward matrix
-            let rows_b = w_hh_bwd.get(l).map(|a| a.nrows()).unwrap_or(0);
-            let cols_b = w_hh_bwd.get(l).map(|a| a.ncols()).unwrap_or(0);
-            for i in 0..rows_b {
-                for j in 0..cols_b {
-                    let w = w_hh_bwd[l][(i,j)];
-                    if w == 0.0 { continue; }
-                    let pre_node = topo_layers.get(l+1).and_then(|v| v.get(j));
-                    let post_node = topo_layers.get(l).and_then(|v| v.get(i));
-                    if let (Some(a), Some(b)) = (pre_node, post_node) {
-                        let pre_soma = Point3{ x:a.x, y:a.y, z:a.z };
-                        let post_soma = Point3{ x:b.x, y:b.y, z:b.z };
-                        let dx = pre_soma.x - post_soma.x; let dy = pre_soma.y - post_soma.y; let dz = pre_soma.z - post_soma.z;
-                        let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-                        let mut pre = Point3{ x: pre_soma.x - dx*0.5, y: pre_soma.y - dy*0.5, z: pre_soma.z - dz*0.5 };
-                        let mut post = Point3{ x: post_soma.x + dx*0.5, y: post_soma.y + dy*0.5, z: post_soma.z + dz*0.5 };
-                        pre = ensure_unique_point(pre, ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x31);
-                        post = ensure_unique_point(post, ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x32);
-                        m.synapses.push(Synapse{
-                            kind: SynKind::HiddenBwd,
-                            pre_layer: (l+1) as isize, pre_id: j,
-                            post_layer: l as isize, post_id: i,
-                            pre_site: pre, post_site: post,
-                            axon_seg_idx: None,
-                            dend_seg_idx: None,
-                            bend: None,
-                            weight: w, p_release: 1.0, delay_ms: to_delay(dist),
-                            stimuli: 1.0,
-                        });
-                    }
-                }
-            }
-        }
         }
 
         // Synapses: Out (target_out_layer -> O)
         if !is_aarnn {
-        if let Some(source_nodes) = topo_layers.get(out_l) {
-            let h_out_count = source_nodes.len();
-            for k in 0..num_output_neurons.min(w_out.nrows()) {
-                for j in 0..h_out_count.min(w_out.ncols()) {
-                    let w = w_out[(k,j)];
-                    if w == 0.0 { continue; }
-                    let pre_node = &source_nodes[j];
-                    let post_soma = out_pos.get(k).cloned().unwrap_or(Point3{ x:1.2, y:0.0, z:0.0 });
-                    let pre_soma = Point3{ x:pre_node.x, y:pre_node.y, z:pre_node.z };
-                    let dx = pre_soma.x - post_soma.x; let dy = pre_soma.y - post_soma.y; let dz = pre_soma.z - post_soma.z;
-                    let dist = (dx*dx + dy*dy + dz*dz).sqrt();
-                    let mut pre = Point3{ x: pre_soma.x - dx*0.5, y: pre_soma.y - dy*0.5, z: pre_soma.z - dz*0.5 };
-                    let mut post = Point3{ x: post_soma.x + dx*0.5, y: post_soma.y + dy*0.5, z: post_soma.z + dz*0.5 };
-                    pre = ensure_unique_point(pre, ((j as u64) << 20) ^ (k as u64) ^ 0x41);
-                    post = ensure_unique_point(post, ((j as u64) << 20) ^ (k as u64) ^ 0x42);
-                    m.synapses.push(Synapse{
-                        kind: SynKind::Out,
-                        pre_layer: out_l as isize, pre_id: j,
-                        post_layer: topo_layers.len() as isize, post_id: k,
-                        pre_site: pre, post_site: post,
-                        axon_seg_idx: None,
-                        dend_seg_idx: None,
-                        bend: None,
-                        weight: w, p_release: 1.0, delay_ms: to_delay(dist),
-                        stimuli: 1.0,
-                    });
+            if let Some(source_nodes) = topo_layers.get(out_l) {
+                let h_out_count = source_nodes.len();
+                for k in 0..num_output_neurons.min(w_out.nrows()) {
+                    for j in 0..h_out_count.min(w_out.ncols()) {
+                        let w = w_out[(k, j)];
+                        if w == 0.0 {
+                            continue;
+                        }
+                        let pre_node = &source_nodes[j];
+                        let post_soma = out_pos.get(k).cloned().unwrap_or(Point3 {
+                            x: 1.2,
+                            y: 0.0,
+                            z: 0.0,
+                        });
+                        let pre_soma = Point3 {
+                            x: pre_node.x,
+                            y: pre_node.y,
+                            z: pre_node.z,
+                        };
+                        let dx = pre_soma.x - post_soma.x;
+                        let dy = pre_soma.y - post_soma.y;
+                        let dz = pre_soma.z - post_soma.z;
+                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                        let mut pre = Point3 {
+                            x: pre_soma.x - dx * 0.5,
+                            y: pre_soma.y - dy * 0.5,
+                            z: pre_soma.z - dz * 0.5,
+                        };
+                        let mut post = Point3 {
+                            x: post_soma.x + dx * 0.5,
+                            y: post_soma.y + dy * 0.5,
+                            z: post_soma.z + dz * 0.5,
+                        };
+                        pre = ensure_unique_point(pre, ((j as u64) << 20) ^ (k as u64) ^ 0x41);
+                        post = ensure_unique_point(post, ((j as u64) << 20) ^ (k as u64) ^ 0x42);
+                        m.synapses.push(Synapse {
+                            kind: SynKind::Out,
+                            pre_layer: out_l as isize,
+                            pre_id: j,
+                            post_layer: topo_layers.len() as isize,
+                            post_id: k,
+                            pre_site: pre,
+                            post_site: post,
+                            axon_seg_idx: None,
+                            dend_seg_idx: None,
+                            bend: None,
+                            weight: w,
+                            p_release: 1.0,
+                            delay_ms: to_delay(dist),
+                            stimuli: 1.0,
+                        });
+                    }
                 }
             }
-        }
         }
 
         // ------------------------------------------------------------------
@@ -1545,31 +2332,49 @@ impl Morphology {
                     SynKind::In => {
                         // post is in hidden layer 0
                         if s.post_layer >= 0 {
-                            let l = s.post_layer as usize; if l < incoming.len() && s.post_id < incoming[l].len() { incoming[l][s.post_id].push((s.post_site, si)); }
+                            let l = s.post_layer as usize;
+                            if l < incoming.len() && s.post_id < incoming[l].len() {
+                                incoming[l][s.post_id].push((s.post_site, si));
+                            }
                         }
                     }
                     SynKind::HiddenFwd => {
                         // pre: layer l, post: l+1
                         if s.pre_layer >= 0 {
-                            let lpre = s.pre_layer as usize; if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() { outgoing[lpre][s.pre_id].push((s.pre_site, si)); }
+                            let lpre = s.pre_layer as usize;
+                            if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() {
+                                outgoing[lpre][s.pre_id].push((s.pre_site, si));
+                            }
                         }
                         if s.post_layer >= 0 {
-                            let lpost = s.post_layer as usize; if lpost < incoming.len() && s.post_id < incoming[lpost].len() { incoming[lpost][s.post_id].push((s.post_site, si)); }
+                            let lpost = s.post_layer as usize;
+                            if lpost < incoming.len() && s.post_id < incoming[lpost].len() {
+                                incoming[lpost][s.post_id].push((s.post_site, si));
+                            }
                         }
                     }
                     SynKind::HiddenBwd | SynKind::HiddenRec => {
                         // pre: layer l+1 (Bwd) or l (Rec), post: l
                         if s.pre_layer >= 0 {
-                            let lpre = s.pre_layer as usize; if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() { outgoing[lpre][s.pre_id].push((s.pre_site, si)); }
+                            let lpre = s.pre_layer as usize;
+                            if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() {
+                                outgoing[lpre][s.pre_id].push((s.pre_site, si));
+                            }
                         }
                         if s.post_layer >= 0 {
-                            let lpost = s.post_layer as usize; if lpost < incoming.len() && s.post_id < incoming[lpost].len() { incoming[lpost][s.post_id].push((s.post_site, si)); }
+                            let lpost = s.post_layer as usize;
+                            if lpost < incoming.len() && s.post_id < incoming[lpost].len() {
+                                incoming[lpost][s.post_id].push((s.post_site, si));
+                            }
                         }
                     }
                     SynKind::Out => {
                         // pre is last hidden layer neuron
                         if s.pre_layer >= 0 {
-                            let lpre = s.pre_layer as usize; if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() { outgoing[lpre][s.pre_id].push((s.pre_site, si)); }
+                            let lpre = s.pre_layer as usize;
+                            if lpre < outgoing.len() && s.pre_id < outgoing[lpre].len() {
+                                outgoing[lpre][s.pre_id].push((s.pre_site, si));
+                            }
                         }
                     }
                 }
@@ -1578,12 +2383,22 @@ impl Morphology {
             for l in 0..topo_layers.len() {
                 let nodes = &topo_layers[l];
                 for j in 0..nodes.len() {
-                    let soma = Point3{ x: nodes[j].x, y: nodes[j].y, z: nodes[j].z };
+                    let soma = Point3 {
+                        x: nodes[j].x,
+                        y: nodes[j].y,
+                        z: nodes[j].z,
+                    };
                     // Axon: keep first small segment as trunk to hillock if exists; else create a tiny one
                     let hillock = {
                         let mut base = if let Some(ax) = m.axons.get(l).and_then(|v| v.get(j)) {
-                            if let Some(seg0) = ax.segments.get(0) { seg0.to } else { soma }
-                        } else { soma };
+                            if let Some(seg0) = ax.segments.get(0) {
+                                seg0.to
+                            } else {
+                                soma
+                            }
+                        } else {
+                            soma
+                        };
                         // ensure uniqueness (reuse seed scheme)
                         let seed = ((l as u64) << 32) ^ (j as u64) ^ 0xA1A2A3A4;
                         base = ensure_unique_point(base, seed);
@@ -1591,22 +2406,49 @@ impl Morphology {
                     };
                     let mut ax_segments: Vec<AxonSeg> = Vec::new();
                     if hillock.x != soma.x || hillock.y != soma.y || hillock.z != soma.z {
-                        let dx = hillock.x - soma.x; let dy = hillock.y - soma.y; let dz = hillock.z - soma.z;
-                        let len = (dx*dx+dy*dy+dz*dz).sqrt();
-                        ax_segments.push(AxonSeg{ from: soma, to: hillock, length: len, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
+                        let dx = hillock.x - soma.x;
+                        let dy = hillock.y - soma.y;
+                        let dz = hillock.z - soma.z;
+                        let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                        ax_segments.push(AxonSeg {
+                            from: soma,
+                            to: hillock,
+                            length: len,
+                            stimuli: 1.0,
+                            parent_idx: None,
+                            syn_index: None,
+                            is_trunk: true,
+                        });
                     }
                     for (k, &(p, si)) in outgoing[l][j].iter().enumerate() {
                         // connect hillock to each pre_site
                         let mut endp = p;
-                        let seed = ((l as u64) << 40) ^ ((j as u64) << 20) ^ (k as u64) ^ 0xA55A5AA5;
+                        let seed =
+                            ((l as u64) << 40) ^ ((j as u64) << 20) ^ (k as u64) ^ 0xA55A5AA5;
                         endp = ensure_unique_point(endp, seed);
-                        let dx = endp.x - hillock.x; let dy = endp.y - hillock.y; let dz = endp.z - hillock.z;
-                        let len = (dx*dx+dy*dy+dz*dz).sqrt();
+                        let dx = endp.x - hillock.x;
+                        let dy = endp.y - hillock.y;
+                        let dz = endp.z - hillock.z;
+                        let len = (dx * dx + dy * dy + dz * dz).sqrt();
                         let asi = ax_segments.len();
-                        ax_segments.push(AxonSeg{ from: hillock, to: endp, length: len, stimuli: 1.0, parent_idx: Some(0), syn_index: Some(si), is_trunk: false });
-                        if si < m.synapses.len() { m.synapses[si].axon_seg_idx = Some(asi); }
+                        ax_segments.push(AxonSeg {
+                            from: hillock,
+                            to: endp,
+                            length: len,
+                            stimuli: 1.0,
+                            parent_idx: Some(0),
+                            syn_index: Some(si),
+                            is_trunk: false,
+                        });
+                        if si < m.synapses.len() {
+                            m.synapses[si].axon_seg_idx = Some(asi);
+                        }
                     }
-                    if let Some(layer_axons) = m.axons.get_mut(l) { if let Some(ax) = layer_axons.get_mut(j) { ax.segments = ax_segments; } }
+                    if let Some(layer_axons) = m.axons.get_mut(l) {
+                        if let Some(ax) = layer_axons.get_mut(j) {
+                            ax.segments = ax_segments;
+                        }
+                    }
 
                     // Dendrites: pick a consolidation hub slightly away from soma toward centroid of incoming sites
                     let dend_branches = {
@@ -1616,31 +2458,81 @@ impl Morphology {
                             // Distribute incoming sites among multiple trunks (e.g. 2)
                             let num_trunks = 2;
                             for trunk_i in 0..num_trunks {
-                                let group: Vec<_> = pts.iter().enumerate().filter(|(k, _)| k % num_trunks == trunk_i).map(|(_, p)| p).collect();
-                                if group.is_empty() { continue; }
-                                
-                                let mut cx = 0.0; let mut cy = 0.0; let mut cz = 0.0;
-                                for &(p, _) in &group { cx += p.x; cy += p.y; cz += p.z; }
+                                let group: Vec<_> = pts
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(k, _)| k % num_trunks == trunk_i)
+                                    .map(|(_, p)| p)
+                                    .collect();
+                                if group.is_empty() {
+                                    continue;
+                                }
+
+                                let mut cx = 0.0;
+                                let mut cy = 0.0;
+                                let mut cz = 0.0;
+                                for &(p, _) in &group {
+                                    cx += p.x;
+                                    cy += p.y;
+                                    cz += p.z;
+                                }
                                 let invn = 1.0f32 / (group.len() as f32);
-                                cx *= invn; cy *= invn; cz *= invn;
-                                
+                                cx *= invn;
+                                cy *= invn;
+                                cz *= invn;
+
                                 // Hub between soma and centroid
                                 let alpha = 0.35f32;
-                                let mut hub = Point3{ x: soma.x*(1.0-alpha) + cx*alpha, y: soma.y*(1.0-alpha) + cy*alpha, z: soma.z*(1.0-alpha) + cz*alpha };
-                                hub = ensure_unique_point(hub, ((l as u64) << 32) ^ (j as u64) ^ 0xBEEFABCD ^ (trunk_i as u64));
-                                
+                                let mut hub = Point3 {
+                                    x: soma.x * (1.0 - alpha) + cx * alpha,
+                                    y: soma.y * (1.0 - alpha) + cy * alpha,
+                                    z: soma.z * (1.0 - alpha) + cz * alpha,
+                                };
+                                hub = ensure_unique_point(
+                                    hub,
+                                    ((l as u64) << 32) ^ (j as u64) ^ 0xBEEFABCD ^ (trunk_i as u64),
+                                );
+
                                 let trunk_idx = branches.len();
-                                let dx = soma.x - hub.x; let dy = soma.y - hub.y; let dz = soma.z - hub.z; let len = (dx*dx+dy*dy+dz*dz).sqrt();
-                                branches.push(DendSeg{ from: hub, to: soma, length: len, stimuli: 1.0, parent_idx: None, syn_index: None, is_trunk: true });
-                                
+                                let dx = soma.x - hub.x;
+                                let dy = soma.y - hub.y;
+                                let dz = soma.z - hub.z;
+                                let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                                branches.push(DendSeg {
+                                    from: hub,
+                                    to: soma,
+                                    length: len,
+                                    stimuli: 1.0,
+                                    parent_idx: None,
+                                    syn_index: None,
+                                    is_trunk: true,
+                                });
+
                                 for (k, &&(p, si)) in group.iter().enumerate() {
                                     let mut start = p;
-                                    let seed = ((l as u64) << 40) ^ ((j as u64) << 20) ^ (k as u64) ^ 0xB55B5BB5 ^ (trunk_i as u64);
+                                    let seed = ((l as u64) << 40)
+                                        ^ ((j as u64) << 20)
+                                        ^ (k as u64)
+                                        ^ 0xB55B5BB5
+                                        ^ (trunk_i as u64);
                                     start = ensure_unique_point(start, seed);
-                                    let dx = hub.x - start.x; let dy = hub.y - start.y; let dz = hub.z - start.z; let len = (dx*dx+dy*dy+dz*dz).sqrt();
+                                    let dx = hub.x - start.x;
+                                    let dy = hub.y - start.y;
+                                    let dz = hub.z - start.z;
+                                    let len = (dx * dx + dy * dy + dz * dz).sqrt();
                                     let dsi = branches.len();
-                                    branches.push(DendSeg{ from: start, to: hub, length: len, stimuli: 1.0, parent_idx: Some(trunk_idx), syn_index: Some(si), is_trunk: false });
-                                    if si < m.synapses.len() { m.synapses[si].dend_seg_idx = Some(dsi); }
+                                    branches.push(DendSeg {
+                                        from: start,
+                                        to: hub,
+                                        length: len,
+                                        stimuli: 1.0,
+                                        parent_idx: Some(trunk_idx),
+                                        syn_index: Some(si),
+                                        is_trunk: false,
+                                    });
+                                    if si < m.synapses.len() {
+                                        m.synapses[si].dend_seg_idx = Some(dsi);
+                                    }
                                 }
                             }
                         } else {
@@ -1651,7 +2543,11 @@ impl Morphology {
                         }
                         branches
                     };
-                    if let Some(layer_dends) = m.dendrites.get_mut(l) { if let Some(d) = layer_dends.get_mut(j) { d.tree.branches = dend_branches; } }
+                    if let Some(layer_dends) = m.dendrites.get_mut(l) {
+                        if let Some(d) = layer_dends.get_mut(j) {
+                            d.tree.branches = dend_branches;
+                        }
+                    }
                 }
             }
         }
@@ -1669,55 +2565,78 @@ impl Morphology {
             #[cfg(feature = "parallel")]
             if n_syn > 128 {
                 let syn_ptr = m.synapses.as_ptr() as usize;
-                m.synapses.par_iter_mut().enumerate().for_each(|(i, syn_i)| {
-                    // Safety: We access other synapses as read-only.
-                    // This is safe because Rayon ensures syn_i is unique.
-                    let other_syns = unsafe { std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn) };
-                    
-                    let a0 = syn_i.pre_site;
-                    let a1 = syn_i.post_site;
-                    
-                    for j in 0..n_syn {
-                        if i == j { continue; }
-                        let b0 = other_syns[j].pre_site;
-                        let b1 = other_syns[j].post_site;
-                        
-                        if !aabb_overlap(&a0, &a1, &b0, &b1, eps) { continue; }
-                        let dist2 = seg_seg_min_dist_sq(a0, a1, b0, b1);
-                        if dist2 < eps2 || near_colinear_overlap(a0, a1, b0, b1) {
-                            let seed = ((syn_i.pre_id as u64) << 20) ^ (syn_i.post_id as u64) ^ (i as u64) ^ 0x55AACC55;
-                            let (jx, jy) = jitter2(seed);
-                            let mut fixed = false;
-                            for t in 1..=max_tries {
-                                let dz = jy * (synapse_offset * 0.25) * (t as f32 / max_tries as f32);
-                                let dx = jx * (synapse_offset * 0.12) * (t as f32 / max_tries as f32);
-                                let dy = jy * (synapse_offset * 0.12) * (t as f32 / max_tries as f32);
-                                let mut new_post = syn_i.post_site;
-                                new_post.z = (new_post.z + dz).clamp(-1.0, 1.0);
-                                new_post.x = (new_post.x + dx).clamp(-1.0, 1.0);
-                                new_post.y = (new_post.y + dy).clamp(-1.0, 1.0);
-                                let nd2 = seg_seg_min_dist_sq(a0, new_post, b0, b1);
-                                if nd2 >= eps2 {
-                                    syn_i.post_site = new_post;
-                                    fixed = true;
-                                    break;
+                m.synapses
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, syn_i)| {
+                        // Safety: We access other synapses as read-only.
+                        // This is safe because Rayon ensures syn_i is unique.
+                        let other_syns =
+                            unsafe { std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn) };
+
+                        let a0 = syn_i.pre_site;
+                        let a1 = syn_i.post_site;
+
+                        for j in 0..n_syn {
+                            if i == j {
+                                continue;
+                            }
+                            let b0 = other_syns[j].pre_site;
+                            let b1 = other_syns[j].post_site;
+
+                            if !aabb_overlap(&a0, &a1, &b0, &b1, eps) {
+                                continue;
+                            }
+                            let dist2 = seg_seg_min_dist_sq(a0, a1, b0, b1);
+                            if dist2 < eps2 || near_colinear_overlap(a0, a1, b0, b1) {
+                                let seed = ((syn_i.pre_id as u64) << 20)
+                                    ^ (syn_i.post_id as u64)
+                                    ^ (i as u64)
+                                    ^ 0x55AACC55;
+                                let (jx, jy) = jitter2(seed);
+                                let mut fixed = false;
+                                for t in 1..=max_tries {
+                                    let dz = jy
+                                        * (synapse_offset * 0.25)
+                                        * (t as f32 / max_tries as f32);
+                                    let dx = jx
+                                        * (synapse_offset * 0.12)
+                                        * (t as f32 / max_tries as f32);
+                                    let dy = jy
+                                        * (synapse_offset * 0.12)
+                                        * (t as f32 / max_tries as f32);
+                                    let mut new_post = syn_i.post_site;
+                                    new_post.z = (new_post.z + dz).clamp(-1.0, 1.0);
+                                    new_post.x = (new_post.x + dx).clamp(-1.0, 1.0);
+                                    new_post.y = (new_post.y + dy).clamp(-1.0, 1.0);
+                                    let nd2 = seg_seg_min_dist_sq(a0, new_post, b0, b1);
+                                    if nd2 >= eps2 {
+                                        syn_i.post_site = new_post;
+                                        fixed = true;
+                                        break;
+                                    }
+                                }
+                                if !fixed && use_mid_bends {
+                                    let seed2 = ((other_syns[j].pre_id as u64) << 20)
+                                        ^ (other_syns[j].post_id as u64)
+                                        ^ (j as u64)
+                                        ^ 0xAA55AA55;
+                                    let (jx2, jy2) = jitter2(seed2);
+                                    let mid = Point3 {
+                                        x: (a0.x + a1.x) * 0.5 + jx2 * synapse_offset * 0.25,
+                                        y: (a0.y + a1.y) * 0.5 + jy2 * synapse_offset * 0.25,
+                                        z: (a0.z + a1.z) * 0.5 + jy * synapse_offset * 0.2,
+                                    };
+                                    // accept bend if it improves separation against segment j
+                                    let nd1 = seg_seg_min_dist_sq(a0, mid, b0, b1)
+                                        .min(seg_seg_min_dist_sq(mid, a1, b0, b1));
+                                    if nd1 > dist2 {
+                                        syn_i.bend = Some(mid);
+                                    }
                                 }
                             }
-                            if !fixed && use_mid_bends {
-                                let seed2 = ((other_syns[j].pre_id as u64) << 20) ^ (other_syns[j].post_id as u64) ^ (j as u64) ^ 0xAA55AA55;
-                                let (jx2, jy2) = jitter2(seed2);
-                                let mid = Point3 {
-                                    x: (a0.x + a1.x) * 0.5 + jx2 * synapse_offset * 0.25,
-                                    y: (a0.y + a1.y) * 0.5 + jy2 * synapse_offset * 0.25,
-                                    z: (a0.z + a1.z) * 0.5 + jy * synapse_offset * 0.2,
-                                };
-                                // accept bend if it improves separation against segment j
-                                let nd1 = seg_seg_min_dist_sq(a0, mid, b0, b1).min(seg_seg_min_dist_sq(mid, a1, b0, b1));
-                                if nd1 > dist2 { syn_i.bend = Some(mid); }
-                            }
                         }
-                    }
-                });
+                    });
             }
 
             #[cfg(not(feature = "parallel"))]
@@ -1727,10 +2646,14 @@ impl Morphology {
                     let a1 = m.synapses[i].post_site;
                     let b0 = m.synapses[j].pre_site;
                     let b1 = m.synapses[j].post_site;
-                    if !aabb_overlap(&a0, &a1, &b0, &b1, eps) { continue; }
+                    if !aabb_overlap(&a0, &a1, &b0, &b1, eps) {
+                        continue;
+                    }
                     let dist2 = seg_seg_min_dist_sq(a0, a1, b0, b1);
                     if dist2 < eps2 || near_colinear_overlap(a0, a1, b0, b1) {
-                        let seed = ((m.synapses[i].pre_id as u64) << 20) ^ (m.synapses[i].post_id as u64) ^ 0x55AACC55;
+                        let seed = ((m.synapses[i].pre_id as u64) << 20)
+                            ^ (m.synapses[i].post_id as u64)
+                            ^ 0x55AACC55;
                         let (jx, jy) = jitter2(seed);
                         let mut fixed = false;
                         for t in 1..=max_tries {
@@ -1749,15 +2672,20 @@ impl Morphology {
                             }
                         }
                         if !fixed && use_mid_bends {
-                            let seed2 = ((m.synapses[j].pre_id as u64) << 20) ^ (m.synapses[j].post_id as u64) ^ 0xAA55AA55;
+                            let seed2 = ((m.synapses[j].pre_id as u64) << 20)
+                                ^ (m.synapses[j].post_id as u64)
+                                ^ 0xAA55AA55;
                             let (jx2, jy2) = jitter2(seed2);
                             let mid = Point3 {
                                 x: (a0.x + a1.x) * 0.5 + jx2 * synapse_offset * 0.25,
                                 y: (a0.y + a1.y) * 0.5 + jy2 * synapse_offset * 0.25,
                                 z: (a0.z + a1.z) * 0.5 + jy * synapse_offset * 0.2,
                             };
-                            let nd1 = seg_seg_min_dist_sq(a0, mid, b0, b1).min(seg_seg_min_dist_sq(mid, a1, b0, b1));
-                            if nd1 > dist2 { m.synapses[i].bend = Some(mid); }
+                            let nd1 = seg_seg_min_dist_sq(a0, mid, b0, b1)
+                                .min(seg_seg_min_dist_sq(mid, a1, b0, b1));
+                            if nd1 > dist2 {
+                                m.synapses[i].bend = Some(mid);
+                            }
                         }
                     }
                 }
@@ -1771,76 +2699,108 @@ impl Morphology {
                     #[cfg(feature = "parallel")]
                     if n_syn > 128 {
                         let syn_ptr = m.synapses.as_ptr() as usize;
-                        let displacements: Vec<(Point3, Point3)> = m.synapses.par_iter().enumerate().map(|(a, syn_a)| {
-                            let mut disp_pre = Point3::default();
-                            let mut disp_post = Point3::default();
-                            let other_syns = unsafe { std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn) };
-                            
-                            for b in 0..n_syn {
-                                if a == b { continue; }
-                                let syn_b = &other_syns[b];
-                                
-                                // Pre sites
-                                let dx = syn_a.pre_site.x - syn_b.pre_site.x;
-                                let dy = syn_a.pre_site.y - syn_b.pre_site.y;
-                                let dz = syn_a.pre_site.z - syn_b.pre_site.z;
-                                let d2 = dx*dx + dy*dy + dz*dz;
-                                if d2 < eps_pt*eps_pt {
-                                    let d = d2.sqrt().max(1e-6);
-                                    let disp = step * 0.5;
-                                    disp_pre.x += (dx / d) * disp;
-                                    disp_pre.y += (dy / d) * disp;
-                                    disp_pre.z += (dz / d) * disp;
+                        let displacements: Vec<(Point3, Point3)> = m
+                            .synapses
+                            .par_iter()
+                            .enumerate()
+                            .map(|(a, syn_a)| {
+                                let mut disp_pre = Point3::default();
+                                let mut disp_post = Point3::default();
+                                let other_syns = unsafe {
+                                    std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn)
+                                };
+
+                                for b in 0..n_syn {
+                                    if a == b {
+                                        continue;
+                                    }
+                                    let syn_b = &other_syns[b];
+
+                                    // Pre sites
+                                    let dx = syn_a.pre_site.x - syn_b.pre_site.x;
+                                    let dy = syn_a.pre_site.y - syn_b.pre_site.y;
+                                    let dz = syn_a.pre_site.z - syn_b.pre_site.z;
+                                    let d2 = dx * dx + dy * dy + dz * dz;
+                                    if d2 < eps_pt * eps_pt {
+                                        let d = d2.sqrt().max(1e-6);
+                                        let disp = step * 0.5;
+                                        disp_pre.x += (dx / d) * disp;
+                                        disp_pre.y += (dy / d) * disp;
+                                        disp_pre.z += (dz / d) * disp;
+                                    }
+
+                                    // Post sites
+                                    let dx = syn_a.post_site.x - syn_b.post_site.x;
+                                    let dy = syn_a.post_site.y - syn_b.post_site.y;
+                                    let dz = syn_a.post_site.z - syn_b.post_site.z;
+                                    let d2 = dx * dx + dy * dy + dz * dz;
+                                    if d2 < eps_pt * eps_pt {
+                                        let d = d2.sqrt().max(1e-6);
+                                        let disp = step * 0.5;
+                                        disp_post.x += (dx / d) * disp;
+                                        disp_post.y += (dy / d) * disp;
+                                        disp_post.z += (dz / d) * disp;
+                                    }
                                 }
-                                
-                                // Post sites
-                                let dx = syn_a.post_site.x - syn_b.post_site.x;
-                                let dy = syn_a.post_site.y - syn_b.post_site.y;
-                                let dz = syn_a.post_site.z - syn_b.post_site.z;
-                                let d2 = dx*dx + dy*dy + dz*dz;
-                                if d2 < eps_pt*eps_pt {
-                                    let d = d2.sqrt().max(1e-6);
-                                    let disp = step * 0.5;
-                                    disp_post.x += (dx / d) * disp;
-                                    disp_post.y += (dy / d) * disp;
-                                    disp_post.z += (dz / d) * disp;
-                                }
-                            }
-                            (disp_pre, disp_post)
-                        }).collect();
-                        
-                        m.synapses.iter_mut().zip(displacements.into_iter()).for_each(|(syn, disp)| {
-                            syn.pre_site.x = (syn.pre_site.x + disp.0.x).clamp(-1.0, 1.0);
-                            syn.pre_site.y = (syn.pre_site.y + disp.0.y).clamp(-1.0, 1.0);
-                            syn.pre_site.z = (syn.pre_site.z + disp.0.z).clamp(-1.0, 1.0);
-                            syn.post_site.x = (syn.post_site.x + disp.1.x).clamp(-1.0, 1.0);
-                            syn.post_site.y = (syn.post_site.y + disp.1.y).clamp(-1.0, 1.0);
-                            syn.post_site.z = (syn.post_site.z + disp.1.z).clamp(-1.0, 1.0);
-                        });
+                                (disp_pre, disp_post)
+                            })
+                            .collect();
+
+                        m.synapses
+                            .iter_mut()
+                            .zip(displacements.into_iter())
+                            .for_each(|(syn, disp)| {
+                                syn.pre_site.x = (syn.pre_site.x + disp.0.x).clamp(-1.0, 1.0);
+                                syn.pre_site.y = (syn.pre_site.y + disp.0.y).clamp(-1.0, 1.0);
+                                syn.pre_site.z = (syn.pre_site.z + disp.0.z).clamp(-1.0, 1.0);
+                                syn.post_site.x = (syn.post_site.x + disp.1.x).clamp(-1.0, 1.0);
+                                syn.post_site.y = (syn.post_site.y + disp.1.y).clamp(-1.0, 1.0);
+                                syn.post_site.z = (syn.post_site.z + disp.1.z).clamp(-1.0, 1.0);
+                            });
                         continue;
                     }
 
                     for a in 0..m.synapses.len() {
-                        for b in (a+1)..m.synapses.len() {
+                        for b in (a + 1)..m.synapses.len() {
                             let pairs = [
                                 (m.synapses[a].pre_site, m.synapses[b].pre_site, true),
                                 (m.synapses[a].post_site, m.synapses[b].post_site, false),
                             ];
                             for (pa, pb, is_pre) in pairs {
-                                let dx = pa.x - pb.x; let dy = pa.y - pb.y; let dz = pa.z - pb.z;
-                                let d2 = dx*dx + dy*dy + dz*dz;
-                                if d2 > eps_pt*eps_pt { continue; }
+                                let dx = pa.x - pb.x;
+                                let dy = pa.y - pb.y;
+                                let dz = pa.z - pb.z;
+                                let d2 = dx * dx + dy * dy + dz * dz;
+                                if d2 > eps_pt * eps_pt {
+                                    continue;
+                                }
                                 let d = d2.sqrt().max(1e-6);
-                                let ux = dx / d; let uy = dy / d; let uz = dz / d;
+                                let ux = dx / d;
+                                let uy = dy / d;
+                                let uz = dz / d;
                                 let disp = step * 0.5;
                                 if is_pre {
-                                    let mut va = m.synapses[a].pre_site; va.x = (va.x + ux*disp).clamp(-1.0,1.0); va.y = (va.y + uy*disp).clamp(-1.0,1.0); va.z = (va.z + uz*disp).clamp(-1.0,1.0);
-                                    let mut vb = m.synapses[b].pre_site; vb.x = (vb.x - ux*disp).clamp(-1.0,1.0); vb.y = (vb.y - uy*disp).clamp(-1.0,1.0); vb.z = (vb.z - uz*disp).clamp(-1.0,1.0);
-                                    m.synapses[a].pre_site = va; m.synapses[b].pre_site = vb;
+                                    let mut va = m.synapses[a].pre_site;
+                                    va.x = (va.x + ux * disp).clamp(-1.0, 1.0);
+                                    va.y = (va.y + uy * disp).clamp(-1.0, 1.0);
+                                    va.z = (va.z + uz * disp).clamp(-1.0, 1.0);
+                                    let mut vb = m.synapses[b].pre_site;
+                                    vb.x = (vb.x - ux * disp).clamp(-1.0, 1.0);
+                                    vb.y = (vb.y - uy * disp).clamp(-1.0, 1.0);
+                                    vb.z = (vb.z - uz * disp).clamp(-1.0, 1.0);
+                                    m.synapses[a].pre_site = va;
+                                    m.synapses[b].pre_site = vb;
                                 } else {
-                                    let mut va = m.synapses[a].post_site; va.x = (va.x + ux*disp).clamp(-1.0,1.0); va.y = (va.y + uy*disp).clamp(-1.0,1.0); va.z = (va.z + uz*disp).clamp(-1.0,1.0);
-                                    let mut vb = m.synapses[b].post_site; vb.x = (vb.x - ux*disp).clamp(-1.0,1.0); vb.y = (vb.y - uy*disp).clamp(-1.0,1.0); vb.z = (vb.z - uz*disp).clamp(-1.0,1.0);
-                                    m.synapses[a].post_site = va; m.synapses[b].post_site = vb;
+                                    let mut va = m.synapses[a].post_site;
+                                    va.x = (va.x + ux * disp).clamp(-1.0, 1.0);
+                                    va.y = (va.y + uy * disp).clamp(-1.0, 1.0);
+                                    va.z = (va.z + uz * disp).clamp(-1.0, 1.0);
+                                    let mut vb = m.synapses[b].post_site;
+                                    vb.x = (vb.x - ux * disp).clamp(-1.0, 1.0);
+                                    vb.y = (vb.y - uy * disp).clamp(-1.0, 1.0);
+                                    vb.z = (vb.z - uz * disp).clamp(-1.0, 1.0);
+                                    m.synapses[a].post_site = va;
+                                    m.synapses[b].post_site = vb;
                                 }
                             }
                         }
@@ -1862,7 +2822,9 @@ impl Morphology {
         // Spot-check some synapse endpoints
         for s in self.synapses.iter().take(8) {
             match s.kind {
-                SynKind::In => { assert!(s.post_layer >= 0 && (s.post_layer as usize) < l_topo); }
+                SynKind::In => {
+                    assert!(s.post_layer >= 0 && (s.post_layer as usize) < l_topo);
+                }
                 SynKind::HiddenFwd => {
                     assert!(s.pre_layer >= 0 && (s.pre_layer as usize) < l_topo);
                     assert!(s.post_layer >= 0 && (s.post_layer as usize) < l_topo);
@@ -1883,7 +2845,7 @@ impl Morphology {
         let cs = cell_size.max(0.01);
         let dim = (2.0 / cs).ceil() as usize;
         let num_cells = dim * dim * dim;
-        
+
         let mut entities: Vec<GridEntity> = Vec::with_capacity(self.synapses.len() * 2);
 
         // Helper to collect all points first (skip out-of-bounds)
@@ -1895,7 +2857,9 @@ impl Morphology {
         };
 
         // 1. Synapses
-        for syn in &self.synapses { add_entity(syn.post_site, syn.stimuli as f32); }
+        for syn in &self.synapses {
+            add_entity(syn.post_site, syn.stimuli as f32);
+        }
 
         // 2. Axon Boutons
         for layer in &self.axons {
@@ -1949,7 +2913,8 @@ impl Morphology {
         }
 
         // Decide between uniform grid and octree based on density.
-        let use_octree = num_cells > 2_000_000 || (entities.len() > 512 && num_cells > entities.len().saturating_mul(64));
+        let use_octree = num_cells > 2_000_000
+            || (entities.len() > 512 && num_cells > entities.len().saturating_mul(64));
 
         if use_octree {
             self.spatial_index = Some(SpatialIndex::Octree(OctreeIndex::build(entities, cs)));
@@ -1961,7 +2926,13 @@ impl Morphology {
             let gx = ((entity.pos.x + 1.0) / cs).floor() as isize;
             let gy = ((entity.pos.y + 1.0) / cs).floor() as isize;
             let gz = ((entity.pos.z + 1.0) / cs).floor() as isize;
-            if gx >= 0 && gx < dim as isize && gy >= 0 && gy < dim as isize && gz >= 0 && gz < dim as isize {
+            if gx >= 0
+                && gx < dim as isize
+                && gy >= 0
+                && gy < dim as isize
+                && gz >= 0
+                && gz < dim as isize
+            {
                 let key = (gx as usize * dim + gy as usize) * dim + gz as usize;
                 raw_entities.push((key, entity));
             }
@@ -1972,7 +2943,7 @@ impl Morphology {
 
         let mut sorted_entities = Vec::with_capacity(raw_entities.len());
         let mut cell_starts = vec![0u32; num_cells + 1];
-        
+
         let mut current_key = 0usize;
         for (key, entity) in raw_entities {
             while current_key < key {
@@ -1986,14 +2957,19 @@ impl Morphology {
             cell_starts[current_key] = sorted_entities.len() as u32;
         }
 
-        self.spatial_index = Some(SpatialIndex::Grid(SpatialGrid { entities: sorted_entities, cell_starts, dim, cell_size: cs }));
+        self.spatial_index = Some(SpatialIndex::Grid(SpatialGrid {
+            entities: sorted_entities,
+            cell_starts,
+            dim,
+            cell_size: cs,
+        }));
     }
 
     /// Calculate synaptic energy density at point `p`.
     pub fn energy_at(&self, p: Point3, radius: f32, k: f32) -> f32 {
         let r2 = radius * radius;
         let mut total = 0.0;
-        
+
         if let Some(ref index) = self.spatial_index {
             match index {
                 SpatialIndex::Grid(grid) => {
@@ -2001,12 +2977,14 @@ impl Morphology {
                     let gx = ((p.x + 1.0) / cs).floor() as isize;
                     let gy = ((p.y + 1.0) / cs).floor() as isize;
                     let gz = ((p.z + 1.0) / cs).floor() as isize;
-                    
+
                     let r_cells = (radius / cs).ceil() as isize;
                     for dx in -r_cells..=r_cells {
                         for dy in -r_cells..=r_cells {
                             for dz in -r_cells..=r_cells {
-                                if let Some(key) = grid.get_key_from_indices(gx + dx, gy + dy, gz + dz) {
+                                if let Some(key) =
+                                    grid.get_key_from_indices(gx + dx, gy + dy, gz + dz)
+                                {
                                     for entity in grid.cell_entities(key) {
                                         let d2 = p.dist_sq(entity.pos);
                                         if d2 < r2 {
@@ -2027,7 +3005,9 @@ impl Morphology {
             // Unoptimized fallback if grid not present
             for syn in &self.synapses {
                 let d2 = p.dist_sq(syn.post_site);
-                if d2 < r2 { total += syn.stimuli as f32 / (1.0 + k * d2); }
+                if d2 < r2 {
+                    total += syn.stimuli as f32 / (1.0 + k * d2);
+                }
             }
         }
 
@@ -2036,8 +3016,14 @@ impl Morphology {
             let dx = p.x - skull.center.x;
             let dy = p.y - skull.center.y;
             let dz = p.z - skull.center.z;
-            let (rx, ry, rz) = skull.radii.unwrap_or_else(|| (skull.radius.max(1e-4), skull.radius.max(1e-4), skull.radius.max(1e-4)));
-            let q2 = (dx*dx)/(rx*rx) + (dy*dy)/(ry*ry) + (dz*dz)/(rz*rz);
+            let (rx, ry, rz) = skull.radii.unwrap_or_else(|| {
+                (
+                    skull.radius.max(1e-4),
+                    skull.radius.max(1e-4),
+                    skull.radius.max(1e-4),
+                )
+            });
+            let q2 = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz);
             if q2 < 1.0 {
                 // Higher ambient energy towards the center, fluctuating
                 total += skull.energy_fluctuation * (1.0 - q2.sqrt());
@@ -2091,12 +3077,18 @@ impl Morphology {
                 }
             }
             if let Some(skull) = &self.skull_membrane {
-                let (rx, ry, rz) =
-                    skull.radii.unwrap_or_else(|| (skull.radius.max(1.0e-4), skull.radius.max(1.0e-4), skull.radius.max(1.0e-4)));
+                let (rx, ry, rz) = skull.radii.unwrap_or_else(|| {
+                    (
+                        skull.radius.max(1.0e-4),
+                        skull.radius.max(1.0e-4),
+                        skull.radius.max(1.0e-4),
+                    )
+                });
                 let dx = cand.x - skull.center.x;
                 let dy = cand.y - skull.center.y;
                 let dz = cand.z - skull.center.z;
-                let q = ((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz)).sqrt();
+                let q =
+                    ((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz)).sqrt();
                 if q > 1.0 {
                     // Keep growth inside membrane; outside points are heavily disfavored.
                     score -= (q - 1.0) * 5.0;
@@ -2111,10 +3103,19 @@ impl Morphology {
         best_p
     }
 
-    pub fn apply_spatial_forces(&mut self, config: &crate::config::NetworkConfig, is_aarnn: bool, dt: f32) {
+    pub fn apply_spatial_forces(
+        &mut self,
+        config: &crate::config::NetworkConfig,
+        is_aarnn: bool,
+        dt: f32,
+    ) {
         observe_time!("morphology/spatial_forces");
         let min_sep = config.min_node_sep.max(0.0);
-        let repulsion_strength = if min_sep > 0.0 { config.spatial_repulsion_strength * dt } else { 0.0 };
+        let repulsion_strength = if min_sep > 0.0 {
+            config.spatial_repulsion_strength * dt
+        } else {
+            0.0
+        };
         let clumping_strength = config.spatial_clumping_strength * dt;
         let column_strength = if is_aarnn && config.columnar_enabled {
             config.columnar_strength * dt
@@ -2123,7 +3124,9 @@ impl Morphology {
         };
         let column_spacing = config.columnar_spacing.max(0.01);
         let column_jitter = config.columnar_jitter.clamp(0.0, 1.0);
-        if repulsion_strength <= 0.0 && clumping_strength <= 0.0 && column_strength <= 0.0 { return; }
+        if repulsion_strength <= 0.0 && clumping_strength <= 0.0 && column_strength <= 0.0 {
+            return;
+        }
 
         // Calculate center of mass for hidden neurons to pull everything together
         let mut hidden_center = Point3::default();
@@ -2147,10 +3150,16 @@ impl Morphology {
                 all_soma_refs.push((l as isize, i));
             }
         }
-        for i in 0..self.sensory_somas.len() { all_soma_refs.push((-1, i)); }
-        for i in 0..self.output_somas.len() { all_soma_refs.push((-2, i)); }
+        for i in 0..self.sensory_somas.len() {
+            all_soma_refs.push((-1, i));
+        }
+        for i in 0..self.output_somas.len() {
+            all_soma_refs.push((-2, i));
+        }
 
-        if all_soma_refs.is_empty() { return; }
+        if all_soma_refs.is_empty() {
+            return;
+        }
 
         // Build a spatial grid for somas to optimize N^2 repulsion to O(N)
         let cs = min_sep.max(0.01);
@@ -2160,129 +3169,175 @@ impl Morphology {
             let gx = (p.x / cs).floor() as i64;
             let gy = (p.y / cs).floor() as i64;
             let gz = (p.z / cs).floor() as i64;
-            let key = (((gx + 1048576) & 0x1FFFFF) as u64) |
-                      ((((gy + 1048576) & 0x1FFFFF) as u64) << 21) |
-                      ((((gz + 1048576) & 0x1FFFFF) as u64) << 42);
+            let key = (((gx + 1048576) & 0x1FFFFF) as u64)
+                | ((((gy + 1048576) & 0x1FFFFF) as u64) << 21)
+                | ((((gz + 1048576) & 0x1FFFFF) as u64) << 42);
             grid.entry(key).or_default().push(idx);
         }
 
         // Parallelize displacement calculation
-        let displacements: Vec<Point3> = (0..all_soma_refs.len()).into_par_iter().map(|idx| {
-            let (l1, _i1) = all_soma_refs[idx];
-            let mut total_disp = Point3::default();
-            let p1 = self.get_soma_pos(all_soma_refs[idx].0, all_soma_refs[idx].1);
-            let center = self.skull_membrane.as_ref().map(|m| m.center).unwrap_or_default();
+        let displacements: Vec<Point3> = (0..all_soma_refs.len())
+            .into_par_iter()
+            .map(|idx| {
+                let (l1, _i1) = all_soma_refs[idx];
+                let mut total_disp = Point3::default();
+                let p1 = self.get_soma_pos(all_soma_refs[idx].0, all_soma_refs[idx].1);
+                let center = self
+                    .skull_membrane
+                    .as_ref()
+                    .map(|m| m.center)
+                    .unwrap_or_default();
 
-            // A. Clumping:
-            // - Hidden: pull towards assigned brain region or hidden center of mass
-            // - AARNN Anchors: pull towards the base of the skull
-            if clumping_strength > 0.0 {
-                let mut clump_target = None;
-                let (rx, ry, _rz) = if let Some(m) = &self.skull_membrane {
-                    m.radii.unwrap_or((m.radius, m.radius, m.radius))
-                } else { (0.5, 0.5, 0.5) };
+                // A. Clumping:
+                // - Hidden: pull towards assigned brain region or hidden center of mass
+                // - AARNN Anchors: pull towards the base of the skull
+                if clumping_strength > 0.0 {
+                    let mut clump_target = None;
+                    let (rx, ry, _rz) = if let Some(m) = &self.skull_membrane {
+                        m.radii.unwrap_or((m.radius, m.radius, m.radius))
+                    } else {
+                        (0.5, 0.5, 0.5)
+                    };
 
-                if l1 >= 0 {
-                    let soma1 = &self.somas[l1 as usize][_i1];
-                    let mut found_region = false;
-                    if let Some(rname) = &soma1.region_name {
-                        if let Some(region) = config.brain_regions.iter().find(|r| &r.name == rname) {
-                            clump_target = Some(Point3 { x: region.center[0], y: region.center[1], z: region.center[2] });
-                            found_region = true;
+                    if l1 >= 0 {
+                        let soma1 = &self.somas[l1 as usize][_i1];
+                        let mut found_region = false;
+                        if let Some(rname) = &soma1.region_name {
+                            if let Some(region) =
+                                config.brain_regions.iter().find(|r| &r.name == rname)
+                            {
+                                clump_target = Some(Point3 {
+                                    x: region.center[0],
+                                    y: region.center[1],
+                                    z: region.center[2],
+                                });
+                                found_region = true;
+                            }
+                        }
+                        if !found_region {
+                            clump_target = Some(avg_hidden_center);
+                        }
+                        // Also add a small pull to center to keep the clump from drifting off-center
+                        // and ensure single neurons don't stay "anchored" if they started far away.
+                        // Now that center is tied to COM, this force primarily stabilizes outliers.
+                        let to_center = center.sub(p1);
+                        if to_center.mag() > 1e-6 {
+                            total_disp = total_disp.add(to_center.mul(clumping_strength * 0.1));
+                        }
+                    } else if is_aarnn {
+                        // Pull to base ports near the "base" of the hidden clump
+                        let base_x = if hidden_count > 0 {
+                            avg_hidden_center.x
+                        } else {
+                            center.x
+                        };
+                        let base_z = if hidden_count > 0 {
+                            avg_hidden_center.z
+                        } else {
+                            center.z
+                        };
+
+                        if l1 == -1 {
+                            // Sensory base: slightly to the left of the clump base, at the bottom
+                            clump_target = Some(Point3 {
+                                x: base_x - rx * 0.15,
+                                y: center.y - ry,
+                                z: base_z,
+                            });
+                        } else if l1 == -2 {
+                            // Output base: slightly to the right of the clump base, at the bottom
+                            clump_target = Some(Point3 {
+                                x: base_x + rx * 0.15,
+                                y: center.y - ry,
+                                z: base_z,
+                            });
                         }
                     }
-                    if !found_region {
-                        clump_target = Some(avg_hidden_center);
-                    }
-                    // Also add a small pull to center to keep the clump from drifting off-center
-                    // and ensure single neurons don't stay "anchored" if they started far away.
-                    // Now that center is tied to COM, this force primarily stabilizes outliers.
-                    let to_center = center.sub(p1);
-                    if to_center.mag() > 1e-6 {
-                        total_disp = total_disp.add(to_center.mul(clumping_strength * 0.1));
-                    }
-                } else if is_aarnn {
-                    // Pull to base ports near the "base" of the hidden clump
-                    let base_x = if hidden_count > 0 { avg_hidden_center.x } else { center.x };
-                    let base_z = if hidden_count > 0 { avg_hidden_center.z } else { center.z };
 
-                    if l1 == -1 {
-                        // Sensory base: slightly to the left of the clump base, at the bottom
-                        clump_target = Some(Point3 { x: base_x - rx * 0.15, y: center.y - ry, z: base_z });
-                    } else if l1 == -2 {
-                        // Output base: slightly to the right of the clump base, at the bottom
-                        clump_target = Some(Point3 { x: base_x + rx * 0.15, y: center.y - ry, z: base_z });
+                    if let Some(target) = clump_target {
+                        let diff = target.sub(p1);
+                        if diff.mag() > 1e-6 {
+                            total_disp = total_disp.add(diff.mul(clumping_strength));
+                        }
                     }
                 }
 
-                if let Some(target) = clump_target {
-                    let diff = target.sub(p1);
+                // B. Columnar organization (AARNN): pull hidden somas laterally toward nearest column center
+                if column_strength > 0.0 && l1 >= 0 {
+                    let origin = if hidden_count > 0 {
+                        avg_hidden_center
+                    } else {
+                        center
+                    };
+                    let dy = p1.y - origin.y;
+                    let dz = p1.z - origin.z;
+                    let col_y = (dy / column_spacing).round() as i32;
+                    let col_z = (dz / column_spacing).round() as i32;
+                    let mut cy = origin.y + (col_y as f32) * column_spacing;
+                    let mut cz = origin.z + (col_z as f32) * column_spacing;
+                    if column_jitter > 0.0 {
+                        let mut h = (col_y as i64).wrapping_mul(73856093)
+                            ^ (col_z as i64).wrapping_mul(19349663);
+                        if h == 0 {
+                            h = 1;
+                        }
+                        let mut x = h as u64;
+                        x ^= x >> 33;
+                        x = x.wrapping_mul(0xff51afd7ed558ccd);
+                        x ^= x >> 33;
+                        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+                        x ^= x >> 33;
+                        let j1 = ((x & 0xFFFF) as f32) / 32767.5 - 1.0;
+                        let j2 = (((x >> 16) & 0xFFFF) as f32) / 32767.5 - 1.0;
+                        let jitter = column_jitter * column_spacing * 0.35;
+                        cy = (cy + j1 * jitter).clamp(-1.0, 1.0);
+                        cz = (cz + j2 * jitter).clamp(-1.0, 1.0);
+                    }
+                    let diff = Point3 {
+                        x: 0.0,
+                        y: cy - p1.y,
+                        z: cz - p1.z,
+                    };
                     if diff.mag() > 1e-6 {
-                        total_disp = total_disp.add(diff.mul(clumping_strength));
+                        total_disp = total_disp.add(diff.mul(column_strength));
                     }
                 }
-            }
 
-            // B. Columnar organization (AARNN): pull hidden somas laterally toward nearest column center
-            if column_strength > 0.0 && l1 >= 0 {
-                let origin = if hidden_count > 0 { avg_hidden_center } else { center };
-                let dy = p1.y - origin.y;
-                let dz = p1.z - origin.z;
-                let col_y = (dy / column_spacing).round() as i32;
-                let col_z = (dz / column_spacing).round() as i32;
-                let mut cy = origin.y + (col_y as f32) * column_spacing;
-                let mut cz = origin.z + (col_z as f32) * column_spacing;
-                if column_jitter > 0.0 {
-                    let mut h = (col_y as i64).wrapping_mul(73856093) ^ (col_z as i64).wrapping_mul(19349663);
-                    if h == 0 { h = 1; }
-                    let mut x = h as u64;
-                    x ^= x >> 33;
-                    x = x.wrapping_mul(0xff51afd7ed558ccd);
-                    x ^= x >> 33;
-                    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-                    x ^= x >> 33;
-                    let j1 = ((x & 0xFFFF) as f32) / 32767.5 - 1.0;
-                    let j2 = (((x >> 16) & 0xFFFF) as f32) / 32767.5 - 1.0;
-                    let jitter = column_jitter * column_spacing * 0.35;
-                    cy = (cy + j1 * jitter).clamp(-1.0, 1.0);
-                    cz = (cz + j2 * jitter).clamp(-1.0, 1.0);
-                }
-                let diff = Point3 { x: 0.0, y: cy - p1.y, z: cz - p1.z };
-                if diff.mag() > 1e-6 {
-                    total_disp = total_disp.add(diff.mul(column_strength));
-                }
-            }
+                let gx = (p1.x / cs).floor() as i64;
+                let gy = (p1.y / cs).floor() as i64;
+                let gz = (p1.z / cs).floor() as i64;
 
-            let gx = (p1.x / cs).floor() as i64;
-            let gy = (p1.y / cs).floor() as i64;
-            let gz = (p1.z / cs).floor() as i64;
-
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    for dz in -1..=1 {
-                        let key = (((gx + dx + 1048576) & 0x1FFFFF) as u64) | 
-                                  ((((gy + dy + 1048576) & 0x1FFFFF) as u64) << 21) | 
-                                  ((((gz + dz + 1048576) & 0x1FFFFF) as u64) << 42);
-                        if let Some(indices) = grid.get(&key) {
-                            for &j_idx in indices {
-                                if idx == j_idx { continue; }
-                                let (l2, _i2) = all_soma_refs[j_idx];
-                                let p2 = self.get_soma_pos(l2, _i2);
-                                let diff = p1.sub(p2);
-                                let d2 = diff.dist_sq(Point3::default());
-                                if d2 < min_sep * min_sep && d2 > 1e-9 {
-                                    let dist = d2.sqrt();
-                                    // Repulsion between all somas to maintain separation
-                                    let force = diff.normalize().mul(repulsion_strength * (min_sep - dist) / min_sep);
-                                    total_disp = total_disp.add(force);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            let key = (((gx + dx + 1048576) & 0x1FFFFF) as u64)
+                                | ((((gy + dy + 1048576) & 0x1FFFFF) as u64) << 21)
+                                | ((((gz + dz + 1048576) & 0x1FFFFF) as u64) << 42);
+                            if let Some(indices) = grid.get(&key) {
+                                for &j_idx in indices {
+                                    if idx == j_idx {
+                                        continue;
+                                    }
+                                    let (l2, _i2) = all_soma_refs[j_idx];
+                                    let p2 = self.get_soma_pos(l2, _i2);
+                                    let diff = p1.sub(p2);
+                                    let d2 = diff.dist_sq(Point3::default());
+                                    if d2 < min_sep * min_sep && d2 > 1e-9 {
+                                        let dist = d2.sqrt();
+                                        // Repulsion between all somas to maintain separation
+                                        let force = diff
+                                            .normalize()
+                                            .mul(repulsion_strength * (min_sep - dist) / min_sep);
+                                        total_disp = total_disp.add(force);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            total_disp
-        }).collect();
+                total_disp
+            })
+            .collect();
 
         // 2. Apply displacements and update associated components using PID control for smoothing
         let kp = config.skull_pid_kp;
@@ -2291,10 +3346,12 @@ impl Morphology {
 
         for (idx, (l, i)) in all_soma_refs.into_iter().enumerate() {
             // Anchors (sensory/output) are static unless in AARNN mode
-            if l < 0 && !is_aarnn { continue; }
+            if l < 0 && !is_aarnn {
+                continue;
+            }
 
             let error = displacements[idx]; // Desired displacement for this step
-            
+
             let soma = match l {
                 -1 => &mut self.sensory_somas[i],
                 -2 => &mut self.output_somas[i],
@@ -2304,11 +3361,12 @@ impl Morphology {
             // PID Control
             soma.integral_err = soma.integral_err.add(error.mul(dt));
             let derivative = error.sub(soma.prev_err).mul(1.0 / dt.max(0.001));
-            
-            let mut smoothed_disp = error.mul(kp)
+
+            let mut smoothed_disp = error
+                .mul(kp)
                 .add(soma.integral_err.mul(ki))
                 .add(derivative.mul(kd));
-            
+
             // Clamp max displacement per step to avoid runaway drift
             let max_move = 0.15f32;
             if smoothed_disp.mag() > max_move {
@@ -2329,10 +3387,10 @@ impl Morphology {
                     let dx = new_pos.x - center.x;
                     let dy = new_pos.y - center.y;
                     let dz = new_pos.z - center.z;
-                    
+
                     // Normalized distance squared (ellipsoid)
-                    let q2 = (dx*dx)/(rx*rx) + (dy*dy)/(ry*ry) + (dz*dz)/(rz*rz);
-                    
+                    let q2 = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz);
+
                     if l >= 0 {
                         // Hidden: keep inside
                         if q2 > 1.0 {
@@ -2354,17 +3412,21 @@ impl Morphology {
                         };
                         // And especially ensure they stay in the bottom hemisphere
                         if surf_pos.y > center.y - ry * 0.2 {
-                             surf_pos.y = center.y - ry * 0.2;
-                             // re-snap to surface? 
-                             let ndx = surf_pos.x - center.x;
-                             let ndy = surf_pos.y - center.y;
-                             let ndz = surf_pos.z - center.z;
-                             let nq = ((ndx*ndx)/(rx*rx) + (ndy*ndy)/(ry*ry) + (ndz*ndz)/(rz*rz)).sqrt().max(1e-6);
-                             surf_pos = Point3 {
-                                 x: center.x + ndx / nq,
-                                 y: center.y + ndy / nq,
-                                 z: center.z + ndz / nq,
-                             };
+                            surf_pos.y = center.y - ry * 0.2;
+                            // re-snap to surface?
+                            let ndx = surf_pos.x - center.x;
+                            let ndy = surf_pos.y - center.y;
+                            let ndz = surf_pos.z - center.z;
+                            let nq = ((ndx * ndx) / (rx * rx)
+                                + (ndy * ndy) / (ry * ry)
+                                + (ndz * ndz) / (rz * rz))
+                                .sqrt()
+                                .max(1e-6);
+                            surf_pos = Point3 {
+                                x: center.x + ndx / nq,
+                                y: center.y + ndy / nq,
+                                z: center.z + ndz / nq,
+                            };
                         }
                         new_pos = surf_pos;
                     }
@@ -2391,14 +3453,27 @@ impl Morphology {
     #[allow(dead_code)]
     fn set_soma_pos(&mut self, layer: isize, id: usize, pos: Point3) {
         match layer {
-            -1 => { self.sensory_somas[id].pos = pos; }
-            -2 => { self.output_somas[id].pos = pos; }
-            l if l >= 0 => { self.somas[l as usize][id].pos = pos; }
+            -1 => {
+                self.sensory_somas[id].pos = pos;
+            }
+            -2 => {
+                self.output_somas[id].pos = pos;
+            }
+            l if l >= 0 => {
+                self.somas[l as usize][id].pos = pos;
+            }
             _ => {}
         }
     }
 
-    fn move_neuron_components(&mut self, layer: isize, id: usize, old_soma_pos: Point3, new_soma_pos: Point3, disp: Point3) {
+    fn move_neuron_components(
+        &mut self,
+        layer: isize,
+        id: usize,
+        old_soma_pos: Point3,
+        new_soma_pos: Point3,
+        disp: Point3,
+    ) {
         // Move organelles
         let organelles = match layer {
             -1 => &mut self.sensory_somas[id].organelles,
@@ -2406,32 +3481,53 @@ impl Morphology {
             l if l >= 0 => &mut self.somas[l as usize][id].organelles,
             _ => return,
         };
-        for org in organelles { org.pos = org.pos.add(disp); }
+        for org in organelles {
+            org.pos = org.pos.add(disp);
+        }
 
         // Move roots of axons and dendrites
         let (axons, dendrites) = match layer {
-            -1 => (std::slice::from_mut(&mut self.sensory_axons[id]), std::slice::from_mut(&mut self.sensory_dendrites[id])),
-            -2 => (std::slice::from_mut(&mut self.output_axons[id]), std::slice::from_mut(&mut self.output_dendrites[id])),
-            l if l >= 0 => (std::slice::from_mut(&mut self.axons[l as usize][id]), std::slice::from_mut(&mut self.dendrites[l as usize][id])),
+            -1 => (
+                std::slice::from_mut(&mut self.sensory_axons[id]),
+                std::slice::from_mut(&mut self.sensory_dendrites[id]),
+            ),
+            -2 => (
+                std::slice::from_mut(&mut self.output_axons[id]),
+                std::slice::from_mut(&mut self.output_dendrites[id]),
+            ),
+            l if l >= 0 => (
+                std::slice::from_mut(&mut self.axons[l as usize][id]),
+                std::slice::from_mut(&mut self.dendrites[l as usize][id]),
+            ),
             _ => return,
         };
 
         for ax in axons {
             for seg in &mut ax.segments {
-                if seg.from.dist(old_soma_pos) < 1e-5 { seg.from = new_soma_pos; }
-                if seg.to.dist(old_soma_pos) < 1e-5 { seg.to = new_soma_pos; }
+                if seg.from.dist(old_soma_pos) < 1e-5 {
+                    seg.from = new_soma_pos;
+                }
+                if seg.to.dist(old_soma_pos) < 1e-5 {
+                    seg.to = new_soma_pos;
+                }
             }
         }
         for den in dendrites {
             for seg in &mut den.tree.branches {
-                if seg.from.dist(old_soma_pos) < 1e-5 { seg.from = new_soma_pos; }
-                if seg.to.dist(old_soma_pos) < 1e-5 { seg.to = new_soma_pos; }
+                if seg.from.dist(old_soma_pos) < 1e-5 {
+                    seg.from = new_soma_pos;
+                }
+                if seg.to.dist(old_soma_pos) < 1e-5 {
+                    seg.to = new_soma_pos;
+                }
             }
         }
     }
 
     fn update_synapse_pos(&mut self, syn_idx: usize, new_pos: Point3, is_pre: bool) {
-        if syn_idx >= self.synapses.len() { return; }
+        if syn_idx >= self.synapses.len() {
+            return;
+        }
         if is_pre {
             self.synapses[syn_idx].pre_site = new_pos;
         } else {
@@ -2443,21 +3539,36 @@ impl Morphology {
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            points.par_iter().map(|&p| self.energy_at(p, radius, k)).collect()
+            points
+                .par_iter()
+                .map(|&p| self.energy_at(p, radius, k))
+                .collect()
         }
         #[cfg(not(feature = "parallel"))]
         {
-            points.iter().map(|&p| self.energy_at(p, radius, k)).collect()
+            points
+                .iter()
+                .map(|&p| self.energy_at(p, radius, k))
+                .collect()
         }
     }
 
     #[cfg(feature = "opencl")]
-    fn energies_at_gpu(&self, points: &[Point3], sources: Option<&[GridEntity]>, radius: f32, k: f32, cl: &OpenCLManager) -> Vec<f32> {
+    fn energies_at_gpu(
+        &self,
+        points: &[Point3],
+        sources: Option<&[GridEntity]>,
+        radius: f32,
+        k: f32,
+        cl: &OpenCLManager,
+    ) -> Vec<f32> {
         use std::sync::atomic::{AtomicBool, Ordering};
         static GPU_ENERGY_DISABLED: AtomicBool = AtomicBool::new(false);
 
         let n_pts = points.len();
-        if n_pts == 0 { return Vec::new(); }
+        if n_pts == 0 {
+            return Vec::new();
+        }
 
         if GPU_ENERGY_DISABLED.load(Ordering::Relaxed) {
             return self.energies_at_cpu(points, radius, k);
@@ -2472,31 +3583,70 @@ impl Morphology {
                 all_entities_fallback.extend_from_slice(index.entities());
             } else {
                 for syn in &self.synapses {
-                    all_entities_fallback.push(GridEntity { pos: syn.post_site, stimuli: syn.stimuli as f32 });
+                    all_entities_fallback.push(GridEntity {
+                        pos: syn.post_site,
+                        stimuli: syn.stimuli as f32,
+                    });
                 }
             }
             &all_entities_fallback
         };
-        
+
         let n_sources = entities.len();
-        if n_sources == 0 { return vec![0.0; n_pts]; }
+        if n_sources == 0 {
+            return vec![0.0; n_pts];
+        }
 
         let points_f4: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
-        let src_sites_f4: Vec<[f32; 4]> = entities.iter().map(|e| [e.pos.x, e.pos.y, e.pos.z, 0.0]).collect();
+        let src_sites_f4: Vec<[f32; 4]> = entities
+            .iter()
+            .map(|e| [e.pos.x, e.pos.y, e.pos.z, 0.0])
+            .collect();
         let src_stimuli: Vec<f32> = entities.iter().map(|e| e.stimuli).collect();
 
         let r2 = radius * radius;
 
         let try_gpu = || -> Result<Vec<f32>, ClError> {
-            let mut pt_buf = unsafe { Buffer::create(&cl.context, CL_MEM_READ_ONLY, n_pts * std::mem::size_of::<[f32; 4]>(), std::ptr::null_mut())? };
-            let mut src_site_buf = unsafe { Buffer::create(&cl.context, CL_MEM_READ_ONLY, n_sources * std::mem::size_of::<[f32; 4]>(), std::ptr::null_mut())? };
-            let mut src_stim_buf = unsafe { Buffer::create(&cl.context, CL_MEM_READ_ONLY, n_sources * std::mem::size_of::<f32>(), std::ptr::null_mut())? };
-            let mut energy_buf = unsafe { Buffer::create(&cl.context, CL_MEM_READ_WRITE, n_pts * std::mem::size_of::<f32>(), std::ptr::null_mut())? };
+            let mut pt_buf = unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_ONLY,
+                    n_pts * std::mem::size_of::<[f32; 4]>(),
+                    std::ptr::null_mut(),
+                )?
+            };
+            let mut src_site_buf = unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_ONLY,
+                    n_sources * std::mem::size_of::<[f32; 4]>(),
+                    std::ptr::null_mut(),
+                )?
+            };
+            let mut src_stim_buf = unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_ONLY,
+                    n_sources * std::mem::size_of::<f32>(),
+                    std::ptr::null_mut(),
+                )?
+            };
+            let mut energy_buf = unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    n_pts * std::mem::size_of::<f32>(),
+                    std::ptr::null_mut(),
+                )?
+            };
 
             unsafe {
-                cl.queue.enqueue_write_buffer(&mut pt_buf, CL_TRUE, 0, &points_f4, &[])?;
-                cl.queue.enqueue_write_buffer(&mut src_site_buf, CL_TRUE, 0, &src_sites_f4, &[])?;
-                cl.queue.enqueue_write_buffer(&mut src_stim_buf, CL_TRUE, 0, &src_stimuli, &[])?;
+                cl.queue
+                    .enqueue_write_buffer(&mut pt_buf, CL_TRUE, 0, &points_f4, &[])?;
+                cl.queue
+                    .enqueue_write_buffer(&mut src_site_buf, CL_TRUE, 0, &src_sites_f4, &[])?;
+                cl.queue
+                    .enqueue_write_buffer(&mut src_stim_buf, CL_TRUE, 0, &src_stimuli, &[])?;
             }
 
             unsafe {
@@ -2515,7 +3665,8 @@ impl Morphology {
 
             let mut energies = vec![0.0f32; n_pts];
             unsafe {
-                cl.queue.enqueue_read_buffer(&mut energy_buf, CL_TRUE, 0, &mut energies, &[])?;
+                cl.queue
+                    .enqueue_read_buffer(&mut energy_buf, CL_TRUE, 0, &mut energies, &[])?;
             }
             Ok(energies)
         };
@@ -2523,7 +3674,10 @@ impl Morphology {
         match try_gpu() {
             Ok(energies) => energies,
             Err(e) => {
-                nm_log!("[warn] OpenCL morpho_energy failed: {:?}; falling back to CPU", e);
+                nm_log!(
+                    "[warn] OpenCL morpho_energy failed: {:?}; falling back to CPU",
+                    e
+                );
                 GPU_ENERGY_DISABLED.store(true, Ordering::Relaxed);
                 self.energies_at_cpu(points, radius, k)
             }
@@ -2531,8 +3685,16 @@ impl Morphology {
     }
 
     pub fn update_skull_membrane(&mut self, config: &crate::config::NetworkConfig, dt: f32) {
-        let mut min_p = Point3 { x: f32::MAX, y: f32::MAX, z: f32::MAX };
-        let mut max_p = Point3 { x: f32::MIN, y: f32::MIN, z: f32::MIN };
+        let mut min_p = Point3 {
+            x: f32::MAX,
+            y: f32::MAX,
+            z: f32::MAX,
+        };
+        let mut max_p = Point3 {
+            x: f32::MIN,
+            y: f32::MIN,
+            z: f32::MIN,
+        };
         let mut sum_p = Point3::default();
         let mut count = 0;
 
@@ -2550,7 +3712,11 @@ impl Morphology {
         };
 
         // Tightly wrap around hidden neurons only.
-        for layer in &self.somas { for s in layer { process_soma(s); } }
+        for layer in &self.somas {
+            for s in layer {
+                process_soma(s);
+            }
+        }
 
         let (target_center, target_radii, target_radius_scalar) = if count > 0 {
             let center = sum_p.mul(1.0 / count as f32);
@@ -2571,9 +3737,11 @@ impl Morphology {
 
             // Density-based isotropic expansion (heuristic)
             let target_density = config.density_target.max(0.001);
-            let volume_per_soma = (4.0f32/3.0) * std::f32::consts::PI * r_soma.powi(3);
+            let volume_per_soma = (4.0f32 / 3.0) * std::f32::consts::PI * r_soma.powi(3);
             let desired_volume = (count as f32) * volume_per_soma / target_density;
-            let iso_r = ((desired_volume / ((4.0f32/3.0) * std::f32::consts::PI)).max(1e-6)).cbrt() * slack;
+            let iso_r = ((desired_volume / ((4.0f32 / 3.0) * std::f32::consts::PI)).max(1e-6))
+                .cbrt()
+                * slack;
 
             // Per-axis radii: cover half-extent plus margin and at least isotropic density radius
             let base_margin = 0.15f32 * slack;
@@ -2603,8 +3771,11 @@ impl Morphology {
         // 1. Center PID
         let err_c = target_center.sub(current.center);
         self.skull_center_integral = self.skull_center_integral.add(err_c.mul(dt));
-        let der_c = err_c.sub(self.skull_center_prev_err).mul(1.0 / dt.max(0.001));
-        let output_c = err_c.mul(kp)
+        let der_c = err_c
+            .sub(self.skull_center_prev_err)
+            .mul(1.0 / dt.max(0.001));
+        let output_c = err_c
+            .mul(kp)
             .add(self.skull_center_integral.mul(ki))
             .add(der_c.mul(kd));
         current.center = current.center.add(output_c);
@@ -2627,16 +3798,26 @@ impl Morphology {
     }
 
     /// Evolve morphology: grow towards energy, detect axon contact, and shrink inactive components.
-    pub fn evolve(&mut self, config: &crate::config::NetworkConfig, is_aarnn: bool, dt: f32, #[cfg(feature = "opencl")] _cl: Option<&Arc<OpenCLManager>>) -> EvolutionResult {
+    pub fn evolve(
+        &mut self,
+        config: &crate::config::NetworkConfig,
+        is_aarnn: bool,
+        dt: f32,
+        #[cfg(feature = "opencl")] _cl: Option<&Arc<OpenCLManager>>,
+    ) -> EvolutionResult {
         static mut CALL_COUNT: u64 = 0;
-        unsafe { CALL_COUNT += 1; }
+        unsafe {
+            CALL_COUNT += 1;
+        }
         let should_log = unsafe { CALL_COUNT % 100 == 0 };
         let is_trace = std::env::var("NM_TRACE").is_ok();
         let mut stats = MorphoStats::default();
 
         observe_time!("morphology/evolve");
         let mut res = EvolutionResult::default();
-        if !config.morpho_growth_enabled { return res; }
+        if !config.morpho_growth_enabled {
+            return res;
+        }
 
         #[inline(always)]
         fn pack_neuron_pair(l1: isize, i1: usize, l2: isize, i2: usize) -> u64 {
@@ -2646,7 +3827,9 @@ impl Morphology {
         }
 
         let (t_ema, t_dev, t_skip, t_cap) = if is_aarnn {
-            let tuning = morpho_energy_tuning().lock().expect("morpho tuning lock poisoned");
+            let tuning = morpho_energy_tuning()
+                .lock()
+                .expect("morpho tuning lock poisoned");
             (tuning.ema, tuning.dev, tuning.skip_bias, tuning.cap_scale)
         } else {
             (0.0, 0.0, 1.0, 1.0)
@@ -2655,8 +3838,24 @@ impl Morphology {
         let ambient: f32 = config.aarnn_ambient_energy_level.max(0.001);
 
         let num_layers = self.dendrites.len();
-        let in_l = if is_aarnn { if num_layers > 1 { 1 } else { 0 } } else { 0 };
-        let out_l = if is_aarnn { if num_layers > 4 { 4 } else { num_layers.saturating_sub(1) } } else { num_layers.saturating_sub(1) };
+        let in_l = if is_aarnn {
+            if num_layers > 1 {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let out_l = if is_aarnn {
+            if num_layers > 4 {
+                4
+            } else {
+                num_layers.saturating_sub(1)
+            }
+        } else {
+            num_layers.saturating_sub(1)
+        };
         let mut total_neurons = 0usize;
         let mut per_neuron_seg_cap = 0usize;
         let mut max_sample_segments = 0usize;
@@ -2692,41 +3891,93 @@ impl Morphology {
         // Update stimuli based on quadratic energy field and decay
         let break_threshold = config.component_pruning_threshold;
         let consolidation = config.synaptic_consolidation_factor;
-        
+
         // Attempt batched energy evaluation on GPU for stimuli updates
         let mut stimuli_updated_via_gpu = false;
         #[cfg(feature = "opencl")]
         if let Some(cl) = _cl {
             // Build list of points requiring energy evaluation in the same order we will apply updates
             let mut pts: Vec<Point3> = Vec::new();
-            pts.reserve(self.synapses.len()
-                + self.sensory_axons.iter().map(|a| a.segments.len()).sum::<usize>()
-                + self.output_axons.iter().map(|a| a.segments.len()).sum::<usize>()
-                + self.axons.iter().map(|layer| layer.iter().map(|a| a.segments.len()).sum::<usize>()).sum::<usize>()
-                + self.sensory_dendrites.iter().map(|d| d.tree.branches.len()).sum::<usize>()
-                + self.output_dendrites.iter().map(|d| d.tree.branches.len()).sum::<usize>()
-                + self.dendrites.iter().map(|layer| layer.iter().map(|d| d.tree.branches.len()).sum::<usize>()).sum::<usize>());
+            pts.reserve(
+                self.synapses.len()
+                    + self
+                        .sensory_axons
+                        .iter()
+                        .map(|a| a.segments.len())
+                        .sum::<usize>()
+                    + self
+                        .output_axons
+                        .iter()
+                        .map(|a| a.segments.len())
+                        .sum::<usize>()
+                    + self
+                        .axons
+                        .iter()
+                        .map(|layer| layer.iter().map(|a| a.segments.len()).sum::<usize>())
+                        .sum::<usize>()
+                    + self
+                        .sensory_dendrites
+                        .iter()
+                        .map(|d| d.tree.branches.len())
+                        .sum::<usize>()
+                    + self
+                        .output_dendrites
+                        .iter()
+                        .map(|d| d.tree.branches.len())
+                        .sum::<usize>()
+                    + self
+                        .dendrites
+                        .iter()
+                        .map(|layer| layer.iter().map(|d| d.tree.branches.len()).sum::<usize>())
+                        .sum::<usize>(),
+            );
 
             // Offsets
             let off_syn = pts.len();
-            for s in &self.synapses { pts.push(s.post_site); }
+            for s in &self.synapses {
+                pts.push(s.post_site);
+            }
             let off_ax_s = pts.len();
-            for ax in &self.sensory_axons { for seg in &ax.segments { pts.push(seg.to); } }
+            for ax in &self.sensory_axons {
+                for seg in &ax.segments {
+                    pts.push(seg.to);
+                }
+            }
             let off_ax_o = pts.len();
-            for ax in &self.output_axons { for seg in &ax.segments { pts.push(seg.to); } }
+            for ax in &self.output_axons {
+                for seg in &ax.segments {
+                    pts.push(seg.to);
+                }
+            }
             let mut off_ax_h: Vec<usize> = Vec::with_capacity(self.axons.len());
             for l in 0..self.axons.len() {
                 off_ax_h.push(pts.len());
-                for ax in &self.axons[l] { for seg in &ax.segments { pts.push(seg.to); } }
+                for ax in &self.axons[l] {
+                    for seg in &ax.segments {
+                        pts.push(seg.to);
+                    }
+                }
             }
             let off_den_s = pts.len();
-            for den in &self.sensory_dendrites { for seg in &den.tree.branches { pts.push(seg.from); } }
+            for den in &self.sensory_dendrites {
+                for seg in &den.tree.branches {
+                    pts.push(seg.from);
+                }
+            }
             let off_den_o = pts.len();
-            for den in &self.output_dendrites { for seg in &den.tree.branches { pts.push(seg.from); } }
+            for den in &self.output_dendrites {
+                for seg in &den.tree.branches {
+                    pts.push(seg.from);
+                }
+            }
             let mut off_den_h: Vec<usize> = Vec::with_capacity(self.dendrites.len());
             for l in 0..self.dendrites.len() {
                 off_den_h.push(pts.len());
-                for den in &self.dendrites[l] { for seg in &den.tree.branches { pts.push(seg.from); } }
+                for den in &self.dendrites[l] {
+                    for seg in &den.tree.branches {
+                        pts.push(seg.from);
+                    }
+                }
             }
 
             // Build sources list from current spatial index (already populated)
@@ -2742,140 +3993,284 @@ impl Morphology {
             // Apply updates using energies
             let mut idx = off_syn;
             for syn in &mut self.synapses {
-                let e = energies[idx]; idx += 1;
+                let e = energies[idx];
+                idx += 1;
                 let energy_factor = (0.9 + e * 0.2).min(1.05);
                 let eff_decay = decay + (1.0 - decay) * syn.stimuli * consolidation;
                 syn.stimuli = (syn.stimuli * eff_decay * energy_factor).min(1.0);
             }
             let mut i = off_ax_s;
-            for ax in &mut self.sensory_axons { for seg in &mut ax.segments { let e = energies[i]; i += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } }
+            for ax in &mut self.sensory_axons {
+                for seg in &mut ax.segments {
+                    let e = energies[i];
+                    i += 1;
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
             let mut i2 = off_ax_o;
-            for ax in &mut self.output_axons { for seg in &mut ax.segments { let e = energies[i2]; i2 += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } }
-            for (l, off) in off_ax_h.iter().enumerate() { let mut k = *off; for ax in &mut self.axons[l] { for seg in &mut ax.segments { let e = energies[k]; k += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } } }
+            for ax in &mut self.output_axons {
+                for seg in &mut ax.segments {
+                    let e = energies[i2];
+                    i2 += 1;
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
+            for (l, off) in off_ax_h.iter().enumerate() {
+                let mut k = *off;
+                for ax in &mut self.axons[l] {
+                    for seg in &mut ax.segments {
+                        let e = energies[k];
+                        k += 1;
+                        let energy_factor = (0.9 + e * 0.2).min(1.05);
+                        let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                        seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                    }
+                }
+            }
             let mut j = off_den_s;
-            for den in &mut self.sensory_dendrites { for seg in &mut den.tree.branches { let e = energies[j]; j += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } }
+            for den in &mut self.sensory_dendrites {
+                for seg in &mut den.tree.branches {
+                    let e = energies[j];
+                    j += 1;
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
             let mut j2 = off_den_o;
-            for den in &mut self.output_dendrites { for seg in &mut den.tree.branches { let e = energies[j2]; j2 += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } }
-            for (l, off) in off_den_h.iter().enumerate() { let mut k = *off; for den in &mut self.dendrites[l] { for seg in &mut den.tree.branches { let e = energies[k]; k += 1; let energy_factor = (0.9 + e * 0.2).min(1.05); let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation; seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0); } } }
+            for den in &mut self.output_dendrites {
+                for seg in &mut den.tree.branches {
+                    let e = energies[j2];
+                    j2 += 1;
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
+            for (l, off) in off_den_h.iter().enumerate() {
+                let mut k = *off;
+                for den in &mut self.dendrites[l] {
+                    for seg in &mut den.tree.branches {
+                        let e = energies[k];
+                        k += 1;
+                        let energy_factor = (0.9 + e * 0.2).min(1.05);
+                        let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                        seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                    }
+                }
+            }
 
             stimuli_updated_via_gpu = true;
         }
 
         if !stimuli_updated_via_gpu {
-        // A. Synapses
-        #[cfg(feature = "parallel")]
-        let syn_energies: Vec<f32> = self.synapses.par_iter()
-            .map(|s| self.energy_at(s.post_site, attraction_r, kernel_k))
-            .collect();
-        #[cfg(not(feature = "parallel"))]
-        let syn_energies: Vec<f32> = self.synapses.iter()
-            .map(|s| self.energy_at(s.post_site, attraction_r, kernel_k))
-            .collect();
-        for (syn, e) in self.synapses.iter_mut().zip(syn_energies) {
-            let energy_factor = (0.9 + e * 0.2).min(1.05);
-            // Consolidation: slow decay for established components
-            let eff_decay = decay + (1.0 - decay) * syn.stimuli * consolidation;
-            syn.stimuli = (syn.stimuli * eff_decay * energy_factor).min(1.0);
-        }
-
-        // B. Axons (sensory, output, hidden)
-        #[cfg(feature = "parallel")]
-        let axon_energies_s: Vec<Vec<f32>> = self.sensory_axons.par_iter()
-            .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
-            .collect();
-        #[cfg(not(feature = "parallel"))]
-        let axon_energies_s: Vec<Vec<f32>> = self.sensory_axons.iter()
-            .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
-            .collect();
-        for (ax, energies) in self.sensory_axons.iter_mut().zip(axon_energies_s) {
-            for (seg, e) in ax.segments.iter_mut().zip(energies) {
-                let energy_factor = (0.9 + e * 0.2).min(1.05);
-                let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
-                seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
-            }
-        }
-        #[cfg(feature = "parallel")]
-        let axon_energies_o: Vec<Vec<f32>> = self.output_axons.par_iter()
-            .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
-            .collect();
-        #[cfg(not(feature = "parallel"))]
-        let axon_energies_o: Vec<Vec<f32>> = self.output_axons.iter()
-            .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
-            .collect();
-        for (ax, energies) in self.output_axons.iter_mut().zip(axon_energies_o) {
-            for (seg, e) in ax.segments.iter_mut().zip(energies) {
-                let energy_factor = (0.9 + e * 0.2).min(1.05);
-                let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
-                seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
-            }
-        }
-        for l in 0..self.axons.len() {
+            // A. Synapses
             #[cfg(feature = "parallel")]
-            let axon_energies_h: Vec<Vec<f32>> = self.axons[l].par_iter()
-                .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
+            let syn_energies: Vec<f32> = self
+                .synapses
+                .par_iter()
+                .map(|s| self.energy_at(s.post_site, attraction_r, kernel_k))
                 .collect();
             #[cfg(not(feature = "parallel"))]
-            let axon_energies_h: Vec<Vec<f32>> = self.axons[l].iter()
-                .map(|ax| ax.segments.iter().map(|seg| self.energy_at(seg.to, attraction_r, kernel_k)).collect())
+            let syn_energies: Vec<f32> = self
+                .synapses
+                .iter()
+                .map(|s| self.energy_at(s.post_site, attraction_r, kernel_k))
                 .collect();
-            for (ax, energies) in self.axons[l].iter_mut().zip(axon_energies_h) {
+            for (syn, e) in self.synapses.iter_mut().zip(syn_energies) {
+                let energy_factor = (0.9 + e * 0.2).min(1.05);
+                // Consolidation: slow decay for established components
+                let eff_decay = decay + (1.0 - decay) * syn.stimuli * consolidation;
+                syn.stimuli = (syn.stimuli * eff_decay * energy_factor).min(1.0);
+            }
+
+            // B. Axons (sensory, output, hidden)
+            #[cfg(feature = "parallel")]
+            let axon_energies_s: Vec<Vec<f32>> = self
+                .sensory_axons
+                .par_iter()
+                .map(|ax| {
+                    ax.segments
+                        .iter()
+                        .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            #[cfg(not(feature = "parallel"))]
+            let axon_energies_s: Vec<Vec<f32>> = self
+                .sensory_axons
+                .iter()
+                .map(|ax| {
+                    ax.segments
+                        .iter()
+                        .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            for (ax, energies) in self.sensory_axons.iter_mut().zip(axon_energies_s) {
                 for (seg, e) in ax.segments.iter_mut().zip(energies) {
                     let energy_factor = (0.9 + e * 0.2).min(1.05);
                     let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
                     seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
                 }
             }
-        }
-
-        // C. Dendrites (sensory, output, hidden)
-        #[cfg(feature = "parallel")]
-        let dend_energies_s: Vec<Vec<f32>> = self.sensory_dendrites.par_iter()
-            .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
-            .collect();
-        #[cfg(not(feature = "parallel"))]
-        let dend_energies_s: Vec<Vec<f32>> = self.sensory_dendrites.iter()
-            .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
-            .collect();
-        for (den, energies) in self.sensory_dendrites.iter_mut().zip(dend_energies_s) {
-            for (seg, e) in den.tree.branches.iter_mut().zip(energies) {
-                let energy_factor = (0.9 + e * 0.2).min(1.05);
-                let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
-                seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
-            }
-        }
-        #[cfg(feature = "parallel")]
-        let dend_energies_o: Vec<Vec<f32>> = self.output_dendrites.par_iter()
-            .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
-            .collect();
-        #[cfg(not(feature = "parallel"))]
-        let dend_energies_o: Vec<Vec<f32>> = self.output_dendrites.iter()
-            .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
-            .collect();
-        for (den, energies) in self.output_dendrites.iter_mut().zip(dend_energies_o) {
-            for (seg, e) in den.tree.branches.iter_mut().zip(energies) {
-                let energy_factor = (0.9 + e * 0.2).min(1.05);
-                let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
-                seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
-            }
-        }
-        for l in 0..self.dendrites.len() {
             #[cfg(feature = "parallel")]
-            let dend_energies_h: Vec<Vec<f32>> = self.dendrites[l].par_iter()
-                .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
+            let axon_energies_o: Vec<Vec<f32>> = self
+                .output_axons
+                .par_iter()
+                .map(|ax| {
+                    ax.segments
+                        .iter()
+                        .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                        .collect()
+                })
                 .collect();
             #[cfg(not(feature = "parallel"))]
-            let dend_energies_h: Vec<Vec<f32>> = self.dendrites[l].iter()
-                .map(|den| den.tree.branches.iter().map(|seg| self.energy_at(seg.from, attraction_r, kernel_k)).collect())
+            let axon_energies_o: Vec<Vec<f32>> = self
+                .output_axons
+                .iter()
+                .map(|ax| {
+                    ax.segments
+                        .iter()
+                        .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                        .collect()
+                })
                 .collect();
-            for (den, energies) in self.dendrites[l].iter_mut().zip(dend_energies_h) {
+            for (ax, energies) in self.output_axons.iter_mut().zip(axon_energies_o) {
+                for (seg, e) in ax.segments.iter_mut().zip(energies) {
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
+            for l in 0..self.axons.len() {
+                #[cfg(feature = "parallel")]
+                let axon_energies_h: Vec<Vec<f32>> = self.axons[l]
+                    .par_iter()
+                    .map(|ax| {
+                        ax.segments
+                            .iter()
+                            .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                            .collect()
+                    })
+                    .collect();
+                #[cfg(not(feature = "parallel"))]
+                let axon_energies_h: Vec<Vec<f32>> = self.axons[l]
+                    .iter()
+                    .map(|ax| {
+                        ax.segments
+                            .iter()
+                            .map(|seg| self.energy_at(seg.to, attraction_r, kernel_k))
+                            .collect()
+                    })
+                    .collect();
+                for (ax, energies) in self.axons[l].iter_mut().zip(axon_energies_h) {
+                    for (seg, e) in ax.segments.iter_mut().zip(energies) {
+                        let energy_factor = (0.9 + e * 0.2).min(1.05);
+                        let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                        seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                    }
+                }
+            }
+
+            // C. Dendrites (sensory, output, hidden)
+            #[cfg(feature = "parallel")]
+            let dend_energies_s: Vec<Vec<f32>> = self
+                .sensory_dendrites
+                .par_iter()
+                .map(|den| {
+                    den.tree
+                        .branches
+                        .iter()
+                        .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            #[cfg(not(feature = "parallel"))]
+            let dend_energies_s: Vec<Vec<f32>> = self
+                .sensory_dendrites
+                .iter()
+                .map(|den| {
+                    den.tree
+                        .branches
+                        .iter()
+                        .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            for (den, energies) in self.sensory_dendrites.iter_mut().zip(dend_energies_s) {
                 for (seg, e) in den.tree.branches.iter_mut().zip(energies) {
                     let energy_factor = (0.9 + e * 0.2).min(1.05);
                     let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
                     seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
                 }
             }
-        }
-
+            #[cfg(feature = "parallel")]
+            let dend_energies_o: Vec<Vec<f32>> = self
+                .output_dendrites
+                .par_iter()
+                .map(|den| {
+                    den.tree
+                        .branches
+                        .iter()
+                        .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            #[cfg(not(feature = "parallel"))]
+            let dend_energies_o: Vec<Vec<f32>> = self
+                .output_dendrites
+                .iter()
+                .map(|den| {
+                    den.tree
+                        .branches
+                        .iter()
+                        .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                        .collect()
+                })
+                .collect();
+            for (den, energies) in self.output_dendrites.iter_mut().zip(dend_energies_o) {
+                for (seg, e) in den.tree.branches.iter_mut().zip(energies) {
+                    let energy_factor = (0.9 + e * 0.2).min(1.05);
+                    let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                    seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                }
+            }
+            for l in 0..self.dendrites.len() {
+                #[cfg(feature = "parallel")]
+                let dend_energies_h: Vec<Vec<f32>> = self.dendrites[l]
+                    .par_iter()
+                    .map(|den| {
+                        den.tree
+                            .branches
+                            .iter()
+                            .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                            .collect()
+                    })
+                    .collect();
+                #[cfg(not(feature = "parallel"))]
+                let dend_energies_h: Vec<Vec<f32>> = self.dendrites[l]
+                    .iter()
+                    .map(|den| {
+                        den.tree
+                            .branches
+                            .iter()
+                            .map(|seg| self.energy_at(seg.from, attraction_r, kernel_k))
+                            .collect()
+                    })
+                    .collect();
+                for (den, energies) in self.dendrites[l].iter_mut().zip(dend_energies_h) {
+                    for (seg, e) in den.tree.branches.iter_mut().zip(energies) {
+                        let energy_factor = (0.9 + e * 0.2).min(1.05);
+                        let eff_decay = decay + (1.0 - decay) * seg.stimuli * consolidation;
+                        seg.stimuli = (seg.stimuli * energy_factor * eff_decay).min(1.0);
+                    }
+                }
+            }
         } // end CPU stimuli update fallback
 
         // D. Somas (sensory, output, hidden)
@@ -2903,12 +4298,34 @@ impl Morphology {
                 new_idx += 1;
             } else {
                 if is_trace {
-                    let pre_name = if syn.pre_layer == -1 { "sensory".to_string() } else { format!("hidden {}", syn.pre_layer) };
-                    let post_name = if syn.post_layer == -1 { "sensory".to_string() } else if (syn.post_layer as usize) == num_layers { "output".to_string() } else { format!("hidden {}", syn.post_layer) };
-                    nm_log!("[trace] synapse pruned: {}:{} -> {}:{} - stimuli {:.4} < {:.4}", 
-                        pre_name, syn.pre_id, post_name, syn.post_id, syn.stimuli, break_threshold);
+                    let pre_name = if syn.pre_layer == -1 {
+                        "sensory".to_string()
+                    } else {
+                        format!("hidden {}", syn.pre_layer)
+                    };
+                    let post_name = if syn.post_layer == -1 {
+                        "sensory".to_string()
+                    } else if (syn.post_layer as usize) == num_layers {
+                        "output".to_string()
+                    } else {
+                        format!("hidden {}", syn.post_layer)
+                    };
+                    nm_log!(
+                        "[trace] synapse pruned: {}:{} -> {}:{} - stimuli {:.4} < {:.4}",
+                        pre_name,
+                        syn.pre_id,
+                        post_name,
+                        syn.post_id,
+                        syn.stimuli,
+                        break_threshold
+                    );
                 }
-                res.broken_connections.push((syn.pre_layer, syn.pre_id, syn.post_layer, syn.post_id));
+                res.broken_connections.push((
+                    syn.pre_layer,
+                    syn.pre_id,
+                    syn.post_layer,
+                    syn.post_id,
+                ));
                 observe_hit!("morphology/synapse_pruned");
             }
             old_idx += 1;
@@ -2927,18 +4344,24 @@ impl Morphology {
                 while changed {
                     changed = false;
                     for i in 0..axon.segments.len() {
-                        if to_remove.contains(&i) { continue; }
+                        if to_remove.contains(&i) {
+                            continue;
+                        }
                         let seg = &axon.segments[i];
-                        
+
                         // Root of trunk is protected
-                        if seg.is_trunk && seg.parent_idx.is_none() { continue; }
-                        
+                        if seg.is_trunk && seg.parent_idx.is_none() {
+                            continue;
+                        }
+
                         // Check bouton status
                         let has_bouton = if let Some(syn_idx) = seg.syn_index {
                             old_to_new[syn_idx].is_some()
-                        } else { false };
+                        } else {
+                            false
+                        };
                         let lost_bouton = seg.syn_index.is_some() && !has_bouton;
-                        
+
                         if !has_bouton {
                             // Check if it has any active children
                             let mut has_active_children = false;
@@ -2948,14 +4371,18 @@ impl Morphology {
                                     break;
                                 }
                             }
-                            
-                            let is_original_leaf = !axon.segments.iter().any(|s| s.parent_idx == Some(i));
-                            
+
+                            let is_original_leaf =
+                                !axon.segments.iter().any(|s| s.parent_idx == Some(i));
+
                             // Pruning triggers:
                             // - Just lost bouton
                             // - Is a leaf with low stimuli (failed to find contact)
                             // - Was a parent but all children are pruned (upward propagation)
-                            if lost_bouton || (!has_active_children && (seg.stimuli < break_threshold || !is_original_leaf)) {
+                            if lost_bouton
+                                || (!has_active_children
+                                    && (seg.stimuli < break_threshold || !is_original_leaf))
+                            {
                                 to_remove.insert(i);
                                 changed = true;
                             }
@@ -2991,15 +4418,21 @@ impl Morphology {
                 while changed {
                     changed = false;
                     for i in 0..dend.tree.branches.len() {
-                        if to_remove.contains(&i) { continue; }
+                        if to_remove.contains(&i) {
+                            continue;
+                        }
                         let seg = &dend.tree.branches[i];
-                        if seg.is_trunk && seg.parent_idx.is_none() { continue; }
-                        
+                        if seg.is_trunk && seg.parent_idx.is_none() {
+                            continue;
+                        }
+
                         let has_bouton = if let Some(syn_idx) = seg.syn_index {
                             old_to_new[syn_idx].is_some()
-                        } else { false };
+                        } else {
+                            false
+                        };
                         let lost_bouton = seg.syn_index.is_some() && !has_bouton;
-                        
+
                         if !has_bouton {
                             let mut has_active_children = false;
                             for (ci, cseg) in dend.tree.branches.iter().enumerate() {
@@ -3008,10 +4441,14 @@ impl Morphology {
                                     break;
                                 }
                             }
-                            
-                            let is_original_leaf = !dend.tree.branches.iter().any(|s| s.parent_idx == Some(i));
-                            
-                            if lost_bouton || (!has_active_children && (seg.stimuli < break_threshold || !is_original_leaf)) {
+
+                            let is_original_leaf =
+                                !dend.tree.branches.iter().any(|s| s.parent_idx == Some(i));
+
+                            if lost_bouton
+                                || (!has_active_children
+                                    && (seg.stimuli < break_threshold || !is_original_leaf))
+                            {
                                 to_remove.insert(i);
                                 changed = true;
                             }
@@ -3039,9 +4476,13 @@ impl Morphology {
 
         // Update syn_index in all remaining segments and reciprocal indices in synapses to avoid stale indices
         for layer_idx in -1..=(self.axons.len() as isize) {
-            let layer = if layer_idx == -1 { &mut self.sensory_axons }
-                        else if layer_idx == self.axons.len() as isize { &mut self.output_axons }
-                        else { &mut self.axons[layer_idx as usize] };
+            let layer = if layer_idx == -1 {
+                &mut self.sensory_axons
+            } else if layer_idx == self.axons.len() as isize {
+                &mut self.output_axons
+            } else {
+                &mut self.axons[layer_idx as usize]
+            };
             for (_j, axon) in layer.iter_mut().enumerate() {
                 for (asi, seg) in axon.segments.iter_mut().enumerate() {
                     if let Some(idx) = seg.syn_index {
@@ -3056,9 +4497,13 @@ impl Morphology {
             }
         }
         for layer_idx in -1..=(self.dendrites.len() as isize) {
-            let layer = if layer_idx == -1 { &mut self.sensory_dendrites }
-                        else if layer_idx == self.dendrites.len() as isize { &mut self.output_dendrites }
-                        else { &mut self.dendrites[layer_idx as usize] };
+            let layer = if layer_idx == -1 {
+                &mut self.sensory_dendrites
+            } else if layer_idx == self.dendrites.len() as isize {
+                &mut self.output_dendrites
+            } else {
+                &mut self.dendrites[layer_idx as usize]
+            };
             for (_j, dendrite) in layer.iter_mut().enumerate() {
                 for (dsi, seg) in dendrite.tree.branches.iter_mut().enumerate() {
                     if let Some(idx) = seg.syn_index {
@@ -3113,9 +4558,8 @@ impl Morphology {
         let mut neuron_positions: Vec<Point3> = Vec::new();
         let mut neuron_ref_by_index: Vec<(isize, usize)> = Vec::new();
         let mut connected_pre_by_post: Vec<FastHashMap<usize, usize>> = Vec::new();
-        let is_close_neighbor = |list: &[usize], other: usize| -> bool {
-            list.binary_search(&other).is_ok()
-        };
+        let is_close_neighbor =
+            |list: &[usize], other: usize| -> bool { list.binary_search(&other).is_ok() };
 
         if is_aarnn {
             neuron_index_sensory = vec![usize::MAX; self.sensory_somas.len()];
@@ -3149,7 +4593,9 @@ impl Morphology {
             } else if layer == num_layers as isize {
                 neuron_index_output.get(id).copied()
             } else {
-                neuron_index_hidden.get(layer as usize).and_then(|layer_ids| layer_ids.get(id).copied())
+                neuron_index_hidden
+                    .get(layer as usize)
+                    .and_then(|layer_ids| layer_ids.get(id).copied())
             }
         };
 
@@ -3158,14 +4604,20 @@ impl Morphology {
             if total_neurons > 0 {
                 let base = (total_neurons * total_neurons).max(1);
                 contact_check_budget = Some((base * 40).clamp(200, 8000));
-                per_neuron_seg_cap = (8.0 + (total_neurons as f32).ln().max(1.0) * 6.0).round() as usize;
+                per_neuron_seg_cap =
+                    (8.0 + (total_neurons as f32).ln().max(1.0) * 6.0).round() as usize;
                 per_neuron_seg_cap = per_neuron_seg_cap.clamp(8, 64);
                 max_sample_segments = (total_neurons.saturating_mul(8)).clamp(256, 8192);
-                pair_cap = (2.0 + (total_neurons as f32).ln().max(1.0)).round().clamp(1.0, 4.0) as usize;
+                pair_cap = (2.0 + (total_neurons as f32).ln().max(1.0))
+                    .round()
+                    .clamp(1.0, 4.0) as usize;
                 small_net_axon_by_neuron = vec![Vec::new(); total_neurons.max(1)];
                 connected_pre_by_post = vec![FastHashMap::default(); total_neurons.max(1)];
                 for syn in &self.synapses {
-                    if let (Some(pre_i), Some(post_i)) = (index_of(syn.pre_layer, syn.pre_id), index_of(syn.post_layer, syn.post_id)) {
+                    if let (Some(pre_i), Some(post_i)) = (
+                        index_of(syn.pre_layer, syn.pre_id),
+                        index_of(syn.post_layer, syn.post_id),
+                    ) {
                         let entry = connected_pre_by_post[post_i].entry(pre_i).or_insert(0);
                         *entry += 1;
                     }
@@ -3197,8 +4649,13 @@ impl Morphology {
                         .filter(|&j| j != i)
                         .map(|j| (j, neuron_positions[i].dist(neuron_positions[j])))
                         .collect();
-                    distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    let mut neighbors: Vec<usize> = distances.into_iter().take(close_neighbor_target).map(|(j, _)| j).collect();
+                    distances
+                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut neighbors: Vec<usize> = distances
+                        .into_iter()
+                        .take(close_neighbor_target)
+                        .map(|(j, _)| j)
+                        .collect();
                     neighbors.sort_unstable();
                     close_neighbors[i] = neighbors;
                 }
@@ -3213,21 +4670,29 @@ impl Morphology {
                 } else if syn.pre_layer == num_layers as isize {
                     neuron_index_output.get(syn.pre_id).copied()
                 } else {
-                    neuron_index_hidden.get(syn.pre_layer as usize).and_then(|layer| layer.get(syn.pre_id).copied())
+                    neuron_index_hidden
+                        .get(syn.pre_layer as usize)
+                        .and_then(|layer| layer.get(syn.pre_id).copied())
                 };
                 let post_idx = if syn.post_layer == -1 {
                     neuron_index_sensory.get(syn.post_id).copied()
                 } else if syn.post_layer == num_layers as isize {
                     neuron_index_output.get(syn.post_id).copied()
                 } else {
-                    neuron_index_hidden.get(syn.post_layer as usize).and_then(|layer| layer.get(syn.post_id).copied())
+                    neuron_index_hidden
+                        .get(syn.post_layer as usize)
+                        .and_then(|layer| layer.get(syn.post_id).copied())
                 };
                 if let (Some(pre_i), Some(post_i)) = (pre_idx, post_idx) {
                     conn_counts[pre_i] += 1;
                     conn_counts[post_i] += 1;
                     if close_neighbor_target > 0 {
-                        if is_close_neighbor(&close_neighbors[pre_i], post_i) { close_conn_counts[pre_i] += 1; }
-                        if is_close_neighbor(&close_neighbors[post_i], pre_i) { close_conn_counts[post_i] += 1; }
+                        if is_close_neighbor(&close_neighbors[pre_i], post_i) {
+                            close_conn_counts[pre_i] += 1;
+                        }
+                        if is_close_neighbor(&close_neighbors[post_i], pre_i) {
+                            close_conn_counts[post_i] += 1;
+                        }
                     }
                 }
             }
@@ -3245,7 +4710,9 @@ impl Morphology {
         if is_aarnn && max_conn_per_neuron > 0 {
             let max_conn_f = max_conn_per_neuron as f32;
             let sparsity = ((max_conn_f - mean_conn) / max_conn_f).clamp(0.0, 1.0);
-            pair_cap = ((pair_cap as f32) * (1.0 + 0.8 * sparsity)).round().clamp(1.0, 6.0) as usize;
+            pair_cap = ((pair_cap as f32) * (1.0 + 0.8 * sparsity))
+                .round()
+                .clamp(1.0, 6.0) as usize;
         }
 
         // 2. Growth & Seeking: Tiered rates and whole-length dendritic growth
@@ -3265,218 +4732,253 @@ impl Morphology {
             }
             acc.mul(1.0 / somas.len() as f32)
         };
-        let layer_centers: Vec<Point3> = self.somas.iter().map(|layer| soma_centroid(layer)).collect();
+        let layer_centers: Vec<Point3> = self
+            .somas
+            .iter()
+            .map(|layer| soma_centroid(layer))
+            .collect();
         let sensory_center = soma_centroid(&self.sensory_somas);
         let output_center = soma_centroid(&self.output_somas);
         let has_sensory = !self.sensory_somas.is_empty();
         let has_output = !self.output_somas.is_empty();
-        let preferred_growth_dir = |layer_idx: isize, soma_pos: Point3, is_dendrite: bool| -> Point3 {
-            if !is_aarnn {
-                return Point3::default();
-            }
-            let mut target = Point3::default();
-            let mut weight = 0.0f32;
+        let preferred_growth_dir =
+            |layer_idx: isize, soma_pos: Point3, is_dendrite: bool| -> Point3 {
+                if !is_aarnn {
+                    return Point3::default();
+                }
+                let mut target = Point3::default();
+                let mut weight = 0.0f32;
 
-            if is_dendrite {
-                if layer_idx == num_layers as isize {
-                    if out_l < layer_centers.len() {
-                        target = target.add(layer_centers[out_l].mul(1.3));
-                        weight += 1.3;
+                if is_dendrite {
+                    if layer_idx == num_layers as isize {
+                        if out_l < layer_centers.len() {
+                            target = target.add(layer_centers[out_l].mul(1.3));
+                            weight += 1.3;
+                        }
+                    } else if layer_idx == -1 {
+                        if in_l < layer_centers.len() {
+                            target = target.add(layer_centers[in_l].mul(1.1));
+                            weight += 1.1;
+                        }
+                    } else if layer_idx >= 0 {
+                        let l = layer_idx as usize;
+                        if l > 0 && (l - 1) < layer_centers.len() {
+                            target = target.add(layer_centers[l - 1]);
+                            weight += 1.0;
+                        }
+                        if l == in_l && has_sensory {
+                            target = target.add(sensory_center.mul(1.4));
+                            weight += 1.4;
+                        }
+                        if (l + 1) < layer_centers.len() {
+                            target = target.add(layer_centers[l + 1].mul(0.35));
+                            weight += 0.35;
+                        }
                     }
-                } else if layer_idx == -1 {
-                    if in_l < layer_centers.len() {
-                        target = target.add(layer_centers[in_l].mul(1.1));
-                        weight += 1.1;
-                    }
-                } else if layer_idx >= 0 {
-                    let l = layer_idx as usize;
-                    if l > 0 && (l - 1) < layer_centers.len() {
-                        target = target.add(layer_centers[l - 1]);
-                        weight += 1.0;
-                    }
-                    if l == in_l && has_sensory {
-                        target = target.add(sensory_center.mul(1.4));
-                        weight += 1.4;
-                    }
-                    if (l + 1) < layer_centers.len() {
-                        target = target.add(layer_centers[l + 1].mul(0.35));
-                        weight += 0.35;
+                } else {
+                    if layer_idx == -1 {
+                        if in_l < layer_centers.len() {
+                            target = target.add(layer_centers[in_l].mul(1.4));
+                            weight += 1.4;
+                        }
+                    } else if layer_idx >= 0 {
+                        let l = layer_idx as usize;
+                        if (l + 1) < layer_centers.len() {
+                            target = target.add(layer_centers[l + 1]);
+                            weight += 1.0;
+                        }
+                        if l == out_l && has_output {
+                            target = target.add(output_center.mul(1.3));
+                            weight += 1.3;
+                        }
+                        if weight <= 0.0 && has_output {
+                            target = target.add(output_center);
+                            weight += 1.0;
+                        }
                     }
                 }
-            } else {
-                if layer_idx == -1 {
-                    if in_l < layer_centers.len() {
-                        target = target.add(layer_centers[in_l].mul(1.4));
-                        weight += 1.4;
-                    }
-                } else if layer_idx >= 0 {
-                    let l = layer_idx as usize;
-                    if (l + 1) < layer_centers.len() {
-                        target = target.add(layer_centers[l + 1]);
-                        weight += 1.0;
-                    }
-                    if l == out_l && has_output {
-                        target = target.add(output_center.mul(1.3));
-                        weight += 1.3;
-                    }
-                    if weight <= 0.0 && has_output {
-                        target = target.add(output_center);
-                        weight += 1.0;
-                    }
-                }
-            }
 
-            if weight <= 0.0 {
-                return Point3::default();
-            }
-            target.mul(1.0 / weight).sub(soma_pos).normalize()
-        };
+                if weight <= 0.0 {
+                    return Point3::default();
+                }
+                target.mul(1.0 / weight).sub(soma_pos).normalize()
+            };
 
         for l in 0..num_layers {
             let soma_layer = &self.somas[l];
-            
+
             #[cfg(feature = "parallel")]
-            let neuron_results: Vec<(usize, Vec<DendSeg>, Vec<AxonSeg>, Vec<(usize, Point3, bool)>)> = self.dendrites[l].par_iter().zip(self.axons[l].par_iter()).enumerate().map(|(j, (dendrite, axon))| {
-                let soma = &soma_layer[j];
-                let mut local_trunk_rate = config.trunk_growth_rate;
-                let mut local_branch_rate = config.branch_growth_rate;
-                if let Some(tname) = &soma.type_name {
-                    if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        let factor = ntype.bio_params.synaptic_gain as f32;
-                        local_trunk_rate *= factor;
-                        local_branch_rate *= factor;
-                    }
-                }
-                let trunk_rate = local_trunk_rate * dt;
-                let branch_rate = local_branch_rate * dt;
-
-                let soma_pos = soma.pos;
-                let dend_pref = preferred_growth_dir(l as isize, soma_pos, true);
-                let axon_pref = preferred_growth_dir(l as isize, soma_pos, false);
-                let mut d_branches = dendrite.tree.branches.clone();
-                let mut a_segments = axon.segments.clone();
-                let mut updates = Vec::new();
-                
-                // --- Dendrite Tree Evolution ---
-                if !d_branches.is_empty() {
-                    let mut hub_pos = d_branches[0].from;
-                    let mut moved = false;
-                    let mut branch_updates = Vec::new();
-
-                    for seg_idx in 0..d_branches.len() {
-                        if d_branches[seg_idx].parent_idx.is_some() {
-                            let old_p = d_branches[seg_idx].from;
-                            let stimuli = d_branches[seg_idx].stimuli;
-                            let syn_idx = d_branches[seg_idx].syn_index;
-
-                            let best_p = self.seek_energy_biased(
-                                old_p,
-                                attraction_r,
-                                kernel_k,
-                                bouton_rate,
-                                dend_pref,
-                                if is_aarnn { 0.55 } else { 0.0 },
-                                if is_aarnn { Some(soma_pos) } else { None },
-                                if is_aarnn { 0.08 } else { 0.0 },
-                            );
-                            let hub_diff = hub_pos.sub(best_p);
-                            let delta_l = (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                            let new_p = best_p.add(hub_diff.normalize().mul(-delta_l));
-
-                            branch_updates.push((seg_idx, new_p, syn_idx));
-                            moved = true;
+            let neuron_results: Vec<(
+                usize,
+                Vec<DendSeg>,
+                Vec<AxonSeg>,
+                Vec<(usize, Point3, bool)>,
+            )> = self.dendrites[l]
+                .par_iter()
+                .zip(self.axons[l].par_iter())
+                .enumerate()
+                .map(|(j, (dendrite, axon))| {
+                    let soma = &soma_layer[j];
+                    let mut local_trunk_rate = config.trunk_growth_rate;
+                    let mut local_branch_rate = config.branch_growth_rate;
+                    if let Some(tname) = &soma.type_name {
+                        if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
+                            let factor = ntype.bio_params.synaptic_gain as f32;
+                            local_trunk_rate *= factor;
+                            local_branch_rate *= factor;
                         }
                     }
+                    let trunk_rate = local_trunk_rate * dt;
+                    let branch_rate = local_branch_rate * dt;
 
-                    if moved {
-                        for &(seg_idx, new_p, syn_idx) in &branch_updates {
-                            d_branches[seg_idx].from = new_p;
-                            if let Some(si) = syn_idx { updates.push((si, new_p, false)); }
+                    let soma_pos = soma.pos;
+                    let dend_pref = preferred_growth_dir(l as isize, soma_pos, true);
+                    let axon_pref = preferred_growth_dir(l as isize, soma_pos, false);
+                    let mut d_branches = dendrite.tree.branches.clone();
+                    let mut a_segments = axon.segments.clone();
+                    let mut updates = Vec::new();
+
+                    // --- Dendrite Tree Evolution ---
+                    if !d_branches.is_empty() {
+                        let mut hub_pos = d_branches[0].from;
+                        let mut moved = false;
+                        let mut branch_updates = Vec::new();
+
+                        for seg_idx in 0..d_branches.len() {
+                            if d_branches[seg_idx].parent_idx.is_some() {
+                                let old_p = d_branches[seg_idx].from;
+                                let stimuli = d_branches[seg_idx].stimuli;
+                                let syn_idx = d_branches[seg_idx].syn_index;
+
+                                let best_p = self.seek_energy_biased(
+                                    old_p,
+                                    attraction_r,
+                                    kernel_k,
+                                    bouton_rate,
+                                    dend_pref,
+                                    if is_aarnn { 0.55 } else { 0.0 },
+                                    if is_aarnn { Some(soma_pos) } else { None },
+                                    if is_aarnn { 0.08 } else { 0.0 },
+                                );
+                                let hub_diff = hub_pos.sub(best_p);
+                                let delta_l =
+                                    (stimuli - config.synaptic_growth_threshold) * branch_rate;
+                                let new_p = best_p.add(hub_diff.normalize().mul(-delta_l));
+
+                                branch_updates.push((seg_idx, new_p, syn_idx));
+                                moved = true;
+                            }
                         }
 
-                        let mut target_hub = soma_pos;
-                        let mut count = 1.0;
-                        for seg in &d_branches {
-                            if seg.parent_idx.is_some() { target_hub = target_hub.add(seg.from); count += 1.0; }
-                        }
-                        target_hub = target_hub.mul(1.0 / count);
-                        hub_pos = hub_pos.lerp(target_hub, trunk_rate);
-                        
-                        d_branches[0].from = hub_pos;
-                        d_branches[0].to = soma_pos;
-                        for seg in &mut d_branches {
-                            if seg.parent_idx.is_some() { seg.to = hub_pos; }
-                            seg.length = seg.from.dist(seg.to);
-                            if seg.length > config.max_segment_length {
-                                let dir = seg.from.sub(seg.to).normalize();
-                                seg.from = seg.to.add(dir.mul(config.max_segment_length));
-                                seg.length = config.max_segment_length;
-                                if let Some(si) = seg.syn_index { updates.push((si, seg.from, false)); }
+                        if moved {
+                            for &(seg_idx, new_p, syn_idx) in &branch_updates {
+                                d_branches[seg_idx].from = new_p;
+                                if let Some(si) = syn_idx {
+                                    updates.push((si, new_p, false));
+                                }
+                            }
+
+                            let mut target_hub = soma_pos;
+                            let mut count = 1.0;
+                            for seg in &d_branches {
+                                if seg.parent_idx.is_some() {
+                                    target_hub = target_hub.add(seg.from);
+                                    count += 1.0;
+                                }
+                            }
+                            target_hub = target_hub.mul(1.0 / count);
+                            hub_pos = hub_pos.lerp(target_hub, trunk_rate);
+
+                            d_branches[0].from = hub_pos;
+                            d_branches[0].to = soma_pos;
+                            for seg in &mut d_branches {
+                                if seg.parent_idx.is_some() {
+                                    seg.to = hub_pos;
+                                }
+                                seg.length = seg.from.dist(seg.to);
+                                if seg.length > config.max_segment_length {
+                                    let dir = seg.from.sub(seg.to).normalize();
+                                    seg.from = seg.to.add(dir.mul(config.max_segment_length));
+                                    seg.length = config.max_segment_length;
+                                    if let Some(si) = seg.syn_index {
+                                        updates.push((si, seg.from, false));
+                                    }
+                                }
                             }
                         }
                     }
-                }
 
-                // --- Axon Tree Evolution ---
-                if !a_segments.is_empty() {
-                    let mut hillock_pos = a_segments[0].to;
-                    let mut moved = false;
-                    let mut terminal_updates = Vec::new();
+                    // --- Axon Tree Evolution ---
+                    if !a_segments.is_empty() {
+                        let mut hillock_pos = a_segments[0].to;
+                        let mut moved = false;
+                        let mut terminal_updates = Vec::new();
 
-                    for seg_idx in 0..a_segments.len() {
-                        if a_segments[seg_idx].parent_idx.is_some() {
-                            let old_p = a_segments[seg_idx].to;
-                            let stimuli = a_segments[seg_idx].stimuli;
-                            let syn_idx = a_segments[seg_idx].syn_index;
-                            
-                            let best_p = self.seek_energy_biased(
-                                old_p,
-                                attraction_r,
-                                kernel_k,
-                                bouton_rate,
-                                axon_pref,
-                                if is_aarnn { 0.65 } else { 0.0 },
-                                if is_aarnn { Some(soma_pos) } else { None },
-                                if is_aarnn { 0.03 } else { 0.0 },
-                            );
-                            let h_diff = best_p.sub(hillock_pos);
-                            let delta_l = (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                            let new_p = best_p.add(h_diff.normalize().mul(delta_l));
-                            
-                            terminal_updates.push((seg_idx, new_p, syn_idx));
-                            moved = true;
-                        }
-                    }
+                        for seg_idx in 0..a_segments.len() {
+                            if a_segments[seg_idx].parent_idx.is_some() {
+                                let old_p = a_segments[seg_idx].to;
+                                let stimuli = a_segments[seg_idx].stimuli;
+                                let syn_idx = a_segments[seg_idx].syn_index;
 
-                    if moved {
-                        for &(seg_idx, new_p, syn_idx) in &terminal_updates {
-                            a_segments[seg_idx].to = new_p;
-                            if let Some(si) = syn_idx { updates.push((si, new_p, true)); }
+                                let best_p = self.seek_energy_biased(
+                                    old_p,
+                                    attraction_r,
+                                    kernel_k,
+                                    bouton_rate,
+                                    axon_pref,
+                                    if is_aarnn { 0.65 } else { 0.0 },
+                                    if is_aarnn { Some(soma_pos) } else { None },
+                                    if is_aarnn { 0.03 } else { 0.0 },
+                                );
+                                let h_diff = best_p.sub(hillock_pos);
+                                let delta_l =
+                                    (stimuli - config.synaptic_growth_threshold) * branch_rate;
+                                let new_p = best_p.add(h_diff.normalize().mul(delta_l));
+
+                                terminal_updates.push((seg_idx, new_p, syn_idx));
+                                moved = true;
+                            }
                         }
 
-                        let mut target_hillock = soma_pos;
-                        let mut count = 1.0;
-                        for seg in &a_segments {
-                            if seg.parent_idx.is_some() { target_hillock = target_hillock.add(seg.to); count += 1.0; }
-                        }
-                        target_hillock = target_hillock.mul(1.0 / count);
-                        hillock_pos = hillock_pos.lerp(target_hillock, trunk_rate);
-                        
-                        a_segments[0].to = hillock_pos;
-                        for seg in &mut a_segments {
-                            if seg.parent_idx.is_some() { seg.from = hillock_pos; }
-                            seg.length = seg.from.dist(seg.to);
-                            if seg.length > config.max_segment_length {
-                                let dir = seg.to.sub(seg.from).normalize();
-                                seg.to = seg.from.add(dir.mul(config.max_segment_length));
-                                seg.length = config.max_segment_length;
-                                if let Some(si) = seg.syn_index { updates.push((si, seg.to, true)); }
+                        if moved {
+                            for &(seg_idx, new_p, syn_idx) in &terminal_updates {
+                                a_segments[seg_idx].to = new_p;
+                                if let Some(si) = syn_idx {
+                                    updates.push((si, new_p, true));
+                                }
+                            }
+
+                            let mut target_hillock = soma_pos;
+                            let mut count = 1.0;
+                            for seg in &a_segments {
+                                if seg.parent_idx.is_some() {
+                                    target_hillock = target_hillock.add(seg.to);
+                                    count += 1.0;
+                                }
+                            }
+                            target_hillock = target_hillock.mul(1.0 / count);
+                            hillock_pos = hillock_pos.lerp(target_hillock, trunk_rate);
+
+                            a_segments[0].to = hillock_pos;
+                            for seg in &mut a_segments {
+                                if seg.parent_idx.is_some() {
+                                    seg.from = hillock_pos;
+                                }
+                                seg.length = seg.from.dist(seg.to);
+                                if seg.length > config.max_segment_length {
+                                    let dir = seg.to.sub(seg.from).normalize();
+                                    seg.to = seg.from.add(dir.mul(config.max_segment_length));
+                                    seg.length = config.max_segment_length;
+                                    if let Some(si) = seg.syn_index {
+                                        updates.push((si, seg.to, true));
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                (j, d_branches, a_segments, updates)
-            }).collect();
+                    (j, d_branches, a_segments, updates)
+                })
+                .collect();
 
             #[cfg(feature = "parallel")]
             for (j, d_branches, a_segments, updates) in neuron_results {
@@ -3499,7 +5001,7 @@ impl Morphology {
                 }
                 let trunk_rate = local_trunk_rate * dt;
                 let branch_rate = local_branch_rate * dt;
-                
+
                 let soma_pos = soma.pos;
                 let dend_pref = preferred_growth_dir(l as isize, soma_pos, true);
                 let axon_pref = preferred_growth_dir(l as isize, soma_pos, false);
@@ -3509,7 +5011,10 @@ impl Morphology {
                     let mut moved = false;
                     let mut branch_updates = Vec::new();
                     for seg_idx in 0..self.dendrites[l][j].tree.branches.len() {
-                        if self.dendrites[l][j].tree.branches[seg_idx].parent_idx.is_some() {
+                        if self.dendrites[l][j].tree.branches[seg_idx]
+                            .parent_idx
+                            .is_some()
+                        {
                             let old_p = self.dendrites[l][j].tree.branches[seg_idx].from;
                             let stimuli = self.dendrites[l][j].tree.branches[seg_idx].stimuli;
                             let syn_idx = self.dendrites[l][j].tree.branches[seg_idx].syn_index;
@@ -3524,7 +5029,8 @@ impl Morphology {
                                 if is_aarnn { 0.08 } else { 0.0 },
                             );
                             let hub_diff = hub_pos.sub(best_p);
-                            let delta_l = (stimuli - config.synaptic_growth_threshold) * branch_rate;
+                            let delta_l =
+                                (stimuli - config.synaptic_growth_threshold) * branch_rate;
                             let new_p = best_p.add(hub_diff.normalize().mul(-delta_l));
                             branch_updates.push((seg_idx, new_p, syn_idx));
                             moved = true;
@@ -3534,25 +5040,34 @@ impl Morphology {
                         let dend = &mut self.dendrites[l][j];
                         for (seg_idx, new_p, syn_idx) in branch_updates {
                             dend.tree.branches[seg_idx].from = new_p;
-                            if let Some(si) = syn_idx { synapse_pos_updates.push((si, new_p, false)); }
+                            if let Some(si) = syn_idx {
+                                synapse_pos_updates.push((si, new_p, false));
+                            }
                         }
                         let mut target_hub = soma_pos;
                         let mut count = 1.0;
                         for seg in &dend.tree.branches {
-                            if seg.parent_idx.is_some() { target_hub = target_hub.add(seg.from); count += 1.0; }
+                            if seg.parent_idx.is_some() {
+                                target_hub = target_hub.add(seg.from);
+                                count += 1.0;
+                            }
                         }
                         target_hub = target_hub.mul(1.0 / count);
                         hub_pos = hub_pos.lerp(target_hub, trunk_rate);
                         dend.tree.branches[0].from = hub_pos;
                         dend.tree.branches[0].to = soma_pos;
                         for seg in &mut dend.tree.branches {
-                            if seg.parent_idx.is_some() { seg.to = hub_pos; }
+                            if seg.parent_idx.is_some() {
+                                seg.to = hub_pos;
+                            }
                             seg.length = seg.from.dist(seg.to);
                             if seg.length > config.max_segment_length {
                                 let dir = seg.from.sub(seg.to).normalize();
                                 seg.from = seg.to.add(dir.mul(config.max_segment_length));
                                 seg.length = config.max_segment_length;
-                                if let Some(si) = seg.syn_index { synapse_pos_updates.push((si, seg.from, false)); }
+                                if let Some(si) = seg.syn_index {
+                                    synapse_pos_updates.push((si, seg.from, false));
+                                }
                             }
                         }
                     }
@@ -3578,7 +5093,8 @@ impl Morphology {
                                 if is_aarnn { 0.03 } else { 0.0 },
                             );
                             let h_diff = best_p.sub(hillock_pos);
-                            let delta_l = (stimuli - config.synaptic_growth_threshold) * branch_rate;
+                            let delta_l =
+                                (stimuli - config.synaptic_growth_threshold) * branch_rate;
                             let new_p = best_p.add(h_diff.normalize().mul(delta_l));
                             terminal_updates.push((seg_idx, new_p, syn_idx));
                             moved = true;
@@ -3588,24 +5104,33 @@ impl Morphology {
                         let ax = &mut self.axons[l][j];
                         for (seg_idx, new_p, syn_idx) in terminal_updates {
                             ax.segments[seg_idx].to = new_p;
-                            if let Some(si) = syn_idx { synapse_pos_updates.push((si, new_p, true)); }
+                            if let Some(si) = syn_idx {
+                                synapse_pos_updates.push((si, new_p, true));
+                            }
                         }
                         let mut target_hillock = soma_pos;
                         let mut count = 1.0;
                         for seg in &ax.segments {
-                            if seg.parent_idx.is_some() { target_hillock = target_hillock.add(seg.to); count += 1.0; }
+                            if seg.parent_idx.is_some() {
+                                target_hillock = target_hillock.add(seg.to);
+                                count += 1.0;
+                            }
                         }
                         target_hillock = target_hillock.mul(1.0 / count);
                         hillock_pos = hillock_pos.lerp(target_hillock, trunk_rate);
                         ax.segments[0].to = hillock_pos;
                         for seg in &mut ax.segments {
-                            if seg.parent_idx.is_some() { seg.from = hillock_pos; }
+                            if seg.parent_idx.is_some() {
+                                seg.from = hillock_pos;
+                            }
                             seg.length = seg.from.dist(seg.to);
                             if seg.length > config.max_segment_length {
                                 let dir = seg.to.sub(seg.from).normalize();
                                 seg.to = seg.from.add(dir.mul(config.max_segment_length));
                                 seg.length = config.max_segment_length;
-                                if let Some(si) = seg.syn_index { synapse_pos_updates.push((si, seg.to, true)); }
+                                if let Some(si) = seg.syn_index {
+                                    synapse_pos_updates.push((si, seg.to, true));
+                                }
                             }
                         }
                     }
@@ -3625,19 +5150,27 @@ impl Morphology {
 
         // Axon Sprouting (Refined: tree root style, space-aware)
         for l_idx in -1..=(num_layers as isize) {
-            let axons = if l_idx == -1 { &self.sensory_axons }
-                        else if l_idx == num_layers as isize { &self.output_axons }
-                        else { &self.axons[l_idx as usize] };
+            let axons = if l_idx == -1 {
+                &self.sensory_axons
+            } else if l_idx == num_layers as isize {
+                &self.output_axons
+            } else {
+                &self.axons[l_idx as usize]
+            };
 
             for j in 0..axons.len() {
-                let soma = if l_idx == -1 { &self.sensory_somas[j] } 
-                               else if l_idx == num_layers as isize { &self.output_somas[j] }
-                               else { &self.somas[l_idx as usize][j] };
+                let soma = if l_idx == -1 {
+                    &self.sensory_somas[j]
+                } else if l_idx == num_layers as isize {
+                    &self.output_somas[j]
+                } else {
+                    &self.somas[l_idx as usize][j]
+                };
                 let soma_pos = soma.pos;
                 let axon_pref = preferred_growth_dir(l_idx, soma_pos, false);
                 let local_e = self.energy_at(soma_pos, attraction_r, kernel_k);
                 stats.axon_sprout_attempts += 1;
-                
+
                 let mut local_sprout_p = sprout_p;
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
@@ -3645,11 +5178,11 @@ impl Morphology {
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (0.4 + local_e * 2.0);
-                
+
                 if fastrand::f32() < effective_sprout_p {
                     stats.axon_sprout_successes += 1;
                     let axon = &axons[j];
-                    
+
                     // Sprout from end of a segment OR midway along a segment OR from soma if empty
                     let (p, parent_idx) = if axon.segments.is_empty() {
                         (soma_pos, None)
@@ -3659,7 +5192,8 @@ impl Morphology {
                         let pos = if fastrand::f32() < 0.5 {
                             parent_seg.to // end of axon branch
                         } else {
-                            parent_seg.from.lerp(parent_seg.to, fastrand::f32()) // midway
+                            parent_seg.from.lerp(parent_seg.to, fastrand::f32())
+                            // midway
                         };
                         (pos, Some(pidx))
                     };
@@ -3667,12 +5201,12 @@ impl Morphology {
                     // Space occupancy check: ensure no two branches sprout from same/near origin
                     let mut too_near = false;
                     for s in &axon.segments {
-                        if s.from.dist(p) < 0.015 { 
+                        if s.from.dist(p) < 0.015 {
                             too_near = true;
                             break;
                         }
                     }
-                    
+
                     if !too_near {
                         let best_p = self.seek_energy_biased(
                             p,
@@ -3686,13 +5220,35 @@ impl Morphology {
                         );
                         if best_p.dist(p) > 0.005 {
                             if is_trace {
-                                let name = if l_idx == -1 { "sensory".to_string() } 
-                                           else if l_idx == num_layers as isize { "output".to_string() }
-                                           else { format!("hidden {}", l_idx) };
-                                nm_log!("[trace] axon sprouted: {}:{} at {:?} -> {:?} - energy {:.4}", 
-                                    name, j, p, best_p, local_e);
+                                let name = if l_idx == -1 {
+                                    "sensory".to_string()
+                                } else if l_idx == num_layers as isize {
+                                    "output".to_string()
+                                } else {
+                                    format!("hidden {}", l_idx)
+                                };
+                                nm_log!(
+                                    "[trace] axon sprouted: {}:{} at {:?} -> {:?} - energy {:.4}",
+                                    name,
+                                    j,
+                                    p,
+                                    best_p,
+                                    local_e
+                                );
                             }
-                            new_axon_branches.push((l_idx, j, AxonSeg { from: p, to: best_p, length: p.dist(best_p), stimuli: 0.5, parent_idx, syn_index: None, is_trunk: axon.segments.is_empty() }));
+                            new_axon_branches.push((
+                                l_idx,
+                                j,
+                                AxonSeg {
+                                    from: p,
+                                    to: best_p,
+                                    length: p.dist(best_p),
+                                    stimuli: 0.5,
+                                    parent_idx,
+                                    syn_index: None,
+                                    is_trunk: axon.segments.is_empty(),
+                                },
+                            ));
                         }
                     }
                 }
@@ -3742,7 +5298,13 @@ impl Morphology {
                         y: aseg.from.y.max(aseg.to.y),
                         z: aseg.from.z.max(aseg.to.z),
                     };
-                    seg_refs.push(SegRef { l: al as isize, j: aj, si: asi, min, max });
+                    seg_refs.push(SegRef {
+                        l: al as isize,
+                        j: aj,
+                        si: asi,
+                        min,
+                        max,
+                    });
                 }
             }
         }
@@ -3778,7 +5340,13 @@ impl Morphology {
                     y: aseg.from.y.max(aseg.to.y),
                     z: aseg.from.z.max(aseg.to.z),
                 };
-                seg_refs.push(SegRef { l: -1, j: aj, si: asi, min, max });
+                seg_refs.push(SegRef {
+                    l: -1,
+                    j: aj,
+                    si: asi,
+                    min,
+                    max,
+                });
             }
         }
 
@@ -3786,11 +5354,7 @@ impl Morphology {
 
         let mut budget_exhausted = false;
         let mut probe_rr = 0usize;
-        fn is_pair_full(
-            pair_counts: &FastHashMap<u64, usize>,
-            key: u64,
-            pair_cap: usize,
-        ) -> bool {
+        fn is_pair_full(pair_counts: &FastHashMap<u64, usize>, key: u64, pair_cap: usize) -> bool {
             pair_counts.get(&key).copied().unwrap_or(0) >= pair_cap
         }
         fn allow_conn_soft(count: usize, max_conn: usize) -> bool {
@@ -3813,19 +5377,28 @@ impl Morphology {
             let (skip_threshold, cap_base) = if is_aarnn {
                 let dyn_skip_base = (t_ema - t_dev * 0.5).max(ambient * 1.1);
                 let dyn_skip = (dyn_skip_base * t_skip).min(t_ema + t_dev * 1.5);
-                let base = (24.0 * (t_ema / (ambient + 0.05)).clamp(0.6, 1.6)).clamp(16.0, 48.0) * t_cap;
+                let base =
+                    (24.0 * (t_ema / (ambient + 0.05)).clamp(0.6, 1.6)).clamp(16.0, 48.0) * t_cap;
                 (dyn_skip, base)
             } else {
                 (ambient * 1.5, 32.0)
             };
             let is_output = l_idx == num_layers as isize;
             let is_sensory = l_idx == -1;
-            let dendrites_layer = if is_sensory { &self.sensory_dendrites } 
-                                  else if is_output { &self.output_dendrites } 
-                                  else { &self.dendrites[l_idx as usize] };
-            let somas_layer = if is_sensory { &self.sensory_somas }
-                              else if is_output { &self.output_somas } 
-                              else { &self.somas[l_idx as usize] };
+            let dendrites_layer = if is_sensory {
+                &self.sensory_dendrites
+            } else if is_output {
+                &self.output_dendrites
+            } else {
+                &self.dendrites[l_idx as usize]
+            };
+            let somas_layer = if is_sensory {
+                &self.sensory_somas
+            } else if is_output {
+                &self.output_somas
+            } else {
+                &self.somas[l_idx as usize]
+            };
 
             for j in 0..dendrites_layer.len() {
                 let soma_pos = somas_layer[j].pos;
@@ -3835,11 +5408,15 @@ impl Morphology {
                 } else if l_idx == num_layers as isize {
                     neuron_index_output.get(j).copied()
                 } else {
-                    neuron_index_hidden.get(l_idx as usize).and_then(|layer| layer.get(j).copied())
+                    neuron_index_hidden
+                        .get(l_idx as usize)
+                        .and_then(|layer| layer.get(j).copied())
                 };
                 let mut homeo_boost = 1.0;
                 if is_aarnn && target_conn > 0.0 {
-                    let conn = post_idx.and_then(|idx| conn_counts.get(idx).copied()).unwrap_or(0);
+                    let conn = post_idx
+                        .and_then(|idx| conn_counts.get(idx).copied())
+                        .unwrap_or(0);
                     let deficit = ((target_conn - conn as f32) / target_conn).clamp(0.0, 1.0);
                     homeo_boost = 1.0 + deficit * 0.4;
                 }
@@ -3851,32 +5428,34 @@ impl Morphology {
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (1.0 + local_e * 5.0) * homeo_boost;
-                
+
                 // Sprouting: Triggered by nearby synaptic energy peaks (Refined: tree root style, space-aware)
                 stats.dendrite_sprout_attempts += 1;
                 if fastrand::f32() < effective_sprout_p {
                     let dend = &dendrites_layer[j];
                     let dend_pref = preferred_growth_dir(l_idx, soma_pos, true);
                     // Decide: new trunk from soma OR branch from existing segment
-                    let (base_pos, parent_idx, is_trunk) = if fastrand::f32() < 0.2 || dend.tree.branches.is_empty() {
-                        (soma_pos, None, true)
-                    } else {
-                        let idx = fastrand::usize(..dend.tree.branches.len());
-                        let pseg = &dend.tree.branches[idx];
-                        let p = if fastrand::f32() < 0.5 {
-                            pseg.from // end of dendrite branch
+                    let (base_pos, parent_idx, is_trunk) =
+                        if fastrand::f32() < 0.2 || dend.tree.branches.is_empty() {
+                            (soma_pos, None, true)
                         } else {
-                            pseg.from.lerp(pseg.to, fastrand::f32()) // midway
+                            let idx = fastrand::usize(..dend.tree.branches.len());
+                            let pseg = &dend.tree.branches[idx];
+                            let p = if fastrand::f32() < 0.5 {
+                                pseg.from // end of dendrite branch
+                            } else {
+                                pseg.from.lerp(pseg.to, fastrand::f32()) // midway
+                            };
+                            (p, Some(idx), false)
                         };
-                        (p, Some(idx), false)
-                    };
 
                     // Space occupancy check: ensure no two branches sprout from same/near origin
                     let mut too_near = false;
                     for s in &dend.tree.branches {
                         // Allow multiple trunks to originate from soma, but check other origins
-                        if base_pos.dist(soma_pos) > 1e-4 && s.to.dist(base_pos) < 0.015 { 
-                            too_near = true; break; 
+                        if base_pos.dist(soma_pos) > 1e-4 && s.to.dist(base_pos) < 0.015 {
+                            too_near = true;
+                            break;
                         }
                     }
 
@@ -3894,7 +5473,7 @@ impl Morphology {
                             if is_aarnn { 0.10 } else { 0.0 },
                         );
                         let max_e = self.energy_at(best_p, attraction_r, kernel_k);
-                        
+
                         if max_e > 0.1 {
                             let mut len = base_pos.dist(best_p);
                             if len <= 0.001 && is_aarnn {
@@ -3909,7 +5488,11 @@ impl Morphology {
                                     dx *= inv;
                                     dy *= inv;
                                     dz *= inv;
-                                    Point3 { x: dx, y: dy, z: dz }
+                                    Point3 {
+                                        x: dx,
+                                        y: dy,
+                                        z: dz,
+                                    }
                                 };
                                 best_p = Point3 {
                                     x: (base_pos.x + step_dir.x * step).clamp(-1.0, 1.0),
@@ -3921,14 +5504,30 @@ impl Morphology {
                             if len > 0.001 {
                                 stats.dendrite_sprout_successes += 1;
                                 if is_trace {
-                                    let name = if is_sensory { "sensory".to_string() }
-                                               else if is_output { "output".to_string() } 
-                                               else { format!("hidden {}", l_idx) };
+                                    let name = if is_sensory {
+                                        "sensory".to_string()
+                                    } else if is_output {
+                                        "output".to_string()
+                                    } else {
+                                        format!("hidden {}", l_idx)
+                                    };
                                     nm_log!("[trace] dendrite sprouted: {}:{} at {:?} -> {:?} - energy {:.4}", 
                                         name, j, best_p, base_pos, local_e);
                                 }
                                 // Sprout a new branch/trunk towards the energy peak
-                                new_dendrite_branches.push((l_idx, j, DendSeg { from: best_p, to: base_pos, length: len, stimuli: 0.5, parent_idx, syn_index: None, is_trunk }));
+                                new_dendrite_branches.push((
+                                    l_idx,
+                                    j,
+                                    DendSeg {
+                                        from: best_p,
+                                        to: base_pos,
+                                        length: len,
+                                        stimuli: 0.5,
+                                        parent_idx,
+                                        syn_index: None,
+                                        is_trunk,
+                                    },
+                                ));
                                 observe_hit!("morphology/dendrite_sprouted");
                             }
                         } else {
@@ -3950,7 +5549,7 @@ impl Morphology {
                         stats.contact_tip_energy_min = stats.contact_tip_energy_min.min(tip_energy);
                         stats.contact_tip_energy_max = stats.contact_tip_energy_max.max(tip_energy);
                     }
-                    
+
                     let mut low_energy_probe = false;
                     if tip_energy < skip_threshold {
                         stats.contact_skipped_low_energy += 1;
@@ -3976,7 +5575,9 @@ impl Morphology {
                     let mut made_connection = false;
                     if is_aarnn {
                         if let Some(post_i) = post_idx {
-                            if max_conn_per_neuron > 0 && !allow_conn_soft(conn_counts[post_i], max_conn_per_neuron) {
+                            if max_conn_per_neuron > 0
+                                && !allow_conn_soft(conn_counts[post_i], max_conn_per_neuron)
+                            {
                                 stats.contact_post_cap_skips += 1;
                                 continue;
                             }
@@ -4021,13 +5622,18 @@ impl Morphology {
                                     stats.contact_checks += 1;
                                     if let Some(post_i) = post_idx {
                                         if let Some(list) = connected_pre_by_post.get(post_i) {
-                                            if list.get(&pre_idx).copied().unwrap_or(0) >= pair_cap {
+                                            if list.get(&pre_idx).copied().unwrap_or(0) >= pair_cap
+                                            {
                                                 stats.contact_existing_skips += 1;
                                                 continue;
                                             }
                                         }
                                     }
-                                    if is_pair_full(&pair_counts, pack_neuron_pair(al, aj, l_idx, j), pair_cap) {
+                                    if is_pair_full(
+                                        &pair_counts,
+                                        pack_neuron_pair(al, aj, l_idx, j),
+                                        pair_cap,
+                                    ) {
                                         stats.contact_existing_skips += 1;
                                         if !pre_full_marks.is_empty() {
                                             pre_full_marks[pre_idx] = tip_mark;
@@ -4040,12 +5646,20 @@ impl Morphology {
                                     let compatible = if al == -1 {
                                         if l_idx != in_l as isize {
                                             false
-                                        } else if aj < sensory_conn_counts.len() && sensory_conn_counts[aj] >= config.max_sensory_connections {
+                                        } else if aj < sensory_conn_counts.len()
+                                            && sensory_conn_counts[aj]
+                                                >= config.max_sensory_connections
+                                        {
                                             let mut best_si = None;
                                             let mut max_d2 = -1.0;
                                             for &si in &sensory_syn_indices[aj] {
-                                                let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                                if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                                let d2 = self.synapses[si]
+                                                    .pre_site
+                                                    .dist_sq(self.synapses[si].post_site);
+                                                if d2 > max_d2 {
+                                                    max_d2 = d2;
+                                                    best_si = Some(si);
+                                                }
                                             }
                                             if let Some(si) = best_si {
                                                 let pre_pos = neuron_positions[pre_idx];
@@ -4066,12 +5680,20 @@ impl Morphology {
                                     } else if is_output {
                                         if al != out_l as isize {
                                             false
-                                        } else if j < output_conn_counts.len() && output_conn_counts[j] >= config.max_output_connections {
+                                        } else if j < output_conn_counts.len()
+                                            && output_conn_counts[j]
+                                                >= config.max_output_connections
+                                        {
                                             let mut best_si = None;
                                             let mut max_d2 = -1.0;
                                             for &si in &output_syn_indices[j] {
-                                                let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                                if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                                let d2 = self.synapses[si]
+                                                    .pre_site
+                                                    .dist_sq(self.synapses[si].post_site);
+                                                if d2 > max_d2 {
+                                                    max_d2 = d2;
+                                                    best_si = Some(si);
+                                                }
                                             }
                                             if let Some(si) = best_si {
                                                 let pre_pos = neuron_positions[pre_idx];
@@ -4090,7 +5712,9 @@ impl Morphology {
                                             true
                                         }
                                     } else {
-                                        (l_idx == al + 1) || (al == l_idx + 1) || (is_aarnn && l_idx == al)
+                                        (l_idx == al + 1)
+                                            || (al == l_idx + 1)
+                                            || (is_aarnn && l_idx == al)
                                     };
                                     if !compatible {
                                         stats.contact_incompatible += 1;
@@ -4103,8 +5727,14 @@ impl Morphology {
                                             let pre_i = pre_idx;
                                             let post_i = post_idx.unwrap_or(pre_idx);
                                             if is_aarnn && max_conn_per_neuron > 0 {
-                                                let pre_ok = allow_conn_soft(conn_counts[pre_i], max_conn_per_neuron);
-                                                let post_ok = allow_conn_soft(conn_counts[post_i], max_conn_per_neuron);
+                                                let pre_ok = allow_conn_soft(
+                                                    conn_counts[pre_i],
+                                                    max_conn_per_neuron,
+                                                );
+                                                let post_ok = allow_conn_soft(
+                                                    conn_counts[post_i],
+                                                    max_conn_per_neuron,
+                                                );
                                                 if !(pre_ok && post_ok) && migration_idx.is_none() {
                                                     stats.contact_rejected_cap += 1;
                                                     continue;
@@ -4116,20 +5746,42 @@ impl Morphology {
                                                     let old_post_l = self.synapses[si].post_layer;
                                                     let old_post_id = self.synapses[si].post_id;
 
-                                                    let old_pair_key = pack_neuron_pair(old_pre_l, old_pre_id, old_post_l, old_post_id);
-                                                    if let Some(count) = pair_counts.get_mut(&old_pair_key) { if *count > 0 { *count -= 1; } }
-
-                                                    if let (Some(pre_idx_old), Some(post_idx_old)) = (index_of(old_pre_l, old_pre_id), index_of(old_post_l, old_post_id)) {
-                                                        conn_counts[pre_idx_old] = conn_counts[pre_idx_old].saturating_sub(1);
-                                                        conn_counts[post_idx_old] = conn_counts[post_idx_old].saturating_sub(1);
+                                                    let old_pair_key = pack_neuron_pair(
+                                                        old_pre_l,
+                                                        old_pre_id,
+                                                        old_post_l,
+                                                        old_post_id,
+                                                    );
+                                                    if let Some(count) =
+                                                        pair_counts.get_mut(&old_pair_key)
+                                                    {
+                                                        if *count > 0 {
+                                                            *count -= 1;
+                                                        }
                                                     }
-                                                    
+
+                                                    if let (Some(pre_idx_old), Some(post_idx_old)) = (
+                                                        index_of(old_pre_l, old_pre_id),
+                                                        index_of(old_post_l, old_post_id),
+                                                    ) {
+                                                        conn_counts[pre_idx_old] = conn_counts
+                                                            [pre_idx_old]
+                                                            .saturating_sub(1);
+                                                        conn_counts[post_idx_old] = conn_counts
+                                                            [post_idx_old]
+                                                            .saturating_sub(1);
+                                                    }
+
                                                     res.migrations.push(MigrationInfo {
                                                         syn_idx: si,
-                                                        new_pre_l: al, new_pre_id: aj,
-                                                        new_post_l: l_idx, new_post_id: j,
-                                                        new_dsi: seg_idx, new_asi: 0, // Soma probe has no segment
-                                                        new_pre_site: *pre_pos, new_post_site: tip,
+                                                        new_pre_l: al,
+                                                        new_pre_id: aj,
+                                                        new_post_l: l_idx,
+                                                        new_post_id: j,
+                                                        new_dsi: seg_idx,
+                                                        new_asi: 0, // Soma probe has no segment
+                                                        new_pre_site: *pre_pos,
+                                                        new_post_site: tip,
                                                     });
 
                                                     if al == -1 {
@@ -4146,7 +5798,7 @@ impl Morphology {
                                             }
                                             stats.contact_successes += 1;
                                             let w = config.initial_synaptic_weight;
-                                            
+
                                             if migration_idx.is_none() {
                                                 res.new_connections.push((al, aj, l_idx, j, w));
                                                 if al == -1 && aj < sensory_conn_counts.len() {
@@ -4157,29 +5809,53 @@ impl Morphology {
                                                 }
                                                 if is_trace && trace_synapse_count < 100 {
                                                     trace_synapse_count += 1;
-                                                    let pre_name = if al == -1 { "sensory".to_string() } else { format!("hidden {}", al) };
-                                                    let post_name = if is_output { "output".to_string() } else { format!("hidden {}", l_idx) };
+                                                    let pre_name = if al == -1 {
+                                                        "sensory".to_string()
+                                                    } else {
+                                                        format!("hidden {}", al)
+                                                    };
+                                                    let post_name = if is_output {
+                                                        "output".to_string()
+                                                    } else {
+                                                        format!("hidden {}", l_idx)
+                                                    };
                                                     nm_log!("[trace] synapse made (soma-probe): {}:{} -> {}:{} - soma proximity", 
                                                         pre_name, aj, post_name, j);
                                                 }
                                                 observe_hit!("morphology/synapse_formed");
                                                 new_syns.push(Synapse {
-                                                    kind: if al == -1 { SynKind::In } 
-                                                          else if is_output { SynKind::Out }
-                                                          else if al < l_idx { SynKind::HiddenFwd } 
-                                                          else if al > l_idx { SynKind::HiddenBwd }
-                                                          else { SynKind::HiddenRec },
-                                                    pre_layer: al, pre_id: aj,
-                                                    post_layer: l_idx, post_id: j,
-                                                    pre_site: *pre_pos, post_site: tip,
+                                                    kind: if al == -1 {
+                                                        SynKind::In
+                                                    } else if is_output {
+                                                        SynKind::Out
+                                                    } else if al < l_idx {
+                                                        SynKind::HiddenFwd
+                                                    } else if al > l_idx {
+                                                        SynKind::HiddenBwd
+                                                    } else {
+                                                        SynKind::HiddenRec
+                                                    },
+                                                    pre_layer: al,
+                                                    pre_id: aj,
+                                                    post_layer: l_idx,
+                                                    post_id: j,
+                                                    pre_site: *pre_pos,
+                                                    post_site: tip,
                                                     axon_seg_idx: None,
                                                     dend_seg_idx: Some(seg_idx),
-                                                    bend: None, weight: w, p_release: 1.0, delay_ms: 1.0,
+                                                    bend: None,
+                                                    weight: w,
+                                                    p_release: 1.0,
+                                                    delay_ms: 1.0,
                                                     stimuli: 1.0,
                                                 });
-                                                *pair_counts.entry(pack_neuron_pair(al, aj, l_idx, j)).or_insert(0) += 1;
+                                                *pair_counts
+                                                    .entry(pack_neuron_pair(al, aj, l_idx, j))
+                                                    .or_insert(0) += 1;
                                                 if let Some(post_i) = post_idx {
-                                                    if let Some(list) = connected_pre_by_post.get_mut(post_i) {
+                                                    if let Some(list) =
+                                                        connected_pre_by_post.get_mut(post_i)
+                                                    {
                                                         *list.entry(pre_i).or_insert(0) += 1;
                                                     }
                                                 }
@@ -4216,10 +5892,14 @@ impl Morphology {
                                 } else if al == num_layers as isize {
                                     neuron_index_output.get(aj).copied()
                                 } else {
-                                    neuron_index_hidden.get(al as usize).and_then(|layer| layer.get(aj).copied())
+                                    neuron_index_hidden
+                                        .get(al as usize)
+                                        .and_then(|layer| layer.get(aj).copied())
                                 };
                                 if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_idx) {
-                                    if !pre_full_marks.is_empty() && pre_full_marks[pre_i] == tip_mark {
+                                    if !pre_full_marks.is_empty()
+                                        && pre_full_marks[pre_i] == tip_mark
+                                    {
                                         continue;
                                     }
                                     if let Some(list) = connected_pre_by_post.get(post_i) {
@@ -4232,7 +5912,11 @@ impl Morphology {
                                         }
                                     }
                                 }
-                                if is_pair_full(&pair_counts, pack_neuron_pair(al, aj, l_idx, j), pair_cap) {
+                                if is_pair_full(
+                                    &pair_counts,
+                                    pack_neuron_pair(al, aj, l_idx, j),
+                                    pair_cap,
+                                ) {
                                     stats.contact_existing_skips += 1;
                                     if let Some(pre_i) = pre_neuron_idx {
                                         if !pre_full_marks.is_empty() {
@@ -4244,128 +5928,171 @@ impl Morphology {
                                 stats.contact_probe_checks += 1;
                                 stats.contact_candidates += 1;
 
-                                        let mut migration_idx: Option<usize> = None;
-                                        let compatible = if al == -1 {
-                                            if l_idx != in_l as isize {
-                                                false
-                                            } else if aj < sensory_conn_counts.len() && sensory_conn_counts[aj] >= config.max_sensory_connections {
-                                                let mut best_si = None;
-                                                let mut max_d2 = -1.0;
-                                                for &si in &sensory_syn_indices[aj] {
-                                                    let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                                    if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
-                                                }
-                                                if let Some(si) = best_si {
-                                                    // Use the synapse's current pre_site as the reference for proximity (robust for degenerate segments)
-                                                    let new_d2 = tip.dist_sq(self.synapses[si].pre_site);
-                                                    let tip_e = tip_energy;
-                                                    let near_thresh = (max_d2 * 0.7).max(contact_dist * contact_dist * 0.25);
-                                                    if tip_e > 0.2 && new_d2 < near_thresh {
-                                                        migration_idx = Some(si);
-                                                        true
-                                                    } else {
-                                                        nm_log!("[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            aj, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
-                                                        false
-                                                    }
-                                                } else {
-                                                    false
-                                                }
-                                            } else {
-                                                true
+                                let mut migration_idx: Option<usize> = None;
+                                let compatible = if al == -1 {
+                                    if l_idx != in_l as isize {
+                                        false
+                                    } else if aj < sensory_conn_counts.len()
+                                        && sensory_conn_counts[aj] >= config.max_sensory_connections
+                                    {
+                                        let mut best_si = None;
+                                        let mut max_d2 = -1.0;
+                                        for &si in &sensory_syn_indices[aj] {
+                                            let d2 = self.synapses[si]
+                                                .pre_site
+                                                .dist_sq(self.synapses[si].post_site);
+                                            if d2 > max_d2 {
+                                                max_d2 = d2;
+                                                best_si = Some(si);
                                             }
-                                        } else if is_output {
-                                            if al != out_l as isize {
-                                                false
-                                            } else if j < output_conn_counts.len() && output_conn_counts[j] >= config.max_output_connections {
-                                                let mut best_si = None;
-                                                let mut max_d2 = -1.0;
-                                                for &si in &output_syn_indices[j] {
-                                                    let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                                    if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
-                                                }
-                                                if let Some(si) = best_si {
-                                                    // Use the synapse's current pre_site as the reference for proximity (robust for degenerate segments)
-                                                    let new_d2 = tip.dist_sq(self.synapses[si].pre_site);
-                                                    let tip_e = tip_energy;
-                                                    let near_thresh = (max_d2 * 0.7).max(contact_dist * contact_dist * 0.25);
-                                                    if tip_e > 0.2 && new_d2 < near_thresh {
-                                                        migration_idx = Some(si);
-                                                        true
-                                                    } else {
-                                                        nm_log!("[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            j, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
-                                                        false
-                                                    }
-                                                } else {
-                                                    false
-                                                }
-                                            } else {
+                                        }
+                                        if let Some(si) = best_si {
+                                            // Use the synapse's current pre_site as the reference for proximity (robust for degenerate segments)
+                                            let new_d2 = tip.dist_sq(self.synapses[si].pre_site);
+                                            let tip_e = tip_energy;
+                                            let near_thresh = (max_d2 * 0.7)
+                                                .max(contact_dist * contact_dist * 0.25);
+                                            if tip_e > 0.2 && new_d2 < near_thresh {
+                                                migration_idx = Some(si);
                                                 true
+                                            } else {
+                                                nm_log!("[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
+                                                            aj, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                false
                                             }
                                         } else {
-                                            (l_idx == al + 1) || (al == l_idx + 1) || (is_aarnn && l_idx == al)
-                                        };
-                                        if !compatible {
-                                            stats.contact_incompatible += 1;
+                                            false
+                                        }
+                                    } else {
+                                        true
+                                    }
+                                } else if is_output {
+                                    if al != out_l as isize {
+                                        false
+                                    } else if j < output_conn_counts.len()
+                                        && output_conn_counts[j] >= config.max_output_connections
+                                    {
+                                        let mut best_si = None;
+                                        let mut max_d2 = -1.0;
+                                        for &si in &output_syn_indices[j] {
+                                            let d2 = self.synapses[si]
+                                                .pre_site
+                                                .dist_sq(self.synapses[si].post_site);
+                                            if d2 > max_d2 {
+                                                max_d2 = d2;
+                                                best_si = Some(si);
+                                            }
+                                        }
+                                        if let Some(si) = best_si {
+                                            // Use the synapse's current pre_site as the reference for proximity (robust for degenerate segments)
+                                            let new_d2 = tip.dist_sq(self.synapses[si].pre_site);
+                                            let tip_e = tip_energy;
+                                            let near_thresh = (max_d2 * 0.7)
+                                                .max(contact_dist * contact_dist * 0.25);
+                                            if tip_e > 0.2 && new_d2 < near_thresh {
+                                                migration_idx = Some(si);
+                                                true
+                                            } else {
+                                                nm_log!("[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
+                                                            j, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        true
+                                    }
+                                } else {
+                                    (l_idx == al + 1)
+                                        || (al == l_idx + 1)
+                                        || (is_aarnn && l_idx == al)
+                                };
+                                if !compatible {
+                                    stats.contact_incompatible += 1;
+                                    continue;
+                                }
+
+                                let aseg = if al == -1 {
+                                    &self.sensory_axons[aj].segments[asi]
+                                } else {
+                                    &self.axons[al as usize][aj].segments[asi]
+                                };
+                                let contact2 = contact_dist * contact_dist;
+                                let (d2, proj) = dist2_point_to_segment(tip, aseg.from, aseg.to);
+                                if d2 < contact2 {
+                                    let pre_i = pre_idx;
+                                    let post_i = post_idx.unwrap_or(pre_idx);
+                                    if is_aarnn && max_conn_per_neuron > 0 {
+                                        let pre_ok = allow_conn_soft(
+                                            conn_counts[pre_i],
+                                            max_conn_per_neuron,
+                                        );
+                                        let post_ok = allow_conn_soft(
+                                            conn_counts[post_i],
+                                            max_conn_per_neuron,
+                                        );
+                                        if !(pre_ok && post_ok) && migration_idx.is_none() {
+                                            stats.contact_rejected_cap += 1;
                                             continue;
                                         }
 
-                                        let aseg = if al == -1 {
-                                            &self.sensory_axons[aj].segments[asi]
-                                        } else {
-                                            &self.axons[al as usize][aj].segments[asi]
-                                        };
-                                        let contact2 = contact_dist * contact_dist;
-                                        let (d2, proj) = dist2_point_to_segment(tip, aseg.from, aseg.to);
-                                        if d2 < contact2 {
-                                            let pre_i = pre_idx;
-                                            let post_i = post_idx.unwrap_or(pre_idx);
-                                            if is_aarnn && max_conn_per_neuron > 0 {
-                                                let pre_ok = allow_conn_soft(conn_counts[pre_i], max_conn_per_neuron);
-                                                let post_ok = allow_conn_soft(conn_counts[post_i], max_conn_per_neuron);
-                                                if !(pre_ok && post_ok) && migration_idx.is_none() {
-                                                    stats.contact_rejected_cap += 1;
-                                                    continue;
+                                        if let Some(si) = migration_idx {
+                                            let old_pre_l = self.synapses[si].pre_layer;
+                                            let old_pre_id = self.synapses[si].pre_id;
+                                            let old_post_l = self.synapses[si].post_layer;
+                                            let old_post_id = self.synapses[si].post_id;
+
+                                            let old_pair_key = pack_neuron_pair(
+                                                old_pre_l,
+                                                old_pre_id,
+                                                old_post_l,
+                                                old_post_id,
+                                            );
+                                            if let Some(count) = pair_counts.get_mut(&old_pair_key)
+                                            {
+                                                if *count > 0 {
+                                                    *count -= 1;
                                                 }
-
-                                                if let Some(si) = migration_idx {
-                                                    let old_pre_l = self.synapses[si].pre_layer;
-                                                    let old_pre_id = self.synapses[si].pre_id;
-                                                    let old_post_l = self.synapses[si].post_layer;
-                                                    let old_post_id = self.synapses[si].post_id;
-
-                                                    let old_pair_key = pack_neuron_pair(old_pre_l, old_pre_id, old_post_l, old_post_id);
-                                                    if let Some(count) = pair_counts.get_mut(&old_pair_key) { if *count > 0 { *count -= 1; } }
-
-                                                    if let (Some(pre_idx_old), Some(post_idx_old)) = (index_of(old_pre_l, old_pre_id), index_of(old_post_l, old_post_id)) {
-                                                        conn_counts[pre_idx_old] = conn_counts[pre_idx_old].saturating_sub(1);
-                                                        conn_counts[post_idx_old] = conn_counts[post_idx_old].saturating_sub(1);
-                                                    }
-                                                    
-                                                    res.migrations.push(MigrationInfo {
-                                                        syn_idx: si,
-                                                        new_pre_l: al, new_pre_id: aj,
-                                                        new_post_l: l_idx, new_post_id: j,
-                                                        new_dsi: seg_idx, new_asi: asi,
-                                                        new_pre_site: proj, new_post_site: tip,
-                                                    });
-
-                                                    if al == -1 {
-                                                        nm_log!("[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
-                                                    } else if is_output {
-                                                        nm_log!("[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)", al, aj, j);
-                                                    } else {
-                                                        nm_log!("[info] synapse migration planned: {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
-                                                    }
-                                                }
-
-                                                conn_counts[pre_i] += 1;
-                                                conn_counts[post_i] += 1;
                                             }
+
+                                            if let (Some(pre_idx_old), Some(post_idx_old)) = (
+                                                index_of(old_pre_l, old_pre_id),
+                                                index_of(old_post_l, old_post_id),
+                                            ) {
+                                                conn_counts[pre_idx_old] =
+                                                    conn_counts[pre_idx_old].saturating_sub(1);
+                                                conn_counts[post_idx_old] =
+                                                    conn_counts[post_idx_old].saturating_sub(1);
+                                            }
+
+                                            res.migrations.push(MigrationInfo {
+                                                syn_idx: si,
+                                                new_pre_l: al,
+                                                new_pre_id: aj,
+                                                new_post_l: l_idx,
+                                                new_post_id: j,
+                                                new_dsi: seg_idx,
+                                                new_asi: asi,
+                                                new_pre_site: proj,
+                                                new_post_site: tip,
+                                            });
+
+                                            if al == -1 {
+                                                nm_log!("[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                            } else if is_output {
+                                                nm_log!("[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                            } else {
+                                                nm_log!("[info] synapse migration planned: {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                            }
+                                        }
+
+                                        conn_counts[pre_i] += 1;
+                                        conn_counts[post_i] += 1;
+                                    }
                                     stats.contact_successes += 1;
                                     let w = config.initial_synaptic_weight;
-                                    
+
                                     if migration_idx.is_none() {
                                         res.new_connections.push((al, aj, l_idx, j, w));
                                         if al == -1 && aj < sensory_conn_counts.len() {
@@ -4376,29 +6103,53 @@ impl Morphology {
                                         }
                                         if is_trace && trace_synapse_count < 100 {
                                             trace_synapse_count += 1;
-                                            let pre_name = if al == -1 { "sensory".to_string() } else { format!("hidden {}", al) };
-                                            let post_name = if is_output { "output".to_string() } else { format!("hidden {}", l_idx) };
+                                            let pre_name = if al == -1 {
+                                                "sensory".to_string()
+                                            } else {
+                                                format!("hidden {}", al)
+                                            };
+                                            let post_name = if is_output {
+                                                "output".to_string()
+                                            } else {
+                                                format!("hidden {}", l_idx)
+                                            };
                                             nm_log!("[trace] synapse made (distributed): {}:{} -> {}:{} - contact", 
                                                 pre_name, aj, post_name, j);
                                         }
                                         observe_hit!("morphology/synapse_formed");
                                         new_syns.push(Synapse {
-                                            kind: if al == -1 { SynKind::In } 
-                                                  else if is_output { SynKind::Out }
-                                                  else if al < l_idx { SynKind::HiddenFwd } 
-                                                  else if al > l_idx { SynKind::HiddenBwd }
-                                                  else { SynKind::HiddenRec },
-                                            pre_layer: al, pre_id: aj,
-                                            post_layer: l_idx, post_id: j,
-                                            pre_site: proj, post_site: tip,
+                                            kind: if al == -1 {
+                                                SynKind::In
+                                            } else if is_output {
+                                                SynKind::Out
+                                            } else if al < l_idx {
+                                                SynKind::HiddenFwd
+                                            } else if al > l_idx {
+                                                SynKind::HiddenBwd
+                                            } else {
+                                                SynKind::HiddenRec
+                                            },
+                                            pre_layer: al,
+                                            pre_id: aj,
+                                            post_layer: l_idx,
+                                            post_id: j,
+                                            pre_site: proj,
+                                            post_site: tip,
                                             axon_seg_idx: Some(asi),
                                             dend_seg_idx: Some(seg_idx),
-                                            bend: None, weight: w, p_release: 1.0, delay_ms: 1.0,
+                                            bend: None,
+                                            weight: w,
+                                            p_release: 1.0,
+                                            delay_ms: 1.0,
                                             stimuli: 1.0,
                                         });
-                                        *pair_counts.entry(pack_neuron_pair(al, aj, l_idx, j)).or_insert(0) += 1;
+                                        *pair_counts
+                                            .entry(pack_neuron_pair(al, aj, l_idx, j))
+                                            .or_insert(0) += 1;
                                         if let Some(post_i) = post_idx {
-                                            if let Some(list) = connected_pre_by_post.get_mut(post_i) {
+                                            if let Some(list) =
+                                                connected_pre_by_post.get_mut(post_i)
+                                            {
                                                 *list.entry(pre_i).or_insert(0) += 1;
                                             }
                                         }
@@ -4458,7 +6209,9 @@ impl Morphology {
                         } else if al == num_layers as isize {
                             neuron_index_output.get(aj).copied()
                         } else {
-                            neuron_index_hidden.get(al as usize).and_then(|layer| layer.get(aj).copied())
+                            neuron_index_hidden
+                                .get(al as usize)
+                                .and_then(|layer| layer.get(aj).copied())
                         };
                         if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_idx) {
                             if !pre_full_marks.is_empty() && pre_full_marks[pre_i] == tip_mark {
@@ -4474,7 +6227,8 @@ impl Morphology {
                                 }
                             }
                         }
-                        if is_pair_full(&pair_counts, pack_neuron_pair(al, aj, l_idx, j), pair_cap) {
+                        if is_pair_full(&pair_counts, pack_neuron_pair(al, aj, l_idx, j), pair_cap)
+                        {
                             stats.contact_existing_skips += 1;
                             if let Some(pre_i) = pre_neuron_idx {
                                 if !pre_full_marks.is_empty() {
@@ -4490,16 +6244,24 @@ impl Morphology {
                         let compatible = if al == -1 {
                             if l_idx != in_l as isize {
                                 false
-                            } else if aj < sensory_conn_counts.len() && sensory_conn_counts[aj] >= config.max_sensory_connections {
+                            } else if aj < sensory_conn_counts.len()
+                                && sensory_conn_counts[aj] >= config.max_sensory_connections
+                            {
                                 let mut best_si = None;
                                 let mut max_d2 = -1.0;
                                 for &si in &sensory_syn_indices[aj] {
-                                    let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                    if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                    let d2 = self.synapses[si]
+                                        .pre_site
+                                        .dist_sq(self.synapses[si].post_site);
+                                    if d2 > max_d2 {
+                                        max_d2 = d2;
+                                        best_si = Some(si);
+                                    }
                                 }
                                 if let Some(si) = best_si {
                                     let aseg = &self.sensory_axons[aj].segments[asi];
-                                    let (new_d2, _) = dist2_point_to_segment(tip, aseg.from, aseg.to);
+                                    let (new_d2, _) =
+                                        dist2_point_to_segment(tip, aseg.from, aseg.to);
                                     let tip_e = self.energy_at(tip, attraction_r, kernel_k);
                                     if tip_e > 0.2 && new_d2 < max_d2 * 0.7 {
                                         migration_idx = Some(si);
@@ -4516,16 +6278,24 @@ impl Morphology {
                         } else if is_output {
                             if al != out_l as isize {
                                 false
-                            } else if j < output_conn_counts.len() && output_conn_counts[j] >= config.max_output_connections {
+                            } else if j < output_conn_counts.len()
+                                && output_conn_counts[j] >= config.max_output_connections
+                            {
                                 let mut best_si = None;
                                 let mut max_d2 = -1.0;
                                 for &si in &output_syn_indices[j] {
-                                    let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                    if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                    let d2 = self.synapses[si]
+                                        .pre_site
+                                        .dist_sq(self.synapses[si].post_site);
+                                    if d2 > max_d2 {
+                                        max_d2 = d2;
+                                        best_si = Some(si);
+                                    }
                                 }
                                 if let Some(si) = best_si {
                                     let aseg = &self.axons[al as usize][aj].segments[asi];
-                                    let (new_d2, _) = dist2_point_to_segment(tip, aseg.from, aseg.to);
+                                    let (new_d2, _) =
+                                        dist2_point_to_segment(tip, aseg.from, aseg.to);
                                     let tip_e = self.energy_at(tip, attraction_r, kernel_k);
                                     if tip_e > 0.2 && new_d2 < max_d2 * 0.7 {
                                         migration_idx = Some(si);
@@ -4542,9 +6312,9 @@ impl Morphology {
                         } else {
                             (l_idx == al + 1) || (al == l_idx + 1) || (is_aarnn && l_idx == al)
                         };
-                        if !compatible { 
+                        if !compatible {
                             stats.contact_incompatible += 1;
-                            continue; 
+                            continue;
                         }
 
                         let aseg = if al == -1 {
@@ -4560,27 +6330,44 @@ impl Morphology {
                             } else if al == num_layers as isize {
                                 neuron_index_output.get(aj).copied()
                             } else {
-                                neuron_index_hidden.get(al as usize).and_then(|layer| layer.get(aj).copied())
+                                neuron_index_hidden
+                                    .get(al as usize)
+                                    .and_then(|layer| layer.get(aj).copied())
                             };
                             let post_neuron_idx = if l_idx == -1 {
                                 neuron_index_sensory.get(j).copied()
                             } else if l_idx == num_layers as isize {
                                 neuron_index_output.get(j).copied()
                             } else {
-                                neuron_index_hidden.get(l_idx as usize).and_then(|layer| layer.get(j).copied())
+                                neuron_index_hidden
+                                    .get(l_idx as usize)
+                                    .and_then(|layer| layer.get(j).copied())
                             };
                             if is_aarnn && max_conn_per_neuron > 0 {
-                                if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_neuron_idx) {
-                                    let pre_ok = allow_conn_soft(conn_counts[pre_i], max_conn_per_neuron);
-                                    let post_ok = allow_conn_soft(conn_counts[post_i], max_conn_per_neuron);
+                                if let (Some(pre_i), Some(post_i)) =
+                                    (pre_neuron_idx, post_neuron_idx)
+                                {
+                                    let pre_ok =
+                                        allow_conn_soft(conn_counts[pre_i], max_conn_per_neuron);
+                                    let post_ok =
+                                        allow_conn_soft(conn_counts[post_i], max_conn_per_neuron);
                                     if !(pre_ok && post_ok) && migration_idx.is_none() {
                                         stats.contact_rejected_cap += 1;
                                         continue;
                                     }
-                                    let pre_needs_close = close_neighbor_target > 0 && close_conn_counts[pre_i] < close_neighbor_target;
-                                    let post_needs_close = close_neighbor_target > 0 && close_conn_counts[post_i] < close_neighbor_target;
-                                    if !migration_idx.is_some() && ((pre_needs_close && !is_close_neighbor(&close_neighbors[pre_i], post_i))
-                                        || (post_needs_close && !is_close_neighbor(&close_neighbors[post_i], pre_i))) {
+                                    let pre_needs_close = close_neighbor_target > 0
+                                        && close_conn_counts[pre_i] < close_neighbor_target;
+                                    let post_needs_close = close_neighbor_target > 0
+                                        && close_conn_counts[post_i] < close_neighbor_target;
+                                    if !migration_idx.is_some()
+                                        && ((pre_needs_close
+                                            && !is_close_neighbor(&close_neighbors[pre_i], post_i))
+                                            || (post_needs_close
+                                                && !is_close_neighbor(
+                                                    &close_neighbors[post_i],
+                                                    pre_i,
+                                                )))
+                                    {
                                         stats.contact_rejected_close += 1;
                                         continue;
                                     }
@@ -4591,20 +6378,38 @@ impl Morphology {
                                         let old_post_l = self.synapses[si].post_layer;
                                         let old_post_id = self.synapses[si].post_id;
 
-                                        let old_pair_key = pack_neuron_pair(old_pre_l, old_pre_id, old_post_l, old_post_id);
-                                        if let Some(count) = pair_counts.get_mut(&old_pair_key) { if *count > 0 { *count -= 1; } }
-
-                                        if let (Some(pre_idx_old), Some(post_idx_old)) = (index_of(old_pre_l, old_pre_id), index_of(old_post_l, old_post_id)) {
-                                            conn_counts[pre_idx_old] = conn_counts[pre_idx_old].saturating_sub(1);
-                                            conn_counts[post_idx_old] = conn_counts[post_idx_old].saturating_sub(1);
+                                        let old_pair_key = pack_neuron_pair(
+                                            old_pre_l,
+                                            old_pre_id,
+                                            old_post_l,
+                                            old_post_id,
+                                        );
+                                        if let Some(count) = pair_counts.get_mut(&old_pair_key) {
+                                            if *count > 0 {
+                                                *count -= 1;
+                                            }
                                         }
-                                        
+
+                                        if let (Some(pre_idx_old), Some(post_idx_old)) = (
+                                            index_of(old_pre_l, old_pre_id),
+                                            index_of(old_post_l, old_post_id),
+                                        ) {
+                                            conn_counts[pre_idx_old] =
+                                                conn_counts[pre_idx_old].saturating_sub(1);
+                                            conn_counts[post_idx_old] =
+                                                conn_counts[post_idx_old].saturating_sub(1);
+                                        }
+
                                         res.migrations.push(MigrationInfo {
                                             syn_idx: si,
-                                            new_pre_l: al, new_pre_id: aj,
-                                            new_post_l: l_idx, new_post_id: j,
-                                            new_dsi: seg_idx, new_asi: asi,
-                                            new_pre_site: proj, new_post_site: tip,
+                                            new_pre_l: al,
+                                            new_pre_id: aj,
+                                            new_post_l: l_idx,
+                                            new_post_id: j,
+                                            new_dsi: seg_idx,
+                                            new_asi: asi,
+                                            new_pre_site: proj,
+                                            new_post_site: tip,
                                         });
 
                                         if al == -1 {
@@ -4619,18 +6424,22 @@ impl Morphology {
                                     conn_counts[pre_i] += 1;
                                     conn_counts[post_i] += 1;
                                     if close_neighbor_target > 0 {
-                                        if is_close_neighbor(&close_neighbors[pre_i], post_i) { close_conn_counts[pre_i] += 1; }
-                                        if is_close_neighbor(&close_neighbors[post_i], pre_i) { close_conn_counts[post_i] += 1; }
+                                        if is_close_neighbor(&close_neighbors[pre_i], post_i) {
+                                            close_conn_counts[pre_i] += 1;
+                                        }
+                                        if is_close_neighbor(&close_neighbors[post_i], pre_i) {
+                                            close_conn_counts[post_i] += 1;
+                                        }
                                     }
                                 }
                             }
 
                             stats.contact_successes += 1;
                             let w = config.initial_synaptic_weight;
-                            
+
                             if migration_idx.is_none() {
                                 res.new_connections.push((al, aj, l_idx, j, w));
-                                
+
                                 if al == -1 && aj < sensory_conn_counts.len() {
                                     sensory_conn_counts[aj] += 1;
                                 }
@@ -4638,28 +6447,52 @@ impl Morphology {
                                     output_conn_counts[j] += 1;
                                 }
 
-                                let pre_name = if al == -1 { "sensory".to_string() } else { format!("hidden {}", al) };
-                                let post_name = if is_output { "output".to_string() } else { format!("hidden {}", l_idx) };
+                                let pre_name = if al == -1 {
+                                    "sensory".to_string()
+                                } else {
+                                    format!("hidden {}", al)
+                                };
+                                let post_name = if is_output {
+                                    "output".to_string()
+                                } else {
+                                    format!("hidden {}", l_idx)
+                                };
                                 nm_log!("[trace] synapse made: {}:{} -> {}:{} - physical contact detected", 
                                     pre_name, aj, post_name, j);
 
                                 observe_hit!("morphology/synapse_formed");
                                 new_syns.push(Synapse {
-                                    kind: if al == -1 { SynKind::In } 
-                                          else if is_output { SynKind::Out }
-                                          else if al < l_idx { SynKind::HiddenFwd } 
-                                          else if al > l_idx { SynKind::HiddenBwd }
-                                          else { SynKind::HiddenRec },
-                                    pre_layer: al, pre_id: aj,
-                                    post_layer: l_idx, post_id: j,
-                                    pre_site: proj, post_site: tip,
+                                    kind: if al == -1 {
+                                        SynKind::In
+                                    } else if is_output {
+                                        SynKind::Out
+                                    } else if al < l_idx {
+                                        SynKind::HiddenFwd
+                                    } else if al > l_idx {
+                                        SynKind::HiddenBwd
+                                    } else {
+                                        SynKind::HiddenRec
+                                    },
+                                    pre_layer: al,
+                                    pre_id: aj,
+                                    post_layer: l_idx,
+                                    post_id: j,
+                                    pre_site: proj,
+                                    post_site: tip,
                                     axon_seg_idx: Some(asi),
                                     dend_seg_idx: Some(seg_idx),
-                                    bend: None, weight: w, p_release: 1.0, delay_ms: 1.0,
+                                    bend: None,
+                                    weight: w,
+                                    p_release: 1.0,
+                                    delay_ms: 1.0,
                                     stimuli: 1.0,
                                 });
-                                *pair_counts.entry(pack_neuron_pair(al, aj, l_idx, j)).or_insert(0) += 1;
-                                if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_neuron_idx) {
+                                *pair_counts
+                                    .entry(pack_neuron_pair(al, aj, l_idx, j))
+                                    .or_insert(0) += 1;
+                                if let (Some(pre_i), Some(post_i)) =
+                                    (pre_neuron_idx, post_neuron_idx)
+                                {
                                     if let Some(list) = connected_pre_by_post.get_mut(post_i) {
                                         *list.entry(pre_i).or_insert(0) += 1;
                                     }
@@ -4670,7 +6503,8 @@ impl Morphology {
                             stats.contact_too_far += 1;
                         }
                     }
-                    if stats.contact_candidates == prev_candidates && !small_net_segments.is_empty() {
+                    if stats.contact_candidates == prev_candidates && !small_net_segments.is_empty()
+                    {
                         let probe_limit = 4usize;
                         let probe_contact2 = contact_dist * contact_dist * 6.25;
                         let mut probes = 0usize;
@@ -4681,13 +6515,19 @@ impl Morphology {
                             } else if l_idx == num_layers as isize {
                                 neuron_index_output.get(j).copied()
                             } else {
-                                neuron_index_hidden.get(l_idx as usize).and_then(|layer| layer.get(j).copied())
+                                neuron_index_hidden
+                                    .get(l_idx as usize)
+                                    .and_then(|layer| layer.get(j).copied())
                             };
-                            if let Some(total) = Some(small_net_axon_by_neuron.len()).filter(|v| *v > 1) {
+                            if let Some(total) =
+                                Some(small_net_axon_by_neuron.len()).filter(|v| *v > 1)
+                            {
                                 for _ in 0..total {
                                     let idx = probe_rr % total;
                                     probe_rr = probe_rr.wrapping_add(1);
-                                    if Some(idx) == post_idx { continue; }
+                                    if Some(idx) == post_idx {
+                                        continue;
+                                    }
                                     if let Some(post_i) = post_idx {
                                         if let Some(list) = connected_pre_by_post.get(post_i) {
                                             if list.get(&idx).copied().unwrap_or(0) >= pair_cap {
@@ -4695,7 +6535,9 @@ impl Morphology {
                                             }
                                         }
                                     }
-                                    if small_net_axon_by_neuron[idx].is_empty() { continue; }
+                                    if small_net_axon_by_neuron[idx].is_empty() {
+                                        continue;
+                                    }
                                     let segs = &small_net_axon_by_neuron[idx];
                                     let seg_idx = fastrand::usize(..segs.len());
                                     picked = Some(segs[seg_idx]);
@@ -4718,7 +6560,9 @@ impl Morphology {
                             } else if al == num_layers as isize {
                                 neuron_index_output.get(aj).copied()
                             } else {
-                                neuron_index_hidden.get(al as usize).and_then(|layer| layer.get(aj).copied())
+                                neuron_index_hidden
+                                    .get(al as usize)
+                                    .and_then(|layer| layer.get(aj).copied())
                             };
                             if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_idx) {
                                 if !pre_full_marks.is_empty() && pre_full_marks[pre_i] == tip_mark {
@@ -4736,7 +6580,11 @@ impl Morphology {
                                     }
                                 }
                             }
-                            if is_pair_full(&pair_counts, pack_neuron_pair(al, aj, l_idx, j), pair_cap) {
+                            if is_pair_full(
+                                &pair_counts,
+                                pack_neuron_pair(al, aj, l_idx, j),
+                                pair_cap,
+                            ) {
                                 stats.contact_existing_skips += 1;
                                 if let Some(pre_i) = pre_neuron_idx {
                                     if !pre_full_marks.is_empty() {
@@ -4752,16 +6600,24 @@ impl Morphology {
                             let compatible = if al == -1 {
                                 if l_idx != in_l as isize {
                                     false
-                                } else if aj < sensory_conn_counts.len() && sensory_conn_counts[aj] >= config.max_sensory_connections {
+                                } else if aj < sensory_conn_counts.len()
+                                    && sensory_conn_counts[aj] >= config.max_sensory_connections
+                                {
                                     let mut best_si = None;
                                     let mut max_d2 = -1.0;
                                     for &si in &sensory_syn_indices[aj] {
-                                        let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                        if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                        let d2 = self.synapses[si]
+                                            .pre_site
+                                            .dist_sq(self.synapses[si].post_site);
+                                        if d2 > max_d2 {
+                                            max_d2 = d2;
+                                            best_si = Some(si);
+                                        }
                                     }
                                     if let Some(si) = best_si {
                                         let aseg = &self.sensory_axons[aj].segments[asi];
-                                        let (new_d2, _) = dist2_point_to_segment(tip, aseg.from, aseg.to);
+                                        let (new_d2, _) =
+                                            dist2_point_to_segment(tip, aseg.from, aseg.to);
                                         let tip_e = self.energy_at(tip, attraction_r, kernel_k);
                                         if tip_e > 0.2 && new_d2 < max_d2 * 0.7 {
                                             migration_idx = Some(si);
@@ -4778,16 +6634,24 @@ impl Morphology {
                             } else if is_output {
                                 if al != out_l as isize {
                                     false
-                                } else if j < output_conn_counts.len() && output_conn_counts[j] >= config.max_output_connections {
+                                } else if j < output_conn_counts.len()
+                                    && output_conn_counts[j] >= config.max_output_connections
+                                {
                                     let mut best_si = None;
                                     let mut max_d2 = -1.0;
                                     for &si in &output_syn_indices[j] {
-                                        let d2 = self.synapses[si].pre_site.dist_sq(self.synapses[si].post_site);
-                                        if d2 > max_d2 { max_d2 = d2; best_si = Some(si); }
+                                        let d2 = self.synapses[si]
+                                            .pre_site
+                                            .dist_sq(self.synapses[si].post_site);
+                                        if d2 > max_d2 {
+                                            max_d2 = d2;
+                                            best_si = Some(si);
+                                        }
                                     }
                                     if let Some(si) = best_si {
                                         let aseg = &self.axons[al as usize][aj].segments[asi];
-                                        let (new_d2, _) = dist2_point_to_segment(tip, aseg.from, aseg.to);
+                                        let (new_d2, _) =
+                                            dist2_point_to_segment(tip, aseg.from, aseg.to);
                                         let tip_e = self.energy_at(tip, attraction_r, kernel_k);
                                         if tip_e > 0.2 && new_d2 < max_d2 * 0.7 {
                                             migration_idx = Some(si);
@@ -4822,20 +6686,32 @@ impl Morphology {
                                 } else if al == num_layers as isize {
                                     neuron_index_output.get(aj).copied()
                                 } else {
-                                    neuron_index_hidden.get(al as usize).and_then(|layer| layer.get(aj).copied())
+                                    neuron_index_hidden
+                                        .get(al as usize)
+                                        .and_then(|layer| layer.get(aj).copied())
                                 };
                                 let post_neuron_idx = if l_idx == -1 {
                                     neuron_index_sensory.get(j).copied()
                                 } else if l_idx == num_layers as isize {
                                     neuron_index_output.get(j).copied()
                                 } else {
-                                    neuron_index_hidden.get(l_idx as usize).and_then(|layer| layer.get(j).copied())
+                                    neuron_index_hidden
+                                        .get(l_idx as usize)
+                                        .and_then(|layer| layer.get(j).copied())
                                 };
-                                
+
                                 if is_aarnn && max_conn_per_neuron > 0 {
-                                    if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_neuron_idx) {
-                                        let pre_ok = allow_conn_soft(conn_counts[pre_i], max_conn_per_neuron);
-                                        let post_ok = allow_conn_soft(conn_counts[post_i], max_conn_per_neuron);
+                                    if let (Some(pre_i), Some(post_i)) =
+                                        (pre_neuron_idx, post_neuron_idx)
+                                    {
+                                        let pre_ok = allow_conn_soft(
+                                            conn_counts[pre_i],
+                                            max_conn_per_neuron,
+                                        );
+                                        let post_ok = allow_conn_soft(
+                                            conn_counts[post_i],
+                                            max_conn_per_neuron,
+                                        );
                                         if !(pre_ok && post_ok) && migration_idx.is_none() {
                                             // Reject
                                             probes += 1;
@@ -4848,20 +6724,39 @@ impl Morphology {
                                             let old_post_l = self.synapses[si].post_layer;
                                             let old_post_id = self.synapses[si].post_id;
 
-                                            let old_pair_key = pack_neuron_pair(old_pre_l, old_pre_id, old_post_l, old_post_id);
-                                            if let Some(count) = pair_counts.get_mut(&old_pair_key) { if *count > 0 { *count -= 1; } }
-
-                                            if let (Some(pre_idx_old), Some(post_idx_old)) = (index_of(old_pre_l, old_pre_id), index_of(old_post_l, old_post_id)) {
-                                                conn_counts[pre_idx_old] = conn_counts[pre_idx_old].saturating_sub(1);
-                                                conn_counts[post_idx_old] = conn_counts[post_idx_old].saturating_sub(1);
+                                            let old_pair_key = pack_neuron_pair(
+                                                old_pre_l,
+                                                old_pre_id,
+                                                old_post_l,
+                                                old_post_id,
+                                            );
+                                            if let Some(count) = pair_counts.get_mut(&old_pair_key)
+                                            {
+                                                if *count > 0 {
+                                                    *count -= 1;
+                                                }
                                             }
-                                            
+
+                                            if let (Some(pre_idx_old), Some(post_idx_old)) = (
+                                                index_of(old_pre_l, old_pre_id),
+                                                index_of(old_post_l, old_post_id),
+                                            ) {
+                                                conn_counts[pre_idx_old] =
+                                                    conn_counts[pre_idx_old].saturating_sub(1);
+                                                conn_counts[post_idx_old] =
+                                                    conn_counts[post_idx_old].saturating_sub(1);
+                                            }
+
                                             res.migrations.push(MigrationInfo {
                                                 syn_idx: si,
-                                                new_pre_l: al, new_pre_id: aj,
-                                                new_post_l: l_idx, new_post_id: j,
-                                                new_dsi: seg_idx, new_asi: asi,
-                                                new_pre_site: proj, new_post_site: tip,
+                                                new_pre_l: al,
+                                                new_pre_id: aj,
+                                                new_post_l: l_idx,
+                                                new_post_id: j,
+                                                new_dsi: seg_idx,
+                                                new_asi: asi,
+                                                new_pre_site: proj,
+                                                new_post_site: tip,
                                             });
 
                                             if al == -1 {
@@ -4880,7 +6775,7 @@ impl Morphology {
 
                                 stats.contact_successes += 1;
                                 let w = config.initial_synaptic_weight;
-                                
+
                                 if migration_idx.is_none() {
                                     res.new_connections.push((al, aj, l_idx, j, w));
                                     if al == -1 && aj < sensory_conn_counts.len() {
@@ -4891,28 +6786,52 @@ impl Morphology {
                                     }
                                     if is_trace && trace_synapse_count < 100 {
                                         trace_synapse_count += 1;
-                                        let pre_name = if al == -1 { "sensory".to_string() } else { format!("hidden {}", al) };
-                                        let post_name = if is_output { "output".to_string() } else { format!("hidden {}", l_idx) };
+                                        let pre_name = if al == -1 {
+                                            "sensory".to_string()
+                                        } else {
+                                            format!("hidden {}", al)
+                                        };
+                                        let post_name = if is_output {
+                                            "output".to_string()
+                                        } else {
+                                            format!("hidden {}", l_idx)
+                                        };
                                         nm_log!("[trace] synapse made (probe): {}:{} -> {}:{} - exploratory contact", 
                                             pre_name, aj, post_name, j);
                                     }
                                     observe_hit!("morphology/synapse_formed");
                                     new_syns.push(Synapse {
-                                        kind: if al == -1 { SynKind::In } 
-                                              else if is_output { SynKind::Out }
-                                              else if al < l_idx { SynKind::HiddenFwd } 
-                                              else if al > l_idx { SynKind::HiddenBwd }
-                                              else { SynKind::HiddenRec },
-                                        pre_layer: al, pre_id: aj,
-                                        post_layer: l_idx, post_id: j,
-                                        pre_site: proj, post_site: tip,
+                                        kind: if al == -1 {
+                                            SynKind::In
+                                        } else if is_output {
+                                            SynKind::Out
+                                        } else if al < l_idx {
+                                            SynKind::HiddenFwd
+                                        } else if al > l_idx {
+                                            SynKind::HiddenBwd
+                                        } else {
+                                            SynKind::HiddenRec
+                                        },
+                                        pre_layer: al,
+                                        pre_id: aj,
+                                        post_layer: l_idx,
+                                        post_id: j,
+                                        pre_site: proj,
+                                        post_site: tip,
                                         axon_seg_idx: Some(asi),
                                         dend_seg_idx: Some(seg_idx),
-                                        bend: None, weight: w, p_release: 1.0, delay_ms: 1.0,
+                                        bend: None,
+                                        weight: w,
+                                        p_release: 1.0,
+                                        delay_ms: 1.0,
                                         stimuli: 1.0,
                                     });
-                                    *pair_counts.entry(pack_neuron_pair(al, aj, l_idx, j)).or_insert(0) += 1;
-                                    if let (Some(pre_i), Some(post_i)) = (pre_neuron_idx, post_neuron_idx) {
+                                    *pair_counts
+                                        .entry(pack_neuron_pair(al, aj, l_idx, j))
+                                        .or_insert(0) += 1;
+                                    if let (Some(pre_i), Some(post_i)) =
+                                        (pre_neuron_idx, post_neuron_idx)
+                                    {
                                         if let Some(list) = connected_pre_by_post.get_mut(post_i) {
                                             *list.entry(pre_i).or_insert(0) += 1;
                                         }
@@ -4959,37 +6878,58 @@ impl Morphology {
         }
         for syn in new_syns {
             // Final deduplication before adding to flat vector
-            if !self.synapses.iter().any(|s| s.pre_layer == syn.pre_layer && s.pre_id == syn.pre_id && s.post_layer == syn.post_layer && s.post_id == syn.post_id) {
+            if !self.synapses.iter().any(|s| {
+                s.pre_layer == syn.pre_layer
+                    && s.pre_id == syn.pre_id
+                    && s.post_layer == syn.post_layer
+                    && s.post_id == syn.post_id
+            }) {
                 let si = self.synapses.len();
                 // Link segment to synapse
                 if let Some(asi) = syn.axon_seg_idx {
                     if syn.pre_layer == -1 {
-                        if syn.pre_id < self.sensory_axons.len() && asi < self.sensory_axons[syn.pre_id].segments.len() {
+                        if syn.pre_id < self.sensory_axons.len()
+                            && asi < self.sensory_axons[syn.pre_id].segments.len()
+                        {
                             self.sensory_axons[syn.pre_id].segments[asi].syn_index = Some(si);
                         }
                     } else if syn.pre_layer == num_layers as isize {
-                        if syn.pre_id < self.output_axons.len() && asi < self.output_axons[syn.pre_id].segments.len() {
+                        if syn.pre_id < self.output_axons.len()
+                            && asi < self.output_axons[syn.pre_id].segments.len()
+                        {
                             self.output_axons[syn.pre_id].segments[asi].syn_index = Some(si);
                         }
                     } else if syn.pre_layer >= 0 && (syn.pre_layer as usize) < self.axons.len() {
                         let l = syn.pre_layer as usize;
-                        if syn.pre_id < self.axons[l].len() && asi < self.axons[l][syn.pre_id].segments.len() {
+                        if syn.pre_id < self.axons[l].len()
+                            && asi < self.axons[l][syn.pre_id].segments.len()
+                        {
                             self.axons[l][syn.pre_id].segments[asi].syn_index = Some(si);
                         }
                     }
                 }
                 if let Some(dsi) = syn.dend_seg_idx {
                     if syn.post_layer == -1 {
-                        if syn.post_id < self.sensory_dendrites.len() && dsi < self.sensory_dendrites[syn.post_id].tree.branches.len() {
-                            self.sensory_dendrites[syn.post_id].tree.branches[dsi].syn_index = Some(si);
+                        if syn.post_id < self.sensory_dendrites.len()
+                            && dsi < self.sensory_dendrites[syn.post_id].tree.branches.len()
+                        {
+                            self.sensory_dendrites[syn.post_id].tree.branches[dsi].syn_index =
+                                Some(si);
                         }
                     } else if syn.post_layer == num_layers as isize {
-                        if syn.post_id < self.output_dendrites.len() && dsi < self.output_dendrites[syn.post_id].tree.branches.len() {
-                            self.output_dendrites[syn.post_id].tree.branches[dsi].syn_index = Some(si);
+                        if syn.post_id < self.output_dendrites.len()
+                            && dsi < self.output_dendrites[syn.post_id].tree.branches.len()
+                        {
+                            self.output_dendrites[syn.post_id].tree.branches[dsi].syn_index =
+                                Some(si);
                         }
-                    } else if syn.post_layer >= 0 && (syn.post_layer as usize) < self.dendrites.len() {
+                    } else if syn.post_layer >= 0
+                        && (syn.post_layer as usize) < self.dendrites.len()
+                    {
                         let l = syn.post_layer as usize;
-                        if syn.post_id < self.dendrites[l].len() && dsi < self.dendrites[l][syn.post_id].tree.branches.len() {
+                        if syn.post_id < self.dendrites[l].len()
+                            && dsi < self.dendrites[l][syn.post_id].tree.branches.len()
+                        {
                             self.dendrites[l][syn.post_id].tree.branches[dsi].syn_index = Some(si);
                         }
                     }
@@ -5005,43 +6945,84 @@ impl Morphology {
             // Sensory -> Hidden layer
             let mut syn_by_sens: FastHashMap<usize, Vec<usize>> = FastHashMap::default();
             for (si, s) in self.synapses.iter().enumerate() {
-                if s.kind as i32 == 0 || s.pre_layer == -1 { // SynKind::In or sensory pre-layer
+                if s.kind as i32 == 0 || s.pre_layer == -1 {
+                    // SynKind::In or sensory pre-layer
                     syn_by_sens.entry(s.pre_id).or_default().push(si);
                 }
             }
 
             // Pre-calculate dendrite candidate positions for in_l
             let dend_cands_in = if in_l < self.dendrites.len() {
-                self.dendrites[in_l].iter().enumerate().map(|(j, d)| {
-                    d.tree.branches.get(0).map(|b| b.from).unwrap_or(self.somas[in_l][j].pos)
-                }).collect::<Vec<_>>()
-            } else { Vec::new() };
+                self.dendrites[in_l]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, d)| {
+                        d.tree
+                            .branches
+                            .get(0)
+                            .map(|b| b.from)
+                            .unwrap_or(self.somas[in_l][j].pos)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
 
             for (sens_id, sis) in syn_by_sens {
-                if sis.is_empty() { continue; }
+                if sis.is_empty() {
+                    continue;
+                }
                 // Only consider when at cap (or above)
-                if config.max_sensory_connections > 0 && sis.len() >= config.max_sensory_connections {
+                if config.max_sensory_connections > 0 && sis.len() >= config.max_sensory_connections
+                {
                     for &si in &sis {
                         let s = &self.synapses[si];
-                        if s.post_layer != in_l as isize { continue; }
+                        if s.post_layer != in_l as isize {
+                            continue;
+                        }
                         let pre_p = s.pre_site;
                         let cur_post = s.post_id;
-                        let cur_post_p = if cur_post < dend_cands_in.len() { dend_cands_in[cur_post] } else { self.somas[in_l][cur_post].pos };
+                        let cur_post_p = if cur_post < dend_cands_in.len() {
+                            dend_cands_in[cur_post]
+                        } else {
+                            self.somas[in_l][cur_post].pos
+                        };
                         let cur_d2 = pre_p.dist_sq(cur_post_p);
                         let mut best_j = cur_post;
                         let mut best_d2 = cur_d2;
-                        
+
                         for (j, &cand_p) in dend_cands_in.iter().enumerate() {
-                            if j == cur_post { continue; }
+                            if j == cur_post {
+                                continue;
+                            }
                             let d2 = pre_p.dist_sq(cand_p);
-                            if d2 < best_d2 { best_d2 = d2; best_j = j; }
+                            if d2 < best_d2 {
+                                best_d2 = d2;
+                                best_j = j;
+                            }
                         }
                         let tip_e = self.energy_at(pre_p, attraction_r, kernel_k);
                         // nm_log!("[DEBUG] post-fallback sensory eval: si={} cur_post={} cur_d2={:.6} best_j={} best_d2={:.6} contact2={:.6} tip_e={:.4}", si, cur_post, cur_d2, best_j, best_d2, contact2, tip_e);
-                        if best_j != cur_post && best_d2 < cur_d2 * 0.7 && best_d2 < contact2 && tip_e > 0.2 {
+                        if best_j != cur_post
+                            && best_d2 < cur_d2 * 0.7
+                            && best_d2 < contact2
+                            && tip_e > 0.2
+                        {
                             // Plan migration
-                            let new_dsi = 0usize.min(self.dendrites[in_l][best_j].tree.branches.len().saturating_sub(1));
-                            let new_post_site = if let Some(seg) = self.dendrites[in_l][best_j].tree.branches.get(new_dsi) { seg.from } else { self.somas[in_l][best_j].pos };
+                            let new_dsi = 0usize.min(
+                                self.dendrites[in_l][best_j]
+                                    .tree
+                                    .branches
+                                    .len()
+                                    .saturating_sub(1),
+                            );
+                            let new_post_site = if let Some(seg) =
+                                self.dendrites[in_l][best_j].tree.branches.get(new_dsi)
+                            {
+                                seg.from
+                            } else {
+                                self.somas[in_l][best_j].pos
+                            };
                             nm_log!("[info] post-fallback planned sensory migration: si={} post {}->{} (d2 {:.6}->{:.6})", si, cur_post, best_j, cur_d2, best_d2);
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
@@ -5061,29 +7042,48 @@ impl Morphology {
             // Output <- Hidden layer
             let mut syn_by_out: FastHashMap<usize, Vec<usize>> = FastHashMap::default();
             for (si, s) in self.synapses.iter().enumerate() {
-                if s.kind as i32 == 2 || s.post_layer == num_layers as isize { // SynKind::Out or output post-layer
+                if s.kind as i32 == 2 || s.post_layer == num_layers as isize {
+                    // SynKind::Out or output post-layer
                     syn_by_out.entry(s.post_id).or_default().push(si);
                 }
             }
 
             // Pre-calculate axon candidate positions for all hidden layers
-            let axon_cands_by_layer: Vec<Vec<Point3>> = self.axons.iter().enumerate().map(|(l, layer)| {
-                layer.iter().enumerate().map(|(i, ax)| {
-                    ax.segments.get(0).map(|seg| seg.to).unwrap_or(self.somas[l][i].pos)
-                }).collect()
-            }).collect();
+            let axon_cands_by_layer: Vec<Vec<Point3>> = self
+                .axons
+                .iter()
+                .enumerate()
+                .map(|(l, layer)| {
+                    layer
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ax)| {
+                            ax.segments
+                                .get(0)
+                                .map(|seg| seg.to)
+                                .unwrap_or(self.somas[l][i].pos)
+                        })
+                        .collect()
+                })
+                .collect();
 
             for (out_id, sis) in syn_by_out {
-                if sis.is_empty() { continue; }
+                if sis.is_empty() {
+                    continue;
+                }
                 if config.max_output_connections > 0 && sis.len() >= config.max_output_connections {
                     for &si in &sis {
                         let s = &self.synapses[si];
-                        if s.pre_layer < 0 { continue; }
+                        if s.pre_layer < 0 {
+                            continue;
+                        }
                         let pre_l = s.pre_layer as usize;
                         let pre_id = s.pre_id;
                         let post_p = s.post_site;
-                        
-                        let cur_pre_p = if pre_l < axon_cands_by_layer.len() && pre_id < axon_cands_by_layer[pre_l].len() {
+
+                        let cur_pre_p = if pre_l < axon_cands_by_layer.len()
+                            && pre_id < axon_cands_by_layer[pre_l].len()
+                        {
                             axon_cands_by_layer[pre_l][pre_id]
                         } else {
                             self.somas[pre_l][pre_id].pos
@@ -5092,19 +7092,35 @@ impl Morphology {
                         let cur_d2 = post_p.dist_sq(cur_pre_p);
                         let mut best_i = pre_id;
                         let mut best_d2 = cur_d2;
-                        
+
                         if pre_l < axon_cands_by_layer.len() {
                             for (i, &cand_p) in axon_cands_by_layer[pre_l].iter().enumerate() {
-                                if i == pre_id { continue; }
+                                if i == pre_id {
+                                    continue;
+                                }
                                 let d2 = post_p.dist_sq(cand_p);
-                                if d2 < best_d2 { best_d2 = d2; best_i = i; }
+                                if d2 < best_d2 {
+                                    best_d2 = d2;
+                                    best_i = i;
+                                }
                             }
                         }
                         let tip_e = self.energy_at(post_p, attraction_r, kernel_k);
                         // nm_log!("[DEBUG] post-fallback output eval: si={} cur_pre={} cur_d2={:.6} best_i={} best_d2={:.6} contact2={:.6} tip_e={:.4}", si, pre_id, cur_d2, best_i, best_d2, contact2, tip_e);
-                        if best_i != pre_id && best_d2 < cur_d2 * 0.7 && best_d2 < contact2 && tip_e > 0.2 {
-                            let new_asi = 0usize.min(self.axons[pre_l][best_i].segments.len().saturating_sub(1));
-                            let new_pre_site = if let Some(seg) = self.axons[pre_l][best_i].segments.get(new_asi) { seg.to } else { self.somas[pre_l][best_i].pos };
+                        if best_i != pre_id
+                            && best_d2 < cur_d2 * 0.7
+                            && best_d2 < contact2
+                            && tip_e > 0.2
+                        {
+                            let new_asi = 0usize
+                                .min(self.axons[pre_l][best_i].segments.len().saturating_sub(1));
+                            let new_pre_site = if let Some(seg) =
+                                self.axons[pre_l][best_i].segments.get(new_asi)
+                            {
+                                seg.to
+                            } else {
+                                self.somas[pre_l][best_i].pos
+                            };
                             nm_log!("[info] post-fallback planned output migration: si={} pre {}->{} (d2 {:.6}->{:.6})", si, pre_id, best_i, cur_d2, best_d2);
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
@@ -5124,15 +7140,21 @@ impl Morphology {
         }
 
         if should_log {
-            let total_axons: usize = self.axons.iter().map(|l| l.len()).sum::<usize>() + self.sensory_axons.len() + self.output_axons.len();
-            let total_dendrites: usize = self.dendrites.iter().map(|l| l.len()).sum::<usize>() + self.sensory_dendrites.len() + self.output_dendrites.len();
+            let total_axons: usize = self.axons.iter().map(|l| l.len()).sum::<usize>()
+                + self.sensory_axons.len()
+                + self.output_axons.len();
+            let total_dendrites: usize = self.dendrites.iter().map(|l| l.len()).sum::<usize>()
+                + self.sensory_dendrites.len()
+                + self.output_dendrites.len();
             let tip_avg = if stats.contact_tip_energy_count == 0 {
                 0.0
             } else {
                 stats.contact_tip_energy_sum / stats.contact_tip_energy_count as f32
             };
             if is_aarnn && stats.contact_tip_energy_count > 0 {
-                let mut tuning = morpho_energy_tuning().lock().expect("morpho tuning lock poisoned");
+                let mut tuning = morpho_energy_tuning()
+                    .lock()
+                    .expect("morpho tuning lock poisoned");
                 let alpha = 0.05;
                 let prev = tuning.ema;
                 tuning.ema = prev * (1.0 - alpha) + tip_avg * alpha;
@@ -5165,7 +7187,11 @@ impl Morphology {
                     // Over-skipping: relax to allow some contact search.
                     tuning.cap_scale = (tuning.cap_scale * 1.25).clamp(0.3, 1.2);
                     tuning.skip_bias = (tuning.skip_bias * 0.90).clamp(1.0, 2.0);
-                } else if no_success && (cap_pressure > 0.4 || too_far_ratio > 0.6 || stats.dendrite_sprout_successes == 0) {
+                } else if no_success
+                    && (cap_pressure > 0.4
+                        || too_far_ratio > 0.6
+                        || stats.dendrite_sprout_successes == 0)
+                {
                     tuning.cap_scale = (tuning.cap_scale * 0.85).clamp(0.3, 1.2);
                     tuning.skip_bias = (tuning.skip_bias * 1.05).clamp(1.0, 2.0);
                 } else {
@@ -5174,7 +7200,9 @@ impl Morphology {
                 }
             }
             let (t_ema, t_dev, t_cap, t_skip) = if is_aarnn {
-                let tuning = morpho_energy_tuning().lock().expect("morpho tuning lock poisoned");
+                let tuning = morpho_energy_tuning()
+                    .lock()
+                    .expect("morpho tuning lock poisoned");
                 (tuning.ema, tuning.dev, tuning.cap_scale, tuning.skip_bias)
             } else {
                 (0.0, 0.0, 0.0, 0.0)
@@ -5183,11 +7211,20 @@ impl Morphology {
                 unsafe { CALL_COUNT }, total_axons, stats.axon_sprout_successes, stats.axon_sprout_attempts, 
                 total_dendrites, stats.dendrite_sprout_successes, stats.dendrite_sprout_attempts, stats.dendrite_sprout_too_near, stats.dendrite_sprout_low_energy,
                 self.synapses.len(), stats.contact_checks, stats.contact_candidates, stats.contact_incompatible, stats.contact_too_far, stats.contact_successes, stats.contact_rejected_cap, stats.contact_rejected_close, stats.contact_self_skips, stats.contact_existing_skips, stats.contact_post_cap_skips, stats.contact_probe_checks, stats.contact_skipped_low_energy, stats.contact_tip_cap_hits, tip_avg, stats.contact_tip_energy_min, stats.contact_tip_energy_max, t_ema, t_dev, t_cap, t_skip, pair_cap);
-            
+
             if is_trace {
-                let avg_stimuli = if self.synapses.is_empty() { 0.0 } else { self.synapses.iter().map(|s| s.stimuli).sum::<f32>() / self.synapses.len() as f32 };
-                nm_log!("[trace] summary: synapses={}, avg_stimuli={:.4}, broken_this_step={}", 
-                    self.synapses.len(), avg_stimuli, res.broken_connections.len());
+                let avg_stimuli = if self.synapses.is_empty() {
+                    0.0
+                } else {
+                    self.synapses.iter().map(|s| s.stimuli).sum::<f32>()
+                        / self.synapses.len() as f32
+                };
+                nm_log!(
+                    "[trace] summary: synapses={}, avg_stimuli={:.4}, broken_this_step={}",
+                    self.synapses.len(),
+                    avg_stimuli,
+                    res.broken_connections.len()
+                );
             }
         }
 
@@ -5205,22 +7242,30 @@ impl Morphology {
             if let Some(oasi) = old_asi {
                 if old_pre_l == -1 {
                     if let Some(ax) = self.sensory_axons.get_mut(old_pre_id) {
-                        if let Some(seg) = ax.segments.get_mut(oasi) { seg.syn_index = None; }
+                        if let Some(seg) = ax.segments.get_mut(oasi) {
+                            seg.syn_index = None;
+                        }
                     }
                 } else if old_pre_l >= 0 && old_pre_l < self.axons.len() as isize {
                     if let Some(ax) = self.axons[old_pre_l as usize].get_mut(old_pre_id) {
-                        if let Some(seg) = ax.segments.get_mut(oasi) { seg.syn_index = None; }
+                        if let Some(seg) = ax.segments.get_mut(oasi) {
+                            seg.syn_index = None;
+                        }
                     }
                 }
             }
             if let Some(odsi) = old_dsi {
                 if old_post_l == num_layers as isize {
                     if let Some(dend) = self.output_dendrites.get_mut(old_post_id) {
-                        if let Some(seg) = dend.tree.branches.get_mut(odsi) { seg.syn_index = None; }
+                        if let Some(seg) = dend.tree.branches.get_mut(odsi) {
+                            seg.syn_index = None;
+                        }
                     }
                 } else if old_post_l >= 0 && old_post_l < self.dendrites.len() as isize {
                     if let Some(dend) = self.dendrites[old_post_l as usize].get_mut(old_post_id) {
-                        if let Some(seg) = dend.tree.branches.get_mut(odsi) { seg.syn_index = None; }
+                        if let Some(seg) = dend.tree.branches.get_mut(odsi) {
+                            seg.syn_index = None;
+                        }
                     }
                 }
             }
@@ -5240,21 +7285,29 @@ impl Morphology {
             // 3. Set new indices
             if syn.pre_layer == -1 {
                 if let Some(ax) = self.sensory_axons.get_mut(syn.pre_id) {
-                    if let Some(seg) = ax.segments.get_mut(mig.new_asi) { seg.syn_index = Some(si); }
+                    if let Some(seg) = ax.segments.get_mut(mig.new_asi) {
+                        seg.syn_index = Some(si);
+                    }
                 }
             } else if syn.pre_layer >= 0 && syn.pre_layer < self.axons.len() as isize {
                 if let Some(ax) = self.axons[syn.pre_layer as usize].get_mut(syn.pre_id) {
-                    if let Some(seg) = ax.segments.get_mut(mig.new_asi) { seg.syn_index = Some(si); }
+                    if let Some(seg) = ax.segments.get_mut(mig.new_asi) {
+                        seg.syn_index = Some(si);
+                    }
                 }
             }
-            
+
             if syn.post_layer == num_layers as isize {
                 if let Some(dend) = self.output_dendrites.get_mut(syn.post_id) {
-                    if let Some(seg) = dend.tree.branches.get_mut(mig.new_dsi) { seg.syn_index = Some(si); }
+                    if let Some(seg) = dend.tree.branches.get_mut(mig.new_dsi) {
+                        seg.syn_index = Some(si);
+                    }
                 }
             } else if syn.post_layer >= 0 && syn.post_layer < self.dendrites.len() as isize {
                 if let Some(dend) = self.dendrites[syn.post_layer as usize].get_mut(syn.post_id) {
-                    if let Some(seg) = dend.tree.branches.get_mut(mig.new_dsi) { seg.syn_index = Some(si); }
+                    if let Some(seg) = dend.tree.branches.get_mut(mig.new_dsi) {
+                        seg.syn_index = Some(si);
+                    }
                 }
             }
         }
@@ -5284,11 +7337,17 @@ impl Morphology {
             let mut output_sources = vec![HashSet::<usize>::new(); output_count];
 
             for syn in &self.synapses {
-                if syn.pre_layer == -1 && syn.post_layer == in_l as isize && syn.pre_id < sensory_count {
+                if syn.pre_layer == -1
+                    && syn.post_layer == in_l as isize
+                    && syn.pre_id < sensory_count
+                {
                     sensory_conn_counts[syn.pre_id] += 1;
                     sensory_targets[syn.pre_id].insert(syn.post_id);
                 }
-                if syn.post_layer == num_layers as isize && syn.pre_layer == out_l as isize && syn.post_id < output_count {
+                if syn.post_layer == num_layers as isize
+                    && syn.pre_layer == out_l as isize
+                    && syn.post_id < output_count
+                {
                     output_conn_counts[syn.post_id] += 1;
                     output_sources[syn.post_id].insert(syn.pre_id);
                 }
@@ -5305,15 +7364,25 @@ impl Morphology {
                     continue;
                 }
 
-                let sens_anchor = self.sensory_somas.get(sens_id).map(|s| s.pos).unwrap_or_default();
+                let sens_anchor = self
+                    .sensory_somas
+                    .get(sens_id)
+                    .map(|s| s.pos)
+                    .unwrap_or_default();
                 let mut candidates: Vec<(usize, Point3, Point3, f32)> = Vec::new();
                 for j in 0..hidden_in_count {
                     if sensory_targets[sens_id].contains(&j) {
                         continue;
                     }
-                    let post_site = if in_l < self.dendrites.len() && j < self.dendrites[in_l].len() {
+                    let post_site = if in_l < self.dendrites.len() && j < self.dendrites[in_l].len()
+                    {
                         let dend = &self.dendrites[in_l][j];
-                        let mut best = self.somas.get(in_l).and_then(|l| l.get(j)).map(|s| s.pos).unwrap_or_default();
+                        let mut best = self
+                            .somas
+                            .get(in_l)
+                            .and_then(|l| l.get(j))
+                            .map(|s| s.pos)
+                            .unwrap_or_default();
                         let mut best_d2 = sens_anchor.dist_sq(best);
                         for seg in &dend.tree.branches {
                             let d2 = sens_anchor.dist_sq(seg.from);
@@ -5324,7 +7393,11 @@ impl Morphology {
                         }
                         best
                     } else {
-                        self.somas.get(in_l).and_then(|l| l.get(j)).map(|s| s.pos).unwrap_or_default()
+                        self.somas
+                            .get(in_l)
+                            .and_then(|l| l.get(j))
+                            .map(|s| s.pos)
+                            .unwrap_or_default()
                     };
                     let pre_site = if sens_id < self.sensory_axons.len() {
                         let ax = &self.sensory_axons[sens_id];
@@ -5344,10 +7417,12 @@ impl Morphology {
                     let d2 = pre_site.dist_sq(post_site);
                     candidates.push((j, pre_site, post_site, d2));
                 }
-                candidates.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+                candidates
+                    .sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
 
                 for (target_j, pre_site, post_site, _d2) in candidates.into_iter().take(needed) {
-                    let w = (config.initial_synaptic_weight * (0.8 + 0.4 * fastrand::f64())).max(0.01);
+                    let w =
+                        (config.initial_synaptic_weight * (0.8 + 0.4 * fastrand::f64())).max(0.01);
                     self.synapses.push(Synapse {
                         kind: SynKind::In,
                         pre_layer: -1,
@@ -5364,7 +7439,8 @@ impl Morphology {
                         delay_ms: 1.0,
                         stimuli: 1.0,
                     });
-                    res.new_connections.push((-1, sens_id, in_l as isize, target_j, w));
+                    res.new_connections
+                        .push((-1, sens_id, in_l as isize, target_j, w));
                     sensory_conn_counts[sens_id] += 1;
                     sensory_targets[sens_id].insert(target_j);
                 }
@@ -5381,7 +7457,11 @@ impl Morphology {
                     continue;
                 }
 
-                let out_anchor = self.output_somas.get(out_id).map(|s| s.pos).unwrap_or_default();
+                let out_anchor = self
+                    .output_somas
+                    .get(out_id)
+                    .map(|s| s.pos)
+                    .unwrap_or_default();
                 let mut candidates: Vec<(usize, Point3, Point3, f32)> = Vec::new();
                 for pre_j in 0..hidden_out_count {
                     if output_sources[out_id].contains(&pre_j) {
@@ -5389,7 +7469,12 @@ impl Morphology {
                     }
                     let pre_site = if out_l < self.axons.len() && pre_j < self.axons[out_l].len() {
                         let ax = &self.axons[out_l][pre_j];
-                        let mut best = self.somas.get(out_l).and_then(|l| l.get(pre_j)).map(|s| s.pos).unwrap_or_default();
+                        let mut best = self
+                            .somas
+                            .get(out_l)
+                            .and_then(|l| l.get(pre_j))
+                            .map(|s| s.pos)
+                            .unwrap_or_default();
                         let mut best_d2 = out_anchor.dist_sq(best);
                         for seg in &ax.segments {
                             let d2 = out_anchor.dist_sq(seg.to);
@@ -5400,7 +7485,11 @@ impl Morphology {
                         }
                         best
                     } else {
-                        self.somas.get(out_l).and_then(|l| l.get(pre_j)).map(|s| s.pos).unwrap_or_default()
+                        self.somas
+                            .get(out_l)
+                            .and_then(|l| l.get(pre_j))
+                            .map(|s| s.pos)
+                            .unwrap_or_default()
                     };
                     let post_site = if out_id < self.output_dendrites.len() {
                         let dend = &self.output_dendrites[out_id];
@@ -5420,10 +7509,12 @@ impl Morphology {
                     let d2 = pre_site.dist_sq(post_site);
                     candidates.push((pre_j, pre_site, post_site, d2));
                 }
-                candidates.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+                candidates
+                    .sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
 
                 for (pre_j, pre_site, post_site, _d2) in candidates.into_iter().take(needed) {
-                    let w = (config.initial_synaptic_weight * (0.8 + 0.4 * fastrand::f64())).max(0.01);
+                    let w =
+                        (config.initial_synaptic_weight * (0.8 + 0.4 * fastrand::f64())).max(0.01);
                     self.synapses.push(Synapse {
                         kind: SynKind::Out,
                         pre_layer: out_l as isize,
@@ -5440,7 +7531,13 @@ impl Morphology {
                         delay_ms: 1.0,
                         stimuli: 1.0,
                     });
-                    res.new_connections.push((out_l as isize, pre_j, num_layers as isize, out_id, w));
+                    res.new_connections.push((
+                        out_l as isize,
+                        pre_j,
+                        num_layers as isize,
+                        out_id,
+                        w,
+                    ));
                     output_conn_counts[out_id] += 1;
                     output_sources[out_id].insert(pre_j);
                 }
@@ -5480,14 +7577,22 @@ mod tests {
     use super::*;
     #[test]
     fn test_point3_ops() {
-        let p1 = Point3 { x: 1.0, y: 2.0, z: 3.0 };
-        let p2 = Point3 { x: 4.0, y: 5.0, z: 6.0 };
-        
+        let p1 = Point3 {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+        };
+        let p2 = Point3 {
+            x: 4.0,
+            y: 5.0,
+            z: 6.0,
+        };
+
         let sum = p1.add(p2);
         assert_eq!(sum.x, 5.0);
         assert_eq!(sum.y, 7.0);
         assert_eq!(sum.z, 9.0);
-        
+
         let dist = p1.dist(p2);
         let expected = ((3.0f32.powi(2) + 3.0f32.powi(2) + 3.0f32.powi(2)) as f32).sqrt();
         assert!((dist - expected).abs() < 1e-6);
@@ -5501,12 +7606,21 @@ mod tests {
             dim: 10,
             cell_size: 1.0,
         };
-        let p = Point3 { x: 1.5, y: 2.5, z: 3.5 };
+        let p = Point3 {
+            x: 1.5,
+            y: 2.5,
+            z: 3.5,
+        };
         let key = grid.get_key(p).unwrap();
-        
-        grid.entities.push(GridEntity { pos: p, stimuli: 1.0 });
-        for i in (key + 1)..=1000 { grid.cell_starts[i] = 1; }
-        
+
+        grid.entities.push(GridEntity {
+            pos: p,
+            stimuli: 1.0,
+        });
+        for i in (key + 1)..=1000 {
+            grid.cell_starts[i] = 1;
+        }
+
         let retrieved = grid.cell_entities(key);
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].pos.x, 1.5);
@@ -5515,20 +7629,52 @@ mod tests {
     #[test]
     fn test_octree_energy_at_matches_bruteforce() {
         let entities = vec![
-            GridEntity { pos: Point3 { x: -0.5, y: 0.2, z: 0.1 }, stimuli: 0.8 },
-            GridEntity { pos: Point3 { x: 0.3, y: -0.1, z: -0.2 }, stimuli: 1.2 },
-            GridEntity { pos: Point3 { x: 0.9, y: 0.9, z: 0.9 }, stimuli: 0.5 },
+            GridEntity {
+                pos: Point3 {
+                    x: -0.5,
+                    y: 0.2,
+                    z: 0.1,
+                },
+                stimuli: 0.8,
+            },
+            GridEntity {
+                pos: Point3 {
+                    x: 0.3,
+                    y: -0.1,
+                    z: -0.2,
+                },
+                stimuli: 1.2,
+            },
+            GridEntity {
+                pos: Point3 {
+                    x: 0.9,
+                    y: 0.9,
+                    z: 0.9,
+                },
+                stimuli: 0.5,
+            },
         ];
         let oct = OctreeIndex::build(entities.clone(), 0.2);
-        let p = Point3 { x: 0.0, y: 0.0, z: 0.0 };
+        let p = Point3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
         let radius = 0.8;
         let k = 0.4;
         let r2 = radius * radius;
 
-        let brute: f32 = entities.iter().map(|e| {
-            let d2 = p.dist_sq(e.pos);
-            if d2 < r2 { e.stimuli / (1.0 + k * d2) } else { 0.0 }
-        }).sum();
+        let brute: f32 = entities
+            .iter()
+            .map(|e| {
+                let d2 = p.dist_sq(e.pos);
+                if d2 < r2 {
+                    e.stimuli / (1.0 + k * d2)
+                } else {
+                    0.0
+                }
+            })
+            .sum();
 
         let octree_val = oct.energy_at(p, radius, k);
         assert!((octree_val - brute).abs() < 1e-5);
@@ -5538,8 +7684,40 @@ mod tests {
     fn unique_points_and_min_dist() {
         // Build tiny topology with 2 layers, 2 neurons each
         use crate::topology::Node3D;
-        let topo: Vec<Vec<Node3D>> = vec![vec![Node3D{ x:-0.2, y:0.0, z:0.1, layer:0, ..Default::default() }, Node3D{ x:0.0, y:0.2, z:-0.1, layer:0, ..Default::default() }],
-                                              vec![Node3D{ x:0.5, y:0.1, z:0.2, layer:1, ..Default::default() }, Node3D{ x:0.6, y:-0.1, z:-0.2, layer:1, ..Default::default() }]];
+        let topo: Vec<Vec<Node3D>> = vec![
+            vec![
+                Node3D {
+                    x: -0.2,
+                    y: 0.0,
+                    z: 0.1,
+                    layer: 0,
+                    ..Default::default()
+                },
+                Node3D {
+                    x: 0.0,
+                    y: 0.2,
+                    z: -0.1,
+                    layer: 0,
+                    ..Default::default()
+                },
+            ],
+            vec![
+                Node3D {
+                    x: 0.5,
+                    y: 0.1,
+                    z: 0.2,
+                    layer: 1,
+                    ..Default::default()
+                },
+                Node3D {
+                    x: 0.6,
+                    y: -0.1,
+                    z: -0.2,
+                    layer: 1,
+                    ..Default::default()
+                },
+            ],
+        ];
         let w_in = ndarray::Array2::<f64>::from_elem((2, 2), 0.2);
         let w_hh_fwd = vec![ndarray::Array2::<f64>::from_elem((2, 2), 0.3)];
         let w_hh_bwd = vec![ndarray::Array2::<f64>::from_elem((2, 2), 0.1)];
@@ -5556,11 +7734,26 @@ mod tests {
         config.synapse_offset = 0.05;
         config.aarnn_velocity = 10.0;
 
-        let m = Morphology::from_weights(&topo, &Vec::new(), &Vec::new(), &w_in, &w_hh_fwd, &w_hh_bwd, &w_out,
-                                         &config, false);
+        let m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &w_out,
+            &config,
+            false,
+        );
         // Ensure points are unique (quantized)
         let mut set = HashSet::new();
-        let q = |p: &Point3| -> (i32,i32,i32) { (((p.x*1000.0).round() as i32), ((p.y*1000.0).round() as i32), ((p.z*1000.0).round() as i32)) };
+        let q = |p: &Point3| -> (i32, i32, i32) {
+            (
+                ((p.x * 1000.0).round() as i32),
+                ((p.y * 1000.0).round() as i32),
+                ((p.z * 1000.0).round() as i32),
+            )
+        };
         for s in &m.synapses {
             assert!(set.insert(q(&s.pre_site)));
             assert!(set.insert(q(&s.post_site)));
@@ -5571,14 +7764,23 @@ mod tests {
                 let s1 = &m.synapses[i];
                 let s2 = &m.synapses[j];
                 // Skip if they share a pre or post neuron, or are reciprocal
-                if (s1.pre_layer == s2.pre_layer && s1.pre_id == s2.pre_id) ||
-                   (s1.post_layer == s2.post_layer && s1.post_id == s2.post_id) ||
-                   (s1.pre_layer == s2.post_layer && s1.pre_id == s2.post_id &&
-                    s1.post_layer == s2.pre_layer && s1.post_id == s2.pre_id) {
+                if (s1.pre_layer == s2.pre_layer && s1.pre_id == s2.pre_id)
+                    || (s1.post_layer == s2.post_layer && s1.post_id == s2.post_id)
+                    || (s1.pre_layer == s2.post_layer
+                        && s1.pre_id == s2.post_id
+                        && s1.post_layer == s2.pre_layer
+                        && s1.post_id == s2.pre_id)
+                {
                     continue;
                 }
                 let d = seg_seg_min_dist_sq(s1.pre_site, s1.post_site, s2.pre_site, s2.post_site);
-                assert!(d >= (config.seg_eps*0.5), "Segments {} and {} are too close: {}", i, j, d);
+                assert!(
+                    d >= (config.seg_eps * 0.5),
+                    "Segments {} and {} are too close: {}",
+                    i,
+                    j,
+                    d
+                );
             }
         }
     }

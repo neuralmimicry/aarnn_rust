@@ -24,45 +24,67 @@
 //! - `DistributedNode`: The primary interface for both Orchestrator and Compute roles.
 //! - `NodeState`: Maintains the local view of the cluster and managed networks.
 //! - `ManagedNetwork`: Represents a partition of a neural network being simulated on the local node.
+#[cfg(not(feature = "sysinfo"))]
+use self::sysinfo_dummy::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+#[cfg(feature = "sysinfo")]
+use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::{mpsc, RwLock};
 use tonic::{Request, Response, Status};
-#[cfg(feature = "sysinfo")]
-use sysinfo::{Components, System, CpuRefreshKind, MemoryRefreshKind, RefreshKind};
-#[cfg(not(feature = "sysinfo"))]
-use self::sysinfo_dummy::{System, CpuRefreshKind, MemoryRefreshKind, RefreshKind};
 
 #[cfg(not(feature = "sysinfo"))]
 mod sysinfo_dummy {
     pub struct System;
     impl System {
-        pub fn new_with_specifics(_: RefreshKind) -> Self { Self }
+        pub fn new_with_specifics(_: RefreshKind) -> Self {
+            Self
+        }
         pub fn refresh_cpu_usage(&mut self) {}
         pub fn refresh_memory(&mut self) {}
-        pub fn global_cpu_usage(&self) -> f32 { 0.0 }
-        pub fn available_memory(&self) -> u64 { 0 }
-        pub fn total_memory(&self) -> u64 { 0 }
+        pub fn global_cpu_usage(&self) -> f32 {
+            0.0
+        }
+        pub fn available_memory(&self) -> u64 {
+            0
+        }
+        pub fn total_memory(&self) -> u64 {
+            0
+        }
     }
     pub struct RefreshKind;
     impl RefreshKind {
-        pub fn nothing() -> Self { Self }
-        pub fn with_cpu(self, _: CpuRefreshKind) -> Self { self }
-        pub fn with_memory(self, _: MemoryRefreshKind) -> Self { self }
+        pub fn nothing() -> Self {
+            Self
+        }
+        pub fn with_cpu(self, _: CpuRefreshKind) -> Self {
+            self
+        }
+        pub fn with_memory(self, _: MemoryRefreshKind) -> Self {
+            self
+        }
     }
     pub struct CpuRefreshKind;
-    impl CpuRefreshKind { pub fn everything() -> Self { Self } }
+    impl CpuRefreshKind {
+        pub fn everything() -> Self {
+            Self
+        }
+    }
     pub struct MemoryRefreshKind;
-    impl MemoryRefreshKind { pub fn everything() -> Self { Self } }
+    impl MemoryRefreshKind {
+        pub fn everything() -> Self {
+            Self
+        }
+    }
 }
-use tokio::net::UdpSocket;
-use tokio::sync::watch;
+use crate::aer::{decode_spikes, encode_spikes};
+use crate::config::{LIFParams, NetworkConfig, STDPParams};
+use crate::runner::Runner;
+use crate::sim::{Learning, NeuronModel};
 use std::net::SocketAddr;
 use std::time::Duration;
-use crate::aer::{decode_spikes, encode_spikes};
-use crate::runner::Runner;
-use crate::config::{NetworkConfig, LIFParams, STDPParams};
-use crate::sim::{Learning, NeuronModel};
+use tokio::net::UdpSocket;
+use tokio::sync::watch;
 
 // Include the generated gRPC code
 pub mod proto {
@@ -71,11 +93,13 @@ pub mod proto {
 
 pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
 
-use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
 use proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
+use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
 use proto::*;
 
-fn control_action_from_command(cmd_type: proto::network_command::CommandType) -> Option<proto::control_update::Action> {
+fn control_action_from_command(
+    cmd_type: proto::network_command::CommandType,
+) -> Option<proto::control_update::Action> {
     use proto::control_update::Action;
     use proto::network_command::CommandType;
     match cmd_type {
@@ -87,7 +111,9 @@ fn control_action_from_command(cmd_type: proto::network_command::CommandType) ->
     }
 }
 
-fn command_type_from_action(action: proto::control_update::Action) -> proto::network_command::CommandType {
+fn command_type_from_action(
+    action: proto::control_update::Action,
+) -> proto::network_command::CommandType {
     use proto::control_update::Action;
     use proto::network_command::CommandType;
     match action {
@@ -113,11 +139,23 @@ fn fresh_single_neuron_snapshot(
     learning: Learning,
 ) -> Result<(NetworkConfig, String), String> {
     let cfg = fresh_single_neuron_config(desired_depth);
-    let runner = Runner::new(LIFParams::default(), STDPParams::default(), cfg.clone(), model, learning);
-    runner.export_network_json().map(|json| (cfg, json)).map_err(|e| e.to_string())
+    let runner = Runner::new(
+        LIFParams::default(),
+        STDPParams::default(),
+        cfg.clone(),
+        model,
+        learning,
+    );
+    runner
+        .export_network_json()
+        .map(|json| (cfg, json))
+        .map_err(|e| e.to_string())
 }
 
-fn apply_control_to_managed_network(net: &mut ManagedNetwork, action: proto::control_update::Action) {
+fn apply_control_to_managed_network(
+    net: &mut ManagedNetwork,
+    action: proto::control_update::Action,
+) {
     match action {
         proto::control_update::Action::Start => {
             net.playing = true;
@@ -147,7 +185,10 @@ fn apply_control_to_managed_network(net: &mut ManagedNetwork, action: proto::con
                 net.initial_learning.clone(),
             );
             if !net.assigned_layers.is_empty() {
-                if let (Some(min), Some(max)) = (net.assigned_layers.iter().min(), net.assigned_layers.iter().max()) {
+                if let (Some(min), Some(max)) = (
+                    net.assigned_layers.iter().min(),
+                    net.assigned_layers.iter().max(),
+                ) {
                     runner.layer_range = Some(*min as usize..(*max as usize + 1));
                     #[cfg(feature = "growth3d")]
                     runner.rebuild_default_topology();
@@ -169,7 +210,10 @@ fn apply_control_to_managed_network(net: &mut ManagedNetwork, action: proto::con
             let cfg = fresh_single_neuron_config(net.desired_aarnn_depth);
             let mut runner = Runner::new(lif.clone(), stdp.clone(), cfg.clone(), model, learning);
             if !net.assigned_layers.is_empty() {
-                if let (Some(min), Some(max)) = (net.assigned_layers.iter().min(), net.assigned_layers.iter().max()) {
+                if let (Some(min), Some(max)) = (
+                    net.assigned_layers.iter().min(),
+                    net.assigned_layers.iter().max(),
+                ) {
                     runner.layer_range = Some(*min as usize..(*max as usize + 1));
                     #[cfg(feature = "growth3d")]
                     runner.rebuild_default_topology();
@@ -274,13 +318,20 @@ fn normalize_peer_address(advertised: &str, remote_addr: Option<SocketAddr>) -> 
     (display_addr, connect_addr)
 }
 
-async fn connect_peer(addr: &str) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
+async fn connect_peer(
+    addr: &str,
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
     let target = if addr.starts_with("http://") || addr.starts_with("https://") {
         addr.to_string()
     } else {
         format!("http://{}", addr)
     };
-    match tokio::time::timeout(Duration::from_secs(3), DistributedNeuromorphicClient::connect(target.clone())).await {
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        DistributedNeuromorphicClient::connect(target.clone()),
+    )
+    .await
+    {
         Ok(Ok(client)) => Ok(client),
         Ok(Err(e)) => Err(format!("connect failed for {}: {}", target, e)),
         Err(_) => Err(format!("connect timeout for {}", target)),
@@ -320,13 +371,18 @@ pub struct NodeState {
     pub peers: HashMap<String, String>, // node_id -> address
     pub network_peers: HashMap<String, Vec<String>>, // network_id -> node ids
     pub peer_last_seen: HashMap<String, std::time::Instant>,
-    pub clients: HashMap<String, proto::distributed_neuromorphic_client::DistributedNeuromorphicClient<tonic::transport::Channel>>,
+    pub clients: HashMap<
+        String,
+        proto::distributed_neuromorphic_client::DistributedNeuromorphicClient<
+            tonic::transport::Channel,
+        >,
+    >,
     pub _orchestrator_addr: Option<String>,
     pub is_orchestrator: bool,
     pub spike_streams: HashMap<String, SpikeStreamHandle>,
     pub spike_stream_backoff: HashMap<String, std::time::Instant>,
     pub spike_drop_counts: HashMap<String, u64>,
-    
+
     // Cluster-wide status (only relevant if is_orchestrator)
     pub nodes: HashMap<String, NodeStatus>,
     pub network_registry: HashMap<String, NetworkStatus>,
@@ -348,8 +404,10 @@ pub struct NodeState {
 
 impl NodeState {
     pub fn prune_peer_maps(&mut self, now: std::time::Instant, ttl: Duration) {
-        self.peer_last_seen.retain(|_, last| now.duration_since(*last) <= ttl);
-        self.peers.retain(|node_id, _| self.peer_last_seen.contains_key(node_id));
+        self.peer_last_seen
+            .retain(|_, last| now.duration_since(*last) <= ttl);
+        self.peers
+            .retain(|node_id, _| self.peer_last_seen.contains_key(node_id));
         for peers in self.network_peers.values_mut() {
             peers.retain(|node_id| self.peers.contains_key(node_id) && node_id != &self.node_id);
         }
@@ -396,14 +454,21 @@ impl DistributedNode {
             system: Arc::new(RwLock::new(System::new_with_specifics(
                 RefreshKind::nothing()
                     .with_cpu(CpuRefreshKind::everything())
-                    .with_memory(MemoryRefreshKind::everything())
+                    .with_memory(MemoryRefreshKind::everything()),
             ))),
         }
     }
 
     #[allow(dead_code)]
-    pub fn apply_network_control(&self, network_id: &str, action: proto::control_update::Action) -> Result<(), String> {
-        let mut state = self.state.try_write().map_err(|_| "Cluster state busy".to_string())?;
+    pub fn apply_network_control(
+        &self,
+        network_id: &str,
+        action: proto::control_update::Action,
+    ) -> Result<(), String> {
+        let mut state = self
+            .state
+            .try_write()
+            .map_err(|_| "Cluster state busy".to_string())?;
         let mut cmd_type = command_type_from_action(action);
         let mut found = false;
         let mut local_busy = false;
@@ -426,7 +491,11 @@ impl DistributedNode {
 
         let (network_registry, network_snapshots, pending_commands) = {
             let state = &mut *state;
-            (&mut state.network_registry, &mut state.network_snapshots, &mut state.pending_commands)
+            (
+                &mut state.network_registry,
+                &mut state.network_snapshots,
+                &mut state.pending_commands,
+            )
         };
 
         if let Some(net_status) = network_registry.get_mut(network_id) {
@@ -435,14 +504,19 @@ impl DistributedNode {
                 proto::control_update::Action::Start | proto::control_update::Action::Repeat => {
                     net_status.playing = true;
                 }
-                proto::control_update::Action::Stop | proto::control_update::Action::Reset | proto::control_update::Action::New => {
+                proto::control_update::Action::Stop
+                | proto::control_update::Action::Reset
+                | proto::control_update::Action::New => {
                     net_status.playing = false;
                 }
             }
             if matches!(action, proto::control_update::Action::New) {
-                let model = NeuronModel::from_str(&net_status.neuron_model).unwrap_or(NeuronModel::Aarnn);
-                let learning = Learning::from_str(&net_status.learning_rule).unwrap_or(Learning::Aarnn);
-                let (fresh_cfg, fresh_json) = fresh_single_neuron_snapshot(net_status.desired_aarnn_depth, model, learning)?;
+                let model =
+                    NeuronModel::from_str(&net_status.neuron_model).unwrap_or(NeuronModel::Aarnn);
+                let learning =
+                    Learning::from_str(&net_status.learning_rule).unwrap_or(Learning::Aarnn);
+                let (fresh_cfg, fresh_json) =
+                    fresh_single_neuron_snapshot(net_status.desired_aarnn_depth, model, learning)?;
                 net_status.config_json = fresh_json.clone();
                 net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
                 if net_status.neuron_model.is_empty() {
@@ -483,8 +557,16 @@ impl DistributedNode {
                     layers,
                     redundant_layers,
                     desired_aarnn_depth: desired_depth,
-                    neuron_model: if use_distribution_layers { command_model.clone() } else { String::new() },
-                    learning_rule: if use_distribution_layers { command_learning.clone() } else { String::new() },
+                    neuron_model: if use_distribution_layers {
+                        command_model.clone()
+                    } else {
+                        String::new()
+                    },
+                    learning_rule: if use_distribution_layers {
+                        command_learning.clone()
+                    } else {
+                        String::new()
+                    },
                 };
                 pending_commands.entry(node_id).or_default().push(cmd);
             }
@@ -499,21 +581,26 @@ impl DistributedNode {
         Ok(())
     }
 
-    pub async fn start_discovery_beacon(grpc_addr: String, mut shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn start_discovery_beacon(
+        grpc_addr: String,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         socket.set_broadcast(true)?;
-        
+
         let msg = format!("NEUROMORPHIC_ORCHESTRATOR:{}", grpc_addr);
         let targets = vec![
             "255.255.255.255:50050".parse::<SocketAddr>()?,
             "127.0.0.1:50050".parse::<SocketAddr>()?,
         ];
-        
+
         nm_log!("[info] Discovery beacon started (port 50050)");
-        
+
         tokio::spawn(async move {
             loop {
-                if *shutdown.borrow() { break; }
+                if *shutdown.borrow() {
+                    break;
+                }
                 for &target in &targets {
                     let _ = socket.send_to(msg.as_bytes(), target).await;
                 }
@@ -531,17 +618,23 @@ impl DistributedNode {
     pub async fn discover_orchestrator() -> anyhow::Result<String> {
         let socket = UdpSocket::bind("0.0.0.0:50050").await?;
         nm_log!("[info] Waiting for orchestrator discovery beacon...");
-        
+
         let mut buf = [0u8; 1024];
         loop {
             if let Ok((len, src_addr)) = socket.recv_from(&mut buf).await {
                 let msg = String::from_utf8_lossy(&buf[..len]);
                 if msg.starts_with("NEUROMORPHIC_ORCHESTRATOR:") {
-                    let mut addr = msg.trim_start_matches("NEUROMORPHIC_ORCHESTRATOR:").to_string();
+                    let mut addr = msg
+                        .trim_start_matches("NEUROMORPHIC_ORCHESTRATOR:")
+                        .to_string();
                     if addr.starts_with("0.0.0.0") {
                         addr = addr.replace("0.0.0.0", &src_addr.ip().to_string());
                     }
-                    let full_addr = if addr.starts_with("http") { addr } else { format!("http://{}", addr) };
+                    let full_addr = if addr.starts_with("http") {
+                        addr
+                    } else {
+                        format!("http://{}", addr)
+                    };
                     nm_log!("[info] Discovered orchestrator at {}", full_addr);
                     return Ok(full_addr);
                 }
@@ -553,7 +646,7 @@ impl DistributedNode {
         let mut sys = self.system.write().await;
         sys.refresh_cpu_usage();
         sys.refresh_memory();
-        
+
         let state = self.state.read().await;
         let mut total_node_neurons = 0u64;
         let mut redundant_node_neurons = 0u64;
@@ -588,11 +681,19 @@ impl DistributedNode {
             total_avg_step_time += net.avg_step_time_ms;
             count += 1;
         }
-        let desired_dt = if count > 0 { total_desired_dt / count as f64 } else { 1.0 };
+        let desired_dt = if count > 0 {
+            total_desired_dt / count as f64
+        } else {
+            1.0
+        };
 
         let mut capacity = 1.0;
         capacity += (1.0 - sys.global_cpu_usage() / 100.0) * 10.0;
-        let mem_ratio = if sys.total_memory() > 0 { sys.available_memory() as f32 / sys.total_memory() as f32 } else { 0.0 };
+        let mem_ratio = if sys.total_memory() > 0 {
+            sys.available_memory() as f32 / sys.total_memory() as f32
+        } else {
+            0.0
+        };
         capacity += mem_ratio * 10.0;
 
         let temperature_c = {
@@ -619,25 +720,31 @@ impl DistributedNode {
         let (ga_pacing, ga_pacing_reason) = crate::ga::ga_pacing_status();
         let ga_ramp = crate::ga::ga_ramp_runtime_status();
         let ga_ramp_active = ga_ramp.is_some();
-        let (ga_ramp_population, ga_ramp_worker_cap, ga_ramp_sim_time_ms, ga_ramp_eval_ms, ga_ramp_eval_neurons, ga_ramp_eval_conns) =
-            if let Some(ramp) = ga_ramp {
-                (
-                    ramp.population_size.min(u32::MAX as usize) as u32,
-                    ramp.worker_cap.min(u32::MAX as usize) as u32,
-                    ramp.sim_time_ms,
-                    ramp.eval_ms.unwrap_or(0),
-                    ramp.eval_neurons.unwrap_or(0).min(u64::MAX as usize) as u64,
-                    ramp.eval_conns.unwrap_or(0).min(u64::MAX as usize) as u64,
-                )
-            } else {
-                (0, 0, 0.0, 0, 0, 0)
-            };
+        let (
+            ga_ramp_population,
+            ga_ramp_worker_cap,
+            ga_ramp_sim_time_ms,
+            ga_ramp_eval_ms,
+            ga_ramp_eval_neurons,
+            ga_ramp_eval_conns,
+        ) = if let Some(ramp) = ga_ramp {
+            (
+                ramp.population_size.min(u32::MAX as usize) as u32,
+                ramp.worker_cap.min(u32::MAX as usize) as u32,
+                ramp.sim_time_ms,
+                ramp.eval_ms.unwrap_or(0),
+                ramp.eval_neurons.unwrap_or(0).min(u64::MAX as usize) as u64,
+                ramp.eval_conns.unwrap_or(0).min(u64::MAX as usize) as u64,
+            )
+        } else {
+            (0, 0, 0.0, 0, 0, 0)
+        };
 
         Resources {
             cpu_usage: sys.global_cpu_usage(),
             total_ram: sys.total_memory(),
             available_ram: sys.available_memory(),
-            num_gpus: 0, 
+            num_gpus: 0,
             num_tpus: 0,
             num_fpgas: 0,
             capacity_score: capacity,
@@ -675,7 +782,7 @@ impl DistributedNode {
             let net = net_arc.read().await;
             let mut layer_neuron_counts = HashMap::new();
             let mut total_neurons = 0u64;
-            
+
             for &l in &net.assigned_layers {
                 let size = if (l as usize) < net.runner.net.num_hidden_layers {
                     net.runner.layer_size(l as usize) as u64
@@ -687,17 +794,24 @@ impl DistributedNode {
                 layer_neuron_counts.insert(l, size);
                 total_neurons += size;
             }
-            
-            res.insert(id.clone(), NetworkResources {
-                num_neurons: total_neurons,
-                layer_neuron_counts,
-                avg_step_time_ms: net.avg_step_time_ms,
-            });
+
+            res.insert(
+                id.clone(),
+                NetworkResources {
+                    num_neurons: total_neurons,
+                    layer_neuron_counts,
+                    avg_step_time_ms: net.avg_step_time_ms,
+                },
+            );
         }
         res
     }
 
-    async fn spike_targets_for_network(&self, network_id: &str, exclude_node: Option<&str>) -> Vec<(String, String)> {
+    async fn spike_targets_for_network(
+        &self,
+        network_id: &str,
+        exclude_node: Option<&str>,
+    ) -> Vec<(String, String)> {
         let state = self.state.read().await;
         if state.is_orchestrator {
             if let Some(net) = state.network_registry.get(network_id) {
@@ -743,7 +857,9 @@ impl DistributedNode {
                     return;
                 }
             }
-            state.spike_stream_backoff.insert(key.clone(), now + Duration::from_secs(2));
+            state
+                .spike_stream_backoff
+                .insert(key.clone(), now + Duration::from_secs(2));
         }
 
         let node = self.clone();
@@ -764,7 +880,9 @@ impl DistributedNode {
                 Ok(resp) => {
                     {
                         let mut state = node.state.write().await;
-                        state.spike_streams.insert(key.clone(), SpikeStreamHandle { tx });
+                        state
+                            .spike_streams
+                            .insert(key.clone(), SpikeStreamHandle { tx });
                     }
                     resp.into_inner()
                 }
@@ -781,11 +899,18 @@ impl DistributedNode {
         });
     }
 
-    async fn send_spike_batches(&self, network_id: &str, batches: &[SpikeBatch], exclude_node: Option<&str>) {
+    async fn send_spike_batches(
+        &self,
+        network_id: &str,
+        batches: &[SpikeBatch],
+        exclude_node: Option<&str>,
+    ) {
         if batches.is_empty() {
             return;
         }
-        let targets = self.spike_targets_for_network(network_id, exclude_node).await;
+        let targets = self
+            .spike_targets_for_network(network_id, exclude_node)
+            .await;
         if targets.is_empty() {
             return;
         }
@@ -824,7 +949,10 @@ impl DistributedNode {
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         let mut state = self.state.write().await;
                         state.spike_streams.remove(&key);
-                        state.spike_stream_backoff.insert(key.clone(), std::time::Instant::now() + Duration::from_secs(2));
+                        state.spike_stream_backoff.insert(
+                            key.clone(),
+                            std::time::Instant::now() + Duration::from_secs(2),
+                        );
                         break;
                     }
                 }
@@ -834,16 +962,22 @@ impl DistributedNode {
 
     pub async fn rebalance_networks(&self) {
         let mut state = self.state.write().await;
-        if !state.is_orchestrator { return; }
-        
+        if !state.is_orchestrator {
+            return;
+        }
+
         let node_ids: Vec<String> = state.nodes.keys().cloned().collect();
-        if node_ids.is_empty() { return; }
+        if node_ids.is_empty() {
+            return;
+        }
 
         // Calculate total capacity and collect node capacities
         let mut total_capacity = 0.0;
         let mut node_capacities = Vec::new();
         for node_id in &node_ids {
-            let cap = state.nodes.get(node_id)
+            let cap = state
+                .nodes
+                .get(node_id)
                 .and_then(|n| n.resources.as_ref())
                 .map(|r| r.capacity_score)
                 .unwrap_or(1.0);
@@ -875,7 +1009,9 @@ impl DistributedNode {
                     snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
                 }
             } else if !net_status.config_json.is_empty() {
-                if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&net_status.config_json) {
+                if let Ok(snap) =
+                    serde_json::from_str::<crate::runner::Snapshot>(&net_status.config_json)
+                {
                     let snap_json = net_status.config_json.clone();
                     network_snapshots.insert(net_id.clone(), snap_json.clone());
                     config_payload = Some(snap_json);
@@ -892,13 +1028,13 @@ impl DistributedNode {
                 7
             };
             let config_json = config_payload.unwrap_or_else(|| net_status.config_json.clone());
-            
+
             // Preserve existing layer neuron counts to avoid UI flicker during rebalance
             let mut old_counts = HashMap::new();
             for (nid, range) in &net_status.distribution {
                 old_counts.insert(nid.clone(), range.layer_neuron_counts.clone());
             }
-            
+
             net_status.distribution.clear();
 
             let mut layer_counts = vec![0u32; total_layers as usize];
@@ -909,17 +1045,21 @@ impl DistributedNode {
                 let start_ratio = current_cap_sum / total_capacity;
                 current_cap_sum += cap;
                 let end_ratio = current_cap_sum / total_capacity;
-                
+
                 let start = (start_ratio * total_layers as f32).round() as u32;
                 let end = (end_ratio * total_layers as f32).round() as u32;
-                
+
                 // Ensure at least one layer if there's any capacity
-                let end = if start == end && end < total_layers { end + 1 } else { end };
-                
+                let end = if start == end && end < total_layers {
+                    end + 1
+                } else {
+                    end
+                };
+
                 // Add overlap for boundary synchronization/redundancy
                 let r_start = start.saturating_sub(1);
                 let r_end = (end + 1).min(total_layers);
-                
+
                 let layers: Vec<u32> = (r_start..r_end).collect();
                 for &l in &layers {
                     if (l as usize) < layer_counts.len() {
@@ -930,12 +1070,19 @@ impl DistributedNode {
             }
 
             for (node_id, layers) in node_assignments {
-                net_status.distribution.insert(node_id.clone(), LayerRange { 
-                    layers: layers.clone(),
-                    layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
-                });
-                
-                let redundant: Vec<u32> = layers.iter().filter(|&&l| (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1).copied().collect();
+                net_status.distribution.insert(
+                    node_id.clone(),
+                    LayerRange {
+                        layers: layers.clone(),
+                        layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                    },
+                );
+
+                let redundant: Vec<u32> = layers
+                    .iter()
+                    .filter(|&&l| (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1)
+                    .copied()
+                    .collect();
 
                 let cmd = NetworkCommand {
                     r#type: proto::network_command::CommandType::LoadNetwork as i32,
@@ -991,13 +1138,18 @@ impl DistributedNode {
     pub async fn handle_command(&self, cmd: NetworkCommand) {
         use proto::network_command::CommandType;
         let mut state = self.state.write().await;
-        
+
         let cmd_type = CommandType::try_from(cmd.r#type).unwrap_or(CommandType::Stop);
         match cmd_type {
             CommandType::LoadNetwork => {
                 if let Some(net_arc) = state.networks.get(&cmd.network_id) {
                     let mut net = net_arc.write().await;
-                    nm_log!("[info] Updating network {} layers to {:?} (redundant: {:?})", cmd.network_id, cmd.layers, cmd.redundant_layers);
+                    nm_log!(
+                        "[info] Updating network {} layers to {:?} (redundant: {:?})",
+                        cmd.network_id,
+                        cmd.layers,
+                        cmd.redundant_layers
+                    );
                     net.assigned_layers = cmd.layers;
                     net.redundant_layers = cmd.redundant_layers;
                     net.desired_aarnn_depth = cmd.desired_aarnn_depth;
@@ -1008,22 +1160,32 @@ impl DistributedNode {
 
                     if !cmd.config_json.is_empty() {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
-                        if let Ok(_snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str) {
+                        if let Ok(_snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                        {
                             #[cfg(feature = "growth3d")]
                             let has_snapshot_topo = _snap.topo.is_some();
                             if let Err(e) = net.runner.import_network_json(&cfg_str) {
-                                nm_err!("[warn] Failed to import snapshot for {}: {}", cmd.network_id, e);
+                                nm_err!(
+                                    "[warn] Failed to import snapshot for {}: {}",
+                                    cmd.network_id,
+                                    e
+                                );
                             }
                             if !net.assigned_layers.is_empty() {
-                                if let (Some(min), Some(max)) = (net.assigned_layers.iter().min(), net.assigned_layers.iter().max()) {
-                                    net.runner.layer_range = Some(*min as usize..(*max as usize + 1));
+                                if let (Some(min), Some(max)) = (
+                                    net.assigned_layers.iter().min(),
+                                    net.assigned_layers.iter().max(),
+                                ) {
+                                    net.runner.layer_range =
+                                        Some(*min as usize..(*max as usize + 1));
                                     #[cfg(feature = "growth3d")]
                                     if !has_snapshot_topo {
                                         net.runner.rebuild_default_topology();
                                     }
                                 }
                             }
-                        } else if let Ok(new_cfg) = serde_json::from_str::<NetworkConfig>(&cfg_str) {
+                        } else if let Ok(new_cfg) = serde_json::from_str::<NetworkConfig>(&cfg_str)
+                        {
                             net.runner.apply_config(new_cfg);
                         }
                     }
@@ -1045,13 +1207,14 @@ impl DistributedNode {
                     nm_log!("[info] Loading network {} with layers {:?} (redundant: {:?}, depth: {}, model: {}, learning: {})", 
                         cmd.network_id, cmd.layers, cmd.redundant_layers, cmd.desired_aarnn_depth,
                         cmd.neuron_model, cmd.learning_rule);
-                    
+
                     let mut snapshot_json: Option<String> = None;
                     #[cfg(feature = "growth3d")]
                     let mut snapshot_has_topo = false;
                     let mut net_cfg = if !cmd.config_json.is_empty() {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
-                        if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str) {
+                        if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                        {
                             #[cfg(feature = "growth3d")]
                             {
                                 snapshot_has_topo = snap.topo.is_some();
@@ -1060,7 +1223,10 @@ impl DistributedNode {
                             snap.net
                         } else {
                             serde_json::from_str(&cfg_str).unwrap_or_else(|e| {
-                                nm_err!("[error] Failed to parse config JSON in LoadNetwork: {}", e);
+                                nm_err!(
+                                    "[error] Failed to parse config JSON in LoadNetwork: {}",
+                                    e
+                                );
                                 NetworkConfig::default()
                             })
                         }
@@ -1095,17 +1261,15 @@ impl DistributedNode {
                     let desired_depth = cmd.desired_aarnn_depth;
                     let lif = LIFParams::default();
                     let stdp = STDPParams::default();
-                    let mut runner = Runner::new(
-                        lif.clone(),
-                        stdp.clone(),
-                        net_cfg.clone(),
-                        model,
-                        learning,
-                    );
-                    
+                    let mut runner =
+                        Runner::new(lif.clone(), stdp.clone(), net_cfg.clone(), model, learning);
+
                     if let Some(json) = snapshot_json {
                         if let Err(e) = runner.import_network_json(&json) {
-                            nm_err!("[error] Failed to import snapshot JSON in LoadNetwork: {}", e);
+                            nm_err!(
+                                "[error] Failed to import snapshot JSON in LoadNetwork: {}",
+                                e
+                            );
                         }
                     }
 
@@ -1118,25 +1282,28 @@ impl DistributedNode {
                             runner.rebuild_default_topology();
                         }
                     }
-                    
-                    state.networks.insert(cmd.network_id.clone(), Arc::new(RwLock::new(ManagedNetwork {
-                        id: cmd.network_id,
-                        runner,
-                        assigned_layers: cmd.layers, 
-                        redundant_layers: cmd.redundant_layers,
-                        remote_spikes_fwd: HashMap::new(),
-                        remote_spikes_bwd: HashMap::new(),
-                        remote_spike_steps_fwd: HashMap::new(),
-                        remote_spike_steps_bwd: HashMap::new(),
-                        avg_step_time_ms: 0.0,
-                        desired_aarnn_depth: desired_depth,
-                        playing: true,
-                        initial_config: net_cfg,
-                        initial_model: model,
-                        initial_learning: learning,
-                        initial_lif: lif,
-                        initial_stdp: stdp,
-                    })));
+
+                    state.networks.insert(
+                        cmd.network_id.clone(),
+                        Arc::new(RwLock::new(ManagedNetwork {
+                            id: cmd.network_id,
+                            runner,
+                            assigned_layers: cmd.layers,
+                            redundant_layers: cmd.redundant_layers,
+                            remote_spikes_fwd: HashMap::new(),
+                            remote_spikes_bwd: HashMap::new(),
+                            remote_spike_steps_fwd: HashMap::new(),
+                            remote_spike_steps_bwd: HashMap::new(),
+                            avg_step_time_ms: 0.0,
+                            desired_aarnn_depth: desired_depth,
+                            playing: true,
+                            initial_config: net_cfg,
+                            initial_model: model,
+                            initial_learning: learning,
+                            initial_lif: lif,
+                            initial_stdp: stdp,
+                        })),
+                    );
                 }
             }
             CommandType::Start | CommandType::Stop | CommandType::Repeat | CommandType::Reset => {
@@ -1154,9 +1321,11 @@ impl DistributedNode {
     pub async fn run_simulation(&self, mut shutdown: watch::Receiver<bool>) {
         let node_id = self.state.read().await.node_id.clone();
         nm_log!("[info] Node {} simulation loop started", node_id);
-        
+
         loop {
-            if *shutdown.borrow() { break; }
+            if *shutdown.borrow() {
+                break;
+            }
             let networks = {
                 let state = self.state.read().await;
                 state.networks.values().cloned().collect::<Vec<_>>()
@@ -1169,7 +1338,9 @@ impl DistributedNode {
 
             let mut any_playing = false;
             for net_arc in networks {
-                if *shutdown.borrow() { break; }
+                if *shutdown.borrow() {
+                    break;
+                }
                 observe_time!("distributed/node_step");
                 let step_start = std::time::Instant::now();
                 let mut net = net_arc.write().await;
@@ -1177,7 +1348,7 @@ impl DistributedNode {
                     continue;
                 }
                 any_playing = true;
-                
+
                 // Sync remote spikes into runner before stepping
                 let fwd_spikes = std::mem::take(&mut net.remote_spikes_fwd);
                 for (l, spikes) in fwd_spikes {
@@ -1188,7 +1359,9 @@ impl DistributedNode {
                         } else {
                             let mut arr = ndarray::Array1::zeros(sz);
                             let n = sz.min(spikes.len());
-                            for i in 0..n { arr[i] = spikes[i]; }
+                            for i in 0..n {
+                                arr[i] = spikes[i];
+                            }
                             net.runner.last_spk_h[l as usize] = arr;
                         }
                     }
@@ -1202,7 +1375,9 @@ impl DistributedNode {
                         } else {
                             let mut arr = ndarray::Array1::zeros(sz);
                             let n = sz.min(spikes.len());
-                            for i in 0..n { arr[i] = spikes[i]; }
+                            for i in 0..n {
+                                arr[i] = spikes[i];
+                            }
                             net.runner.last_spk_h[l as usize] = arr;
                         }
                     }
@@ -1223,8 +1398,11 @@ impl DistributedNode {
                     if layer_idx >= net.runner.last_spk_h.len() {
                         continue;
                     }
-                    let layer_spikes: Vec<i8> = net.runner.last_spk_h[layer_idx].iter().copied().collect();
-                    let indices = layer_spikes.iter().enumerate()
+                    let layer_spikes: Vec<i8> =
+                        net.runner.last_spk_h[layer_idx].iter().copied().collect();
+                    let indices = layer_spikes
+                        .iter()
+                        .enumerate()
                         .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
                         .collect::<Vec<_>>();
                     let mut aer_payload = encode_spikes(ts_us, 0, &layer_spikes);
@@ -1254,9 +1432,15 @@ impl DistributedNode {
                 let target_ms = 10.0;
                 if net.avg_step_time_ms > target_ms && net.runner.net.aarnn_layer_depth > 0 {
                     net.runner.net.aarnn_layer_depth -= 1;
-                    nm_log!("[info] Node {} auto-adjusting AARNN depth down to {} for network {}", 
-                        node_id, net.runner.net.aarnn_layer_depth, net.id);
-                } else if net.avg_step_time_ms < target_ms * 0.5 && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize {
+                    nm_log!(
+                        "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
+                        node_id,
+                        net.runner.net.aarnn_layer_depth,
+                        net.id
+                    );
+                } else if net.avg_step_time_ms < target_ms * 0.5
+                    && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize
+                {
                     net.runner.net.aarnn_layer_depth += 1;
                 }
 
@@ -1296,10 +1480,10 @@ impl DistributedNeuromorphic for DistributedNode {
             resources: req.resources,
             active_networks: req.network_resources.keys().cloned().collect(),
         };
-        
+
         state.nodes.insert(node_id.clone(), node_status);
         state.peers.insert(node_id.clone(), connect_addr.clone());
-        
+
         // Trigger rebalance when new node joins
         drop(state);
         let node_clone = self.clone();
@@ -1311,12 +1495,17 @@ impl DistributedNeuromorphic for DistributedNode {
                     state.clients.insert(node_id_clone, client);
                 }
                 Err(e) => {
-                    nm_err!("[warn] Failed to connect to peer {} at {}: {}", node_id_clone, connect_addr, e);
+                    nm_err!(
+                        "[warn] Failed to connect to peer {} at {}: {}",
+                        node_id_clone,
+                        connect_addr,
+                        e
+                    );
                 }
             }
         });
         self.rebalance_networks().await;
-        
+
         let state = self.state.read().await;
         Ok(Response::new(JoinResponse {
             success: true,
@@ -1325,12 +1514,15 @@ impl DistributedNeuromorphic for DistributedNode {
         }))
     }
 
-    async fn heartbeat(&self, request: Request<HeartbeatRequest>) -> Result<Response<HeartbeatResponse>, Status> {
+    async fn heartbeat(
+        &self,
+        request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatResponse>, Status> {
         let remote_addr = request.remote_addr();
         let mut state = self.state.write().await;
         let req = request.into_inner();
         let now = std::time::Instant::now();
-        
+
         state.last_heartbeat.insert(req.node_id.clone(), now);
 
         let mut commands = Vec::new();
@@ -1339,8 +1531,12 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut network_peers = HashMap::new();
         let mut needs_rebalance = false;
         if state.is_orchestrator {
-            let stale_nodes: Vec<String> = state.last_heartbeat.iter()
-                .filter_map(|(node_id, last)| (now.duration_since(*last) > PEER_STALE_AFTER).then_some(node_id.clone()))
+            let stale_nodes: Vec<String> = state
+                .last_heartbeat
+                .iter()
+                .filter_map(|(node_id, last)| {
+                    (now.duration_since(*last) > PEER_STALE_AFTER).then_some(node_id.clone())
+                })
                 .collect();
             if !stale_nodes.is_empty() {
                 needs_rebalance = true;
@@ -1361,16 +1557,19 @@ impl DistributedNeuromorphic for DistributedNode {
                 node.resources = req.resources;
                 node.active_networks = req.network_resources.keys().cloned().collect();
 
-                let (display_addr, connect_addr) = normalize_peer_address(&node.address, remote_addr);
+                let (display_addr, connect_addr) =
+                    normalize_peer_address(&node.address, remote_addr);
                 if display_addr != node.address {
                     node.address = display_addr;
                 }
-                state.peers.insert(req.node_id.clone(), connect_addr.clone());
+                state
+                    .peers
+                    .insert(req.node_id.clone(), connect_addr.clone());
                 if !state.clients.contains_key(&req.node_id) {
                     connect_target = Some(connect_addr);
                 }
             }
-            
+
             // Update network distribution info with current neuron counts
             for (net_id, net_res) in req.network_resources {
                 if let Some(net_status) = state.network_registry.get_mut(&net_id) {
@@ -1385,7 +1584,9 @@ impl DistributedNeuromorphic for DistributedNode {
             }
 
             for (node_id, addr) in &state.peers {
-                let fresh = state.last_heartbeat.get(node_id)
+                let fresh = state
+                    .last_heartbeat
+                    .get(node_id)
                     .map(|t| now.duration_since(*t) <= PEER_STALE_AFTER)
                     .unwrap_or(false);
                 if fresh {
@@ -1393,7 +1594,9 @@ impl DistributedNeuromorphic for DistributedNode {
                 }
             }
             for (net_id, net) in &state.network_registry {
-                let nodes = net.distribution.keys()
+                let nodes = net
+                    .distribution
+                    .keys()
                     .filter(|node_id| peer_map.contains_key(*node_id))
                     .cloned()
                     .collect::<Vec<_>>();
@@ -1416,7 +1619,7 @@ impl DistributedNeuromorphic for DistributedNode {
                 }
             });
         }
-        
+
         let response = Ok(Response::new(HeartbeatResponse {
             acknowledged: true,
             commands,
@@ -1432,14 +1635,17 @@ impl DistributedNeuromorphic for DistributedNode {
 
     type StreamSpikesStream = tokio_stream::wrappers::ReceiverStream<Result<SpikeBatch, Status>>;
 
-    async fn stream_spikes(&self, request: Request<tonic::Streaming<SpikeBatch>>) -> Result<Response<Self::StreamSpikesStream>, Status> {
+    async fn stream_spikes(
+        &self,
+        request: Request<tonic::Streaming<SpikeBatch>>,
+    ) -> Result<Response<Self::StreamSpikesStream>, Status> {
         let remote_addr = request.remote_addr();
         let mut stream = request.into_inner();
         let state = self.state.clone();
         let node = self.clone();
-        
+
         let (_tx, rx) = mpsc::channel(128);
-        
+
         tokio::spawn(async move {
             while let Some(batch) = stream.message().await.unwrap_or(None) {
                 let (networks, is_orchestrator, exclude_node) = {
@@ -1453,7 +1659,7 @@ impl DistributedNeuromorphic for DistributedNode {
                     };
                     (net, is_orchestrator, exclude)
                 };
-                
+
                 if let Some(net_arc) = networks {
                     let mut net = net_arc.write().await;
                     let layer_index = batch.layer_index as usize;
@@ -1500,18 +1706,28 @@ impl DistributedNeuromorphic for DistributedNode {
                 }
 
                 if is_orchestrator {
-                    node.send_spike_batches(&batch.network_id, std::slice::from_ref(&batch), exclude_node.as_deref()).await;
+                    node.send_spike_batches(
+                        &batch.network_id,
+                        std::slice::from_ref(&batch),
+                        exclude_node.as_deref(),
+                    )
+                    .await;
                 }
             }
         });
-        
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
-    async fn update_network(&self, request: Request<NetworkUpdateRequest>) -> Result<Response<NetworkUpdateResponse>, Status> {
+    async fn update_network(
+        &self,
+        request: Request<NetworkUpdateRequest>,
+    ) -> Result<Response<NetworkUpdateResponse>, Status> {
         let req = request.into_inner();
         let mut state = self.state.write().await;
-        
+
         if !state.is_orchestrator {
             return Err(Status::permission_denied("Not an orchestrator"));
         }
@@ -1526,104 +1742,121 @@ impl DistributedNeuromorphic for DistributedNode {
         let response = {
             let (network_registry, network_snapshots, pending_commands) = {
                 let state = &mut *state;
-                (&mut state.network_registry, &mut state.network_snapshots, &mut state.pending_commands)
+                (
+                    &mut state.network_registry,
+                    &mut state.network_snapshots,
+                    &mut state.pending_commands,
+                )
             };
             if let Some(net_status) = network_registry.get_mut(&network_id) {
-            if let Some(update) = req.update {
-                match update {
-                    proto::network_update_request::Update::Config(c) => {
-                        if !c.config_json.is_empty() {
-                            let cfg_str = String::from_utf8_lossy(&c.config_json).to_string();
-                            net_status.config_json = cfg_str.clone();
-                            if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str) {
-                                network_snapshots.insert(network_id.clone(), cfg_str);
-                                net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
+                if let Some(update) = req.update {
+                    match update {
+                        proto::network_update_request::Update::Config(c) => {
+                            if !c.config_json.is_empty() {
+                                let cfg_str = String::from_utf8_lossy(&c.config_json).to_string();
+                                net_status.config_json = cfg_str.clone();
+                                if let Ok(snap) =
+                                    serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                                {
+                                    network_snapshots.insert(network_id.clone(), cfg_str);
+                                    net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
+                                }
                             }
-                        }
-                        if !c.neuron_model.is_empty() {
-                            net_status.neuron_model = c.neuron_model.clone();
-                        }
-                        if !c.learning_rule.is_empty() {
-                            net_status.learning_rule = c.learning_rule.clone();
-                        }
-
-                        // Prepare commands for all nodes in the distribution
-                        for (node_id, range) in &net_status.distribution {
-                            let redundant: Vec<u32> = range.layers.iter().copied().collect();
-
-                            let cmd = NetworkCommand {
-                                r#type: proto::network_command::CommandType::LoadNetwork as i32,
-                                network_id: network_id.clone(),
-                                config_json: c.config_json.clone(),
-                                layers: range.layers.clone(),
-                                redundant_layers: redundant,
-                                desired_aarnn_depth: net_status.desired_aarnn_depth,
-                                neuron_model: c.neuron_model.clone(),
-                                learning_rule: c.learning_rule.clone(),
-                            };
-                            commands_to_send.push((node_id.clone(), cmd));
-                        }
-                    }
-                    proto::network_update_request::Update::Control(c) => {
-                        let action = proto::control_update::Action::try_from(c.action)
-                            .map_err(|_| Status::invalid_argument("invalid control action"))?;
-                        let cmd_type = command_type_from_action(action);
-
-                        match action {
-                            proto::control_update::Action::Start | proto::control_update::Action::Repeat => {
-                                net_status.playing = true;
+                            if !c.neuron_model.is_empty() {
+                                net_status.neuron_model = c.neuron_model.clone();
                             }
-                            proto::control_update::Action::Stop | proto::control_update::Action::Reset | proto::control_update::Action::New => {
-                                net_status.playing = false;
+                            if !c.learning_rule.is_empty() {
+                                net_status.learning_rule = c.learning_rule.clone();
                             }
-                        }
 
-                        local_control = Some(action);
-                        local_net_arc = local_net_arc_candidate.clone();
+                            // Prepare commands for all nodes in the distribution
+                            for (node_id, range) in &net_status.distribution {
+                                let redundant: Vec<u32> = range.layers.iter().copied().collect();
 
-                        if matches!(action, proto::control_update::Action::New) {
-                            let model = NeuronModel::from_str(&net_status.neuron_model).unwrap_or(NeuronModel::Aarnn);
-                            let learning = Learning::from_str(&net_status.learning_rule).unwrap_or(Learning::Aarnn);
-                            let (fresh_cfg, fresh_json) = fresh_single_neuron_snapshot(net_status.desired_aarnn_depth, model, learning)
-                                .map_err(|e| Status::internal(format!("new network failed: {}", e)))?;
-                            net_status.config_json = fresh_json.clone();
-                            net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
-                            if net_status.neuron_model.is_empty() {
-                                net_status.neuron_model = model.to_str().to_string();
-                            }
-                            if net_status.learning_rule.is_empty() {
-                                net_status.learning_rule = learning.to_str().to_string();
-                            }
-                            network_snapshots.insert(network_id.clone(), fresh_json);
-                            needs_rebalance = true;
-                        } else {
-                            for (node_id, _range) in &net_status.distribution {
                                 let cmd = NetworkCommand {
-                                    r#type: cmd_type as i32,
+                                    r#type: proto::network_command::CommandType::LoadNetwork as i32,
                                     network_id: network_id.clone(),
-                                    config_json: Vec::new(),
-                                    layers: Vec::new(),
-                                    redundant_layers: Vec::new(),
+                                    config_json: c.config_json.clone(),
+                                    layers: range.layers.clone(),
+                                    redundant_layers: redundant,
                                     desired_aarnn_depth: net_status.desired_aarnn_depth,
-                                    neuron_model: String::new(),
-                                    learning_rule: String::new(),
+                                    neuron_model: c.neuron_model.clone(),
+                                    learning_rule: c.learning_rule.clone(),
                                 };
                                 commands_to_send.push((node_id.clone(), cmd));
                             }
                         }
-                    }
-                    _ => {
-                        nm_log!("[warn] Unsupported network update type");
+                        proto::network_update_request::Update::Control(c) => {
+                            let action = proto::control_update::Action::try_from(c.action)
+                                .map_err(|_| Status::invalid_argument("invalid control action"))?;
+                            let cmd_type = command_type_from_action(action);
+
+                            match action {
+                                proto::control_update::Action::Start
+                                | proto::control_update::Action::Repeat => {
+                                    net_status.playing = true;
+                                }
+                                proto::control_update::Action::Stop
+                                | proto::control_update::Action::Reset
+                                | proto::control_update::Action::New => {
+                                    net_status.playing = false;
+                                }
+                            }
+
+                            local_control = Some(action);
+                            local_net_arc = local_net_arc_candidate.clone();
+
+                            if matches!(action, proto::control_update::Action::New) {
+                                let model = NeuronModel::from_str(&net_status.neuron_model)
+                                    .unwrap_or(NeuronModel::Aarnn);
+                                let learning = Learning::from_str(&net_status.learning_rule)
+                                    .unwrap_or(Learning::Aarnn);
+                                let (fresh_cfg, fresh_json) = fresh_single_neuron_snapshot(
+                                    net_status.desired_aarnn_depth,
+                                    model,
+                                    learning,
+                                )
+                                .map_err(|e| {
+                                    Status::internal(format!("new network failed: {}", e))
+                                })?;
+                                net_status.config_json = fresh_json.clone();
+                                net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
+                                if net_status.neuron_model.is_empty() {
+                                    net_status.neuron_model = model.to_str().to_string();
+                                }
+                                if net_status.learning_rule.is_empty() {
+                                    net_status.learning_rule = learning.to_str().to_string();
+                                }
+                                network_snapshots.insert(network_id.clone(), fresh_json);
+                                needs_rebalance = true;
+                            } else {
+                                for (node_id, _range) in &net_status.distribution {
+                                    let cmd = NetworkCommand {
+                                        r#type: cmd_type as i32,
+                                        network_id: network_id.clone(),
+                                        config_json: Vec::new(),
+                                        layers: Vec::new(),
+                                        redundant_layers: Vec::new(),
+                                        desired_aarnn_depth: net_status.desired_aarnn_depth,
+                                        neuron_model: String::new(),
+                                        learning_rule: String::new(),
+                                    };
+                                    commands_to_send.push((node_id.clone(), cmd));
+                                }
+                            }
+                        }
+                        _ => {
+                            nm_log!("[warn] Unsupported network update type");
+                        }
                     }
                 }
-            }
-            
-            // Apply all pending commands
-            for (node_id, cmd) in commands_to_send {
-                pending_commands.entry(node_id).or_default().push(cmd);
-            }
 
-            Ok(Response::new(NetworkUpdateResponse { success: true }))
+                // Apply all pending commands
+                for (node_id, cmd) in commands_to_send {
+                    pending_commands.entry(node_id).or_default().push(cmd);
+                }
+
+                Ok(Response::new(NetworkUpdateResponse { success: true }))
             } else {
                 Err(Status::not_found("Network not found"))
             }
@@ -1641,7 +1874,10 @@ impl DistributedNeuromorphic for DistributedNode {
         response
     }
 
-    async fn get_system_status(&self, _request: Request<StatusRequest>) -> Result<Response<StatusResponse>, Status> {
+    async fn get_system_status(
+        &self,
+        _request: Request<StatusRequest>,
+    ) -> Result<Response<StatusResponse>, Status> {
         let state = self.state.read().await;
         Ok(Response::new(StatusResponse {
             nodes: state.nodes.values().cloned().collect(),
@@ -1649,23 +1885,37 @@ impl DistributedNeuromorphic for DistributedNode {
         }))
     }
 
-    async fn run_ga_evaluation(&self, request: Request<GaEvaluationRequest>) -> Result<Response<GaEvaluationResponse>, Status> {
+    async fn run_ga_evaluation(
+        &self,
+        request: Request<GaEvaluationRequest>,
+    ) -> Result<Response<GaEvaluationResponse>, Status> {
         let req = request.into_inner();
         let req_json = req.config_json;
         let config: crate::config::NetworkConfig = serde_json::from_str(&req_json)
             .map_err(|e| Status::invalid_argument(format!("Invalid config JSON: {}", e)))?;
-        
+
         let sim_time_ms = req.sim_time_ms;
         let seed = req.seed;
 
         let mut tried_peers: HashSet<String> = HashSet::new();
         let eval_timeout = crate::ga::ga_remote_eval_timeout();
         loop {
-            let forward_target: Option<(String, DistributedNeuromorphicClient<tonic::transport::Channel>)> = {
+            let forward_target: Option<(
+                String,
+                DistributedNeuromorphicClient<tonic::transport::Channel>,
+            )> = {
                 let mut state = self.state.write().await;
                 if state.is_orchestrator && !state.clients.is_empty() {
-                    let mut best: Option<(String, f32, DistributedNeuromorphicClient<tonic::transport::Channel>)> = None;
-                    let mut fallback: Option<(String, f32, DistributedNeuromorphicClient<tonic::transport::Channel>)> = None;
+                    let mut best: Option<(
+                        String,
+                        f32,
+                        DistributedNeuromorphicClient<tonic::transport::Channel>,
+                    )> = None;
+                    let mut fallback: Option<(
+                        String,
+                        f32,
+                        DistributedNeuromorphicClient<tonic::transport::Channel>,
+                    )> = None;
                     for (peer_id, client) in state.clients.iter() {
                         if tried_peers.contains(peer_id) {
                             continue;
@@ -1679,17 +1929,27 @@ impl DistributedNeuromorphic for DistributedNode {
                             continue;
                         }
                         let score = capacity / (1.0 + inflight as f32);
-                        if !busy && !pacing && best.as_ref().map(|(_, s, _)| score > *s).unwrap_or(true) {
+                        if !busy
+                            && !pacing
+                            && best.as_ref().map(|(_, s, _)| score > *s).unwrap_or(true)
+                        {
                             best = Some((peer_id.clone(), score, client.clone()));
                         }
-                        if fallback.as_ref().map(|(_, s, _)| score > *s).unwrap_or(true) {
+                        if fallback
+                            .as_ref()
+                            .map(|(_, s, _)| score > *s)
+                            .unwrap_or(true)
+                        {
                             fallback = Some((peer_id.clone(), score, client.clone()));
                         }
                     }
 
                     let pick = if best.is_none() { fallback } else { best };
                     if let Some((peer_id, _score, client)) = pick {
-                        *state.ga_inflight_by_peer.entry(peer_id.clone()).or_insert(0) += 1;
+                        *state
+                            .ga_inflight_by_peer
+                            .entry(peer_id.clone())
+                            .or_insert(0) += 1;
                         Some((peer_id, client))
                     } else {
                         None
@@ -1699,7 +1959,9 @@ impl DistributedNeuromorphic for DistributedNode {
                 }
             };
 
-            let Some((peer_id, mut client)) = forward_target else { break; };
+            let Some((peer_id, mut client)) = forward_target else {
+                break;
+            };
             let req_fwd = GaEvaluationRequest {
                 config_json: req_json.clone(),
                 sim_time_ms,
@@ -1748,7 +2010,9 @@ impl DistributedNeuromorphic for DistributedNode {
         // Run simulation in a blocking task to avoid stalling the executor
         let fitness = tokio::task::spawn_blocking(move || {
             crate::ga::GASearch::evaluate_individual(&config, sim_time_ms, seed)
-        }).await.map_err(|e| {
+        })
+        .await
+        .map_err(|e| {
             nm_err!("[error] Simulation task failed: {}", e);
             Status::internal(format!("Simulation task failed: {}", e))
         })?;
@@ -1763,7 +2027,10 @@ impl DistributedNeuromorphic for DistributedNode {
         Ok(Response::new(GaEvaluationResponse { fitness }))
     }
 
-    async fn get_network_snapshot(&self, request: Request<NetworkSnapshotRequest>) -> Result<Response<NetworkSnapshotResponse>, Status> {
+    async fn get_network_snapshot(
+        &self,
+        request: Request<NetworkSnapshotRequest>,
+    ) -> Result<Response<NetworkSnapshotResponse>, Status> {
         let req = request.into_inner();
         let net_id = req.network_id.clone();
         let net_arc = {
@@ -1789,7 +2056,10 @@ impl DistributedNeuromorphic for DistributedNode {
         }))
     }
 
-    async fn get_network_activity(&self, request: Request<NetworkActivityRequest>) -> Result<Response<NetworkActivityResponse>, Status> {
+    async fn get_network_activity(
+        &self,
+        request: Request<NetworkActivityRequest>,
+    ) -> Result<Response<NetworkActivityResponse>, Status> {
         let req = request.into_inner();
         let net_arc = {
             let state = self.state.read().await;
@@ -1803,16 +2073,29 @@ impl DistributedNeuromorphic for DistributedNode {
         let (hidden, output) = tokio::task::spawn_blocking(move || {
             let net = net_arc.blocking_read();
             let ts_us = (net.runner.t_ms * 1000.0) as u64;
-            let hidden = net.runner.last_spk_h.iter().map(|layer| {
-                let indices = layer.iter()
-                    .enumerate()
-                    .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
-                    .collect::<Vec<_>>();
-                let layer_vec: Vec<i8> = layer.iter().copied().collect();
-                let aer_payload = encode_spikes(ts_us, 0, &layer_vec);
-                SpikeIndices { indices, aer_payload, aer_base: 0 }
-            }).collect::<Vec<_>>();
-            let output_indices = net.runner.last_spk_o.iter()
+            let hidden = net
+                .runner
+                .last_spk_h
+                .iter()
+                .map(|layer| {
+                    let indices = layer
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
+                        .collect::<Vec<_>>();
+                    let layer_vec: Vec<i8> = layer.iter().copied().collect();
+                    let aer_payload = encode_spikes(ts_us, 0, &layer_vec);
+                    SpikeIndices {
+                        indices,
+                        aer_payload,
+                        aer_base: 0,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let output_indices = net
+                .runner
+                .last_spk_o
+                .iter()
                 .enumerate()
                 .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
                 .collect::<Vec<_>>();
@@ -1829,7 +2112,11 @@ impl DistributedNeuromorphic for DistributedNode {
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
-            sensory: Some(SpikeIndices { indices: Vec::new(), aer_payload: Vec::new(), aer_base: 0 }),
+            sensory: Some(SpikeIndices {
+                indices: Vec::new(),
+                aer_payload: Vec::new(),
+                aer_base: 0,
+            }),
             hidden,
             output: Some(output),
         }))

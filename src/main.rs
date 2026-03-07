@@ -14,39 +14,39 @@
 //!   Rust batch path mirrors those outputs for convenience.
 #[macro_use]
 mod obs;
-mod config;
-mod network;
-mod sim;
 mod aer;
-mod stimuli;
-mod viz;
+mod affinity;
 #[cfg(feature = "robot_io")]
 mod bridge;
-mod runner;
-#[cfg(feature = "growth3d")]
-mod topology;
-#[cfg(feature = "morpho")]
-mod morphology;
-#[cfg(feature = "ui")]
-mod providers;
-#[cfg(feature = "ui")]
-mod ui;
 #[cfg(feature = "opencl")]
 mod cl_compute;
+mod config;
 mod distributed;
-mod rdma;
 mod ga;
 mod monitor;
-mod affinity;
+#[cfg(feature = "morpho")]
+mod morphology;
+mod network;
+#[cfg(feature = "ui")]
+mod providers;
+mod rdma;
+mod runner;
+mod sim;
+mod stimuli;
+#[cfg(feature = "growth3d")]
+mod topology;
+#[cfg(feature = "ui")]
+mod ui;
+mod viz;
 
 use clap::{Parser, ValueEnum};
-use rand::{RngExt, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
+use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
 use crate::stimuli::{AerIoConfig, AerLink};
-use crate::monitor::MonitorHeuristics;
 use std::sync::atomic::AtomicBool;
 
 /// Supported neuron models for simulation.
@@ -367,7 +367,9 @@ fn main() -> anyhow::Result<()> {
                             net_status.learning_rule = learning_rule;
                         }
                         if let Some(snapshot_json) = snapshot_json {
-                            state.network_snapshots.insert(brain_id.clone(), snapshot_json);
+                            state
+                                .network_snapshots
+                                .insert(brain_id.clone(), snapshot_json);
                         }
                     }
                     node.rebalance_networks().await;
@@ -384,7 +386,11 @@ fn main() -> anyhow::Result<()> {
         cfg.output_base = args.aer_output_base;
         cfg.max_events = args.aer_max_events;
         cfg.max_packet_bytes = args.aer_max_packet_bytes;
-        if cfg.enabled() { Some(cfg) } else { None }
+        if cfg.enabled() {
+            Some(cfg)
+        } else {
+            None
+        }
     };
 
     let ga_search_enabled = args.ga_search || args.auto_ga;
@@ -394,7 +400,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "ui")]
     if args.ui {
         let mut net_cfg = net_cfg; // Re-use or reload config for UI consistency
-        if matches!(args.neuron_model, NeuronModel::Aarnn) || matches!(args.learning, LearningRule::Aarnn) {
+        if matches!(args.neuron_model, NeuronModel::Aarnn)
+            || matches!(args.learning, LearningRule::Aarnn)
+        {
             net_cfg.growth_enabled = true;
             net_cfg.use_morphology = true;
             net_cfg.aarnn_layer_depth = 5;
@@ -439,7 +447,12 @@ fn main() -> anyhow::Result<()> {
             net_cfg.theta_rhythm_phase_jitter,
         )
     } else {
-        sim::poisson_input_patterns(args.simulation_time_ms, net_cfg.num_sensory_neurons, lif.dt, &mut rng)
+        sim::poisson_input_patterns(
+            args.simulation_time_ms,
+            net_cfg.num_sensory_neurons,
+            lif.dt,
+            &mut rng,
+        )
     };
 
     // Step 3: Simulation Selection
@@ -461,7 +474,15 @@ fn main() -> anyhow::Result<()> {
 
     // Branch to real-time continuous mode if requested.
     if args.continuous {
-        return run_continuous(net_cfg, lif, stdp, neuron_model, learning, args.seed, aer_cfg);
+        return run_continuous(
+            net_cfg,
+            lif,
+            stdp,
+            neuron_model,
+            learning,
+            args.seed,
+            aer_cfg,
+        );
     }
 
     if ga_search_enabled && (args.orchestrator || args.node) {
@@ -474,12 +495,19 @@ fn main() -> anyhow::Result<()> {
         std::thread::spawn(move || {
             // Keep GA controller thread unpinned so worker budgeting and child pools
             // can see/use the full CPU set.
-            if let Err(e) = run_ga_search(net_cfg_clone, seed, sim_time, dist_node_clone, rt_handle) {
+            if let Err(e) = run_ga_search(net_cfg_clone, seed, sim_time, dist_node_clone, rt_handle)
+            {
                 nm_err!("[error] Background GA search failed: {}", e);
             }
         });
     } else if ga_search_enabled {
-        return run_ga_search(net_cfg, args.seed, args.simulation_time_ms, distributed_node, rt.handle().clone());
+        return run_ga_search(
+            net_cfg,
+            args.seed,
+            args.simulation_time_ms,
+            distributed_node,
+            rt.handle().clone(),
+        );
     }
 
     // Distributed nodes enter a perpetual sleep loop, as their work is managed via gRPC.
@@ -505,29 +533,60 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Step 5: Post-Simulation Analysis and Reporting
-    let total_h_spikes: usize = sim_out.spikes_h.iter().map(|s| s.iter().filter(|&&x| x != 0).count()).sum();
+    let total_h_spikes: usize = sim_out
+        .spikes_h
+        .iter()
+        .map(|s| s.iter().filter(|&&x| x != 0).count())
+        .sum();
     let total_o_spikes: usize = sim_out.spikes_o.iter().filter(|&&x| x != 0).count();
-    nm_log!("[info] Simulation complete. Total spikes: hidden={}, output={}", total_h_spikes, total_o_spikes);
+    nm_log!(
+        "[info] Simulation complete. Total spikes: hidden={}, output={}",
+        total_h_spikes,
+        total_o_spikes
+    );
 
     nm_log!("[summary] Hidden layer neuron counts:");
     for (l, spikes) in sim_out.spikes_h.iter().enumerate() {
         let n = spikes.shape()[1];
         nm_log!("[summary]   Layer {}: {} neurons", l + 1, n);
     }
-    nm_log!("[summary] Output layer neuron count: {}", sim_out.spikes_o.shape()[1]);
+    nm_log!(
+        "[summary] Output layer neuron count: {}",
+        sim_out.spikes_o.shape()[1]
+    );
 
     let w = &sim_out.weights;
-    let count_nonzero = |arr: &ndarray::Array2<f64>| arr.iter().filter(|&&x| x.abs() > 1e-8).count();
+    let count_nonzero =
+        |arr: &ndarray::Array2<f64>| arr.iter().filter(|&&x| x.abs() > 1e-8).count();
     nm_log!("[summary] Connections:");
     nm_log!("[summary]   Sensory -> H1: {}", count_nonzero(&w.w_in));
     for (l, m) in w.w_hh_fwd.iter().enumerate() {
-        nm_log!("[summary]   H{} -> H{} (fwd): {}", l + 1, l + 2, count_nonzero(m));
+        nm_log!(
+            "[summary]   H{} -> H{} (fwd): {}",
+            l + 1,
+            l + 2,
+            count_nonzero(m)
+        );
     }
     for (l, m) in w.w_hh_bwd.iter().enumerate() {
-        nm_log!("[summary]   H{} <- H{} (bwd): {}", l + 1, l + 2, count_nonzero(m));
+        nm_log!(
+            "[summary]   H{} <- H{} (bwd): {}",
+            l + 1,
+            l + 2,
+            count_nonzero(m)
+        );
     }
     nm_log!("[summary]   H_last -> Output: {}", count_nonzero(&w.w_out));
-    nm_log!("[summary] Longterm connections: {} / {} ({:.2}%)", sim_out.longterm_conn, sim_out.total_conn, if sim_out.total_conn > 0 { 100.0 * (sim_out.longterm_conn as f64) / (sim_out.total_conn as f64) } else { 0.0 });
+    nm_log!(
+        "[summary] Longterm connections: {} / {} ({:.2}%)",
+        sim_out.longterm_conn,
+        sim_out.total_conn,
+        if sim_out.total_conn > 0 {
+            100.0 * (sim_out.longterm_conn as f64) / (sim_out.total_conn as f64)
+        } else {
+            0.0
+        }
+    );
 
     // Step 6: Visualization
     // Export simulation results as various graphical diagrams.
@@ -542,21 +601,9 @@ fn main() -> anyhow::Result<()> {
         &sim_out.spikes_o,
         lif.dt,
     )?;
-    viz::draw_weight_histograms(
-        "weight_histograms.png",
-        &sim_out.weights,
-        false,
-    )?;
-    viz::draw_weight_histograms(
-        "weight_histograms_output.png",
-        &sim_out.weights,
-        true,
-    )?;
-    viz::draw_final_weighted_network(
-        "final_weighted_network.png",
-        &net_cfg,
-        &sim_out.weights,
-    )?;
+    viz::draw_weight_histograms("weight_histograms.png", &sim_out.weights, false)?;
+    viz::draw_weight_histograms("weight_histograms_output.png", &sim_out.weights, true)?;
+    viz::draw_final_weighted_network("final_weighted_network.png", &net_cfg, &sim_out.weights)?;
 
     nm_log!("Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png");
     Ok(())
@@ -578,16 +625,26 @@ fn run_ga_search(
     let _mutation_rate = 0.2;
     let n_elite = 2;
 
-    let mut ga = GASearch::new(pop_size.max(1), &base_cfg, &mut rng, dist_node.clone(), false, Vec::new());
+    let mut ga = GASearch::new(
+        pop_size.max(1),
+        &base_cfg,
+        &mut rng,
+        dist_node.clone(),
+        false,
+        Vec::new(),
+    );
     let mut ramp = GARampController::new(pop_size.max(1), sim_time_ms);
-    
+
     // Load existing leaderboard to pick up where we left off
     if let Err(e) = ga.load_leaderboard("leaderboard.json") {
         if std::path::Path::new("leaderboard.json").exists() {
             nm_err!("[warn] Failed to load leaderboard: {}", e);
         }
     } else if !ga.leaderboard.is_empty() {
-        nm_log!("[info] Loaded leaderboard with {} entries. Seeding population.", ga.leaderboard.len());
+        nm_log!(
+            "[info] Loaded leaderboard with {} entries. Seeding population.",
+            ga.leaderboard.len()
+        );
         // Seed first individual with the best from leaderboard
         ga.population[0] = ga.leaderboard[0].clone();
     }
@@ -603,7 +660,7 @@ fn run_ga_search(
         ga.resize_population(plan.population_size, &base_cfg, &mut rng);
         rt.block_on(ga.evaluate_population(plan.sim_time_ms, gen_seed, &status_tx));
         ramp.note_generation_result(crate::ga::ga_abort_reason().is_none());
-        
+
         // Pull best results from cluster if we are the orchestrator
         if let Some(dist) = &dist_node {
             let state = rt.block_on(async { dist.state.read().await });
@@ -612,14 +669,18 @@ fn run_ga_search(
                     if let Some(res) = &node_status.resources {
                         if !res.ga_best_config_json.is_empty() && res.ga_best_fitness > 0.0 {
                             if let Ok(config) = serde_json::from_str(&res.ga_best_config_json) {
-                                nm_log!("[info] Incorporating best config from node {}: fitness {:.4}", node_id, res.ga_best_fitness);
+                                nm_log!(
+                                    "[info] Incorporating best config from node {}: fitness {:.4}",
+                                    node_id,
+                                    res.ga_best_fitness
+                                );
                                 ga.add_to_leaderboard(Individual::new(config, res.ga_best_fitness));
                             }
                         }
                     }
                 }
             }
-            
+
             // Update local state for reporting back to orchestrator (if we are a node)
             let mut state_mut = rt.block_on(async { dist.state.write().await });
             state_mut.ga_running = true;
@@ -631,10 +692,20 @@ fn run_ga_search(
         }
 
         // Sort and print results
-        ga.population.sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap_or(std::cmp::Ordering::Equal));
+        ga.population.sort_by(|a, b| {
+            b.fitness
+                .partial_cmp(&a.fitness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (i, ind) in ga.population.iter().enumerate().take(5) {
-            nm_log!("  [{}] Fitness: {:.4} (p_in: {:.2}, p_hidden: {:.2}, p_out: {:.2})", 
-                i + 1, ind.fitness, ind.config.p_in, ind.config.p_hidden, ind.config.p_out);
+            nm_log!(
+                "  [{}] Fitness: {:.4} (p_in: {:.2}, p_hidden: {:.2}, p_out: {:.2})",
+                i + 1,
+                ind.fitness,
+                ind.config.p_in,
+                ind.config.p_hidden,
+                ind.config.p_out
+            );
         }
 
         if gen < n_gen - 1 {
@@ -650,7 +721,7 @@ fn run_ga_search(
                 ga.population[n_elite] = ga.leaderboard[0].clone();
             }
         }
-        
+
         // Save leaderboard after each generation
         let _ = ga.save_leaderboard("leaderboard.json");
     }
@@ -659,7 +730,7 @@ fn run_ga_search(
         nm_log!("\n=== Search Complete ===");
         nm_log!("Best Fitness: {:.4}", ga.best_fitness);
         nm_log!("Best Params: {:#?}", best);
-        
+
         // Save best config
         let s = serde_json::to_string_pretty(best)?;
         std::fs::write("best_config_ga.json", s)?;
@@ -691,17 +762,17 @@ fn run_continuous(
     let mut runner = Runner::new(lif, stdp, net_cfg, neuron_model, learning);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut aer_link = aer_cfg.and_then(|cfg| AerLink::bind(cfg).ok());
-    
+
     // Monitoring heuristics (defaults). Could be made configurable via CLI/env.
     let monitor_h = MonitorHeuristics::default();
 
     let mut avg_step_time_ms = 0.0;
     // Aim for ~10ms calculation time per step to leave room for system responsiveness
-    let target_step_time_ms = 10.0; 
-    
+    let target_step_time_ms = 10.0;
+
     nm_log!("[info] Starting continuous simulation. Press Ctrl+C to stop.");
     nm_log!("[info] Initial dt: {:.3}ms", runner.lif.dt);
-    
+
     let mut last_report = std::time::Instant::now();
     let mut total_hidden_spikes = 0;
     let mut total_output_spikes = 0;
@@ -711,12 +782,15 @@ fn run_continuous(
         // Thermal guard: if the system is hot, wait until it cools.
         let waited = monitor::thermal_wait_blocking("continuous", &monitor_h, &CONT_ABORT);
         if waited.as_millis() > 0 {
-            nm_log!("[info] Continuous run paused for cooling: {}ms", waited.as_millis());
+            nm_log!(
+                "[info] Continuous run paused for cooling: {}ms",
+                waited.as_millis()
+            );
         }
 
         observe_time!("run_continuous/step");
         let step_start = std::time::Instant::now();
-        
+
         if let Some(link) = aer_link.as_mut() {
             link.poll();
         }
@@ -749,8 +823,12 @@ fn run_continuous(
                 link.send_output_spikes(ts_us, out_spikes);
             }
         }
-        
-        total_hidden_spikes += out.spk_h.iter().map(|s| s.iter().filter(|&&x| x != 0).count()).sum::<usize>();
+
+        total_hidden_spikes += out
+            .spk_h
+            .iter()
+            .map(|s| s.iter().filter(|&&x| x != 0).count())
+            .sum::<usize>();
         total_output_spikes += out.spk_o.iter().filter(|&&x| x != 0).count();
         steps_since_report += 1;
 
@@ -774,10 +852,14 @@ fn run_continuous(
         let snap = monitor::get_safety_snapshot(None);
         let dt_now = runner.lif.dt;
         if let Some(free) = snap.mem_free_mb {
-            if free < monitor_h.mem_free_min_mb { runner.set_dt((dt_now * 1.05).min(10.0)); }
+            if free < monitor_h.mem_free_min_mb {
+                runner.set_dt((dt_now * 1.05).min(10.0));
+            }
         }
         if let Some(rss) = snap.proc_rss_mb {
-            if rss >= monitor_h.mem_rss_warn_mb { runner.set_dt((dt_now * 1.02).min(10.0)); }
+            if rss >= monitor_h.mem_rss_warn_mb {
+                runner.set_dt((dt_now * 1.02).min(10.0));
+            }
         }
         if let Some(temp) = snap.temp_c {
             if temp >= monitor_h.temp_warn_c {
@@ -789,8 +871,14 @@ fn run_continuous(
         if last_report.elapsed().as_secs() >= 1 {
             let snap = monitor::get_safety_snapshot(None);
             let sim_time = runner.t_ms;
-            let temp_s = snap.temp_c.map(|v| format!("{:.0}C", v)).unwrap_or_else(|| "-".into());
-            let free_s = snap.mem_free_mb.map(|v| format!("{}MB", v)).unwrap_or_else(|| "-".into());
+            let temp_s = snap
+                .temp_c
+                .map(|v| format!("{:.0}C", v))
+                .unwrap_or_else(|| "-".into());
+            let free_s = snap
+                .mem_free_mb
+                .map(|v| format!("{}MB", v))
+                .unwrap_or_else(|| "-".into());
             nm_log!(
                 "[info] t={:.2}ms, dt={:.3}ms, avg_calc={:.2}ms, steps/s={}, spikes: H={}, O={}, temp={}, free_mem={}", 
                 sim_time, runner.lif.dt, avg_step_time_ms, steps_since_report, total_hidden_spikes, total_output_spikes, temp_s, free_s
@@ -798,7 +886,7 @@ fn run_continuous(
             last_report = std::time::Instant::now();
             steps_since_report = 0;
         }
-        
+
         // Optional: brief yield if it's too fast, though "shortest interval" implies max speed
         if step_elapsed < 0.1 {
             std::thread::yield_now();
@@ -812,9 +900,11 @@ fn run_continuous(
 /// - **Orchestrator**: Manages the cluster, assigns partitions, and aggregates results.
 /// - **Compute Node**: Performs a subset of the network simulation.
 async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::DistributedNode> {
-    use crate::distributed::{DistributedNode, proto::distributed_neuromorphic_server::DistributedNeuromorphicServer};
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
-    use crate::distributed::proto::{JoinRequest, HeartbeatRequest};
+    use crate::distributed::proto::{HeartbeatRequest, JoinRequest};
+    use crate::distributed::{
+        proto::distributed_neuromorphic_server::DistributedNeuromorphicServer, DistributedNode,
+    };
     use tonic::transport::{Channel, Server};
 
     let node_id = format!("{}_{}", args.brain_id, fastrand::u32(..));
@@ -837,29 +927,36 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             resources: Some(resources),
             network_resources,
         };
-        client.join(join_req).await.map_err(|e| format!("join: {e}"))?;
+        client
+            .join(join_req)
+            .await
+            .map_err(|e| format!("join: {e}"))?;
         Ok(client)
     }
-    
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     if args.orchestrator {
-        DistributedNode::start_discovery_beacon(args.grpc_addr.clone(), shutdown_rx.clone()).await?;
+        DistributedNode::start_discovery_beacon(args.grpc_addr.clone(), shutdown_rx.clone())
+            .await?;
 
         // Register the brain network if we are an orchestrator
         let default_playing = !args.ui;
         let mut state = node.state.write().await;
-        state.network_registry.insert(args.brain_id.clone(), crate::distributed::proto::NetworkStatus {
-            network_id: args.brain_id.clone(),
-            distribution: std::collections::HashMap::new(),
-            current_dt: args.dt_ms,
-            total_neurons: 0,
-            num_layers: (args.num_hidden_layers + 1) as u32,
-            desired_aarnn_depth: 5, // Default to max realism depth
-            config_json: String::new(),
-            neuron_model: NeuronModel::Aarnn.to_str().to_string(),
-            learning_rule: LearningRule::Aarnn.to_str().to_string(),
-            playing: default_playing,
-        });
+        state.network_registry.insert(
+            args.brain_id.clone(),
+            crate::distributed::proto::NetworkStatus {
+                network_id: args.brain_id.clone(),
+                distribution: std::collections::HashMap::new(),
+                current_dt: args.dt_ms,
+                total_neurons: 0,
+                num_layers: (args.num_hidden_layers + 1) as u32,
+                desired_aarnn_depth: 5, // Default to max realism depth
+                config_json: String::new(),
+                neuron_model: NeuronModel::Aarnn.to_str().to_string(),
+                learning_rule: LearningRule::Aarnn.to_str().to_string(),
+                playing: default_playing,
+            },
+        );
     }
 
     let addr: std::net::SocketAddr = args.grpc_addr.parse()?;
@@ -898,7 +995,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     #[cfg(unix)]
     {
         let shutdown_tx_term = shutdown_tx.clone();
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::spawn(async move {
             sigterm.recv().await;
             let _ = shutdown_tx_term.send(true);
@@ -911,7 +1009,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         let grpc_addr = args.grpc_addr.clone();
         let orchestrator_addr_arg = args.orchestrator_addr.clone();
         let shutdown_tx_node = shutdown_tx.clone();
-        
+
         tokio::spawn(async move {
             let reconnect_timeout = std::time::Duration::from_secs(5 * 60);
             let reconnect_interval = std::time::Duration::from_secs(2);
@@ -933,13 +1031,19 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             }
 
             let mut client = loop {
-                match connect_and_join(&orchestrator_addr, &node_id_inner, &grpc_addr, &node_inner).await {
+                match connect_and_join(&orchestrator_addr, &node_id_inner, &grpc_addr, &node_inner)
+                    .await
+                {
                     Ok(c) => {
                         nm_log!("[info] Successfully joined orchestrator");
                         break c;
                     }
                     Err(e) => {
-                        nm_err!("[info] Waiting for orchestrator at {}: {}", orchestrator_addr, e);
+                        nm_err!(
+                            "[info] Waiting for orchestrator at {}: {}",
+                            orchestrator_addr,
+                            e
+                        );
                         tokio::time::sleep(reconnect_interval).await;
                     }
                 }
@@ -950,7 +1054,10 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 tokio::time::sleep(heartbeat_interval).await;
                 {
                     let mut state = node_inner.state.write().await;
-                    state.prune_peer_maps(std::time::Instant::now(), crate::distributed::PEER_STALE_AFTER);
+                    state.prune_peer_maps(
+                        std::time::Instant::now(),
+                        crate::distributed::PEER_STALE_AFTER,
+                    );
                 }
                 let resources = node_inner.get_resources().await;
                 let network_resources = node_inner.get_network_resources().await;
@@ -974,9 +1081,16 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                 }
                             }
                             if !resp.network_peers.is_empty() {
-                                state.network_peers = resp.network_peers.drain().map(|(k, v)| (k, v.node_ids)).collect();
+                                state.network_peers = resp
+                                    .network_peers
+                                    .drain()
+                                    .map(|(k, v)| (k, v.node_ids))
+                                    .collect();
                             }
-                            state.prune_peer_maps(std::time::Instant::now(), crate::distributed::PEER_STALE_AFTER);
+                            state.prune_peer_maps(
+                                std::time::Instant::now(),
+                                crate::distributed::PEER_STALE_AFTER,
+                            );
                         }
                         let commands = resp.commands;
                         for cmd in commands {
@@ -986,7 +1100,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     }
                     Err(e) => {
                         nm_err!("[error] Heartbeat failed: {}", e);
-                        let reconnect_start = reconnect_started.get_or_insert_with(std::time::Instant::now);
+                        let reconnect_start =
+                            reconnect_started.get_or_insert_with(std::time::Instant::now);
                         let deadline = *reconnect_start + reconnect_timeout;
                         loop {
                             if std::time::Instant::now() >= deadline {
@@ -994,7 +1109,14 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                 let _ = shutdown_tx_node.send(true);
                                 return;
                             }
-                            match connect_and_join(&orchestrator_addr, &node_id_inner, &grpc_addr, &node_inner).await {
+                            match connect_and_join(
+                                &orchestrator_addr,
+                                &node_id_inner,
+                                &grpc_addr,
+                                &node_inner,
+                            )
+                            .await
+                            {
                                 Ok(c) => {
                                     nm_log!("[info] Reconnected to orchestrator");
                                     client = c;
@@ -1018,7 +1140,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                
+
                 // Periodically rebalance to account for new nodes or resource changes
                 node_inner.rebalance_networks().await;
 
@@ -1044,13 +1166,13 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                             total_cluster_neurons += res.num_neurons;
                         }
                     }
-                    
+
                     let avg_ms_per_neuron = if total_cluster_neurons > 0 {
                         total_workload_ms / total_cluster_neurons as f32
                     } else {
                         0.0
                     };
-                    
+
                     let est_nodes_1ms = if avg_ms_per_neuron > 0.0 {
                         (net.total_neurons as f32 * avg_ms_per_neuron) / 1.0
                     } else {
@@ -1064,7 +1186,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             }
         });
     }
-    
+
     Ok(node)
 }
 

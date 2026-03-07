@@ -31,7 +31,13 @@ pub struct RingBufferHeader {
 }
 
 impl Default for RingBufferHeader {
-    fn default() -> Self { Self { capacity: 0, producer_position: 0, consumer_position: 0 } }
+    fn default() -> Self {
+        Self {
+            capacity: 0,
+            producer_position: 0,
+            consumer_position: 0,
+        }
+    }
 }
 
 /// Shared-memory ring buffer mapping.
@@ -52,17 +58,33 @@ impl ShmRingBuffer {
     /// Future iteration can add memfd/shm_open variants.
     pub fn create<P: AsRef<Path>>(path: P, capacity: usize) -> io::Result<Self> {
         use std::fs::OpenOptions;
-        let file = OpenOptions::new().create(true).read(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)?;
         let total = std::mem::size_of::<RingBufferHeader>() + capacity;
         file.set_len(total as u64)?;
         let mut mmap = unsafe { MmapOptions::new().len(total).map_mut(&file)? };
-        let hdr = RingBufferHeader { capacity: capacity as u64, ..Default::default() };
+        let hdr = RingBufferHeader {
+            capacity: capacity as u64,
+            ..Default::default()
+        };
         // Write header
         let hdr_bytes = unsafe {
-            std::slice::from_raw_parts((&hdr as *const RingBufferHeader) as *const u8, std::mem::size_of::<RingBufferHeader>())
+            std::slice::from_raw_parts(
+                (&hdr as *const RingBufferHeader) as *const u8,
+                std::mem::size_of::<RingBufferHeader>(),
+            )
         };
         mmap[..hdr_bytes.len()].copy_from_slice(hdr_bytes);
-        Ok(Self { _file: file, _mmap: mmap, header: hdr, _header_offset: 0, _data_offset: hdr_bytes.len() })
+        Ok(Self {
+            _file: file,
+            _mmap: mmap,
+            header: hdr,
+            _header_offset: 0,
+            _data_offset: hdr_bytes.len(),
+        })
     }
 
     /// Open an existing ring buffer file and map it.
@@ -70,17 +92,35 @@ impl ShmRingBuffer {
         use std::fs::OpenOptions;
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let len = file.metadata()?.len() as usize;
-        if len < std::mem::size_of::<RingBufferHeader>() { return Err(io::Error::new(io::ErrorKind::InvalidData, "shmem too small")); }
+        if len < std::mem::size_of::<RingBufferHeader>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "shmem too small",
+            ));
+        }
         let mmap = unsafe { MmapOptions::new().len(len).map_mut(&file)? };
         // Read header
         let mut hdr = RingBufferHeader::default();
-        let dst = unsafe { std::slice::from_raw_parts_mut((&mut hdr as *mut RingBufferHeader) as *mut u8, std::mem::size_of::<RingBufferHeader>()) };
+        let dst = unsafe {
+            std::slice::from_raw_parts_mut(
+                (&mut hdr as *mut RingBufferHeader) as *mut u8,
+                std::mem::size_of::<RingBufferHeader>(),
+            )
+        };
         dst.copy_from_slice(&mmap[..dst.len()]);
-        Ok(Self { _file: file, _mmap: mmap, header: hdr, _header_offset: 0, _data_offset: std::mem::size_of::<RingBufferHeader>() })
+        Ok(Self {
+            _file: file,
+            _mmap: mmap,
+            header: hdr,
+            _header_offset: 0,
+            _data_offset: std::mem::size_of::<RingBufferHeader>(),
+        })
     }
 
     /// Returns the payload capacity in bytes.
-    pub fn capacity(&self) -> usize { self.header.capacity as usize }
+    pub fn capacity(&self) -> usize {
+        self.header.capacity as usize
+    }
 
     /// Try to write a single frame (bytes) into the ring.
     /// Returns number of bytes written or an error if insufficient space.
@@ -88,12 +128,18 @@ impl ShmRingBuffer {
         // Placeholder: future implementation will implement wrap-around copy and
         // atomics to coordinate multiple processes.
         let _ = data;
-        Err(io::Error::new(io::ErrorKind::WouldBlock, "not implemented: write_frame"))
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "not implemented: write_frame",
+        ))
     }
 
     /// Try to read a single frame into out. Returns bytes read or WouldBlock if none.
     pub fn read_frame(&mut self, out: &mut [u8]) -> io::Result<usize> {
         let _ = out;
-        Err(io::Error::new(io::ErrorKind::WouldBlock, "not implemented: read_frame"))
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "not implemented: read_frame",
+        ))
     }
 }
