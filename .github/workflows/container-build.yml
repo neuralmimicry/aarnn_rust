@@ -34,7 +34,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64, arm64]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
       packages: write
@@ -81,7 +81,7 @@ jobs:
   manifest:
     if: github.event_name == 'push'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       packages: write
 
@@ -110,7 +110,7 @@ jobs:
 
   promote:
     if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       packages: write
 
