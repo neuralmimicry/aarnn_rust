@@ -35,10 +35,10 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner_arch: x86
+            runner_arch: X64
           - arch: arm64
-            runner_arch: arm64
-    runs-on: [self-hosted, linux, "${{ matrix.runner_arch }}"]
+            runner_arch: ARM64
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     permissions:
       contents: read
       packages: write
@@ -85,7 +85,7 @@ jobs:
   manifest:
     if: github.event_name == 'push'
     needs: build
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     permissions:
       packages: write
 
@@ -114,7 +114,7 @@ jobs:
 
   promote:
     if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     permissions:
       packages: write
 
