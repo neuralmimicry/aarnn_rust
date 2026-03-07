@@ -29,7 +29,12 @@ pub fn aer_event_to_can_frame(ev: &AerEvent, can_id: u32, is_extended: bool) -> 
     let mut data = [0u8; 8];
     data[..4].copy_from_slice(&ev.addr.to_le_bytes());
     data[4] = ev.value;
-    AerCanFrame { id: can_id, data, len: 5, is_extended }
+    AerCanFrame {
+        id: can_id,
+        data,
+        len: 5,
+        is_extended,
+    }
 }
 
 /// Decode a CAN frame into an AER event.
@@ -44,6 +49,9 @@ pub fn can_frame_to_aer_event(frame: &AerCanFrame, ts_us: Option<u64>) -> Option
     addr_bytes.copy_from_slice(&frame.data[..4]);
     let addr = u32::from_le_bytes(addr_bytes);
     let value = frame.data[4];
-    Some(AerEvent { ts_us: ts_us.unwrap_or(0), addr, value })
+    Some(AerEvent {
+        ts_us: ts_us.unwrap_or(0),
+        addr,
+        value,
+    })
 }
-

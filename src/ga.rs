@@ -22,16 +22,16 @@
 //! 4. **Crossover**: Combine parameters from successful parents to create offspring.
 //! 5. **Mutation**: Apply random changes to offspring parameters to maintain diversity.
 
-use rand::{RngExt, prelude::StdRng, SeedableRng};
+use rand::{prelude::StdRng, RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[cfg(feature = "sysinfo")]
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[cfg(feature = "sysinfo")]
 fn ga_sys_mb_from_raw(raw: u64) -> u64 {
@@ -41,18 +41,20 @@ fn ga_sys_mb_from_raw(raw: u64) -> u64 {
         raw / 1024
     }
 }
+#[cfg(feature = "opencl")]
+use crate::cl_compute::gpu_device_ids_for_indices;
+#[cfg(feature = "opencl")]
+use crate::cl_compute::OpenCLManager;
+use crate::config::{apply_clumping_design, ClumpingDesign, NetworkConfig, NeuromodSignal};
+use crate::monitor::{
+    self, update_sys_cache, update_temp_cache, MonitorHeuristics, SafetySnapshot,
+};
+use crate::runner::Runner;
+use crate::sim;
 #[cfg(feature = "core_affinity")]
 use core_affinity::CoreId;
 #[cfg(feature = "opencl")]
 use std::cell::RefCell;
-#[cfg(feature = "opencl")]
-use crate::cl_compute::OpenCLManager;
-#[cfg(feature = "opencl")]
-use crate::cl_compute::gpu_device_ids_for_indices;
-use crate::config::{apply_clumping_design, ClumpingDesign, NetworkConfig, NeuromodSignal};
-use crate::sim;
-use crate::runner::Runner;
-use crate::monitor::{self, MonitorHeuristics, SafetySnapshot, update_temp_cache, update_sys_cache};
 
 /// Represents an individual in the GA population.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,7 +82,6 @@ impl Individual {
         }
     }
 }
-
 
 #[derive(Clone)]
 pub struct GASearch {
@@ -160,7 +161,9 @@ fn apply_clumping_design_keep_max_total(cfg: &mut NetworkConfig, design: Clumpin
 }
 
 fn min_total_neurons(cfg: &NetworkConfig) -> u64 {
-    let hidden = cfg.num_hidden_layers.saturating_mul(cfg.num_hidden_per_layer_initial) as u64;
+    let hidden = cfg
+        .num_hidden_layers
+        .saturating_mul(cfg.num_hidden_per_layer_initial) as u64;
     let total = cfg.num_sensory_neurons as u64 + cfg.num_output_neurons as u64 + hidden;
     total.max(1)
 }
@@ -241,7 +244,9 @@ static GA_CL_DEVICE_COUNT: OnceLock<usize> = OnceLock::new();
 static GA_OPENCL_FALLBACK_IDX: AtomicUsize = AtomicUsize::new(0);
 
 fn parse_env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|v| v.parse::<usize>().ok())
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
 }
 
 fn parse_env_f32(name: &str) -> Option<f32> {
@@ -265,12 +270,18 @@ fn parse_env_usize_list(name: &str) -> Option<Vec<usize>> {
     let mut out = Vec::new();
     for part in raw.split(',') {
         let trimmed = part.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         if let Ok(v) = trimmed.parse::<usize>() {
             out.push(v);
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn parse_env_string_list(name: &str) -> Vec<String> {
@@ -322,7 +333,11 @@ pub fn ga_set_stall_timeout_secs(secs: u64) {
     GA_STALL_TIMEOUT_SECS.store(clamped, Ordering::Relaxed);
 }
 
-pub fn ga_set_eval_limits_override(max_ms: Option<u64>, max_neurons: Option<usize>, max_conns: Option<usize>) {
+pub fn ga_set_eval_limits_override(
+    max_ms: Option<u64>,
+    max_neurons: Option<usize>,
+    max_conns: Option<usize>,
+) {
     GA_EVAL_MS_OVERRIDE.store(max_ms.unwrap_or(0), Ordering::Relaxed);
     GA_EVAL_NEURONS_OVERRIDE.store(max_neurons.unwrap_or(0), Ordering::Relaxed);
     GA_EVAL_CONNS_OVERRIDE.store(max_conns.unwrap_or(0), Ordering::Relaxed);
@@ -339,7 +354,11 @@ pub fn ga_set_worker_limit_override(limit: Option<usize>) {
 
 fn ga_worker_limit_override() -> Option<usize> {
     let v = GA_WORKER_LIMIT_OVERRIDE.load(Ordering::Relaxed);
-    if v > 0 { Some(v) } else { None }
+    if v > 0 {
+        Some(v)
+    } else {
+        None
+    }
 }
 
 pub fn ga_total_evaluations() -> u64 {
@@ -601,9 +620,15 @@ fn ga_tighten_heuristics(h: &mut GAHeuristics, reason: &str) {
     h.temp_hot_c = (h.temp_hot_c - 2.0).clamp(h.temp_warn_c + 2.0, 98.0);
     h.mem_free_min_mb = h.mem_free_min_mb.saturating_add(256);
     h.mem_rss_warn_mb = h.mem_rss_warn_mb.saturating_sub(512).max(4096);
-    h.mem_rss_abort_mb = h.mem_rss_abort_mb.saturating_sub(1024).max(h.mem_rss_warn_mb + 512);
+    h.mem_rss_abort_mb = h
+        .mem_rss_abort_mb
+        .saturating_sub(1024)
+        .max(h.mem_rss_warn_mb + 512);
     h.mem_rss_growth_warn_mb = h.mem_rss_growth_warn_mb.saturating_sub(256).max(512);
-    h.mem_rss_growth_abort_mb = h.mem_rss_growth_abort_mb.saturating_sub(512).max(h.mem_rss_growth_warn_mb + 256);
+    h.mem_rss_growth_abort_mb = h
+        .mem_rss_growth_abort_mb
+        .saturating_sub(512)
+        .max(h.mem_rss_growth_warn_mb + 256);
     h.ui_frame_warn_ms = (h.ui_frame_warn_ms - 5.0).clamp(10.0, 250.0);
     h.ui_frame_hot_ms = (h.ui_frame_hot_ms - 10.0).clamp(h.ui_frame_warn_ms + 10.0, 1000.0);
     h.gen_max_ms = h.gen_max_ms.saturating_sub(10_000).max(30_000);
@@ -621,9 +646,13 @@ fn ga_relax_heuristics(h: &mut GAHeuristics) {
     h.temp_hot_c = (h.temp_hot_c + 1.0).clamp(h.temp_warn_c + 2.0, 98.0);
     h.mem_free_min_mb = h.mem_free_min_mb.saturating_sub(128).max(256);
     h.mem_rss_warn_mb = (h.mem_rss_warn_mb + 256).min(65_536);
-    h.mem_rss_abort_mb = (h.mem_rss_abort_mb + 512).min(98_304).max(h.mem_rss_warn_mb + 512);
+    h.mem_rss_abort_mb = (h.mem_rss_abort_mb + 512)
+        .min(98_304)
+        .max(h.mem_rss_warn_mb + 512);
     h.mem_rss_growth_warn_mb = (h.mem_rss_growth_warn_mb + 128).min(32_768);
-    h.mem_rss_growth_abort_mb = (h.mem_rss_growth_abort_mb + 256).min(49_152).max(h.mem_rss_growth_warn_mb + 256);
+    h.mem_rss_growth_abort_mb = (h.mem_rss_growth_abort_mb + 256)
+        .min(49_152)
+        .max(h.mem_rss_growth_warn_mb + 256);
     h.ui_frame_warn_ms = (h.ui_frame_warn_ms + 2.0).clamp(10.0, 250.0);
     h.ui_frame_hot_ms = (h.ui_frame_hot_ms + 4.0).clamp(h.ui_frame_warn_ms + 10.0, 1000.0);
     h.gen_max_ms = (h.gen_max_ms + 5_000).min(300_000);
@@ -636,11 +665,13 @@ fn ga_record_mem_rss(rss_mb: Option<u64>) -> (Option<u64>, Option<u64>) {
     let Some(rss_mb) = rss_mb else {
         return (None, None);
     };
-    let tracker = GA_MEM_TRACKER.get_or_init(|| Mutex::new(GAMemTracker {
-        baseline_rss_mb: None,
-        last_rss_mb: None,
-        max_rss_mb: None,
-    }));
+    let tracker = GA_MEM_TRACKER.get_or_init(|| {
+        Mutex::new(GAMemTracker {
+            baseline_rss_mb: None,
+            last_rss_mb: None,
+            max_rss_mb: None,
+        })
+    });
     let mut guard = tracker.lock().expect("GA memory tracker poisoned");
     if let Some(base) = guard.baseline_rss_mb {
         let low = base / 4;
@@ -656,26 +687,32 @@ fn ga_record_mem_rss(rss_mb: Option<u64>) -> (Option<u64>, Option<u64>) {
     }
     guard.last_rss_mb = Some(rss_mb);
     guard.max_rss_mb = Some(guard.max_rss_mb.map_or(rss_mb, |prev| prev.max(rss_mb)));
-    let growth = guard.baseline_rss_mb.map(|base| rss_mb.saturating_sub(base));
+    let growth = guard
+        .baseline_rss_mb
+        .map(|base| rss_mb.saturating_sub(base));
     (guard.baseline_rss_mb, growth)
 }
 
 fn ga_mem_baseline_mb() -> Option<u64> {
-    let tracker = GA_MEM_TRACKER.get_or_init(|| Mutex::new(GAMemTracker {
-        baseline_rss_mb: None,
-        last_rss_mb: None,
-        max_rss_mb: None,
-    }));
+    let tracker = GA_MEM_TRACKER.get_or_init(|| {
+        Mutex::new(GAMemTracker {
+            baseline_rss_mb: None,
+            last_rss_mb: None,
+            max_rss_mb: None,
+        })
+    });
     let guard = tracker.lock().expect("GA memory tracker poisoned");
     guard.baseline_rss_mb
 }
 
 fn ga_reset_mem_tracker() {
-    let tracker = GA_MEM_TRACKER.get_or_init(|| Mutex::new(GAMemTracker {
-        baseline_rss_mb: None,
-        last_rss_mb: None,
-        max_rss_mb: None,
-    }));
+    let tracker = GA_MEM_TRACKER.get_or_init(|| {
+        Mutex::new(GAMemTracker {
+            baseline_rss_mb: None,
+            last_rss_mb: None,
+            max_rss_mb: None,
+        })
+    });
     let mut guard = tracker.lock().expect("GA memory tracker poisoned");
     guard.baseline_rss_mb = None;
     guard.last_rss_mb = None;
@@ -704,11 +741,13 @@ fn ga_reset_mem_tracker() {
 }
 
 fn ga_clear_mem_tracker() {
-    let tracker = GA_MEM_TRACKER.get_or_init(|| Mutex::new(GAMemTracker {
-        baseline_rss_mb: None,
-        last_rss_mb: None,
-        max_rss_mb: None,
-    }));
+    let tracker = GA_MEM_TRACKER.get_or_init(|| {
+        Mutex::new(GAMemTracker {
+            baseline_rss_mb: None,
+            last_rss_mb: None,
+            max_rss_mb: None,
+        })
+    });
     let mut guard = tracker.lock().expect("GA memory tracker poisoned");
     guard.baseline_rss_mb = None;
     guard.last_rss_mb = None;
@@ -740,7 +779,9 @@ pub fn ga_mark_clean() {
     }
     #[cfg(feature = "core_affinity")]
     {
-        let history = ga_core_history().lock().expect("GA core history lock poisoned");
+        let history = ga_core_history()
+            .lock()
+            .expect("GA core history lock poisoned");
         ga_save_core_history(&history);
     }
     ga_clear_mem_tracker();
@@ -800,7 +841,10 @@ fn ga_arm_hard_stop(reason: &str) {
         return;
     }
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (delay_secs, severity) = ga_hard_stop_delay_secs(reason, &snapshot, &h);
     nm_err!(
         "[warn] GA hard stop armed due to {} (delay {}s, severity {:.2}).",
@@ -815,7 +859,11 @@ fn ga_arm_hard_stop(reason: &str) {
     });
 }
 
-fn ga_hard_stop_delay_secs(reason: &str, snapshot: &SafetySnapshot, h: &GAHeuristics) -> (u64, f32) {
+fn ga_hard_stop_delay_secs(
+    reason: &str,
+    snapshot: &SafetySnapshot,
+    h: &GAHeuristics,
+) -> (u64, f32) {
     if let Some(v) = parse_env_usize("NM_GA_HARD_STOP_SECS") {
         return (v.max(1) as u64, 0.0);
     }
@@ -877,7 +925,9 @@ fn ga_hard_stop_delay_secs(reason: &str, snapshot: &SafetySnapshot, h: &GAHeuris
             severity = severity.max(0.25);
         }
     }
-    if h.last_event.as_deref().map_or(false, |e| e.contains("mem_critical") || e.contains("mem_growth")) {
+    if h.last_event.as_deref().map_or(false, |e| {
+        e.contains("mem_critical") || e.contains("mem_growth")
+    }) {
         delay = delay.min(2);
         severity = severity.max(0.5);
     }
@@ -909,7 +959,10 @@ fn ga_request_abort(reason: &str) {
     *guard = Some(reason.to_string());
     GA_ABORT_REQUESTED.store(true, Ordering::SeqCst);
     ga_log_abort_snapshot(reason);
-    if reason.contains("mem_critical") || reason.contains("mem_growth") || reason.contains("mem_eval_guard_abort") {
+    if reason.contains("mem_critical")
+        || reason.contains("mem_growth")
+        || reason.contains("mem_eval_guard_abort")
+    {
         ga_request_ui_cleanup();
     }
     if reason == "mem_critical" || reason == "mem_eval_guard_abort" {
@@ -918,12 +971,17 @@ fn ga_request_abort(reason: &str) {
 }
 
 fn ga_adjust_eval_limits_on_pressure(snapshot: &SafetySnapshot) {
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (free_warn_mb, _) = ga_mem_free_limits(snapshot, &h);
     let (rss_warn_mb, _) = ga_effective_rss_limits(snapshot, &h);
     let pressure = snapshot.mem_free_mb.map_or(false, |m| m < free_warn_mb)
         || snapshot.proc_rss_mb.map_or(false, |r| r >= rss_warn_mb)
-        || snapshot.proc_rss_growth_mb.map_or(false, |g| g >= h.mem_rss_growth_warn_mb);
+        || snapshot
+            .proc_rss_growth_mb
+            .map_or(false, |g| g >= h.mem_rss_growth_warn_mb);
     if !pressure {
         return;
     }
@@ -933,22 +991,34 @@ fn ga_adjust_eval_limits_on_pressure(snapshot: &SafetySnapshot) {
     } else {
         750_000
     };
-        let conns_cap = if total_mb > 0 {
-            ((total_mb as f32) * 60.0).round() as usize
-        } else {
-            6_000_000
-        };
-        let segs_cap = if total_mb > 0 {
-            ((total_mb as f32) * 2.0).round() as usize
-        } else {
-            200_000
-        };
+    let conns_cap = if total_mb > 0 {
+        ((total_mb as f32) * 60.0).round() as usize
+    } else {
+        6_000_000
+    };
+    let segs_cap = if total_mb > 0 {
+        ((total_mb as f32) * 2.0).round() as usize
+    } else {
+        200_000
+    };
     let cur_neurons = GA_EVAL_NEURONS_OVERRIDE.load(Ordering::Relaxed);
     let cur_conns = GA_EVAL_CONNS_OVERRIDE.load(Ordering::Relaxed);
     let cur_segs = GA_EVAL_SEGMENTS_OVERRIDE.load(Ordering::Relaxed);
-    let next_neurons = if cur_neurons == 0 { neuron_cap } else { cur_neurons.min(neuron_cap) };
-    let next_conns = if cur_conns == 0 { conns_cap } else { cur_conns.min(conns_cap) };
-    let next_segs = if cur_segs == 0 { segs_cap } else { cur_segs.min(segs_cap) };
+    let next_neurons = if cur_neurons == 0 {
+        neuron_cap
+    } else {
+        cur_neurons.min(neuron_cap)
+    };
+    let next_conns = if cur_conns == 0 {
+        conns_cap
+    } else {
+        cur_conns.min(conns_cap)
+    };
+    let next_segs = if cur_segs == 0 {
+        segs_cap
+    } else {
+        cur_segs.min(segs_cap)
+    };
     if next_neurons != cur_neurons || next_conns != cur_conns || next_segs != cur_segs {
         GA_EVAL_NEURONS_OVERRIDE.store(next_neurons, Ordering::Relaxed);
         GA_EVAL_CONNS_OVERRIDE.store(next_conns, Ordering::Relaxed);
@@ -978,7 +1048,11 @@ pub fn ga_reset_abort_reason() {
 /// This sets the global abort flag so in-flight evaluations can exit quickly.
 #[allow(dead_code)]
 pub fn ga_request_stop(reason: &str) {
-    let r = if reason.trim().is_empty() { "stop_requested" } else { reason };
+    let r = if reason.trim().is_empty() {
+        "stop_requested"
+    } else {
+        reason
+    };
     ga_request_abort(r);
 }
 
@@ -1021,7 +1095,13 @@ pub fn ga_affinity_label() -> Option<String> {
         guard.as_ref().map(|ids| {
             let mut ids = ids.clone();
             ids.sort_unstable();
-            format!("cores {}", ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","))
+            format!(
+                "cores {}",
+                ids.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
         })
     }
     #[cfg(not(feature = "core_affinity"))]
@@ -1123,17 +1203,25 @@ fn ga_try_clear_auto_worker_limit(snapshot: &SafetySnapshot, h: &GAHeuristics) {
     }
     let (rss_warn_mb, _) = ga_effective_rss_limits(snapshot, h);
     let (free_warn_mb, _) = ga_mem_free_limits(snapshot, h);
-    let cpu_ok = snapshot.cpu_usage_pct.map_or(true, |cpu| cpu < (h.cpu_warn_pct * 0.9));
+    let cpu_ok = snapshot
+        .cpu_usage_pct
+        .map_or(true, |cpu| cpu < (h.cpu_warn_pct * 0.9));
     let temp_ok = snapshot
         .temp_c
         .or_else(update_temp_cache)
         .map_or(true, |temp| temp < (h.temp_warn_c - 1.0));
-    let free_ok = snapshot.mem_free_mb.map_or(true, |free_mb| free_mb >= free_warn_mb);
-    let rss_ok = snapshot.proc_rss_mb.map_or(true, |rss_mb| rss_mb < rss_warn_mb);
+    let free_ok = snapshot
+        .mem_free_mb
+        .map_or(true, |free_mb| free_mb >= free_warn_mb);
+    let rss_ok = snapshot
+        .proc_rss_mb
+        .map_or(true, |rss_mb| rss_mb < rss_warn_mb);
     let growth_ok = snapshot
         .proc_rss_growth_mb
         .map_or(true, |growth_mb| growth_mb < h.mem_rss_growth_warn_mb);
-    let ui_ok = snapshot.ui_frame_ms.map_or(true, |ui_ms| ui_ms < h.ui_frame_warn_ms);
+    let ui_ok = snapshot
+        .ui_frame_ms
+        .map_or(true, |ui_ms| ui_ms < h.ui_frame_warn_ms);
     if cpu_ok && temp_ok && free_ok && rss_ok && growth_ok && ui_ok {
         GA_WORKER_LIMIT_OVERRIDE.store(0, Ordering::Relaxed);
         GA_WORKER_LIMIT_AUTO.store(false, Ordering::Relaxed);
@@ -1149,11 +1237,13 @@ fn ga_clear_mem_backoff() {
 }
 
 fn ga_mem_tracker_snapshot() -> (Option<u64>, Option<u64>, Option<u64>) {
-    let tracker = GA_MEM_TRACKER.get_or_init(|| Mutex::new(GAMemTracker {
-        baseline_rss_mb: None,
-        last_rss_mb: None,
-        max_rss_mb: None,
-    }));
+    let tracker = GA_MEM_TRACKER.get_or_init(|| {
+        Mutex::new(GAMemTracker {
+            baseline_rss_mb: None,
+            last_rss_mb: None,
+            max_rss_mb: None,
+        })
+    });
     let guard = tracker.lock().expect("GA memory tracker poisoned");
     (guard.baseline_rss_mb, guard.last_rss_mb, guard.max_rss_mb)
 }
@@ -1166,8 +1256,12 @@ fn ga_mem_free_limits(snapshot: &SafetySnapshot, h: &GAHeuristics) -> (u64, u64)
         let auto_abort = ((total_mb as f32) * 0.18).ceil() as u64;
         let max_warn = ((total_mb as f32) * 0.40).ceil() as u64;
         let max_abort = ((total_mb as f32) * 0.25).ceil() as u64;
-        warn = warn.max(auto_warn.max(512)).min(max_warn.max(auto_warn.max(512)));
-        abort = abort.max(auto_abort.max(256)).min(max_abort.max(auto_abort.max(256)));
+        warn = warn
+            .max(auto_warn.max(512))
+            .min(max_warn.max(auto_warn.max(512)));
+        abort = abort
+            .max(auto_abort.max(256))
+            .min(max_abort.max(auto_abort.max(256)));
         let max_cap = total_mb.saturating_sub(256);
         if warn > max_cap {
             warn = max_cap.max(256);
@@ -1181,7 +1275,10 @@ fn ga_mem_free_limits(snapshot: &SafetySnapshot, h: &GAHeuristics) -> (u64, u64)
 
 fn ga_should_split_batches() -> bool {
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (_, rss_abort_mb) = ga_effective_rss_limits(&snapshot, &h);
     let (_, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
     if snapshot.mem_free_mb.map_or(false, |m| m < free_abort_mb) {
@@ -1190,28 +1287,42 @@ fn ga_should_split_batches() -> bool {
     if snapshot.proc_rss_mb.map_or(false, |r| r >= rss_abort_mb) {
         return true;
     }
-    if snapshot.proc_rss_growth_mb.map_or(false, |g| g >= h.mem_rss_growth_abort_mb) {
+    if snapshot
+        .proc_rss_growth_mb
+        .map_or(false, |g| g >= h.mem_rss_growth_abort_mb)
+    {
         return true;
     }
     false
 }
 
 fn ga_min_parallel_evals() -> usize {
-    parse_env_usize("NM_GA_MIN_PARALLEL_EVALS").unwrap_or(2).max(1)
+    parse_env_usize("NM_GA_MIN_PARALLEL_EVALS")
+        .unwrap_or(2)
+        .max(1)
 }
 
 fn ga_resources_healthy_for_parallelism() -> bool {
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (rss_warn_mb, _) = ga_effective_rss_limits(&snapshot, &h);
     let (free_warn_mb, _) = ga_mem_free_limits(&snapshot, &h);
-    let cpu_ok = snapshot.cpu_usage_pct.map_or(true, |cpu| cpu < h.cpu_warn_pct);
+    let cpu_ok = snapshot
+        .cpu_usage_pct
+        .map_or(true, |cpu| cpu < h.cpu_warn_pct);
     let temp_ok = snapshot
         .temp_c
         .or_else(update_temp_cache)
         .map_or(true, |temp| temp < h.temp_warn_c);
-    let free_ok = snapshot.mem_free_mb.map_or(true, |free_mb| free_mb >= free_warn_mb);
-    let rss_ok = snapshot.proc_rss_mb.map_or(true, |rss_mb| rss_mb < rss_warn_mb);
+    let free_ok = snapshot
+        .mem_free_mb
+        .map_or(true, |free_mb| free_mb >= free_warn_mb);
+    let rss_ok = snapshot
+        .proc_rss_mb
+        .map_or(true, |rss_mb| rss_mb < rss_warn_mb);
     let growth_ok = snapshot
         .proc_rss_growth_mb
         .map_or(true, |growth_mb| growth_mb < h.mem_rss_growth_warn_mb);
@@ -1230,17 +1341,26 @@ fn ga_morph_growth_parallel_threads(pop_size: usize) -> usize {
     }
 
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (rss_warn_mb, _) = ga_effective_rss_limits(&snapshot, &h);
     let (free_warn_mb, _) = ga_mem_free_limits(&snapshot, &h);
 
-    let cpu_ok = snapshot.cpu_usage_pct.map_or(true, |cpu| cpu < h.cpu_warn_pct);
+    let cpu_ok = snapshot
+        .cpu_usage_pct
+        .map_or(true, |cpu| cpu < h.cpu_warn_pct);
     let temp_ok = snapshot
         .temp_c
         .or_else(update_temp_cache)
         .map_or(true, |temp| temp < h.temp_warn_c);
-    let free_ok = snapshot.mem_free_mb.map_or(true, |free_mb| free_mb >= free_warn_mb);
-    let rss_ok = snapshot.proc_rss_mb.map_or(true, |rss_mb| rss_mb < rss_warn_mb);
+    let free_ok = snapshot
+        .mem_free_mb
+        .map_or(true, |free_mb| free_mb >= free_warn_mb);
+    let rss_ok = snapshot
+        .proc_rss_mb
+        .map_or(true, |rss_mb| rss_mb < rss_warn_mb);
     let growth_ok = snapshot
         .proc_rss_growth_mb
         .map_or(true, |growth_mb| growth_mb < h.mem_rss_growth_warn_mb);
@@ -1461,7 +1581,10 @@ fn ga_should_abort_on_mem_free(
 
 fn ga_check_mem_pressure(context: &str) -> bool {
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (rss_warn_mb, rss_abort_mb) = ga_effective_rss_limits(&snapshot, &h);
     let (free_warn_mb, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
     if let Some(free_mb) = snapshot.mem_free_mb {
@@ -1532,7 +1655,7 @@ fn ga_check_mem_pressure(context: &str) -> bool {
 fn ga_throttle_if_needed() -> Duration {
     let ticket = GA_THROTTLE_TICKET.load(Ordering::Relaxed);
     let last_ticket = LAST_THROTTLE_TICKET.with(|c| c.get());
-    
+
     if ticket > last_ticket {
         let ms = GA_THROTTLE_MS.load(Ordering::Relaxed);
         if ms > 0 {
@@ -1560,7 +1683,10 @@ fn ga_wait_for_eval_mem(context: &str) -> bool {
             return false;
         }
         let snapshot = ga_safety_snapshot();
-        let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+        let h = ga_heuristics()
+            .lock()
+            .expect("GA heuristics lock poisoned")
+            .clone();
         let (rss_warn_mb, rss_abort_mb) = ga_effective_rss_limits(&snapshot, &h);
         let (free_warn_mb, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
         let mut critical = false;
@@ -1635,7 +1761,10 @@ fn ga_wait_for_eval_mem(context: &str) -> bool {
 
 fn ga_eval_mem_guard(start_rss_mb: Option<u64>, context: &str) -> bool {
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     if let Some(free_mb) = snapshot.mem_free_mb {
         let (free_warn_mb, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
         if free_mb < free_abort_mb {
@@ -1725,10 +1854,22 @@ fn ga_should_use_opencl() -> bool {
             return false;
         }
         let snapshot = ga_safety_snapshot();
-        let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
-        let cpu_hot = snapshot.cpu_usage_pct.map(|v| v >= h.cpu_warn_pct).unwrap_or(false);
-        let gpu_hot = snapshot.gpu_util_pct.map(|v| v >= h.gpu_util_warn_pct).unwrap_or(false);
-        let gpu_low_vram = snapshot.gpu_vram_free_mb.map(|v| v < h.gpu_vram_free_min_mb).unwrap_or(false);
+        let h = ga_heuristics()
+            .lock()
+            .expect("GA heuristics lock poisoned")
+            .clone();
+        let cpu_hot = snapshot
+            .cpu_usage_pct
+            .map(|v| v >= h.cpu_warn_pct)
+            .unwrap_or(false);
+        let gpu_hot = snapshot
+            .gpu_util_pct
+            .map(|v| v >= h.gpu_util_warn_pct)
+            .unwrap_or(false);
+        let gpu_low_vram = snapshot
+            .gpu_vram_free_mb
+            .map(|v| v < h.gpu_vram_free_min_mb)
+            .unwrap_or(false);
         if cpu_hot && !gpu_hot && !gpu_low_vram {
             return true;
         }
@@ -1744,7 +1885,9 @@ fn ga_should_use_opencl() -> bool {
 }
 
 fn ga_opencl_workers() -> usize {
-    parse_env_usize("NM_GA_OPENCL_WORKERS").unwrap_or(DEFAULT_GA_OPENCL_WORKERS).max(1)
+    parse_env_usize("NM_GA_OPENCL_WORKERS")
+        .unwrap_or(DEFAULT_GA_OPENCL_WORKERS)
+        .max(1)
 }
 
 #[cfg(feature = "core_affinity")]
@@ -1778,7 +1921,9 @@ fn ga_save_core_history(history: &GACoreHistory) {
 
 #[cfg(feature = "core_affinity")]
 fn ga_record_core_usage(core_ids: &[CoreId]) {
-    let mut history = ga_core_history().lock().expect("GA core history lock poisoned");
+    let mut history = ga_core_history()
+        .lock()
+        .expect("GA core history lock poisoned");
     for id in core_ids {
         *history.counts.entry(id.id).or_insert(0) += 1;
     }
@@ -1802,7 +1947,11 @@ fn ga_affinity_core_ids_from_env() -> Option<Vec<CoreId>> {
             selected.push(*id);
         }
     }
-    if selected.is_empty() { None } else { Some(selected) }
+    if selected.is_empty() {
+        None
+    } else {
+        Some(selected)
+    }
 }
 
 #[cfg(feature = "core_affinity")]
@@ -1823,7 +1972,9 @@ fn ga_affinity_core_ids() -> Option<Vec<CoreId>> {
         return None;
     }
     let available = core_affinity::get_core_ids()?;
-    let history = ga_core_history().lock().expect("GA core history lock poisoned");
+    let history = ga_core_history()
+        .lock()
+        .expect("GA core history lock poisoned");
     if history.counts.is_empty() {
         return None;
     }
@@ -1834,7 +1985,11 @@ fn ga_affinity_core_ids() -> Option<Vec<CoreId>> {
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     let limit = ga_core_history_count_limit(scored.len());
     let selected: Vec<CoreId> = scored.into_iter().take(limit).map(|(c, _)| c).collect();
-    if selected.is_empty() { None } else { Some(selected) }
+    if selected.is_empty() {
+        None
+    } else {
+        Some(selected)
+    }
 }
 
 #[cfg(feature = "opencl")]
@@ -1878,7 +2033,10 @@ fn ga_opencl_worker_limit_base(pop_size: usize) -> usize {
         workers = workers.saturating_mul(device_count).max(1);
     }
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     let (rss_warn_mb, rss_abort_mb) = ga_effective_rss_limits(&snapshot, &h);
     let (free_warn_mb, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
     if let Some(cpu) = snapshot.cpu_usage_pct {
@@ -1889,16 +2047,25 @@ fn ga_opencl_worker_limit_base(pop_size: usize) -> usize {
         }
     }
     if let Some(free_mb) = snapshot.mem_free_mb {
-        if free_mb < free_abort_mb { workers = 1; }
-        else if free_mb < free_warn_mb { workers = (workers / 2).max(1); }
+        if free_mb < free_abort_mb {
+            workers = 1;
+        } else if free_mb < free_warn_mb {
+            workers = (workers / 2).max(1);
+        }
     }
     if let Some(rss_mb) = snapshot.proc_rss_mb {
-        if rss_mb >= rss_abort_mb { workers = 1; }
-        else if rss_mb >= rss_warn_mb { workers = (workers / 2).max(1); }
+        if rss_mb >= rss_abort_mb {
+            workers = 1;
+        } else if rss_mb >= rss_warn_mb {
+            workers = (workers / 2).max(1);
+        }
     }
     if let Some(ui_ms) = snapshot.ui_frame_ms {
-        if ui_ms >= h.ui_frame_hot_ms { workers = 1; }
-        else if ui_ms >= h.ui_frame_warn_ms { workers = (workers / 2).max(1); }
+        if ui_ms >= h.ui_frame_hot_ms {
+            workers = 1;
+        } else if ui_ms >= h.ui_frame_warn_ms {
+            workers = (workers / 2).max(1);
+        }
     }
     if let Some(temp) = update_temp_cache() {
         let warn = ga_temp_warn_c();
@@ -1917,7 +2084,6 @@ fn ga_opencl_worker_limit_base(pop_size: usize) -> usize {
     }
     workers.min(pop_size.max(1))
 }
-
 
 #[cfg(feature = "opencl")]
 thread_local! {
@@ -1941,7 +2107,9 @@ fn ga_thread_opencl_manager() -> Option<Arc<OpenCLManager>> {
                 .and_then(|suffix| suffix.parse::<usize>().ok())
                 .unwrap_or_else(|| GA_OPENCL_FALLBACK_IDX.fetch_add(1, Ordering::SeqCst));
             let device_id = device_ids[thread_idx % device_ids.len()];
-            *mgr = OpenCLManager::new_with_device_id(device_id).ok().map(Arc::new);
+            *mgr = OpenCLManager::new_with_device_id(device_id)
+                .ok()
+                .map(Arc::new);
             if mgr.is_none() {
                 nm_err!("[warn] GA OpenCL requested but per-thread manager failed to initialize.");
             }
@@ -1954,7 +2122,9 @@ fn ga_reserved_cores() -> usize {
     if let Some(v) = parse_env_usize("NM_GA_RESERVE_CORES") {
         return v;
     }
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     if cores <= 2 {
         return 1;
     }
@@ -1963,7 +2133,9 @@ fn ga_reserved_cores() -> usize {
 }
 
 fn default_max_concurrent_populations() -> usize {
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     if cores >= 16 {
         DEFAULT_GA_MAX_CONCURRENT_POPULATIONS_LARGE
     } else {
@@ -1972,14 +2144,18 @@ fn default_max_concurrent_populations() -> usize {
 }
 
 fn max_concurrent_populations() -> usize {
-    parse_env_usize("NM_GA_MAX_CONCURRENT_POPULATIONS").unwrap_or_else(default_max_concurrent_populations).max(1)
+    parse_env_usize("NM_GA_MAX_CONCURRENT_POPULATIONS")
+        .unwrap_or_else(default_max_concurrent_populations)
+        .max(1)
 }
 
 fn max_concurrent_evaluations() -> usize {
     if let Some(v) = parse_env_usize("NM_GA_MAX_CONCURRENT_EVALS") {
         return v.max(1);
     }
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let reserve = ga_reserved_cores();
     cores.saturating_sub(reserve).max(1)
 }
@@ -2008,7 +2184,7 @@ fn ga_max_eval_ms() -> Option<u64> {
     } else {
         configured.unwrap_or(120_000)
     };
-    
+
     // Under thermal pressure, allow more time for individual evaluations.
     let snapshot = ga_safety_snapshot();
     if let Some(temp) = snapshot.temp_c {
@@ -2025,7 +2201,8 @@ fn ga_max_eval_neurons_configured() -> Option<usize> {
     parse_env_usize("NM_GA_MAX_EVAL_NEURONS").map(|v| v.max(1))
 }
 
-static GA_AUTO_EVAL_LIMITS_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static GA_AUTO_EVAL_LIMITS_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn ga_active_eval_factor() -> usize {
     GA_ACTIVE_EVALS.load(Ordering::SeqCst).max(1)
@@ -2034,7 +2211,7 @@ fn ga_active_eval_factor() -> usize {
 fn ga_auto_eval_neuron_cap(snapshot: &SafetySnapshot) -> Option<usize> {
     let total_mb = snapshot.total_mem_mb?;
     let mut cap = (total_mb as f64 * 1.5).round() as usize;
-    
+
     // Reduce cap if system is hot or under high CPU load
     if let Some(temp) = snapshot.temp_c {
         let h = ga_heuristics().lock().expect("GA heuristics lock poisoned");
@@ -2054,7 +2231,10 @@ fn ga_auto_eval_neuron_cap(snapshot: &SafetySnapshot) -> Option<usize> {
     Some(cap.clamp(1_000, 500_000))
 }
 
-fn ga_auto_eval_connection_cap(snapshot: &SafetySnapshot, neuron_cap: Option<usize>) -> Option<usize> {
+fn ga_auto_eval_connection_cap(
+    snapshot: &SafetySnapshot,
+    neuron_cap: Option<usize>,
+) -> Option<usize> {
     if let Some(n_cap) = neuron_cap {
         let cap = (n_cap as f64 * 30.0).round() as usize;
         return Some(cap.clamp(10_000, 25_000_000));
@@ -2217,7 +2397,11 @@ fn ga_now() -> Instant {
 
 fn ga_ui_frame_ms() -> Option<f32> {
     let raw = GA_UI_FRAME_MS_X100.load(Ordering::Relaxed);
-    if raw == 0 { None } else { Some(raw as f32 / 100.0) }
+    if raw == 0 {
+        None
+    } else {
+        Some(raw as f32 / 100.0)
+    }
 }
 
 fn ga_safety_snapshot() -> SafetySnapshot {
@@ -2252,7 +2436,10 @@ fn ga_record_safe_generation() {
 fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
     let mut gen_elapsed = gen_elapsed;
     let mut snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     ga_try_clear_auto_worker_limit(&snapshot, &h);
 
     if let Some(temp) = snapshot.temp_c {
@@ -2280,7 +2467,7 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
     let paused_ms = GA_PAUSED_MS.load(Ordering::Relaxed) as u64;
     let throttled_ms = GA_THROTTLED_MS.load(Ordering::Relaxed);
     let remote_wait_ms = GA_REMOTE_WAIT_MS.load(Ordering::Relaxed);
-    
+
     // Account for throttled time correctly in generation timeout.
     // Since workers are parallel, we take the average throttled time per worker as a heuristic,
     // but a safer approach is to track wall-clock time spent in throttles.
@@ -2289,14 +2476,16 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
     let worker_budget = population_worker_threads(pop_size).max(1);
     let effective_workers = ga_effective_parallelism(pop_size);
     let wall_throttled_ms = throttled_ms / effective_workers as u64;
-    
-    let effective_elapsed = gen_elapsed.saturating_sub(Duration::from_millis(paused_ms + wall_throttled_ms + remote_wait_ms));
+
+    let effective_elapsed = gen_elapsed.saturating_sub(Duration::from_millis(
+        paused_ms + wall_throttled_ms + remote_wait_ms,
+    ));
     let mut max_ms = ga_dynamic_gen_timeout_ms(pop_size);
     if worker_budget > effective_workers {
         let slowdown = (worker_budget as f64 / effective_workers as f64).clamp(1.0, 8.0);
         max_ms = (max_ms as f64 * slowdown).round() as u64;
     }
-    
+
     // Under thermal pressure, ease off by extending the allowed time.
     if let Some(temp) = snapshot.temp_c {
         if temp >= h.temp_warn_c {
@@ -2332,7 +2521,10 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                 effective_workers,
                 ema_ms
             );
-            return GASafetyAction::Throttle(Duration::from_millis(400), "generation_slow".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(400),
+                "generation_slow".to_string(),
+            );
         }
         nm_err!(
             "[warn] GA generation timeout hard abort: effective_elapsed {}ms > hard budget {}ms (budget {}ms). progress {}/{} workers budget/effective {}/{} ema_ind_ms {} rss {:?}MB free {:?}MB.",
@@ -2374,7 +2566,10 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                 );
                 return GASafetyAction::Abort("mem_critical".to_string());
             }
-            return GASafetyAction::Throttle(Duration::from_millis(1000), "mem_critical".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(1000),
+                "mem_critical".to_string(),
+            );
         }
         if free_mb < free_warn_mb {
             ga_apply_mem_backoff();
@@ -2392,7 +2587,10 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                     rss_mb,
                     "safety_decision"
                 );
-                return GASafetyAction::Throttle(Duration::from_millis(1000), "mem_rss_grace".to_string());
+                return GASafetyAction::Throttle(
+                    Duration::from_millis(1000),
+                    "mem_rss_grace".to_string(),
+                );
             }
             let (streak, elapsed) = ga_note_rss_critical();
             ga_request_throttle(2000);
@@ -2405,10 +2603,16 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                 );
                 return GASafetyAction::Abort("mem_rss_abort".to_string());
             }
-            return GASafetyAction::Throttle(Duration::from_millis(1000), "mem_rss_critical".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(1000),
+                "mem_rss_critical".to_string(),
+            );
         }
         if rss_mb >= rss_warn_mb {
-            return GASafetyAction::Throttle(Duration::from_millis(200), "mem_rss_warn".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(200),
+                "mem_rss_warn".to_string(),
+            );
         }
         ga_clear_rss_critical();
     }
@@ -2425,11 +2629,17 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                 );
                 return GASafetyAction::Abort("mem_growth_abort".to_string());
             }
-            return GASafetyAction::Throttle(Duration::from_millis(1000), "mem_growth_critical".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(1000),
+                "mem_growth_critical".to_string(),
+            );
         }
         if growth_mb >= h.mem_rss_growth_warn_mb {
             ga_apply_mem_backoff();
-            return GASafetyAction::Throttle(Duration::from_millis(200), format!("mem_growth_{}_mb", growth_mb));
+            return GASafetyAction::Throttle(
+                Duration::from_millis(200),
+                format!("mem_growth_{}_mb", growth_mb),
+            );
         }
         ga_clear_mem_growth_critical();
         ga_clear_mem_backoff();
@@ -2468,10 +2678,16 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
                 GA_FORCE_CPU.store(true, Ordering::Relaxed);
             }
             ga_set_worker_limit_auto(1);
-            return GASafetyAction::Throttle(Duration::from_millis(200), "gpu_vram_critical".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(200),
+                "gpu_vram_critical".to_string(),
+            );
         }
         if free_mb < h.gpu_vram_free_min_mb {
-            return GASafetyAction::Throttle(Duration::from_millis(200), "gpu_vram_warn".to_string());
+            return GASafetyAction::Throttle(
+                Duration::from_millis(200),
+                "gpu_vram_warn".to_string(),
+            );
         }
         #[cfg(feature = "opencl")]
         {
@@ -2484,7 +2700,10 @@ fn ga_safety_decision(gen_elapsed: Duration) -> GASafetyAction {
 }
 
 async fn thermal_wait_if_hot(kind: &str) {
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").to_monitor();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .to_monitor();
     GA_THERMAL_WAITERS.fetch_add(1, Ordering::SeqCst);
     let waited = monitor::thermal_wait_if_hot(kind, &h, &GA_ABORT_REQUESTED).await;
     GA_THERMAL_WAITERS.fetch_sub(1, Ordering::SeqCst);
@@ -2495,7 +2714,10 @@ async fn thermal_wait_if_hot(kind: &str) {
 }
 
 fn thermal_wait_blocking(kind: &str) {
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").to_monitor();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .to_monitor();
     GA_THERMAL_WAITERS.fetch_add(1, Ordering::SeqCst);
     let waited = monitor::thermal_wait_blocking(kind, &h, &GA_ABORT_REQUESTED);
     GA_THERMAL_WAITERS.fetch_sub(1, Ordering::SeqCst);
@@ -2528,7 +2750,10 @@ pub async fn acquire_population_permit() -> GAPopulationPermit {
         nm_log!("[info] GA population queued; waiting for system headroom.");
         GA_SEM_WAITERS.fetch_add(1, Ordering::SeqCst);
     }
-    let permit = sem.acquire_owned().await.expect("GA population semaphore closed");
+    let permit = sem
+        .acquire_owned()
+        .await
+        .expect("GA population semaphore closed");
     if will_wait {
         GA_SEM_WAITERS.fetch_sub(1, Ordering::SeqCst);
     }
@@ -2544,7 +2769,10 @@ pub async fn acquire_evaluation_permit() -> OwnedSemaphorePermit {
         nm_log!("[info] GA evaluation queued; waiting for system headroom.");
         GA_SEM_WAITERS.fetch_add(1, Ordering::SeqCst);
     }
-    let permit = sem.acquire_owned().await.expect("GA evaluation semaphore closed");
+    let permit = sem
+        .acquire_owned()
+        .await
+        .expect("GA evaluation semaphore closed");
     if will_wait {
         GA_SEM_WAITERS.fetch_sub(1, Ordering::SeqCst);
     }
@@ -2583,14 +2811,19 @@ fn population_worker_threads_base(pop_size: usize) -> usize {
         return ga_opencl_worker_limit_base(pop_size);
     }
     let active = GA_ACTIVE_POPULATIONS.load(Ordering::SeqCst).max(1);
-    let available = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     let rayon_limit = rayon::current_num_threads().max(1);
     let base = available.min(rayon_limit).max(1);
     let reserve = ga_reserved_cores();
     let budget = base.saturating_sub(reserve).max(1);
     let mut threads = (budget / active).max(1);
     let snapshot = ga_safety_snapshot();
-    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+    let h = ga_heuristics()
+        .lock()
+        .expect("GA heuristics lock poisoned")
+        .clone();
     ga_try_clear_auto_worker_limit(&snapshot, &h);
     let (rss_warn_mb, rss_abort_mb) = ga_effective_rss_limits(&snapshot, &h);
     let (free_warn_mb, free_abort_mb) = ga_mem_free_limits(&snapshot, &h);
@@ -2753,15 +2986,21 @@ impl GARampController {
         let sim_time_current = self.min_sim_time + (self.max_sim_time - self.min_sim_time) * ratio;
         let eval_ms_current = self.max_eval_ms.map(|max| {
             let min = self.min_eval_ms.unwrap_or(max);
-            (min as f64 + (max.saturating_sub(min) as f64 * ratio)).round().max(1.0) as u64
+            (min as f64 + (max.saturating_sub(min) as f64 * ratio))
+                .round()
+                .max(1.0) as u64
         });
         let eval_neurons_current = self.max_eval_neurons.map(|max| {
             let min = self.min_eval_neurons.unwrap_or(max);
-            (min as f64 + (max.saturating_sub(min) as f64 * ratio)).round().max(1.0) as usize
+            (min as f64 + (max.saturating_sub(min) as f64 * ratio))
+                .round()
+                .max(1.0) as usize
         });
         let eval_conns_current = self.max_eval_conns.map(|max| {
             let min = self.min_eval_conns.unwrap_or(max);
-            (min as f64 + (max.saturating_sub(min) as f64 * ratio)).round().max(1.0) as usize
+            (min as f64 + (max.saturating_sub(min) as f64 * ratio))
+                .round()
+                .max(1.0) as usize
         });
         let worker_budget_now = ga_worker_budget_max(self.max_pop).max(1);
         let worker_cap = if worker_budget_now <= 1 {
@@ -2770,7 +3009,11 @@ impl GARampController {
             let cap = 1.0 + ((worker_budget_now - 1) as f64 * ratio);
             cap.round().max(1.0) as usize
         };
-        let min_parallel = if self.current_pop >= 2 && worker_budget_now >= 2 { 2 } else { 1 };
+        let min_parallel = if self.current_pop >= 2 && worker_budget_now >= 2 {
+            2
+        } else {
+            1
+        };
         GARampPlan {
             population_size: self.current_pop,
             sim_time_ms: sim_time_current,
@@ -2813,12 +3056,12 @@ fn ga_ramp_start_population(max_pop: usize, worker_budget: usize) -> usize {
 
 impl GASearch {
     pub fn new(
-        pop_size: usize, 
-        initial_config: &NetworkConfig, 
-        rng: &mut StdRng, 
-        distributed_node: Option<crate::distributed::DistributedNode>, 
+        pop_size: usize,
+        initial_config: &NetworkConfig,
+        rng: &mut StdRng,
+        distributed_node: Option<crate::distributed::DistributedNode>,
         is_restart: bool,
-        existing_leaderboard: Vec<Individual>
+        existing_leaderboard: Vec<Individual>,
     ) -> Self {
         let mut population = Vec::with_capacity(pop_size);
         let leaderboard = existing_leaderboard;
@@ -2841,7 +3084,10 @@ impl GASearch {
             if population.len() >= pop_size {
                 break;
             }
-            if !population.iter().any(|existing| existing.config == ind.config) {
+            if !population
+                .iter()
+                .any(|existing| existing.config == ind.config)
+            {
                 population.push(Individual::new(ind.config.clone(), 0.0));
             }
         }
@@ -2850,7 +3096,8 @@ impl GASearch {
             population.truncate(pop_size);
         }
 
-        let seed_configs: Vec<NetworkConfig> = population.iter().map(|ind| ind.config.clone()).collect();
+        let seed_configs: Vec<NetworkConfig> =
+            population.iter().map(|ind| ind.config.clone()).collect();
 
         if population.len() < pop_size {
             if (is_restart || !leaderboard.is_empty()) && !seed_configs.is_empty() {
@@ -2878,7 +3125,7 @@ impl GASearch {
                 }
             }
         }
-        
+
         // Fallback: if we still don't have a full population, just fill it (shouldn't happen with enough entropy)
         while population.len() < pop_size {
             population.push(Individual::new(initial_config.clone(), 0.0));
@@ -2901,7 +3148,12 @@ impl GASearch {
         }
     }
 
-    pub fn resize_population(&mut self, new_size: usize, base_cfg: &NetworkConfig, rng: &mut StdRng) {
+    pub fn resize_population(
+        &mut self,
+        new_size: usize,
+        base_cfg: &NetworkConfig,
+        rng: &mut StdRng,
+    ) {
         let new_size = new_size.max(1);
         if new_size == self.population.len() {
             return;
@@ -2911,7 +3163,11 @@ impl GASearch {
             return;
         }
 
-        let mut seed_configs: Vec<NetworkConfig> = self.population.iter().map(|ind| ind.config.clone()).collect();
+        let mut seed_configs: Vec<NetworkConfig> = self
+            .population
+            .iter()
+            .map(|ind| ind.config.clone())
+            .collect();
         if seed_configs.is_empty() {
             seed_configs.push(base_cfg.clone());
         }
@@ -2936,7 +3192,12 @@ impl GASearch {
     }
 
     /// Evaluates the entire population, potentially using the cluster.
-    pub async fn evaluate_population(&mut self, sim_time_ms: f64, seed: u64, status_tx: &std::sync::mpsc::Sender<GASearch>) {
+    pub async fn evaluate_population(
+        &mut self,
+        sim_time_ms: f64,
+        seed: u64,
+        status_tx: &std::sync::mpsc::Sender<GASearch>,
+    ) {
         let _population_permit = acquire_population_permit().await;
         GA_ABORT_REQUESTED.store(false, Ordering::SeqCst);
         ga_clear_abort_reason();
@@ -2964,7 +3225,9 @@ impl GASearch {
                 GASafetyAction::None => false,
                 GASafetyAction::Throttle(delay, reason) => {
                     ga_request_throttle(delay.as_millis() as u64);
-                    if last_throttle_log.elapsed() > Duration::from_secs(2) || reason != last_throttle_reason {
+                    if last_throttle_log.elapsed() > Duration::from_secs(2)
+                        || reason != last_throttle_reason
+                    {
                         nm_log!("[info] GA throttling ({}) during {}.", reason, phase);
                         last_throttle_log = Instant::now();
                         last_throttle_reason = reason;
@@ -2999,8 +3262,16 @@ impl GASearch {
         }
 
         enum EvalOutcome {
-            Ok { idx: usize, fitness: f64, peer_id: String },
-            Err { idx: usize, peer_id: String, reason: String },
+            Ok {
+                idx: usize,
+                fitness: f64,
+                peer_id: String,
+            },
+            Err {
+                idx: usize,
+                peer_id: String,
+                reason: String,
+            },
         }
 
         let mut peer_pool: Vec<PeerEval> = Vec::new();
@@ -3020,7 +3291,8 @@ impl GASearch {
                         Some(c) => c,
                         None => continue,
                     };
-                    let (capacity, busy, pacing) = nodes.get(peer_id)
+                    let (capacity, busy, pacing) = nodes
+                        .get(peer_id)
                         .and_then(|n| n.resources.as_ref())
                         .map(|r| (r.capacity_score.max(0.1), r.ga_evaluating, r.ga_pacing))
                         .unwrap_or((1.0, false, false));
@@ -3039,13 +3311,21 @@ impl GASearch {
         let remote_orchs = ga_remote_orchestrators();
         if !remote_orchs.is_empty() {
             for addr in remote_orchs {
-                let label = addr.trim_start_matches("http://").trim_start_matches("https://");
+                let label = addr
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
                 let peer_id = format!("orch@{}", label);
-                let client_res = tokio::time::timeout(Duration::from_secs(3), GaClient::connect(addr.clone())).await;
+                let client_res =
+                    tokio::time::timeout(Duration::from_secs(3), GaClient::connect(addr.clone()))
+                        .await;
                 let mut client = match client_res {
                     Ok(Ok(c)) => c,
                     Ok(Err(e)) => {
-                        nm_err!("[warn] GA remote orchestrator connect failed ({}): {}", addr, e);
+                        nm_err!(
+                            "[warn] GA remote orchestrator connect failed ({}): {}",
+                            addr,
+                            e
+                        );
                         continue;
                     }
                     Err(_) => {
@@ -3061,7 +3341,8 @@ impl GASearch {
                 let status_res = tokio::time::timeout(
                     Duration::from_secs(3),
                     client.get_system_status(crate::distributed::proto::StatusRequest {}),
-                ).await;
+                )
+                .await;
                 match status_res {
                     Ok(Ok(resp)) => {
                         let status = resp.into_inner();
@@ -3073,8 +3354,12 @@ impl GASearch {
                             if let Some(res) = node.resources {
                                 node_count += 1;
                                 total_capacity += res.capacity_score.max(0.1);
-                                if res.ga_evaluating { busy_count += 1; }
-                                if res.ga_pacing { pacing_count += 1; }
+                                if res.ga_evaluating {
+                                    busy_count += 1;
+                                }
+                                if res.ga_pacing {
+                                    pacing_count += 1;
+                                }
                             }
                         }
                         if node_count > 0 {
@@ -3086,7 +3371,11 @@ impl GASearch {
                         }
                     }
                     Ok(Err(e)) => {
-                        nm_err!("[warn] GA remote orchestrator status failed ({}): {}", addr, e);
+                        nm_err!(
+                            "[warn] GA remote orchestrator status failed ({}): {}",
+                            addr,
+                            e
+                        );
                     }
                     Err(_) => {
                         nm_err!("[warn] GA remote orchestrator status timeout ({})", addr);
@@ -3113,72 +3402,100 @@ impl GASearch {
             let mut inflight_owner: HashMap<usize, String> = HashMap::new();
             let mut pending: VecDeque<usize> = (0..pop_size).collect();
 
-            let schedule_next = |population: &Vec<Individual>,
-                                     pending: &mut VecDeque<usize>,
-                                     peer_pool: &Vec<PeerEval>,
-                                     inflight_by_peer: &mut HashMap<String, usize>,
-                                     inflight_owner: &mut HashMap<usize, String>,
-                                     inflight: &mut HashSet<usize>,
-                                     join_set: &mut tokio::task::JoinSet<EvalOutcome>| {
-                loop {
-                    if pending.is_empty() {
-                        break;
-                    }
-                    let mut best: Option<(usize, f32)> = None;
-                    let mut fallback: Option<(usize, f32)> = None;
-                    for (idx, peer) in peer_pool.iter().enumerate() {
-                        if peer.client.is_none() {
-                            continue;
+            let schedule_next =
+                |population: &Vec<Individual>,
+                 pending: &mut VecDeque<usize>,
+                 peer_pool: &Vec<PeerEval>,
+                 inflight_by_peer: &mut HashMap<String, usize>,
+                 inflight_owner: &mut HashMap<usize, String>,
+                 inflight: &mut HashSet<usize>,
+                 join_set: &mut tokio::task::JoinSet<EvalOutcome>| {
+                    loop {
+                        if pending.is_empty() {
+                            break;
                         }
-                        let inflight_count = *inflight_by_peer.get(&peer.id).unwrap_or(&0);
-                        if inflight_count >= peer.max_inflight {
-                            continue;
-                        }
-                        let score = peer.capacity / (1.0 + inflight_count as f32);
-                        if !peer.busy && !peer.pacing && best.map(|(_, s)| score > s).unwrap_or(true) {
-                            best = Some((idx, score));
-                        }
-                        if fallback.map(|(_, s)| score > s).unwrap_or(true) {
-                            fallback = Some((idx, score));
-                        }
-                    }
-                    let best = if best.is_none() && inflight.is_empty() {
-                        fallback
-                    } else {
-                        best
-                    };
-                    let Some((peer_idx, _)) = best else {
-                        break;
-                    };
-                    let idx = pending.pop_front().unwrap();
-                    let peer = &peer_pool[peer_idx];
-                    inflight.insert(idx);
-                    *inflight_by_peer.entry(peer.id.clone()).or_insert(0) += 1;
-                    inflight_owner.insert(idx, peer.id.clone());
-
-                    let config_json = serde_json::to_string(&population[idx].config).unwrap();
-                    let seed = seed + idx as u64;
-                    let peer_id = peer.id.clone();
-                    if let Some(mut client) = peer.client.clone() {
-                        join_set.spawn(async move {
-                            let req = crate::distributed::proto::GaEvaluationRequest {
-                                config_json,
-                                sim_time_ms,
-                                seed,
-                            };
-                            let res = tokio::time::timeout(remote_eval_timeout, client.run_ga_evaluation(req)).await;
-                            match res {
-                                Ok(Ok(resp)) => EvalOutcome::Ok { idx, fitness: resp.into_inner().fitness, peer_id },
-                                Ok(Err(e)) => EvalOutcome::Err { idx, peer_id, reason: format!("rpc: {}", e) },
-                                Err(_) => EvalOutcome::Err { idx, peer_id, reason: "timeout".to_string() },
+                        let mut best: Option<(usize, f32)> = None;
+                        let mut fallback: Option<(usize, f32)> = None;
+                        for (idx, peer) in peer_pool.iter().enumerate() {
+                            if peer.client.is_none() {
+                                continue;
                             }
-                        });
+                            let inflight_count = *inflight_by_peer.get(&peer.id).unwrap_or(&0);
+                            if inflight_count >= peer.max_inflight {
+                                continue;
+                            }
+                            let score = peer.capacity / (1.0 + inflight_count as f32);
+                            if !peer.busy
+                                && !peer.pacing
+                                && best.map(|(_, s)| score > s).unwrap_or(true)
+                            {
+                                best = Some((idx, score));
+                            }
+                            if fallback.map(|(_, s)| score > s).unwrap_or(true) {
+                                fallback = Some((idx, score));
+                            }
+                        }
+                        let best = if best.is_none() && inflight.is_empty() {
+                            fallback
+                        } else {
+                            best
+                        };
+                        let Some((peer_idx, _)) = best else {
+                            break;
+                        };
+                        let idx = pending.pop_front().unwrap();
+                        let peer = &peer_pool[peer_idx];
+                        inflight.insert(idx);
+                        *inflight_by_peer.entry(peer.id.clone()).or_insert(0) += 1;
+                        inflight_owner.insert(idx, peer.id.clone());
+
+                        let config_json = serde_json::to_string(&population[idx].config).unwrap();
+                        let seed = seed + idx as u64;
+                        let peer_id = peer.id.clone();
+                        if let Some(mut client) = peer.client.clone() {
+                            join_set.spawn(async move {
+                                let req = crate::distributed::proto::GaEvaluationRequest {
+                                    config_json,
+                                    sim_time_ms,
+                                    seed,
+                                };
+                                let res = tokio::time::timeout(
+                                    remote_eval_timeout,
+                                    client.run_ga_evaluation(req),
+                                )
+                                .await;
+                                match res {
+                                    Ok(Ok(resp)) => EvalOutcome::Ok {
+                                        idx,
+                                        fitness: resp.into_inner().fitness,
+                                        peer_id,
+                                    },
+                                    Ok(Err(e)) => EvalOutcome::Err {
+                                        idx,
+                                        peer_id,
+                                        reason: format!("rpc: {}", e),
+                                    },
+                                    Err(_) => EvalOutcome::Err {
+                                        idx,
+                                        peer_id,
+                                        reason: "timeout".to_string(),
+                                    },
+                                }
+                            });
+                        }
                     }
-                }
-            };
+                };
 
             // Initial scheduling
-            schedule_next(&self.population, &mut pending, &peer_pool, &mut inflight_by_peer, &mut inflight_owner, &mut inflight, &mut join_set);
+            schedule_next(
+                &self.population,
+                &mut pending,
+                &peer_pool,
+                &mut inflight_by_peer,
+                &mut inflight_owner,
+                &mut inflight,
+                &mut join_set,
+            );
             for (idx, ind) in self.population.iter_mut().enumerate() {
                 ind.evaluating_node = inflight_owner.get(&idx).cloned();
             }
@@ -3209,7 +3526,9 @@ impl GASearch {
                         let _permit = acquire_evaluation_permit().await;
                         let fitness = match tokio::task::spawn_blocking(move || {
                             Self::evaluate_individual(&cfg, sim_time_ms, eval_seed)
-                        }).await {
+                        })
+                        .await
+                        {
                             Ok(f) => f,
                             Err(e) => {
                                 nm_err!("[error] Local GA fallback task failed: {}", e);
@@ -3234,15 +3553,20 @@ impl GASearch {
                 let tick_start = std::time::Instant::now();
                 let join_res = tokio::time::timeout(
                     Duration::from_millis(GA_PROGRESS_TICK_MS),
-                    join_set.join_next()
-                ).await;
+                    join_set.join_next(),
+                )
+                .await;
                 let tick_elapsed = tick_start.elapsed();
                 if !inflight.is_empty() {
                     GA_REMOTE_WAIT_MS.fetch_add(tick_elapsed.as_millis() as u64, Ordering::Relaxed);
                 }
                 match join_res {
                     Ok(Some(res)) => match res {
-                        Ok(EvalOutcome::Ok { idx, fitness, peer_id }) => {
+                        Ok(EvalOutcome::Ok {
+                            idx,
+                            fitness,
+                            peer_id,
+                        }) => {
                             self.population[idx].fitness = fitness;
                             if !done[idx] {
                                 done[idx] = true;
@@ -3255,7 +3579,15 @@ impl GASearch {
                             if let Some(count) = inflight_by_peer.get_mut(&peer_id) {
                                 *count = count.saturating_sub(1);
                             }
-                            schedule_next(&self.population, &mut pending, &peer_pool, &mut inflight_by_peer, &mut inflight_owner, &mut inflight, &mut join_set);
+                            schedule_next(
+                                &self.population,
+                                &mut pending,
+                                &peer_pool,
+                                &mut inflight_by_peer,
+                                &mut inflight_owner,
+                                &mut inflight,
+                                &mut join_set,
+                            );
                             for (idx, ind) in self.population.iter_mut().enumerate() {
                                 ind.evaluating_node = inflight_owner.get(&idx).cloned();
                             }
@@ -3266,13 +3598,18 @@ impl GASearch {
                                 let _ = status_tx.send(self.clone());
                             }
                         }
-                        Ok(EvalOutcome::Err { idx, peer_id, reason }) => {
+                        Ok(EvalOutcome::Err {
+                            idx,
+                            peer_id,
+                            reason,
+                        }) => {
                             nm_err!(
                                 "[warn] Distributed GA evaluation failed for peer {} ({}); requeueing.",
                                 peer_id,
                                 reason
                             );
-                            if let Some(peer) = peer_pool.iter_mut().find(|peer| peer.id == peer_id) {
+                            if let Some(peer) = peer_pool.iter_mut().find(|peer| peer.id == peer_id)
+                            {
                                 peer.client = None;
                             }
                             inflight.remove(&idx);
@@ -3282,7 +3619,15 @@ impl GASearch {
                             }
                             last_progress = std::time::Instant::now();
                             pending.push_back(idx);
-                            schedule_next(&self.population, &mut pending, &peer_pool, &mut inflight_by_peer, &mut inflight_owner, &mut inflight, &mut join_set);
+                            schedule_next(
+                                &self.population,
+                                &mut pending,
+                                &peer_pool,
+                                &mut inflight_by_peer,
+                                &mut inflight_owner,
+                                &mut inflight,
+                                &mut join_set,
+                            );
                             for (idx, ind) in self.population.iter_mut().enumerate() {
                                 ind.evaluating_node = inflight_owner.get(&idx).cloned();
                             }
@@ -3325,7 +3670,8 @@ impl GASearch {
             }
             let paused_ms = GA_PAUSED_MS.load(Ordering::Relaxed) as u64;
             let remote_wait_ms = GA_REMOTE_WAIT_MS.load(Ordering::Relaxed);
-            let effective_elapsed = gen_start.elapsed()
+            let effective_elapsed = gen_start
+                .elapsed()
                 .saturating_sub(Duration::from_millis(paused_ms + remote_wait_ms));
             if !GA_ABORT_REQUESTED.load(Ordering::Relaxed) && self.current_eval_idx >= pop_size {
                 ga_record_individual_timing(pop_size, effective_elapsed);
@@ -3355,14 +3701,19 @@ impl GASearch {
 
         // Local parallel evaluation using a worker pool to track progress
         let (fit_tx, fit_rx) = std::sync::mpsc::channel::<(usize, f64)>();
-        let configs: Vec<_> = self.population.iter().enumerate().map(|(i, ind)| (i, ind.config.clone())).collect();
+        let configs: Vec<_> = self
+            .population
+            .iter()
+            .enumerate()
+            .map(|(i, ind)| (i, ind.config.clone()))
+            .collect();
         let morpho_growth_active = configs.iter().any(|(_, cfg)| {
             cfg.use_morphology && (cfg.growth_enabled || cfg.morpho_growth_enabled)
         });
         let inflight = Arc::new(Mutex::new(HashSet::<usize>::new()));
         let inflight_worker = Arc::clone(&inflight);
         let mut last_hb_log = Instant::now() - Duration::from_secs(15);
-        
+
         // Assign "local" to all individuals for UI feedback
         for ind in self.population.iter_mut() {
             ind.evaluating_node = Some("local".to_string());
@@ -3416,10 +3767,7 @@ impl GASearch {
                     }
                 } else {
                     healthy_for_parallel = ga_resources_healthy_for_parallelism();
-                    if min_parallel > 1
-                        && num_threads < min_parallel
-                        && healthy_for_parallel
-                    {
+                    if min_parallel > 1 && num_threads < min_parallel && healthy_for_parallel {
                         num_threads = min_parallel;
                         batch_len = (num_threads * 2).min(pending.len()).max(min_parallel);
                         if last_floor_log.elapsed() > Duration::from_secs(5) {
@@ -3484,18 +3832,22 @@ impl GASearch {
                                 return;
                             }
                             {
-                                let mut guard = inflight_batch.lock().expect("GA inflight lock poisoned");
+                                let mut guard =
+                                    inflight_batch.lock().expect("GA inflight lock poisoned");
                                 guard.insert(i);
                             }
                             thermal_wait_blocking("evaluation");
                             if GA_ABORT_REQUESTED.load(Ordering::SeqCst) {
-                                let mut guard = inflight_batch.lock().expect("GA inflight lock poisoned");
+                                let mut guard =
+                                    inflight_batch.lock().expect("GA inflight lock poisoned");
                                 guard.remove(&i);
                                 return;
                             }
-                            let fitness = Self::evaluate_individual(&cfg, sim_time_ms, seed + i as u64);
+                            let fitness =
+                                Self::evaluate_individual(&cfg, sim_time_ms, seed + i as u64);
                             let _ = fit_tx.send((i, fitness));
-                            let mut guard = inflight_batch.lock().expect("GA inflight lock poisoned");
+                            let mut guard =
+                                inflight_batch.lock().expect("GA inflight lock poisoned");
                             guard.remove(&i);
                         });
                     });
@@ -3507,12 +3859,14 @@ impl GASearch {
                             return;
                         }
                         {
-                            let mut guard = inflight_batch.lock().expect("GA inflight lock poisoned");
+                            let mut guard =
+                                inflight_batch.lock().expect("GA inflight lock poisoned");
                             guard.insert(i);
                         }
                         thermal_wait_blocking("evaluation");
                         if GA_ABORT_REQUESTED.load(Ordering::SeqCst) {
-                            let mut guard = inflight_batch.lock().expect("GA inflight lock poisoned");
+                            let mut guard =
+                                inflight_batch.lock().expect("GA inflight lock poisoned");
                             guard.remove(&i);
                             return;
                         }
@@ -3545,7 +3899,7 @@ impl GASearch {
                     if let Ok(guard) = inflight.lock() {
                         self.inflight = guard.iter().copied().collect();
                     }
-                    
+
                     // Throttle status updates to avoid overwhelming the UI thread
                     if self.current_eval_idx % 2 == 0 || self.current_eval_idx == pop_size {
                         let _ = status_tx.send(self.clone());
@@ -3558,7 +3912,9 @@ impl GASearch {
                         abort_after_loop = true;
                         break;
                     }
-                    if last_hb_log.elapsed() > Duration::from_secs(10) && last_progress.elapsed() > Duration::from_secs(10) {
+                    if last_hb_log.elapsed() > Duration::from_secs(10)
+                        && last_progress.elapsed() > Duration::from_secs(10)
+                    {
                         let inflight_count = inflight.lock().map(|g| g.len()).unwrap_or(0);
                         let snapshot = ga_safety_snapshot();
                         let workers = population_worker_threads(pop_size).max(1);
@@ -3613,7 +3969,8 @@ impl GASearch {
         }
         let paused_ms = GA_PAUSED_MS.load(Ordering::Relaxed) as u64;
         let remote_wait_ms = GA_REMOTE_WAIT_MS.load(Ordering::Relaxed);
-        let effective_elapsed = gen_start.elapsed()
+        let effective_elapsed = gen_start
+            .elapsed()
             .saturating_sub(Duration::from_millis(paused_ms + remote_wait_ms));
         if !GA_ABORT_REQUESTED.load(Ordering::Relaxed) && self.current_eval_idx >= pop_size {
             ga_record_individual_timing(pop_size, effective_elapsed);
@@ -3649,7 +4006,7 @@ impl GASearch {
     }
 
     /// Evaluates the fitness of an individual locally.
-pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) -> f64 {
+    pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) -> f64 {
         struct EvalGuard;
         impl Drop for EvalGuard {
             fn drop(&mut self) {
@@ -3665,11 +4022,11 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
         let eval_start_snapshot = ga_safety_snapshot();
         let eval_start_rss_mb = eval_start_snapshot.proc_rss_mb;
         let mut rng = StdRng::seed_from_u64(seed);
-        
+
         let mut lif = crate::config::LIFParams::default();
         lif.dt = 1.0;
         let stdp = crate::config::STDPParams::default();
-        
+
         let eval_config = config.clone();
         let max_eval_neurons = ga_max_eval_neurons();
         let max_eval_connections = ga_max_eval_connections();
@@ -3729,16 +4086,24 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 return 0.0;
             }
         }
-        
+
         // Use AARNN if morphology is requested, else LIF
-        let neuron_model = if eval_config.use_morphology { sim::NeuronModel::Aarnn } else { sim::NeuronModel::Lif };
-        let learning = if eval_config.use_morphology { sim::Learning::Aarnn } else { sim::Learning::Stdp };
+        let neuron_model = if eval_config.use_morphology {
+            sim::NeuronModel::Aarnn
+        } else {
+            sim::NeuronModel::Lif
+        };
+        let learning = if eval_config.use_morphology {
+            sim::Learning::Aarnn
+        } else {
+            sim::Learning::Stdp
+        };
 
         let mut runner = Runner::new(lif, stdp, eval_config.clone(), neuron_model, learning);
         #[cfg(feature = "opencl")]
         {
-            let allow_opencl = ga_should_use_opencl()
-                && GA_ACTIVE_EVALS.load(Ordering::SeqCst) <= 1;
+            let allow_opencl =
+                ga_should_use_opencl() && GA_ACTIVE_EVALS.load(Ordering::SeqCst) <= 1;
             if !allow_opencl {
                 // GA runs are highly parallel; disable OpenCL here to avoid shared-context buffer issues.
                 if ga_should_use_opencl() {
@@ -3754,7 +4119,7 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 runner.clear_cl_buffers();
             }
         }
-        
+
         if !ga_eval_mem_guard(eval_start_rss_mb, "eval_post_init") {
             return 0.0;
         }
@@ -3779,7 +4144,7 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 max_eval_connections
             );
         }
-        
+
         let num_sensory = eval_config.num_sensory_neurons;
         let base_rate = 2.0_f64;
         let burst_rate = 25.0_f64;
@@ -3813,7 +4178,9 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
             // Runner::step takes Option<&[i8]>
             runner.step(Some(&spk_buf));
 
-            let warn_interval = if GA_EVAL_MEM_WARN.load(Ordering::Relaxed) || GA_ABORT_REQUESTED.load(Ordering::Relaxed) {
+            let warn_interval = if GA_EVAL_MEM_WARN.load(Ordering::Relaxed)
+                || GA_ABORT_REQUESTED.load(Ordering::Relaxed)
+            {
                 1
             } else {
                 check_interval
@@ -3832,9 +4199,14 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 if !ga_eval_mem_guard(eval_start_rss_mb, "eval_loop") {
                     return 0.0;
                 }
-                if let (Some(start), Some(cur)) = (eval_start_rss_mb, ga_safety_snapshot().proc_rss_mb) {
+                if let (Some(start), Some(cur)) =
+                    (eval_start_rss_mb, ga_safety_snapshot().proc_rss_mb)
+                {
                     let growth = cur.saturating_sub(start);
-                    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
+                    let h = ga_heuristics()
+                        .lock()
+                        .expect("GA heuristics lock poisoned")
+                        .clone();
                     let mut eval_warn = h.mem_rss_growth_warn_mb;
                     let mut eval_abort = h.mem_rss_growth_abort_mb;
                     if let Some(total_mb) = ga_safety_snapshot().total_mem_mb {
@@ -3876,12 +4248,17 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 }
                 if !mem_logged {
                     let snapshot = ga_safety_snapshot();
-                    let h = ga_heuristics().lock().expect("GA heuristics lock poisoned").clone();
-                    let growth_from_start = eval_start_rss_mb
-                        .and_then(|start| snapshot.proc_rss_mb.map(|cur| cur.saturating_sub(start)));
+                    let h = ga_heuristics()
+                        .lock()
+                        .expect("GA heuristics lock poisoned")
+                        .clone();
+                    let growth_from_start = eval_start_rss_mb.and_then(|start| {
+                        snapshot.proc_rss_mb.map(|cur| cur.saturating_sub(start))
+                    });
                     if growth_from_start.map_or(false, |g| g >= h.mem_rss_growth_warn_mb) {
                         let total_neurons = runner.total_neurons();
-                        let total_conn = runner.connection_counts().iter().sum::<usize>() + runner.output_connection_count();
+                        let total_conn = runner.connection_counts().iter().sum::<usize>()
+                            + runner.output_connection_count();
                         let spike_bytes = (steps as u64)
                             .saturating_mul(eval_config.num_sensory_neurons as u64)
                             .saturating_mul(std::mem::size_of::<i8>() as u64);
@@ -3932,7 +4309,8 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                     }
                 }
                 if let Some(max_conns) = max_eval_connections {
-                    let total_conn = runner.connection_counts().iter().sum::<usize>() + runner.output_connection_count();
+                    let total_conn = runner.connection_counts().iter().sum::<usize>()
+                        + runner.output_connection_count();
                     if total_conn > max_conns {
                         nm_err!(
                             "[warn] GA eval exceeded connection cap {} (got {}) at step {}. Aborting individual.",
@@ -3961,14 +4339,19 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
         }
 
         let (lt, total) = runner.calculate_longterm_connections();
-        let stability_ratio = if total > 0 { lt as f64 / total as f64 } else { 0.0 };
+        let stability_ratio = if total > 0 {
+            lt as f64 / total as f64
+        } else {
+            0.0
+        };
 
         let layer_sizes: Vec<usize> = (0..runner.net.num_hidden_layers)
             .map(|l| runner.layer_size(l))
             .collect();
         let layer_count = layer_sizes.iter().filter(|&&s| s > 0).count();
 
-        let total_conn = runner.connection_counts().iter().sum::<usize>() + runner.output_connection_count();
+        let total_conn =
+            runner.connection_counts().iter().sum::<usize>() + runner.output_connection_count();
         let mut total_possible: usize = 0;
         if !layer_sizes.is_empty() {
             let h0 = layer_sizes[0];
@@ -3981,7 +4364,8 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 total_possible += h * h; // rec
             }
             if runner.net.num_output_neurons > 0 {
-                total_possible += runner.net.num_output_neurons * layer_sizes[layer_sizes.len() - 1];
+                total_possible +=
+                    runner.net.num_output_neurons * layer_sizes[layer_sizes.len() - 1];
             }
         }
 
@@ -3993,8 +4377,10 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
             let (in_l, out_l) = runner.get_io_layers();
 
             let mut sensory_out = vec![0usize; s_count];
-            let mut hidden_in: Vec<Vec<usize>> = layer_sizes.iter().map(|&n| vec![0usize; n]).collect();
-            let mut hidden_out: Vec<Vec<usize>> = layer_sizes.iter().map(|&n| vec![0usize; n]).collect();
+            let mut hidden_in: Vec<Vec<usize>> =
+                layer_sizes.iter().map(|&n| vec![0usize; n]).collect();
+            let mut hidden_out: Vec<Vec<usize>> =
+                layer_sizes.iter().map(|&n| vec![0usize; n]).collect();
             let mut output_in = vec![0usize; o_count];
 
             if in_l < layer_sizes.len() {
@@ -4055,39 +4441,64 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 }
             }
 
-            let sens_possible = if in_l < layer_sizes.len() { layer_sizes[in_l] } else { 0 };
+            let sens_possible = if in_l < layer_sizes.len() {
+                layer_sizes[in_l]
+            } else {
+                0
+            };
             if sens_possible > 0 {
                 for &count in &sensory_out {
                     let ratio = count as f64 / sens_possible as f64;
-                    if ratio > max_neuron_ratio { max_neuron_ratio = ratio; }
+                    if ratio > max_neuron_ratio {
+                        max_neuron_ratio = ratio;
+                    }
                 }
             }
 
-            let out_possible = if out_l < layer_sizes.len() { layer_sizes[out_l] } else { 0 };
+            let out_possible = if out_l < layer_sizes.len() {
+                layer_sizes[out_l]
+            } else {
+                0
+            };
             if out_possible > 0 {
                 for &count in &output_in {
                     let ratio = count as f64 / out_possible as f64;
-                    if ratio > max_neuron_ratio { max_neuron_ratio = ratio; }
+                    if ratio > max_neuron_ratio {
+                        max_neuron_ratio = ratio;
+                    }
                 }
             }
 
             for l in 0..layer_sizes.len() {
                 let n = layer_sizes[l];
-                if n == 0 { continue; }
+                if n == 0 {
+                    continue;
+                }
                 let possible_in = (if l == in_l { s_count } else { 0 })
                     + (if l > 0 { layer_sizes[l - 1] } else { 0 })
-                    + (if l + 1 < layer_sizes.len() { layer_sizes[l + 1] } else { 0 })
+                    + (if l + 1 < layer_sizes.len() {
+                        layer_sizes[l + 1]
+                    } else {
+                        0
+                    })
                     + n;
-                let possible_out = (if l + 1 < layer_sizes.len() { layer_sizes[l + 1] } else { 0 })
-                    + (if l > 0 { layer_sizes[l - 1] } else { 0 })
+                let possible_out = (if l + 1 < layer_sizes.len() {
+                    layer_sizes[l + 1]
+                } else {
+                    0
+                }) + (if l > 0 { layer_sizes[l - 1] } else { 0 })
                     + n
                     + (if l == out_l { o_count } else { 0 });
                 let possible_total = possible_in + possible_out;
-                if possible_total == 0 { continue; }
+                if possible_total == 0 {
+                    continue;
+                }
                 for j in 0..n {
                     let actual = hidden_in[l][j] + hidden_out[l][j];
                     let ratio = actual as f64 / possible_total as f64;
-                    if ratio > max_neuron_ratio { max_neuron_ratio = ratio; }
+                    if ratio > max_neuron_ratio {
+                        max_neuron_ratio = ratio;
+                    }
                 }
             }
         }
@@ -4130,12 +4541,14 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
             let bio = &eval_config.aarnn_bio;
             let mut hits = 0.0f64;
             let mut total = 0.0f64;
-            
+
             let add_bool = |ok: bool, hits: &mut f64, total: &mut f64| {
                 *total += 1.0;
-                if ok { *hits += 1.0; }
+                if ok {
+                    *hits += 1.0;
+                }
             };
-            
+
             let add_granular = |val: f64, min: f64, max: f64, hits: &mut f64, total: &mut f64| {
                 *total += 1.0;
                 if val >= min && val <= max {
@@ -4151,43 +4564,145 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
 
             add_bool(bio.stp_enabled, &mut hits, &mut total);
             add_granular(bio.stp_u as f64, 0.1, 0.5, &mut hits, &mut total);
-            add_granular(bio.stp_tau_rec_ms as f64, 100.0, 1500.0, &mut hits, &mut total);
-            add_granular(bio.stp_tau_facil_ms as f64, 50.0, 800.0, &mut hits, &mut total);
+            add_granular(
+                bio.stp_tau_rec_ms as f64,
+                100.0,
+                1500.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.stp_tau_facil_ms as f64,
+                50.0,
+                800.0,
+                &mut hits,
+                &mut total,
+            );
             add_granular(bio.ampa_tau_ms as f64, 2.0, 10.0, &mut hits, &mut total);
             add_granular(bio.nmda_tau_ms as f64, 40.0, 200.0, &mut hits, &mut total);
             add_granular(bio.gaba_tau_ms as f64, 5.0, 30.0, &mut hits, &mut total);
             add_granular(bio.nmda_ratio as f64, 0.1, 0.5, &mut hits, &mut total);
             add_granular(bio.synaptic_gain as f64, 0.5, 2.0, &mut hits, &mut total);
             add_bool(bio.adaptive_threshold_enabled, &mut hits, &mut total);
-            add_granular(bio.adaptive_threshold_tau_ms as f64, 50.0, 800.0, &mut hits, &mut total);
-            add_granular(bio.adaptive_threshold_increment as f64, 0.2, 1.0, &mut hits, &mut total);
-            add_granular(bio.homeostasis_target_rate_hz as f64, 1.0, 5.0, &mut hits, &mut total);
-            add_granular(bio.homeostasis_tau_ms as f64, 500.0, 3000.0, &mut hits, &mut total);
+            add_granular(
+                bio.adaptive_threshold_tau_ms as f64,
+                50.0,
+                800.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.adaptive_threshold_increment as f64,
+                0.2,
+                1.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.homeostasis_target_rate_hz as f64,
+                1.0,
+                5.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.homeostasis_tau_ms as f64,
+                500.0,
+                3000.0,
+                &mut hits,
+                &mut total,
+            );
             add_bool(bio.neuromodulation_enabled, &mut hits, &mut total);
 
             // Next-10 AARNN plausibility priors (kept soft to avoid over-constraining search).
-            add_granular(eval_config.aarnn_inhibitory_fraction as f64, 0.15, 0.30, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_dale_strictness as f64, 0.70, 1.00, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_gap_junction_strength as f64, 0.005, 0.06, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_nmda_voltage_sensitivity as f64, 0.02, 0.12, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_triplet_ltp_gain as f64, 0.10, 0.80, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_triplet_ltd_gain as f64, 0.05, 0.60, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_synaptic_scaling_strength as f64, 0.005, 0.08, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_synaptic_scaling_target as f64, 0.6, 1.8, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_distance_attenuation_per_unit as f64, 0.05, 0.6, &mut hits, &mut total);
-            add_granular(eval_config.aarnn_release_prob_heterogeneity as f64, 0.05, 0.40, &mut hits, &mut total);
+            add_granular(
+                eval_config.aarnn_inhibitory_fraction as f64,
+                0.15,
+                0.30,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_dale_strictness as f64,
+                0.70,
+                1.00,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_gap_junction_strength as f64,
+                0.005,
+                0.06,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_nmda_voltage_sensitivity as f64,
+                0.02,
+                0.12,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_triplet_ltp_gain as f64,
+                0.10,
+                0.80,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_triplet_ltd_gain as f64,
+                0.05,
+                0.60,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_synaptic_scaling_strength as f64,
+                0.005,
+                0.08,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_synaptic_scaling_target as f64,
+                0.6,
+                1.8,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_distance_attenuation_per_unit as f64,
+                0.05,
+                0.6,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_release_prob_heterogeneity as f64,
+                0.05,
+                0.40,
+                &mut hits,
+                &mut total,
+            );
 
             // Biological tendency: potentiation and depression gains are generally same-order,
             // with mild LTP dominance often observed in stable learning regimes.
             add_granular(
-                (eval_config.aarnn_triplet_ltp_gain as f64 - eval_config.aarnn_triplet_ltd_gain as f64).abs(),
+                (eval_config.aarnn_triplet_ltp_gain as f64
+                    - eval_config.aarnn_triplet_ltd_gain as f64)
+                    .abs(),
                 0.0,
                 0.5,
                 &mut hits,
                 &mut total,
             );
-            
-            if total > 0.0 { hits / total } else { 0.0 }
+
+            if total > 0.0 {
+                hits / total
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
@@ -4195,8 +4710,12 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
         let aarnn_feature_score = if eval_config.use_morphology {
             let bio = &eval_config.aarnn_bio;
             let mut enabled = 0.0;
-            if bio.stp_enabled { enabled += 1.0; }
-            if bio.neuromodulation_enabled { enabled += 1.0; }
+            if bio.stp_enabled {
+                enabled += 1.0;
+            }
+            if bio.neuromodulation_enabled {
+                enabled += 1.0;
+            }
             enabled / 2.0
         } else {
             0.0
@@ -4218,7 +4737,9 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
 
     pub fn evolve(&mut self, n_elite: usize, use_dk_bias: bool, rng: &mut StdRng) {
         let pop_size = self.population.len();
-        if pop_size == 0 { return; }
+        if pop_size == 0 {
+            return;
+        }
 
         // 1. Update stagnation and self-adaptation for the current population (recently evaluated)
         for ind in &mut self.population {
@@ -4238,12 +4759,16 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
 
         // 2. Apply Dunning-Kruger (DK) Fitness Bias for selection
         // We use a temporary vector to store adjusted fitness for sorting/selection
-        let mut selection_pool: Vec<(usize, f64)> = self.population.iter().enumerate()
-            .map(|(i, ind)| (i, ind.fitness)).collect();
-        
+        let mut selection_pool: Vec<(usize, f64)> = self
+            .population
+            .iter()
+            .enumerate()
+            .map(|(i, ind)| (i, ind.fitness))
+            .collect();
+
         // Sort by raw fitness to determine ranks
         selection_pool.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         if use_dk_bias {
             // Apply bias based on rank
             for rank in 0..pop_size {
@@ -4253,25 +4778,35 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 let bias = 0.1 * (1.0 - percentile) - 0.03 * percentile;
                 selection_pool[rank].1 = (raw_fitness + bias).clamp(0.0, 1.0);
             }
-            
+
             // Re-sort selection pool by adjusted fitness
-            selection_pool.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            selection_pool
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         }
 
         // 3. Update global best (using raw fitness)
         // Note: population is not yet sorted by raw fitness here, but selection_pool[0] was the best
         // if bias didn't push someone else higher. Let's find the absolute best.
-        let (best_idx, _) = self.population.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.fitness.partial_cmp(&b.fitness).unwrap_or(std::cmp::Ordering::Equal))
+        let (best_idx, _) = self
+            .population
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.fitness
+                    .partial_cmp(&b.fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .unwrap();
-        
+
         if self.population[best_idx].fitness > self.best_fitness {
             self.best_fitness = self.population[best_idx].fitness;
             self.best_config = Some(self.population[best_idx].config.clone());
         }
 
         // 4. Update leaderboard
-        let to_add: Vec<Individual> = self.population.iter()
+        let to_add: Vec<Individual> = self
+            .population
+            .iter()
             .filter(|ind| ind.fitness > 0.0)
             .cloned()
             .collect();
@@ -4284,7 +4819,9 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
         // 5. Elitism (using best adjusted individuals)
         let mut elites_added = 0;
         for (idx, _) in &selection_pool {
-            if elites_added >= n_elite { break; }
+            if elites_added >= n_elite {
+                break;
+            }
             let ind = &self.population[*idx];
             if !next_gen.iter().any(|x: &Individual| x.config == ind.config) {
                 next_gen.push(ind.clone());
@@ -4296,33 +4833,43 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
         let mut attempts = 0;
         let mut children_added = 0;
         let top_selection_range = (pop_size / 2).max(1);
-        
+
         while next_gen.len() < pop_size && attempts < pop_size * 20 {
             attempts += 1;
-            
+
             // Tournament/Weighted selection from adjusted fitness pool
             let p1_idx = selection_pool[rng.random_range(0..top_selection_range)].0;
             let p2_idx = selection_pool[rng.random_range(0..top_selection_range)].0;
             let p1 = &self.population[p1_idx];
             let p2 = &self.population[p2_idx];
-            
+
             // Crossover using self-adaptive rate
             let crossover_prob = (p1.crossover_rate + p2.crossover_rate) / 2.0;
             let mut child_config = if rng.random_bool(crossover_prob) {
                 crossover(&p1.config, &p2.config, rng)
             } else {
-                if rng.random_bool(0.5) { p1.config.clone() } else { p2.config.clone() }
+                if rng.random_bool(0.5) {
+                    p1.config.clone()
+                } else {
+                    p2.config.clone()
+                }
             };
 
             // Mutation using inherited/averaged rates
             let mut child_mutation_rate = (p1.mutation_rate + p2.mutation_rate) / 2.0;
             // Meta-mutation: slightly mutate the rates themselves
-            child_mutation_rate = (child_mutation_rate + rng.random_range(-0.005..0.005)).clamp(0.001, 0.3);
-            let child_crossover_rate = ((p1.crossover_rate + p2.crossover_rate) / 2.0 + rng.random_range(-0.01..0.01)).clamp(0.1, 0.95);
-            
+            child_mutation_rate =
+                (child_mutation_rate + rng.random_range(-0.005..0.005)).clamp(0.001, 0.3);
+            let child_crossover_rate = ((p1.crossover_rate + p2.crossover_rate) / 2.0
+                + rng.random_range(-0.01..0.01))
+            .clamp(0.1, 0.95);
+
             mutate(&mut child_config, child_mutation_rate, rng);
-            
-            if !next_gen.iter().any(|x: &Individual| x.config == child_config) {
+
+            if !next_gen
+                .iter()
+                .any(|x: &Individual| x.config == child_config)
+            {
                 let mut child = Individual::new(child_config, 0.0);
                 child.mutation_rate = child_mutation_rate;
                 child.crossover_rate = child_crossover_rate;
@@ -4331,12 +4878,15 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
                 children_added += 1;
             }
         }
-        
+
         // If we still didn't fill the population, randomize the rest
         let mut randomized_added = 0;
         while next_gen.len() < pop_size {
             let base_idx = selection_pool[0].0;
-            let mut ind = Individual::new(randomize_config(&self.population[base_idx].config, rng), 0.0);
+            let mut ind = Individual::new(
+                randomize_config(&self.population[base_idx].config, rng),
+                0.0,
+            );
             // Randomize rates for new random individuals too
             ind.mutation_rate = rng.random_range(0.01..0.2);
             ind.crossover_rate = rng.random_range(0.4..0.9);
@@ -4344,8 +4894,13 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
             randomized_added += 1;
         }
 
-        nm_log!("[info] Evolved generation {}: {} elites, {} children, {} randomized", 
-            self.generation + 1, elites_added, children_added, randomized_added);
+        nm_log!(
+            "[info] Evolved generation {}: {} elites, {} children, {} randomized",
+            self.generation + 1,
+            elites_added,
+            children_added,
+            randomized_added
+        );
 
         self.population = next_gen;
         if self.force_morphology {
@@ -4357,12 +4912,19 @@ pub fn evaluate_individual(config: &NetworkConfig, sim_time_ms: f64, seed: u64) 
     }
 
     pub fn add_to_leaderboard(&mut self, ind: Individual) {
-        if ind.fitness <= 0.0 { return; }
+        if ind.fitness <= 0.0 {
+            return;
+        }
         self.leaderboard.push(ind);
-        self.leaderboard.sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap_or(std::cmp::Ordering::Equal));
-        self.leaderboard.dedup_by(|a, b| (a.fitness - b.fitness).abs() < 1e-9);
+        self.leaderboard.sort_by(|a, b| {
+            b.fitness
+                .partial_cmp(&a.fitness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        self.leaderboard
+            .dedup_by(|a, b| (a.fitness - b.fitness).abs() < 1e-9);
         self.leaderboard.truncate(10);
-        
+
         if let Some(best) = self.leaderboard.first() {
             if best.fitness > self.best_fitness {
                 self.best_fitness = best.fitness;
@@ -4412,8 +4974,14 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.max_layers = rng.random_range(1..=10);
     cfg.layer_split_threshold = rng.random_range(1..=256);
     let min_total = min_total_neurons(&cfg);
-    let max_total = min_total.saturating_mul(20).max(min_total.saturating_add(16));
-    cfg.max_total_neurons = if rng.random_bool(0.2) { 0 } else { rng.random_range(min_total..=max_total) };
+    let max_total = min_total
+        .saturating_mul(20)
+        .max(min_total.saturating_add(16));
+    cfg.max_total_neurons = if rng.random_bool(0.2) {
+        0
+    } else {
+        rng.random_range(min_total..=max_total)
+    };
     cfg.p_in = rng.random_range(0.05..0.5);
     cfg.p_hidden = rng.random_range(0.01..0.3);
     cfg.p_out = rng.random_range(0.05..0.5);
@@ -4433,7 +5001,7 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.use_aarnn_delays = rng.random_bool(0.7);
     cfg.bouton_latency_ms = rng.random_range(0.0..20.0);
     cfg.bouton_jitter_ms = rng.random_range(0.0..10.0);
-    
+
     // Geometry
     cfg.enforce_unique_geometry = rng.random_bool(0.8);
     cfg.min_node_sep = rng.random_range(0.005..0.1);
@@ -4445,7 +5013,7 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.seg_eps = rng.random_range(0.0005..0.01);
     cfg.max_reroute_tries = rng.random_range(1..=16);
     cfg.use_mid_bends = rng.random_bool(0.7);
-    
+
     // Morphology growth
     cfg.morpho_growth_enabled = rng.random_bool(0.8);
     cfg.trunk_growth_rate = rng.random_range(0.0001..0.5);
@@ -4544,7 +5112,7 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.aarnn_bio.dopamine_gain = rng.random_range(0.1..3.0);
     cfg.aarnn_bio.acetylcholine_gain = rng.random_range(0.1..3.0);
     cfg.aarnn_bio.serotonin_gain = rng.random_range(0.1..3.0);
-    
+
     // Stability & Search optimization parameters
     cfg.component_pruning_threshold = rng.random_range(0.001..0.2);
     cfg.initial_synaptic_weight = rng.random_range(0.001..0.5);
@@ -4559,13 +5127,13 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
         cfg.max_layers = cfg.num_hidden_layers;
     }
     sanitize_io_layers(&mut cfg);
-    
+
     cfg
 }
 
 fn crossover(p1: &NetworkConfig, p2: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     let mut child = p1.clone();
-    
+
     macro_rules! crossover_field {
         ($field:ident) => {
             if rng.random_bool(0.5) {
@@ -4697,29 +5265,75 @@ fn crossover(p1: &NetworkConfig, p2: &NetworkConfig, rng: &mut StdRng) -> Networ
     crossover_field!(max_output_connections);
     crossover_field!(aarnn_layer_depth);
     crossover_field!(use_morphology);
-    if rng.random_bool(0.5) { child.aarnn_bio.izh_preset = p2.aarnn_bio.izh_preset.clone(); }
-    if rng.random_bool(0.5) { child.aarnn_bio.stp_enabled = p2.aarnn_bio.stp_enabled; }
-    if rng.random_bool(0.5) { child.aarnn_bio.stp_u = p2.aarnn_bio.stp_u; }
-    if rng.random_bool(0.5) { child.aarnn_bio.stp_tau_rec_ms = p2.aarnn_bio.stp_tau_rec_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.stp_tau_facil_ms = p2.aarnn_bio.stp_tau_facil_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.ampa_tau_ms = p2.aarnn_bio.ampa_tau_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.nmda_tau_ms = p2.aarnn_bio.nmda_tau_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.gaba_tau_ms = p2.aarnn_bio.gaba_tau_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.nmda_ratio = p2.aarnn_bio.nmda_ratio; }
-    if rng.random_bool(0.5) { child.aarnn_bio.synaptic_gain = p2.aarnn_bio.synaptic_gain; }
-    if rng.random_bool(0.5) { child.aarnn_bio.adaptive_threshold_enabled = p2.aarnn_bio.adaptive_threshold_enabled; }
-    if rng.random_bool(0.5) { child.aarnn_bio.adaptive_threshold_tau_ms = p2.aarnn_bio.adaptive_threshold_tau_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.adaptive_threshold_increment = p2.aarnn_bio.adaptive_threshold_increment; }
-    if rng.random_bool(0.5) { child.aarnn_bio.adaptive_threshold_min = p2.aarnn_bio.adaptive_threshold_min; }
-    if rng.random_bool(0.5) { child.aarnn_bio.adaptive_threshold_max = p2.aarnn_bio.adaptive_threshold_max; }
-    if rng.random_bool(0.5) { child.aarnn_bio.izh_refractory_ms = p2.aarnn_bio.izh_refractory_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.homeostasis_target_rate_hz = p2.aarnn_bio.homeostasis_target_rate_hz; }
-    if rng.random_bool(0.5) { child.aarnn_bio.homeostasis_tau_ms = p2.aarnn_bio.homeostasis_tau_ms; }
-    if rng.random_bool(0.5) { child.aarnn_bio.homeostasis_gain = p2.aarnn_bio.homeostasis_gain; }
-    if rng.random_bool(0.5) { child.aarnn_bio.neuromodulation_enabled = p2.aarnn_bio.neuromodulation_enabled; }
-    if rng.random_bool(0.5) { child.aarnn_bio.dopamine_gain = p2.aarnn_bio.dopamine_gain; }
-    if rng.random_bool(0.5) { child.aarnn_bio.acetylcholine_gain = p2.aarnn_bio.acetylcholine_gain; }
-    if rng.random_bool(0.5) { child.aarnn_bio.serotonin_gain = p2.aarnn_bio.serotonin_gain; }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.izh_preset = p2.aarnn_bio.izh_preset.clone();
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.stp_enabled = p2.aarnn_bio.stp_enabled;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.stp_u = p2.aarnn_bio.stp_u;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.stp_tau_rec_ms = p2.aarnn_bio.stp_tau_rec_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.stp_tau_facil_ms = p2.aarnn_bio.stp_tau_facil_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.ampa_tau_ms = p2.aarnn_bio.ampa_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.nmda_tau_ms = p2.aarnn_bio.nmda_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.gaba_tau_ms = p2.aarnn_bio.gaba_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.nmda_ratio = p2.aarnn_bio.nmda_ratio;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.synaptic_gain = p2.aarnn_bio.synaptic_gain;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.adaptive_threshold_enabled = p2.aarnn_bio.adaptive_threshold_enabled;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.adaptive_threshold_tau_ms = p2.aarnn_bio.adaptive_threshold_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.adaptive_threshold_increment = p2.aarnn_bio.adaptive_threshold_increment;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.adaptive_threshold_min = p2.aarnn_bio.adaptive_threshold_min;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.adaptive_threshold_max = p2.aarnn_bio.adaptive_threshold_max;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.izh_refractory_ms = p2.aarnn_bio.izh_refractory_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.homeostasis_target_rate_hz = p2.aarnn_bio.homeostasis_target_rate_hz;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.homeostasis_tau_ms = p2.aarnn_bio.homeostasis_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.homeostasis_gain = p2.aarnn_bio.homeostasis_gain;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.neuromodulation_enabled = p2.aarnn_bio.neuromodulation_enabled;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dopamine_gain = p2.aarnn_bio.dopamine_gain;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.acetylcholine_gain = p2.aarnn_bio.acetylcholine_gain;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.serotonin_gain = p2.aarnn_bio.serotonin_gain;
+    }
 
     if child.max_layers < child.num_hidden_layers {
         child.max_layers = child.num_hidden_layers;
@@ -4743,7 +5357,10 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(p_in, 0.05..0.5);
     mutate_field!(p_hidden, 0.01..0.3);
     mutate_field!(p_out, 0.05..0.5);
-    if rng.random_bool(rate) { cfg.growth_enabled = rng.random_bool(0.8); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.growth_enabled = rng.random_bool(0.8);
+        changed = true;
+    }
     mutate_field!(num_hidden_layers, 2..=6);
     mutate_field!(num_hidden_per_layer_initial, 2..=64);
     mutate_field!(max_layers, 1..=10);
@@ -4771,8 +5388,14 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(layer_split_threshold, 1..=256);
     if rng.random_bool(rate) {
         let min_total = min_total_neurons(cfg);
-        let max_total = min_total.saturating_mul(20).max(min_total.saturating_add(16));
-        cfg.max_total_neurons = if rng.random_bool(0.2) { 0 } else { rng.random_range(min_total..=max_total) };
+        let max_total = min_total
+            .saturating_mul(20)
+            .max(min_total.saturating_add(16));
+        cfg.max_total_neurons = if rng.random_bool(0.2) {
+            0
+        } else {
+            rng.random_range(min_total..=max_total)
+        };
         changed = true;
     }
     mutate_field!(saturation_threshold, 0.0..2.0);
@@ -4787,10 +5410,16 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(aarnn_velocity, 0.1..50.0);
     mutate_field!(axon_velocity, 0.0..100.0);
     mutate_field!(dend_velocity, 0.0..100.0);
-    if rng.random_bool(rate) { cfg.use_aarnn_delays = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.use_aarnn_delays = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(bouton_latency_ms, 0.0..20.0);
     mutate_field!(bouton_jitter_ms, 0.0..10.0);
-    if rng.random_bool(rate) { cfg.enforce_unique_geometry = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.enforce_unique_geometry = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(min_node_sep, 0.005..0.1);
     mutate_field!(min_segment_sep, 0.001..0.05);
     mutate_field!(synapse_offset, 0.001..0.05);
@@ -4799,15 +5428,24 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(relax_step, 0.0..0.02);
     mutate_field!(seg_eps, 0.0005..0.01);
     mutate_field!(max_reroute_tries, 1..=16);
-    if rng.random_bool(rate) { cfg.use_mid_bends = rng.random_bool(0.5); changed = true; }
-    if rng.random_bool(rate) { cfg.morpho_growth_enabled = rng.random_bool(0.7); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.use_mid_bends = rng.random_bool(0.5);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.morpho_growth_enabled = rng.random_bool(0.7);
+        changed = true;
+    }
     mutate_field!(trunk_growth_rate, 0.0001..0.5);
     mutate_field!(branch_growth_rate, 0.001..1.0);
     mutate_field!(bouton_growth_rate, 0.005..2.0);
     mutate_field!(max_segment_length, 0.1..2.0);
     mutate_field!(spatial_repulsion_strength, 0.0..0.2);
     mutate_field!(spatial_clumping_strength, 0.0..0.2);
-    if rng.random_bool(rate) { cfg.columnar_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.columnar_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(columnar_spacing, 0.05..1.0);
     mutate_field!(columnar_strength, 0.0..0.1);
     mutate_field!(columnar_jitter, 0.0..1.0);
@@ -4824,9 +5462,18 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(aarnn_neuromod_baseline_dopamine, 0.0..3.0);
     mutate_field!(aarnn_neuromod_baseline_ach, 0.0..3.0);
     mutate_field!(aarnn_neuromod_baseline_serotonin, 0.0..3.0);
-    if rng.random_bool(rate) { cfg.aarnn_neuromod_dopamine_signal = pick_neuromod_signal(rng); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_neuromod_ach_signal = pick_neuromod_signal(rng); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_neuromod_serotonin_signal = pick_neuromod_signal(rng); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.aarnn_neuromod_dopamine_signal = pick_neuromod_signal(rng);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_neuromod_ach_signal = pick_neuromod_signal(rng);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_neuromod_serotonin_signal = pick_neuromod_signal(rng);
+        changed = true;
+    }
     mutate_field!(aarnn_reward_proxy, 0.0..1.0);
     mutate_field!(aarnn_neuromod_decay, 0.0..0.5);
     mutate_field!(aarnn_neuromod_error_gain, 0.0..3.0);
@@ -4846,27 +5493,42 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(component_decay_rate, 0.01..1.0);
     mutate_field!(p_release_default, 0.0..1.0);
     mutate_field!(aarnn_synaptic_energy_randomness, 0.0..1.0);
-    if rng.random_bool(rate) { cfg.perceptual_loop_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.perceptual_loop_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(perceptual_prediction_lr, 0.0..1.0);
     mutate_field!(perceptual_prediction_decay, 0.0..0.5);
     mutate_field!(perceptual_prediction_threshold, 0.0..1.0);
     mutate_field!(perceptual_error_gain, 0.0..20.0);
     mutate_field!(perceptual_feedback_gain, 0.0..1.0);
-    if rng.random_bool(rate) { cfg.world_model_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.world_model_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(world_model_dim, 2..=32);
     mutate_field!(world_model_decay, 0.0..0.5);
-    if rng.random_bool(rate) { cfg.sleep_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.sleep_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(sleep_cycle_ms, 1000.0..600000.0);
     mutate_field!(sleep_duration_ms, 100.0..120000.0);
     mutate_field!(sleep_dream_replay_prob, 0.0..1.0);
     mutate_field!(sleep_dream_threshold, 0.0..1.0);
     mutate_field!(sleep_consolidation_gain, 0.0..1.0);
-    if rng.random_bool(rate) { cfg.theta_rhythm_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.theta_rhythm_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(theta_rhythm_hz, 0.5..12.0);
     mutate_field!(theta_rhythm_duty, 0.05..0.9);
     mutate_field!(theta_rhythm_drive, 0.0..20.0);
     mutate_field!(theta_rhythm_phase_jitter, 0.0..1.0);
-    if rng.random_bool(rate) { cfg.thalamic_gating_enabled = rng.random_bool(0.5); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.thalamic_gating_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
     mutate_field!(thalamic_gate_hz, 0.5..20.0);
     mutate_field!(thalamic_gate_duty, 0.05..0.95);
     mutate_field!(thalamic_gate_floor, 0.0..1.0);
@@ -4881,30 +5543,102 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(max_sensory_connections, 1..=128);
     mutate_field!(max_output_connections, 1..=128);
     mutate_field!(aarnn_layer_depth, 0..=5);
-    if rng.random_bool(rate) { cfg.use_morphology = rng.random_bool(0.7); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.izh_preset = pick_izh_preset(rng); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.stp_enabled = rng.random_bool(0.5); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.stp_u = rng.random_range(0.0..1.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.stp_tau_rec_ms = rng.random_range(10.0..5000.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.stp_tau_facil_ms = rng.random_range(10.0..2000.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.ampa_tau_ms = rng.random_range(1.0..50.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.nmda_tau_ms = rng.random_range(10.0..300.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.gaba_tau_ms = rng.random_range(1.0..50.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.nmda_ratio = rng.random_range(0.0..1.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.synaptic_gain = rng.random_range(0.1..5.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.adaptive_threshold_enabled = rng.random_bool(0.5); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.adaptive_threshold_tau_ms = rng.random_range(10.0..1000.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.adaptive_threshold_increment = rng.random_range(0.0..5.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.adaptive_threshold_min = rng.random_range(-5.0..0.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.adaptive_threshold_max = rng.random_range(0.0..10.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.izh_refractory_ms = rng.random_range(0.0..10.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.homeostasis_target_rate_hz = rng.random_range(0.0..20.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.homeostasis_tau_ms = rng.random_range(100.0..10000.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.homeostasis_gain = rng.random_range(0.0..5.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.neuromodulation_enabled = rng.random_bool(0.5); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.dopamine_gain = rng.random_range(0.1..3.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.acetylcholine_gain = rng.random_range(0.1..3.0); changed = true; }
-    if rng.random_bool(rate) { cfg.aarnn_bio.serotonin_gain = rng.random_range(0.1..3.0); changed = true; }
+    if rng.random_bool(rate) {
+        cfg.use_morphology = rng.random_bool(0.7);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.izh_preset = pick_izh_preset(rng);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.stp_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.stp_u = rng.random_range(0.0..1.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.stp_tau_rec_ms = rng.random_range(10.0..5000.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.stp_tau_facil_ms = rng.random_range(10.0..2000.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.ampa_tau_ms = rng.random_range(1.0..50.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.nmda_tau_ms = rng.random_range(10.0..300.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.gaba_tau_ms = rng.random_range(1.0..50.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.nmda_ratio = rng.random_range(0.0..1.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.synaptic_gain = rng.random_range(0.1..5.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.adaptive_threshold_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.adaptive_threshold_tau_ms = rng.random_range(10.0..1000.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.adaptive_threshold_increment = rng.random_range(0.0..5.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.adaptive_threshold_min = rng.random_range(-5.0..0.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.adaptive_threshold_max = rng.random_range(0.0..10.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.izh_refractory_ms = rng.random_range(0.0..10.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.homeostasis_target_rate_hz = rng.random_range(0.0..20.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.homeostasis_tau_ms = rng.random_range(100.0..10000.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.homeostasis_gain = rng.random_range(0.0..5.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.neuromodulation_enabled = rng.random_bool(0.5);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dopamine_gain = rng.random_range(0.1..3.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.acetylcholine_gain = rng.random_range(0.1..3.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.serotonin_gain = rng.random_range(0.1..3.0);
+        changed = true;
+    }
 
     // Force at least one change if none happened by chance
     if !changed {
@@ -4927,22 +5661,22 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let base_cfg = NetworkConfig::default();
         let pop_size = 10;
-        
+
         // Test fresh start
         let ga_fresh = GASearch::new(pop_size, &base_cfg, &mut rng, None, false, Vec::new());
         assert_eq!(ga_fresh.population.len(), pop_size);
         // AARNN fresh run should always include the current configuration.
         assert_eq!(ga_fresh.population[0].config, base_cfg);
-        
+
         // Test restart
         let mut best_cfg = base_cfg.clone();
         best_cfg.p_in = 0.99; // Set a distinctive value
         let ga_restart = GASearch::new(pop_size, &best_cfg, &mut rng, None, true, Vec::new());
-        
+
         assert_eq!(ga_restart.population.len(), pop_size);
         // First individual must be exactly best_cfg
         assert_eq!(ga_restart.population[0].config.p_in, 0.99);
-        
+
         // Others should be mutated from best_cfg, but many fields should remain 0.99
         let mut same_p_in_count = 0;
         for i in 1..pop_size {
@@ -4959,25 +5693,25 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let base_cfg = NetworkConfig::default();
         let mut ga = GASearch::new(5, &base_cfg, &mut rng, None, false, Vec::new());
-        
+
         let mut ind = Individual::new(base_cfg.clone(), 0.85);
         ind.config.p_in = 0.123;
-        
+
         ga.add_to_leaderboard(ind);
         assert_eq!(ga.leaderboard.len(), 1);
         assert_eq!(ga.best_fitness, 0.85);
-        
+
         let temp_path = "test_leaderboard.json";
         ga.save_leaderboard(temp_path).unwrap();
-        
+
         let mut ga2 = GASearch::new(5, &base_cfg, &mut rng, None, false, Vec::new());
         ga2.load_leaderboard(temp_path).unwrap();
-        
+
         assert_eq!(ga2.leaderboard.len(), 1);
         assert_eq!(ga2.leaderboard[0].fitness, 0.85);
         assert_eq!(ga2.leaderboard[0].config.p_in, 0.123);
         assert_eq!(ga2.best_fitness, 0.85);
-        
+
         std::fs::remove_file(temp_path).unwrap();
     }
 
@@ -5027,7 +5761,7 @@ mod tests {
         p1.p_in = 0.1;
         let mut p2 = NetworkConfig::default();
         p2.p_in = 0.9;
-        
+
         let child = crossover(&p1, &p2, &mut rng);
         assert!(child.p_in == 0.1 || child.p_in == 0.9);
     }

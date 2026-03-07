@@ -22,53 +22,78 @@
 #[cfg(feature = "ui")]
 use eframe::{egui, egui::vec2};
 
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::aer::decode_events;
 #[cfg(feature = "ui")]
-use crate::config::{IzhikevichParams, LIFParams, STDPParams, NetworkConfig, ClumpingDesign, NeuromodSignal, apply_aarnn_human_biomimicry_defaults, apply_clumping_design};
-use crate::sim::{NeuronModel, Learning};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use crate::config::{
+    apply_aarnn_human_biomimicry_defaults, apply_clumping_design, ClumpingDesign, IzhikevichParams,
+    LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
+};
 #[cfg(feature = "ui")]
-use tonic::Request;
-#[cfg(feature = "ui")]
-use crate::runner::Runner;
-use crate::providers::{SensoryProvider, RandomProvider, ThetaProvider, AudioFileProvider, MicrophoneProvider};
+use crate::distributed::{
+    proto::{
+        control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        NetworkSnapshotRequest, NetworkStatus, NodeStatus, StatusRequest,
+    },
+    DistributedNode, ManagedNetwork,
+};
+use crate::ga::GASearch;
 #[cfg(all(feature = "ui", feature = "image_input"))]
 use crate::providers::ImageFileProvider;
 #[cfg(all(feature = "ui", feature = "video_input"))]
 use crate::providers::VideoFileProvider;
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 use crate::providers::WebcamCaptureProvider;
-#[cfg(feature = "sysinfo")]
-use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
+use crate::providers::{
+    AudioFileProvider, MicrophoneProvider, RandomProvider, SensoryProvider, ThetaProvider,
+};
 #[cfg(feature = "ui")]
-use crate::distributed::{DistributedNode, ManagedNetwork, proto::{control_update, NodeStatus, NetworkStatus, StatusRequest, NetworkSnapshotRequest, distributed_neuromorphic_client::DistributedNeuromorphicClient}};
-use crate::ga::GASearch;
+use crate::runner::Runner;
+use crate::sim::{Learning, NeuronModel};
+use crate::stimuli::{AerIoConfig, AerLink};
 use rand::SeedableRng;
 use std::collections::HashMap;
-use crate::stimuli::{AerIoConfig, AerLink};
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-use crate::aer::decode_events;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+#[cfg(feature = "sysinfo")]
+use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
+use tokio::sync::RwLock;
+#[cfg(feature = "ui")]
+use tonic::Request;
 
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use std::os::unix::net::UnixDatagram;
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-use std::path::{PathBuf};
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-use crate::bridge::{Quantizer, IoMapping};
+use std::path::PathBuf;
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-#[derive(serde::Deserialize, Clone)]
+#[derive(serde::Deserialize, Clone, PartialEq)]
 struct IpcHandshake {
+    #[serde(default)]
     s_names: Vec<String>,
+    #[serde(default)]
     o_names: Vec<String>,
     #[serde(default)]
     reward_name: Option<String>,
+    #[serde(default)]
+    sensory: Option<usize>,
+    #[serde(default)]
+    output: Option<usize>,
+    #[serde(default)]
+    expected_s: Option<usize>,
+    #[serde(default)]
+    expected_o: Option<usize>,
+    #[serde(default)]
+    num_sensory_neurons: Option<usize>,
+    #[serde(default)]
+    num_output_neurons: Option<usize>,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 enum IpcEvent {
-    Data(f32, f32, Option<String>), // t_ms, reward, peer_path
+    Data(f32, f32, Option<String>),       // t_ms, reward, peer_path
     Config(IpcHandshake, Option<String>), // handshake, peer_path
 }
 
@@ -92,7 +117,13 @@ struct IpcUdsServer {
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 impl IpcUdsServer {
-    fn bind(path: &str, s: usize, o: usize, aer_sensory_base: u32, aer_output_base: u32) -> std::io::Result<Self> {
+    fn bind(
+        path: &str,
+        s: usize,
+        o: usize,
+        aer_sensory_base: u32,
+        aer_output_base: u32,
+    ) -> std::io::Result<Self> {
         let _ = std::fs::remove_file(path);
         let sock = UnixDatagram::bind(path)?;
         sock.set_nonblocking(true)?;
@@ -116,25 +147,47 @@ impl IpcUdsServer {
         loop {
             match self.sock.recv_from(&mut self.req_buf) {
                 Ok((n, addr)) => {
-                    if n == 0 { continue; }
+                    if n == 0 {
+                        continue;
+                    }
                     if n > 0 && self.req_buf[0] == b'{' {
                         match serde_json::from_slice::<IpcHandshake>(&self.req_buf[..n]) {
                             Ok(hs) => {
                                 self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                                let peer_str = self.last_peer.as_ref().map(|p| p.to_string_lossy().to_string());
+                                nm_err!(
+                                    "[IpcUdsServer] Handshake received S_names={} O_names={}",
+                                    hs.s_names.len(),
+                                    hs.o_names.len()
+                                );
+                                self.send_size_hint_to_last_peer();
+                                let peer_str = self
+                                    .last_peer
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string());
                                 return Some(IpcEvent::Config(hs, peer_str));
                             }
-                            Err(_) => { continue; }
+                            Err(err) => {
+                                nm_err!("[IpcUdsServer] Handshake parse failed: {}", err);
+                                self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                                continue;
+                            }
                         }
                     }
                     if n >= 4 && &self.req_buf[..4] == b"AER1" {
                         self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                        let peer_str = self.last_peer.as_ref().map(|p| p.to_string_lossy().to_string());
-                        for v in dst_inputs.iter_mut() { *v = 0.0; }
+                        let peer_str = self
+                            .last_peer
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string());
+                        for v in dst_inputs.iter_mut() {
+                            *v = 0.0;
+                        }
                         match decode_events(&self.req_buf[..n]) {
                             Ok(events) => {
                                 for ev in events {
-                                    if ev.value == 0 { continue; }
+                                    if ev.value == 0 {
+                                        continue;
+                                    }
                                     let idx = if ev.addr >= self.aer_sensory_base {
                                         (ev.addr - self.aer_sensory_base) as usize
                                     } else {
@@ -148,13 +201,17 @@ impl IpcUdsServer {
                             }
                             Err(_) => {
                                 self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                                self.send_size_hint_to_addr(&addr);
                                 continue;
                             }
                         }
                     }
                     if n == need_data || n == need_data_reward {
                         self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                        let peer_str = self.last_peer.as_ref().map(|p| p.to_string_lossy().to_string());
+                        let peer_str = self
+                            .last_peer
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string());
                         self.total_received = self.total_received.saturating_add(1);
                         let mut rdr = &self.req_buf[..];
                         let read_f32 = |bytes: &mut &[u8]| -> f32 {
@@ -166,15 +223,24 @@ impl IpcUdsServer {
                         for i in 0..self.s.min(dst_inputs.len()) {
                             dst_inputs[i] = read_f32(&mut rdr);
                         }
-                        let reward = if n == need_data_reward { read_f32(&mut rdr) } else { 0.0 };
+                        let reward = if n == need_data_reward {
+                            read_f32(&mut rdr)
+                        } else {
+                            0.0
+                        };
                         return Some(IpcEvent::Data(t_ms, reward, peer_str));
                     } else {
                         self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                        self.send_size_hint_to_addr(&addr);
                         continue;
                     }
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => { return None; }
-                Err(_) => { return None; }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return None;
+                }
+                Err(_) => {
+                    return None;
+                }
             }
         }
     }
@@ -182,17 +248,63 @@ impl IpcUdsServer {
     fn send_outputs(&mut self, outputs: &[f32]) -> std::io::Result<()> {
         if let Some(ref peer) = self.last_peer {
             let mut buf = Vec::with_capacity(outputs.len() * 4);
-            for &v in outputs { buf.extend_from_slice(&v.to_le_bytes()); }
+            for &v in outputs {
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
             let _ = self.sock.send_to(&buf, peer);
         }
         Ok(())
     }
+    fn send_size_hint_to_last_peer(&self) {
+        if let Some(ref peer) = self.last_peer {
+            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            if let Err(e) = self.sock.send_to(hint.as_bytes(), peer) {
+                nm_err!("[IpcUdsServer] Failed to send size hint to peer {:?}: {}", peer, e);
+            }
+        }
+    }
+    fn send_size_hint_to_addr(&self, addr: &std::os::unix::net::SocketAddr) {
+        if let Some(path) = addr.as_pathname() {
+            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            if let Err(e) = self.sock.send_to(hint.as_bytes(), path) {
+                nm_err!("[IpcUdsServer] Failed to send size hint to addr {:?}: {}", path, e);
+            }
+        }
+    }
     #[allow(dead_code)]
     fn stop(&mut self) {}
     #[allow(dead_code)]
-    fn take_recent_drops(&mut self) -> u64 { let d = self.recent_drops; self.recent_drops = 0; d }
+    fn take_recent_drops(&mut self) -> u64 {
+        let d = self.recent_drops;
+        self.recent_drops = 0;
+        d
+    }
     #[allow(dead_code)]
-    fn take_recent_mismatches(&mut self) -> u64 { let m = self.recent_mismatches; self.recent_mismatches = 0; m }
+    fn take_recent_mismatches(&mut self) -> u64 {
+        let m = self.recent_mismatches;
+        self.recent_mismatches = 0;
+        m
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+fn resolve_ipc_handshake_sizes(handshake: &IpcHandshake, fallback_s: usize, fallback_o: usize) -> (usize, usize) {
+    let from_names_s = (!handshake.s_names.is_empty()).then_some(handshake.s_names.len());
+    let from_names_o = (!handshake.o_names.is_empty()).then_some(handshake.o_names.len());
+
+    let sensory = from_names_s
+        .or(handshake.sensory)
+        .or(handshake.expected_s)
+        .or(handshake.num_sensory_neurons)
+        .unwrap_or(fallback_s)
+        .max(1);
+    let output = from_names_o
+        .or(handshake.output)
+        .or(handshake.expected_o)
+        .or(handshake.num_output_neurons)
+        .unwrap_or(fallback_o)
+        .max(1);
+    (sensory, output)
 }
 
 #[cfg(all(feature = "ui", feature = "morpho", feature = "growth3d"))]
@@ -253,16 +365,18 @@ pub fn launch_ui(
     if let Err(e) = eframe::run_native(
         &format!("Neuromorphic Network - {}", brain_id),
         native_options,
-        Box::new(move |_cc| Ok(Box::new(App::new(
-            net_cfg,
-            brain_id,
-            ipc_enabled,
-            distributed_node,
-            remote_only,
-            startup_snapshot_json,
-            aer_cfg,
-            runtime_handle,
-        )))),
+        Box::new(move |_cc| {
+            Ok(Box::new(App::new(
+                net_cfg,
+                brain_id,
+                ipc_enabled,
+                distributed_node,
+                remote_only,
+                startup_snapshot_json,
+                aer_cfg,
+                runtime_handle,
+            )))
+        }),
     ) {
         return Err(anyhow::anyhow!(e.to_string()));
     }
@@ -286,6 +400,8 @@ struct IpcStats {
     last_peer: Option<String>,
     last_receive_time: Option<std::time::Instant>,
     last_steps: usize,
+    #[cfg(all(feature = "robot_io", unix))]
+    last_handshake: Option<IpcHandshake>,
 }
 
 #[cfg(feature = "sysinfo")]
@@ -377,7 +493,13 @@ enum SimControl {
     SetDt(f64),
     ResizeSensory(usize),
     ResizeOutput(usize),
-    RecreateRunner(crate::config::LIFParams, crate::config::STDPParams, crate::config::NetworkConfig, NeuronModel, Learning),
+    RecreateRunner(
+        crate::config::LIFParams,
+        crate::config::STDPParams,
+        crate::config::NetworkConfig,
+        NeuronModel,
+        Learning,
+    ),
     ImportNetwork(String),
     ImportNetworkWithReply(String, std::sync::mpsc::Sender<Result<(), String>>),
     SetStdpEta(f64),
@@ -457,7 +579,14 @@ struct EdgeCacheResult {
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum ImportKind { Standard, Tflite, Onnx, NeuroML, PyNN, Nir }
+enum ImportKind {
+    Standard,
+    Tflite,
+    Onnx,
+    NeuroML,
+    PyNN,
+    Nir,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, Debug)]
@@ -573,6 +702,7 @@ struct App {
     cam_running: bool,
     // EQ state (smoothed)
     smoothed_equalizer_values: Vec<f32>,
+    output_count: usize,
     // Network view cache
     last_rendered_panel_size: egui::Vec2,
     sensory_positions: Vec<egui::Pos2>,
@@ -617,7 +747,17 @@ struct App {
     #[cfg(feature = "growth3d")]
     cam_pivot_world: (f32, f32, f32),
     #[cfg(feature = "growth3d")]
+    cam_pivot_pid: UiPid3State,
+    #[cfg(feature = "growth3d")]
+    topo_pid_sensory: Vec<UiPid2State>,
+    #[cfg(feature = "growth3d")]
+    topo_pid_hidden: Vec<Vec<UiPid2State>>,
+    #[cfg(feature = "growth3d")]
+    topo_pid_output: Vec<UiPid2State>,
+    #[cfg(feature = "growth3d")]
     region_label_states: crate::morphology::FastHashMap<String, egui::Pos2>,
+    #[cfg(feature = "growth3d")]
+    region_label_target_states: crate::morphology::FastHashMap<String, egui::Pos2>,
     // Morphology overlays (optional)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     show_morpho_overlays: bool,
@@ -831,13 +971,23 @@ impl App {
     }
 
     fn log_ui_memory_snapshot(&self, reason: &str) {
-        let cached_edges_bytes = (self.cached_edges.len() * std::mem::size_of::<CachedEdge>()) as u64;
+        let cached_edges_bytes =
+            (self.cached_edges.len() * std::mem::size_of::<CachedEdge>()) as u64;
         let edge_shapes_bytes = (self.edge_shapes.len() * std::mem::size_of::<EdgeVisual>()) as u64;
         let raster_bytes: u64 = self.raster_outputs.iter().map(|v| v.len() as u64).sum();
         let sensory_bytes = self.sensory_activity.len() as u64 * std::mem::size_of::<f32>() as u64;
-        let hidden_bytes: u64 = self.hidden_activity.iter().map(|v| v.len() as u64).sum::<u64>() * std::mem::size_of::<f32>() as u64;
+        let hidden_bytes: u64 = self
+            .hidden_activity
+            .iter()
+            .map(|v| v.len() as u64)
+            .sum::<u64>()
+            * std::mem::size_of::<f32>() as u64;
         let output_bytes = self.output_activity.len() as u64 * std::mem::size_of::<f32>() as u64;
-        let prev_hidden_bytes: u64 = self.previous_hidden_spikes.iter().map(|v| v.len() as u64).sum();
+        let prev_hidden_bytes: u64 = self
+            .previous_hidden_spikes
+            .iter()
+            .map(|v| v.len() as u64)
+            .sum();
         let last_sensory_bytes = self.last_sensory_spikes.len() as u64;
         nm_err!(
             "[warn] UI mem snapshot ({}): cached_edges={} (~{}MB) edge_shapes={} (~{}MB) raster_cols={} raster_bytes~{}MB activity_bytes~{}MB prev_hidden_bytes~{}MB last_sensory_bytes~{}MB.",
@@ -854,7 +1004,8 @@ impl App {
         );
         if let Ok(r) = self.runner.try_read() {
             let total_neurons = r.total_neurons();
-            let total_conn = r.connection_counts().iter().sum::<usize>() + r.output_connection_count();
+            let total_conn =
+                r.connection_counts().iter().sum::<usize>() + r.output_connection_count();
             nm_err!(
                 "[warn] UI mem snapshot ({}): runner neurons {} conns {} layers {} hidden_per_layer {}.",
                 reason,
@@ -864,6 +1015,17 @@ impl App {
                 r.net.num_hidden_per_layer_initial
             );
         }
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn reset_topology_pid_states(&mut self) {
+        self.cam_pivot_pid = UiPid3State::default();
+        self.topo_pid_sensory.clear();
+        self.topo_pid_hidden.clear();
+        self.topo_pid_output.clear();
+        self.region_label_states.clear();
+        self.region_label_target_states.clear();
+        self.region_label_positions.clear();
     }
 
     fn clear_ui_caches(&mut self) {
@@ -877,6 +1039,7 @@ impl App {
         #[cfg(feature = "growth3d")]
         {
             self.cached_edge_topo = None;
+            self.reset_topology_pid_states();
         }
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
@@ -900,7 +1063,11 @@ impl App {
     }
 
     fn reap_finished_ga_thread(&mut self) {
-        let finished = self.ga_thread.as_ref().map(|h| h.is_finished()).unwrap_or(false);
+        let finished = self
+            .ga_thread
+            .as_ref()
+            .map(|h| h.is_finished())
+            .unwrap_or(false);
         if finished {
             if let Some(handle) = self.ga_thread.take() {
                 let _ = handle.join();
@@ -910,15 +1077,24 @@ impl App {
     /// Display layer/connection summary including longterm connections
     #[allow(dead_code)]
     fn show_layer_connection_summary(&self, ui: &mut egui::Ui) {
-            ui.label(format!("Longterm connections: {} / {} ({:.2}%)",
-                self.longterm_conn,
-                self.total_conn,
-                if self.total_conn > 0 { 100.0 * (self.longterm_conn as f64) / (self.total_conn as f64) } else { 0.0 }
-            ));
-            // TODO: Add more layer/connection summary info here as needed
-        }
+        ui.label(format!(
+            "Longterm connections: {} / {} ({:.2}%)",
+            self.longterm_conn,
+            self.total_conn,
+            if self.total_conn > 0 {
+                100.0 * (self.longterm_conn as f64) / (self.total_conn as f64)
+            } else {
+                0.0
+            }
+        ));
+        // TODO: Add more layer/connection summary info here as needed
+    }
     #[allow(dead_code)]
-    fn get_incoming_synapses(&self, runner: &Runner, pick: ContextPick) -> Vec<(isize, usize, usize)> {
+    fn get_incoming_synapses(
+        &self,
+        runner: &Runner,
+        pick: ContextPick,
+    ) -> Vec<(isize, usize, usize)> {
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
             let mut res = Vec::new();
@@ -1048,7 +1224,8 @@ impl App {
         let sim_throttle_ms = Arc::new(AtomicU32::new(0));
         let (tool_task_tx, tool_task_rx) = std::sync::mpsc::channel::<ToolTaskResult>();
         let (edge_cache_res_tx, edge_cache_rx) = std::sync::mpsc::channel::<EdgeCacheResult>();
-        let (cluster_snapshot_tx, cluster_snapshot_rx) = std::sync::mpsc::channel::<ClusterSnapshotMsg>();
+        let (cluster_snapshot_tx, cluster_snapshot_rx) =
+            std::sync::mpsc::channel::<ClusterSnapshotMsg>();
         let ipc_stats = Arc::new(RwLock::new(IpcStats {
             connected: false,
             frame_count: 0,
@@ -1057,8 +1234,10 @@ impl App {
             last_peer: None,
             last_receive_time: None,
             last_steps: 0,
+            #[cfg(all(feature = "robot_io", unix))]
+            last_handshake: None,
         }));
-        
+
         let sim_runner = runner.clone();
         let sim_playing = playing_atomic.clone();
         let sim_spectral = spectral_bands.clone();
@@ -1096,323 +1275,427 @@ impl App {
             .clamp(100, 10_000);
         #[cfg(all(feature = "robot_io", unix))]
         let sim_ipc_stats = ipc_stats.clone();
-        let mut sim_provider: Box<dyn SensoryProvider + Send> = Box::new(RandomProvider::new(n_s, 0.02));
+        let mut sim_provider: Box<dyn SensoryProvider + Send> =
+            Box::new(RandomProvider::new(n_s, 0.02));
         let ipc_aer_cfg = aer_cfg.clone().unwrap_or_default();
         let ipc_aer_sensory_base = ipc_aer_cfg.sensory_base;
         let ipc_aer_output_base = ipc_aer_cfg.output_base;
         let mut aer_link = aer_cfg.and_then(|cfg| AerLink::bind(cfg).ok());
-        
+
         #[cfg(all(feature = "robot_io", unix))]
         let mut sim_ipc_server: Option<IpcUdsServer> = None;
 
-        std::thread::Builder::new().name("simulation".into()).spawn(move || {
-            // Keep simulation controller thread unpinned so the scheduler can
-            // spread its control-path load instead of concentrating it on one core.
-            loop {
-                // 1. Process all pending control messages
-                while let Ok(msg) = sim_rx.try_recv() {
-                    match msg {
-                        SimControl::SetPlaying(p) => { sim_playing.store(p, Ordering::SeqCst); }
-                        SimControl::SetProvider(p) => { 
-                            sim_provider.stop();
-                            sim_provider = p;
-                            if let Ok(r) = sim_runner.try_read() {
-                                sim_provider.set_dt(r.lif.dt as f32);
+        std::thread::Builder::new()
+            .name("simulation".into())
+            .spawn(move || {
+                // Keep simulation controller thread unpinned so the scheduler can
+                // spread its control-path load instead of concentrating it on one core.
+                loop {
+                    // 1. Process all pending control messages
+                    while let Ok(msg) = sim_rx.try_recv() {
+                        match msg {
+                            SimControl::SetPlaying(p) => {
+                                sim_playing.store(p, Ordering::SeqCst);
                             }
-                        }
-                        SimControl::ApplyConfig(cfg) => { sim_runner.blocking_write().apply_config(cfg); }
-                        SimControl::SetModel(m) => { sim_runner.blocking_write().set_model(m); }
-                        SimControl::SetLearning(l) => { sim_runner.blocking_write().set_learning(l); }
-                        SimControl::Reset => { sim_runner.blocking_write().reset(); }
-                        SimControl::SetDt(dt) => {
-                            sim_runner.blocking_write().set_dt(dt);
-                            sim_provider.set_dt(dt as f32);
-                        }
-                        SimControl::ResizeSensory(n) => {
-                            sim_runner.blocking_write().resize_sensory(n);
-                            sim_provider.set_num_sensory_neurons(n);
-                        }
-                        SimControl::ResizeOutput(n) => { sim_runner.blocking_write().resize_output(n); }
-                        SimControl::SetFeedback(f) => { sim_runner.blocking_write().feedback_enabled = f; }
-                        SimControl::RecreateRunner(lif, stdp, net, model, learning) => {
-                            *sim_runner.blocking_write() = Runner::new(lif, stdp, net, model, learning);
-                        }
-                        SimControl::ImportNetwork(json) => {
-                            let _ = sim_runner.blocking_write().import_network_json(&json);
-                            if let Ok(r) = sim_runner.try_read() {
-                                sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
-                            }
-                        }
-                        SimControl::ImportNetworkWithReply(json, tx) => {
-                            let res = sim_runner.blocking_write().import_network_json(&json);
-                            if let Ok(ref r) = sim_runner.try_read() {
-                                sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
-                                nm_log!(
-                                    "[import] network apply result: {:?} (S={} H={} O={})",
-                                    res.as_ref().map(|_| ()).map_err(|e| e.to_string()),
-                                    r.net.num_sensory_neurons,
-                                    r.net.num_hidden_layers,
-                                    r.net.num_output_neurons
-                                );
-                            }
-                            let _ = tx.send(res.map_err(|e| e.to_string()));
-                        }
-                        SimControl::SetStdpEta(eta) => {
-                            sim_runner.blocking_write().stdp.eta = eta;
-                        }
-                        #[cfg(all(feature = "robot_io", unix))]
-                        SimControl::BindIpc(path, s, o) => {
-                            match IpcUdsServer::bind(&path, s, o, ipc_aer_sensory_base, ipc_aer_output_base) {
-                                Ok(srv) => { sim_ipc_server = Some(srv); }
-                                Err(_) => { sim_ipc_server = None; }
-                            }
-                        }
-                        SimControl::Shutdown => { return; }
-                        _ => {}
-                    }
-                }
-
-                if sim_remote_only {
-                    std::thread::sleep(std::time::Duration::from_millis(sim_remote_idle_sleep_ms));
-                    continue;
-                }
-
-                if let Some(link) = aer_link.as_mut() {
-                    link.poll();
-                }
-                
-                // 2. Perform simulation step if playing or IPC frame available
-                #[allow(unused_mut)]
-                let mut spikes_source = None;
-                #[allow(unused_mut)]
-                let mut ipc_dt = None;
-                #[allow(unused_mut)]
-                let mut reward_source: Option<f32> = None;
-
-                #[cfg(all(feature = "robot_io", unix))]
-                if let Some(ref mut srv) = sim_ipc_server {
-                    let mut inputs = vec![0.0f32; srv.s];
-                    if let Some(ev) = srv.poll_next_event(&mut inputs) {
-                        match ev {
-                            IpcEvent::Data(t_ms, reward, peer) => {
-                                let mut spk = vec![0i8; srv.s];
-                                for (i, &v) in inputs.iter().enumerate() {
-                                    if v >= 0.5 { spk[i] = 1; }
-                                }
-                                spikes_source = Some(spk);
-                                if t_ms > 0.0 {
-                                    ipc_dt = Some(t_ms as f64);
-                                }
-                                reward_source = Some(reward);
-                                if let Ok(mut stats) = sim_ipc_stats.try_write() {
-                                    stats.connected = true;
-                                    stats.frame_count += 1;
-                                    stats.last_peer = peer; // peer is already Option<String>
-                                    stats.last_receive_time = Some(std::time::Instant::now());
+                            SimControl::SetProvider(p) => {
+                                sim_provider.stop();
+                                sim_provider = p;
+                                if let Ok(r) = sim_runner.try_read() {
+                                    sim_provider.set_dt(r.lif.dt as f32);
                                 }
                             }
-                            IpcEvent::Config(_hs, _peer) => {
-                                // Handshake handling
+                            SimControl::ApplyConfig(cfg) => {
+                                sim_runner.blocking_write().apply_config(cfg);
                             }
-                        }
-                    }
-                }
-
-                if !sim_playing.load(Ordering::SeqCst) && spikes_source.is_none() {
-                    std::thread::sleep(std::time::Duration::from_millis(sim_idle_sleep_ms));
-                    continue;
-                }
-
-                if sim_playing.load(Ordering::SeqCst) || spikes_source.is_some() {
-                    let batch_steps: usize = {
-                        let r = sim_runner.blocking_read();
-                        let many_layers = r.net.num_hidden_layers > 32;
-                        let many_neurons = r.total_neurons() > 5000;
-                        if many_layers || many_neurons { 1 } else { sim_batch_steps }
-                    };
-                    if spikes_source.is_some() || ipc_dt.is_some() {
-                        let spikes = if let Some(s) = spikes_source {
-                            s
-                        } else {
-                            sim_provider.next_spikes()
-                        };
-                        let mut spikes = spikes;
-                        sim_step_counter_thread.fetch_add(1, Ordering::Relaxed);
-                        sim_last_spike_count_thread.store(spikes.iter().filter(|&&v| v != 0).count() as u64, Ordering::Relaxed);
-                        sim_last_spike_len_thread.store(spikes.len() as u64, Ordering::Relaxed);
-                        if let Ok(mut snap) = sim_sensory_snapshot.try_write() {
-                            *snap = spikes.clone();
-                        }
-                        if let Some(bands) = sim_provider.last_bands() {
-                            if let Ok(mut b) = sim_spectral.try_write() {
-                                *b = bands.to_vec();
+                            SimControl::SetModel(m) => {
+                                sim_runner.blocking_write().set_model(m);
                             }
-                        }
-                        if let Ok(mut r) = sim_runner.try_write() {
-                            r.external_reward = reward_source.unwrap_or(0.0);
-                            if let Some(link) = aer_link.as_mut() {
-                                let start_us = (r.t_ms * 1000.0) as u64;
-                                let end_us = ((r.t_ms + r.lif.dt) * 1000.0) as u64;
-                                let aer_spikes = link.sensory_spikes(start_us, end_us, spikes.len());
-                                for (dst, src) in spikes.iter_mut().zip(aer_spikes.iter()) {
-                                    if *src != 0 {
-                                        *dst = 1;
+                            SimControl::SetLearning(l) => {
+                                sim_runner.blocking_write().set_learning(l);
+                            }
+                            SimControl::Reset => {
+                                sim_runner.blocking_write().reset();
+                            }
+                            SimControl::SetDt(dt) => {
+                                sim_runner.blocking_write().set_dt(dt);
+                                sim_provider.set_dt(dt as f32);
+                            }
+                            SimControl::ResizeSensory(n) => {
+                                sim_runner.blocking_write().resize_sensory(n);
+                                sim_provider.set_num_sensory_neurons(n);
+                            }
+                            SimControl::ResizeOutput(n) => {
+                                sim_runner.blocking_write().resize_output(n);
+                            }
+                            SimControl::SetFeedback(f) => {
+                                sim_runner.blocking_write().feedback_enabled = f;
+                            }
+                            SimControl::RecreateRunner(lif, stdp, net, model, learning) => {
+                                *sim_runner.blocking_write() =
+                                    Runner::new(lif, stdp, net, model, learning);
+                            }
+                            SimControl::ImportNetwork(json) => {
+                                let _ = sim_runner.blocking_write().import_network_json(&json);
+                                if let Ok(r) = sim_runner.try_read() {
+                                    sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
+                                }
+                            }
+                            SimControl::ImportNetworkWithReply(json, tx) => {
+                                let res = sim_runner.blocking_write().import_network_json(&json);
+                                if let Ok(ref r) = sim_runner.try_read() {
+                                    sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
+                                    nm_log!(
+                                        "[import] network apply result: {:?} (S={} H={} O={})",
+                                        res.as_ref().map(|_| ()).map_err(|e| e.to_string()),
+                                        r.net.num_sensory_neurons,
+                                        r.net.num_hidden_layers,
+                                        r.net.num_output_neurons
+                                    );
+                                }
+                                let _ = tx.send(res.map_err(|e| e.to_string()));
+                            }
+                            SimControl::SetStdpEta(eta) => {
+                                sim_runner.blocking_write().stdp.eta = eta;
+                            }
+                            #[cfg(all(feature = "robot_io", unix))]
+                            SimControl::BindIpc(path, s, o) => {
+                                match IpcUdsServer::bind(
+                                    &path,
+                                    s,
+                                    o,
+                                    ipc_aer_sensory_base,
+                                    ipc_aer_output_base,
+                                ) {
+                                    Ok(srv) => {
+                                        sim_ipc_server = Some(srv);
+                                    }
+                                    Err(_) => {
+                                        sim_ipc_server = None;
                                     }
                                 }
                             }
-                            if let Some(dt) = ipc_dt {
-                                r.step_sync(dt, Some(&spikes));
+                            SimControl::Shutdown => {
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if sim_remote_only {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            sim_remote_idle_sleep_ms,
+                        ));
+                        continue;
+                    }
+
+                    if let Some(link) = aer_link.as_mut() {
+                        link.poll();
+                    }
+
+                    // 2. Perform simulation step if playing or IPC frame available
+                    #[allow(unused_mut)]
+                    let mut spikes_source = None;
+                    #[allow(unused_mut)]
+                    let mut ipc_dt = None;
+                    #[allow(unused_mut)]
+                    let mut reward_source: Option<f32> = None;
+
+                    #[cfg(all(feature = "robot_io", unix))]
+                    if let Some(ref mut srv) = sim_ipc_server {
+                        let mut inputs = vec![0.0f32; srv.s];
+                        if let Some(ev) = srv.poll_next_event(&mut inputs) {
+                            match ev {
+                                IpcEvent::Data(t_ms, reward, peer) => {
+                                    let mut spk = vec![0i8; srv.s];
+                                    for (i, &v) in inputs.iter().enumerate() {
+                                        if v >= 0.5 {
+                                            spk[i] = 1;
+                                        }
+                                    }
+                                    spikes_source = Some(spk);
+                                    if t_ms > 0.0 {
+                                        ipc_dt = Some(t_ms as f64);
+                                    }
+                                    reward_source = Some(reward);
+                                    if let Ok(mut stats) = sim_ipc_stats.try_write() {
+                                        stats.connected = true;
+                                        stats.frame_count += 1;
+                                        stats.last_peer = peer; // peer is already Option<String>
+                                        stats.last_receive_time = Some(std::time::Instant::now());
+                                    }
+                                }
+                                IpcEvent::Config(hs, peer) => {
+                                    let (new_s, new_o) =
+                                        resolve_ipc_handshake_sizes(&hs, srv.s, srv.o);
+                                    let resized = new_s != srv.s || new_o != srv.o;
+                                    if resized {
+                                        nm_err!(
+                                            "[IpcUdsServer] Applying handshake resize S={} O={}",
+                                            new_s,
+                                            new_o
+                                        );
+                                        srv.s = new_s;
+                                        srv.o = new_o;
+                                        sim_runner.blocking_write().resize_sensory(new_s);
+                                        sim_runner.blocking_write().resize_output(new_o);
+                                        sim_provider.set_num_sensory_neurons(new_s);
+                                    }
+                                    srv.send_size_hint_to_last_peer();
+                                    if let Ok(mut stats) = sim_ipc_stats.try_write() {
+                                        stats.connected = true;
+                                        stats.last_peer = peer;
+                                        stats.last_receive_time = Some(std::time::Instant::now());
+                                        stats.last_handshake = Some(hs);
+                                        if resized {
+                                            stats.size_mismatch_count =
+                                                stats.size_mismatch_count.saturating_add(1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !sim_playing.load(Ordering::SeqCst) && spikes_source.is_none() {
+                        std::thread::sleep(std::time::Duration::from_millis(sim_idle_sleep_ms));
+                        continue;
+                    }
+
+                    if sim_playing.load(Ordering::SeqCst) || spikes_source.is_some() {
+                        let batch_steps: usize = {
+                            let r = sim_runner.blocking_read();
+                            let many_layers = r.net.num_hidden_layers > 32;
+                            let many_neurons = r.total_neurons() > 5000;
+                            if many_layers || many_neurons {
+                                1
                             } else {
-                                r.step(Some(&spikes));
-                            }
-                            if let Some(link) = aer_link.as_mut() {
-                                let ts_us = (r.t_ms * 1000.0) as u64;
-                                if let Some(out) = r.last_spk_o.as_slice() {
-                                    link.send_output_spikes(ts_us, out);
-                                }
-                            }
-                            if let Ok(mut snap) = sim_ui_snapshot.try_write() {
-                                snap.sensory_spikes.clear();
-                                snap.sensory_spikes.extend_from_slice(&spikes);
-                                let layers = r.last_spk_h.len();
-                                if snap.hidden_spikes.len() != layers {
-                                    snap.hidden_spikes.resize_with(layers, Vec::new);
-                                }
-                                for (dst, src) in snap.hidden_spikes.iter_mut().zip(r.last_spk_h.iter()) {
-                                    if let Some(src_slice) = src.as_slice() {
-                                        if dst.len() != src_slice.len() {
-                                            dst.resize(src_slice.len(), 0);
-                                        }
-                                        dst.copy_from_slice(src_slice);
-                                    } else {
-                                        dst.clear();
-                                        dst.extend(src.iter().copied());
-                                    }
-                                }
-                                if let Some(src_slice) = r.last_spk_o.as_slice() {
-                                    if snap.output_spikes.len() != src_slice.len() {
-                                        snap.output_spikes.resize(src_slice.len(), 0);
-                                    }
-                                    snap.output_spikes.copy_from_slice(src_slice);
-                                } else {
-                                    snap.output_spikes.clear();
-                                    snap.output_spikes.extend(r.last_spk_o.iter().copied());
-                                }
-                                snap.num_sensory = r.net.num_sensory_neurons;
-                                snap.num_hidden_layers = r.net.num_hidden_layers;
-                                snap.num_output = r.net.num_output_neurons;
-                                #[cfg(feature = "growth3d")]
-                                {
-                                    if r.net.growth_enabled {
-                                        snap.topo_sensory = r.topo.sensory_nodes.clone();
-                                        snap.topo_hidden = r.topo.layers.clone();
-                                        snap.topo_output = r.topo.output_nodes.clone();
-                                    }
-                                }
-                            }
-                        } else {
-                            std::thread::sleep(std::time::Duration::from_millis(1));
-                        }
-                    } else {
-                        let mut last_bands: Option<Vec<f32>> = None;
-                        let update_ui_snapshot = |r: &Runner| {
-                            if let Ok(mut snap) = sim_ui_snapshot.try_write() {
-                                snap.sensory_spikes.clear();
-                                if let Some(front) = r.spk_hist_s.front().and_then(|v| v.as_slice()) {
-                                    snap.sensory_spikes.extend_from_slice(front);
-                                } else if let Some(front) = r.spk_hist_s.front() {
-                                    snap.sensory_spikes.extend(front.iter().copied());
-                                }
-                                let layers = r.last_spk_h.len();
-                                if snap.hidden_spikes.len() != layers {
-                                    snap.hidden_spikes.resize_with(layers, Vec::new);
-                                }
-                                for (dst, src) in snap.hidden_spikes.iter_mut().zip(r.last_spk_h.iter()) {
-                                    if let Some(src_slice) = src.as_slice() {
-                                        if dst.len() != src_slice.len() {
-                                            dst.resize(src_slice.len(), 0);
-                                        }
-                                        dst.copy_from_slice(src_slice);
-                                    } else {
-                                        dst.clear();
-                                        dst.extend(src.iter().copied());
-                                    }
-                                }
-                                if let Some(src_slice) = r.last_spk_o.as_slice() {
-                                    if snap.output_spikes.len() != src_slice.len() {
-                                        snap.output_spikes.resize(src_slice.len(), 0);
-                                    }
-                                    snap.output_spikes.copy_from_slice(src_slice);
-                                } else {
-                                    snap.output_spikes.clear();
-                                    snap.output_spikes.extend(r.last_spk_o.iter().copied());
-                                }
-                                snap.num_sensory = r.net.num_sensory_neurons;
-                                snap.num_hidden_layers = r.net.num_hidden_layers;
-                                snap.num_output = r.net.num_output_neurons;
-                                #[cfg(feature = "growth3d")]
-                                {
-                                    if r.net.growth_enabled {
-                                        snap.topo_sensory = r.topo.sensory_nodes.clone();
-                                        snap.topo_hidden = r.topo.layers.clone();
-                                        snap.topo_output = r.topo.output_nodes.clone();
-                                    }
-                                }
+                                sim_batch_steps
                             }
                         };
-                        for _ in 0..batch_steps {
-                            let mut spikes = sim_provider.next_spikes();
+                        if spikes_source.is_some() || ipc_dt.is_some() {
+                            #[cfg(all(feature = "robot_io", unix))]
+                            let mut ipc_reply_values: Option<Vec<f32>> = None;
+                            let spikes = if let Some(s) = spikes_source {
+                                s
+                            } else {
+                                sim_provider.next_spikes()
+                            };
+                            let mut spikes = spikes;
                             sim_step_counter_thread.fetch_add(1, Ordering::Relaxed);
-                            sim_last_spike_count_thread.store(spikes.iter().filter(|&&v| v != 0).count() as u64, Ordering::Relaxed);
+                            sim_last_spike_count_thread.store(
+                                spikes.iter().filter(|&&v| v != 0).count() as u64,
+                                Ordering::Relaxed,
+                            );
                             sim_last_spike_len_thread.store(spikes.len() as u64, Ordering::Relaxed);
                             if let Ok(mut snap) = sim_sensory_snapshot.try_write() {
                                 *snap = spikes.clone();
                             }
                             if let Some(bands) = sim_provider.last_bands() {
-                                last_bands = Some(bands.to_vec());
+                                if let Ok(mut b) = sim_spectral.try_write() {
+                                    *b = bands.to_vec();
+                                }
                             }
                             if let Ok(mut r) = sim_runner.try_write() {
-                                r.external_reward = 0.0;
+                                r.external_reward = reward_source.unwrap_or(0.0);
                                 if let Some(link) = aer_link.as_mut() {
                                     let start_us = (r.t_ms * 1000.0) as u64;
                                     let end_us = ((r.t_ms + r.lif.dt) * 1000.0) as u64;
-                                    let aer_spikes = link.sensory_spikes(start_us, end_us, spikes.len());
+                                    let aer_spikes =
+                                        link.sensory_spikes(start_us, end_us, spikes.len());
                                     for (dst, src) in spikes.iter_mut().zip(aer_spikes.iter()) {
                                         if *src != 0 {
                                             *dst = 1;
                                         }
                                     }
                                 }
-                                r.step(Some(&spikes));
+                                if let Some(dt) = ipc_dt {
+                                    r.step_sync(dt, Some(&spikes));
+                                } else {
+                                    r.step(Some(&spikes));
+                                }
                                 if let Some(link) = aer_link.as_mut() {
                                     let ts_us = (r.t_ms * 1000.0) as u64;
                                     if let Some(out) = r.last_spk_o.as_slice() {
                                         link.send_output_spikes(ts_us, out);
                                     }
                                 }
-                                update_ui_snapshot(&r);
+                                #[cfg(all(feature = "robot_io", unix))]
+                                if let Some(ref srv) = sim_ipc_server {
+                                    let mut out = vec![0.0f32; srv.o];
+                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
+                                        for i in 0..out.len().min(src_slice.len()) {
+                                            out[i] = if src_slice[i] != 0 { 1.0 } else { 0.0 };
+                                        }
+                                    } else {
+                                        for i in 0..out.len().min(r.last_spk_o.len()) {
+                                            out[i] = if r.last_spk_o[i] != 0 { 1.0 } else { 0.0 };
+                                        }
+                                    }
+                                    ipc_reply_values = Some(out);
+                                }
+                                if let Ok(mut snap) = sim_ui_snapshot.try_write() {
+                                    snap.sensory_spikes.clear();
+                                    snap.sensory_spikes.extend_from_slice(&spikes);
+                                    let layers = r.last_spk_h.len();
+                                    if snap.hidden_spikes.len() != layers {
+                                        snap.hidden_spikes.resize_with(layers, Vec::new);
+                                    }
+                                    for (dst, src) in
+                                        snap.hidden_spikes.iter_mut().zip(r.last_spk_h.iter())
+                                    {
+                                        if let Some(src_slice) = src.as_slice() {
+                                            if dst.len() != src_slice.len() {
+                                                dst.resize(src_slice.len(), 0);
+                                            }
+                                            dst.copy_from_slice(src_slice);
+                                        } else {
+                                            dst.clear();
+                                            dst.extend(src.iter().copied());
+                                        }
+                                    }
+                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
+                                        if snap.output_spikes.len() != src_slice.len() {
+                                            snap.output_spikes.resize(src_slice.len(), 0);
+                                        }
+                                        snap.output_spikes.copy_from_slice(src_slice);
+                                    } else {
+                                        snap.output_spikes.clear();
+                                        snap.output_spikes.extend(r.last_spk_o.iter().copied());
+                                    }
+                                    snap.num_sensory = r.net.num_sensory_neurons;
+                                    snap.num_hidden_layers = r.net.num_hidden_layers;
+                                    snap.num_output = r.net.num_output_neurons;
+                                    #[cfg(feature = "growth3d")]
+                                    {
+                                        if r.net.growth_enabled {
+                                            snap.topo_sensory = r.topo.sensory_nodes.clone();
+                                            snap.topo_hidden = r.topo.layers.clone();
+                                            snap.topo_output = r.topo.output_nodes.clone();
+                                        }
+                                    }
+                                }
                             } else {
                                 std::thread::sleep(std::time::Duration::from_millis(1));
-                                break;
+                            }
+                            #[cfg(all(feature = "robot_io", unix))]
+                            if let Some(out_vals) = ipc_reply_values {
+                                if let Some(ref mut srv) = sim_ipc_server {
+                                    let _ = srv.send_outputs(&out_vals);
+                                    if let Ok(mut stats) = sim_ipc_stats.try_write() {
+                                        stats.last_steps = 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            let mut last_bands: Option<Vec<f32>> = None;
+                            let update_ui_snapshot = |r: &Runner| {
+                                if let Ok(mut snap) = sim_ui_snapshot.try_write() {
+                                    snap.sensory_spikes.clear();
+                                    if let Some(front) =
+                                        r.spk_hist_s.front().and_then(|v| v.as_slice())
+                                    {
+                                        snap.sensory_spikes.extend_from_slice(front);
+                                    } else if let Some(front) = r.spk_hist_s.front() {
+                                        snap.sensory_spikes.extend(front.iter().copied());
+                                    }
+                                    let layers = r.last_spk_h.len();
+                                    if snap.hidden_spikes.len() != layers {
+                                        snap.hidden_spikes.resize_with(layers, Vec::new);
+                                    }
+                                    for (dst, src) in
+                                        snap.hidden_spikes.iter_mut().zip(r.last_spk_h.iter())
+                                    {
+                                        if let Some(src_slice) = src.as_slice() {
+                                            if dst.len() != src_slice.len() {
+                                                dst.resize(src_slice.len(), 0);
+                                            }
+                                            dst.copy_from_slice(src_slice);
+                                        } else {
+                                            dst.clear();
+                                            dst.extend(src.iter().copied());
+                                        }
+                                    }
+                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
+                                        if snap.output_spikes.len() != src_slice.len() {
+                                            snap.output_spikes.resize(src_slice.len(), 0);
+                                        }
+                                        snap.output_spikes.copy_from_slice(src_slice);
+                                    } else {
+                                        snap.output_spikes.clear();
+                                        snap.output_spikes.extend(r.last_spk_o.iter().copied());
+                                    }
+                                    snap.num_sensory = r.net.num_sensory_neurons;
+                                    snap.num_hidden_layers = r.net.num_hidden_layers;
+                                    snap.num_output = r.net.num_output_neurons;
+                                    #[cfg(feature = "growth3d")]
+                                    {
+                                        if r.net.growth_enabled {
+                                            snap.topo_sensory = r.topo.sensory_nodes.clone();
+                                            snap.topo_hidden = r.topo.layers.clone();
+                                            snap.topo_output = r.topo.output_nodes.clone();
+                                        }
+                                    }
+                                }
+                            };
+                            for _ in 0..batch_steps {
+                                let mut spikes = sim_provider.next_spikes();
+                                sim_step_counter_thread.fetch_add(1, Ordering::Relaxed);
+                                sim_last_spike_count_thread.store(
+                                    spikes.iter().filter(|&&v| v != 0).count() as u64,
+                                    Ordering::Relaxed,
+                                );
+                                sim_last_spike_len_thread
+                                    .store(spikes.len() as u64, Ordering::Relaxed);
+                                if let Ok(mut snap) = sim_sensory_snapshot.try_write() {
+                                    *snap = spikes.clone();
+                                }
+                                if let Some(bands) = sim_provider.last_bands() {
+                                    last_bands = Some(bands.to_vec());
+                                }
+                                if let Ok(mut r) = sim_runner.try_write() {
+                                    r.external_reward = 0.0;
+                                    if let Some(link) = aer_link.as_mut() {
+                                        let start_us = (r.t_ms * 1000.0) as u64;
+                                        let end_us = ((r.t_ms + r.lif.dt) * 1000.0) as u64;
+                                        let aer_spikes =
+                                            link.sensory_spikes(start_us, end_us, spikes.len());
+                                        for (dst, src) in spikes.iter_mut().zip(aer_spikes.iter()) {
+                                            if *src != 0 {
+                                                *dst = 1;
+                                            }
+                                        }
+                                    }
+                                    r.step(Some(&spikes));
+                                    if let Some(link) = aer_link.as_mut() {
+                                        let ts_us = (r.t_ms * 1000.0) as u64;
+                                        if let Some(out) = r.last_spk_o.as_slice() {
+                                            link.send_output_spikes(ts_us, out);
+                                        }
+                                    }
+                                    update_ui_snapshot(&r);
+                                } else {
+                                    std::thread::sleep(std::time::Duration::from_millis(1));
+                                    break;
+                                }
+                            }
+                            if let Some(bands) = last_bands {
+                                if let Ok(mut b) = sim_spectral.try_write() {
+                                    *b = bands;
+                                }
                             }
                         }
-                        if let Some(bands) = last_bands {
-                            if let Ok(mut b) = sim_spectral.try_write() {
-                                *b = bands;
-                            }
+                        // Yield to give UI and other threads a chance to acquire the runner lock
+                        std::thread::yield_now();
+                        let throttle = sim_throttle.load(Ordering::Relaxed);
+                        if throttle > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(throttle as u64));
                         }
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
                     }
-                    // Yield to give UI and other threads a chance to acquire the runner lock
-                    std::thread::yield_now();
-                    let throttle = sim_throttle.load(Ordering::Relaxed);
-                    if throttle > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(throttle as u64));
-                    }
-                } else {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-            }
-        }).expect("Failed to spawn simulation thread");
+            })
+            .expect("Failed to spawn simulation thread");
 
         #[cfg(feature = "sysinfo")]
         let (sys_snapshot, sys_stop) = {
@@ -1420,112 +1703,129 @@ impl App {
             let stop = Arc::new(AtomicBool::new(false));
             let snapshot_thread = snapshot.clone();
             let stop_thread = stop.clone();
-            if let Err(e) = std::thread::Builder::new().name("sysinfo".into()).spawn(move || {
-                let _ = crate::affinity::apply_rotating_current_thread("sysinfo");
-                let mut sys = sysinfo::System::new_all();
-                let mut components = Components::new_with_refreshed_list();
-                let mut last_sys_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
-                let mut last_temp_update = std::time::Instant::now() - std::time::Duration::from_secs(2);
-                let mut last_rss_log = std::time::Instant::now() - std::time::Duration::from_secs(5);
-                let mut rss_baseline_mb: Option<u64> = None;
-                let mut rss_last_mb: Option<u64> = None;
-                let mut cpu_usage = 0.0f32;
-                let mut ram_usage_mb = 0.0f32;
-                let mut cpu_temp_c: Option<f32> = None;
-                let hot_core_threshold_pct = ui_hot_core_threshold_pct();
-                let mut os_threads = 0u32;
-                let mut runnable_threads = 0u32;
-                let mut cpu_core_count = 0u32;
-                let mut hot_core_count = 0u32;
-                let mut hot_core_top: Vec<(usize, f32)> = Vec::new();
+            if let Err(e) = std::thread::Builder::new()
+                .name("sysinfo".into())
+                .spawn(move || {
+                    let _ = crate::affinity::apply_rotating_current_thread("sysinfo");
+                    let mut sys = sysinfo::System::new_all();
+                    let mut components = Components::new_with_refreshed_list();
+                    let mut last_sys_update =
+                        std::time::Instant::now() - std::time::Duration::from_secs(1);
+                    let mut last_temp_update =
+                        std::time::Instant::now() - std::time::Duration::from_secs(2);
+                    let mut last_rss_log =
+                        std::time::Instant::now() - std::time::Duration::from_secs(5);
+                    let mut rss_baseline_mb: Option<u64> = None;
+                    let mut rss_last_mb: Option<u64> = None;
+                    let mut cpu_usage = 0.0f32;
+                    let mut ram_usage_mb = 0.0f32;
+                    let mut cpu_temp_c: Option<f32> = None;
+                    let hot_core_threshold_pct = ui_hot_core_threshold_pct();
+                    let mut os_threads = 0u32;
+                    let mut runnable_threads = 0u32;
+                    let mut cpu_core_count = 0u32;
+                    let mut hot_core_count = 0u32;
+                    let mut hot_core_top: Vec<(usize, f32)> = Vec::new();
 
-                loop {
-                    if stop_thread.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let now = std::time::Instant::now();
-                    let mut touched = false;
+                    loop {
+                        if stop_thread.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let now = std::time::Instant::now();
+                        let mut touched = false;
 
-                    if now.duration_since(last_sys_update) >= std::time::Duration::from_millis(1000) {
-                        sys.refresh_cpu_usage();
-                        sys.refresh_memory();
-                        cpu_usage = sys.global_cpu_usage();
-                        ram_usage_mb = sys.used_memory() as f32 / 1024.0 / 1024.0;
-                        let (threads, runnable) = read_linux_thread_counts();
-                        os_threads = threads;
-                        runnable_threads = runnable;
-                        let mut per_core: Vec<(usize, f32)> = sys
-                            .cpus()
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, cpu)| (idx, cpu.cpu_usage()))
-                            .collect();
-                        cpu_core_count = per_core.len() as u32;
-                        hot_core_count = per_core
-                            .iter()
-                            .filter(|(_, usage)| *usage >= hot_core_threshold_pct)
-                            .count() as u32;
-                        per_core.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                        per_core.truncate(4);
-                        hot_core_top = per_core;
-                        last_sys_update = now;
-                        touched = true;
-                    }
-                    if now.duration_since(last_temp_update) >= std::time::Duration::from_millis(2000) {
-                        components.refresh(false);
-                        let mut max_c = None;
-                        for component in &components {
-                            if let Some(temp) = component.temperature() {
-                                if temp.is_finite() {
-                                    max_c = Some(max_c.map_or(temp, |prev: f32| prev.max(temp)));
+                        if now.duration_since(last_sys_update)
+                            >= std::time::Duration::from_millis(1000)
+                        {
+                            sys.refresh_cpu_usage();
+                            sys.refresh_memory();
+                            cpu_usage = sys.global_cpu_usage();
+                            ram_usage_mb = sys.used_memory() as f32 / 1024.0 / 1024.0;
+                            let (threads, runnable) = read_linux_thread_counts();
+                            os_threads = threads;
+                            runnable_threads = runnable;
+                            let mut per_core: Vec<(usize, f32)> = sys
+                                .cpus()
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, cpu)| (idx, cpu.cpu_usage()))
+                                .collect();
+                            cpu_core_count = per_core.len() as u32;
+                            hot_core_count = per_core
+                                .iter()
+                                .filter(|(_, usage)| *usage >= hot_core_threshold_pct)
+                                .count() as u32;
+                            per_core.sort_by(|a, b| {
+                                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            per_core.truncate(4);
+                            hot_core_top = per_core;
+                            last_sys_update = now;
+                            touched = true;
+                        }
+                        if now.duration_since(last_temp_update)
+                            >= std::time::Duration::from_millis(2000)
+                        {
+                            components.refresh(false);
+                            let mut max_c = None;
+                            for component in &components {
+                                if let Some(temp) = component.temperature() {
+                                    if temp.is_finite() {
+                                        max_c =
+                                            Some(max_c.map_or(temp, |prev: f32| prev.max(temp)));
+                                    }
                                 }
                             }
+                            cpu_temp_c = max_c;
+                            last_temp_update = now;
+                            touched = true;
                         }
-                        cpu_temp_c = max_c;
-                        last_temp_update = now;
-                        touched = true;
-                    }
-                    if now.duration_since(last_rss_log) >= std::time::Duration::from_secs(5) {
-                        if let Ok(pid) = sysinfo::get_current_pid() {
-                            sys.refresh_processes_specifics(
-                                ProcessesToUpdate::Some(&[pid]),
-                                true,
-                                ProcessRefreshKind::nothing().with_memory(),
-                            );
-                            if let Some(proc) = sys.process(pid) {
-                                let total_raw = sys.total_memory() as u64;
-                                let scale_is_bytes = total_raw > 1_000_000_000;
-                                let raw = proc.memory() as u64;
-                                let rss_mb = if scale_is_bytes { raw / 1024 / 1024 } else { raw / 1024 };
-                                if rss_baseline_mb.is_none() {
-                                    rss_baseline_mb = Some(rss_mb);
+                        if now.duration_since(last_rss_log) >= std::time::Duration::from_secs(5) {
+                            if let Ok(pid) = sysinfo::get_current_pid() {
+                                sys.refresh_processes_specifics(
+                                    ProcessesToUpdate::Some(&[pid]),
+                                    true,
+                                    ProcessRefreshKind::nothing().with_memory(),
+                                );
+                                if let Some(proc) = sys.process(pid) {
+                                    let total_raw = sys.total_memory() as u64;
+                                    let scale_is_bytes = total_raw > 1_000_000_000;
+                                    let raw = proc.memory() as u64;
+                                    let rss_mb = if scale_is_bytes {
+                                        raw / 1024 / 1024
+                                    } else {
+                                        raw / 1024
+                                    };
+                                    if rss_baseline_mb.is_none() {
+                                        rss_baseline_mb = Some(rss_mb);
+                                    }
+                                    let baseline = rss_baseline_mb.unwrap_or(rss_mb);
+                                    let growth = rss_mb.saturating_sub(baseline);
+                                    if rss_last_mb.map_or(true, |prev| rss_mb != prev) {
+                                        nm_log!("[info] UI RSS: {}MB (+{}MB)", rss_mb, growth);
+                                    }
+                                    rss_last_mb = Some(rss_mb);
                                 }
-                                let baseline = rss_baseline_mb.unwrap_or(rss_mb);
-                                let growth = rss_mb.saturating_sub(baseline);
-                                if rss_last_mb.map_or(true, |prev| rss_mb != prev) {
-                                    nm_log!("[info] UI RSS: {}MB (+{}MB)", rss_mb, growth);
-                                }
-                                rss_last_mb = Some(rss_mb);
+                            }
+                            last_rss_log = now;
+                        }
+
+                        if touched {
+                            if let Ok(mut snap) = snapshot_thread.try_write() {
+                                snap.cpu_usage = cpu_usage;
+                                snap.ram_usage_mb = ram_usage_mb;
+                                snap.cpu_temp_c = cpu_temp_c;
+                                snap.os_threads = os_threads;
+                                snap.runnable_threads = runnable_threads;
+                                snap.cpu_core_count = cpu_core_count;
+                                snap.hot_core_count = hot_core_count;
+                                snap.hot_core_top = hot_core_top.clone();
                             }
                         }
-                        last_rss_log = now;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
                     }
-
-                    if touched {
-                        if let Ok(mut snap) = snapshot_thread.try_write() {
-                            snap.cpu_usage = cpu_usage;
-                            snap.ram_usage_mb = ram_usage_mb;
-                            snap.cpu_temp_c = cpu_temp_c;
-                            snap.os_threads = os_threads;
-                            snap.runnable_threads = runnable_threads;
-                            snap.cpu_core_count = cpu_core_count;
-                            snap.hot_core_count = hot_core_count;
-                            snap.hot_core_top = hot_core_top.clone();
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }) {
+                })
+            {
                 nm_err!("[warn] Sysinfo thread failed: {}", e);
             }
             (snapshot, stop)
@@ -1536,7 +1836,11 @@ impl App {
             playing: false,
             loop_feedback: false,
             #[cfg(all(feature = "robot_io", unix))]
-            input_source: if _ipc_enabled { InputSource::ExternalIpc } else { InputSource::Random },
+            input_source: if _ipc_enabled {
+                InputSource::ExternalIpc
+            } else {
+                InputSource::Random
+            },
             #[cfg(not(all(feature = "robot_io", unix)))]
             input_source: InputSource::Random,
             sensory_count: n_s,
@@ -1575,6 +1879,7 @@ impl App {
             #[cfg(feature = "webcam_input")]
             cam_running: false,
             smoothed_equalizer_values: Vec::new(),
+            output_count: o,
             last_rendered_panel_size: egui::vec2(0.0, 0.0),
             sensory_positions: Vec::new(),
             hidden_positions: vec![vec![]; l],
@@ -1609,7 +1914,17 @@ impl App {
             #[cfg(feature = "growth3d")]
             region_label_states: crate::morphology::FastHashMap::default(),
             #[cfg(feature = "growth3d")]
+            region_label_target_states: crate::morphology::FastHashMap::default(),
+            #[cfg(feature = "growth3d")]
             cam_pivot_world: (0.0, 0.0, 0.0),
+            #[cfg(feature = "growth3d")]
+            cam_pivot_pid: UiPid3State::default(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_sensory: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_hidden: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_output: Vec::new(),
             #[cfg(feature = "growth3d")]
             cached_skull_hull: Vec::new(),
             #[cfg(feature = "growth3d")]
@@ -1725,7 +2040,10 @@ impl App {
             #[cfg(all(feature = "robot_io", unix))]
             ipc_sync: crate::bridge::TimeSync::new(),
             #[cfg(all(feature = "robot_io", unix))]
-            quantizer: Quantizer { threshold: 0.2, probabilistic: true },
+            quantizer: Quantizer {
+                threshold: 0.2,
+                probabilistic: true,
+            },
             #[cfg(all(feature = "robot_io", unix))]
             last_sensory_inputs_f32: vec![0.0; n_s],
             #[cfg(all(feature = "robot_io", unix))]
@@ -1812,7 +2130,9 @@ impl App {
 
         #[cfg(all(feature = "robot_io", unix))]
         if _ipc_enabled {
-            let _ = app.sim_tx.send(SimControl::BindIpc(app.ipc_sock_path.clone(), n_s, o));
+            let _ = app
+                .sim_tx
+                .send(SimControl::BindIpc(app.ipc_sock_path.clone(), n_s, o));
             app.status = format!("IPC requested bind: {}", app.ipc_sock_path);
         }
 
@@ -1873,7 +2193,10 @@ impl App {
         (sizes, counts, out)
     }
 
-    fn compute_edges_from_snapshot(overlay_density: usize, snap: &crate::runner::Snapshot) -> (Vec<CachedEdge>, Vec<usize>, Vec<usize>, usize) {
+    fn compute_edges_from_snapshot(
+        overlay_density: usize,
+        snap: &crate::runner::Snapshot,
+    ) -> (Vec<CachedEdge>, Vec<usize>, Vec<usize>, usize) {
         let k = overlay_density.max(1);
         let mut edges = Vec::new();
 
@@ -1926,7 +2249,12 @@ impl App {
             Some(((max_presence as f32) * 0.75).ceil() as u32)
         };
 
-        let push_topk = |from_layer: i32, to_layer: i32, m: &crate::runner::Matrix2, presence: Option<&crate::runner::Matrix2U32>, kind: &'static str| -> Vec<CachedEdge> {
+        let push_topk = |from_layer: i32,
+                         to_layer: i32,
+                         m: &crate::runner::Matrix2,
+                         presence: Option<&crate::runner::Matrix2U32>,
+                         kind: &'static str|
+         -> Vec<CachedEdge> {
             let nr = m.rows;
             let nc = m.cols;
             if nr == 0 || nc == 0 || m.data.is_empty() {
@@ -1936,50 +2264,64 @@ impl App {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                let rows: Vec<Vec<CachedEdge>> = (0..nr).into_par_iter().map(|r| {
-                    let mut best: Vec<(usize, f32)> = Vec::new();
-                    let row_base = r.saturating_mul(nc);
-                    for i in 0..nc {
-                        let idx = row_base + i;
-                        let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
-                        if w.abs() <= 1e-8 { continue; }
-                        if best.len() < k { best.push((i, w)); }
-                        else {
-                            let mut min_idx = 0usize;
-                            let mut min_w = best[0].1.abs();
-                            for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
-                                if bw.abs() < min_w { min_w = bw.abs(); min_idx = bi; }
+                let rows: Vec<Vec<CachedEdge>> = (0..nr)
+                    .into_par_iter()
+                    .map(|r| {
+                        let mut best: Vec<(usize, f32)> = Vec::new();
+                        let row_base = r.saturating_mul(nc);
+                        for i in 0..nc {
+                            let idx = row_base + i;
+                            let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
+                            if w.abs() <= 1e-8 {
+                                continue;
                             }
-                            if w.abs() > min_w { best[min_idx] = (i, w); }
+                            if best.len() < k {
+                                best.push((i, w));
+                            } else {
+                                let mut min_idx = 0usize;
+                                let mut min_w = best[0].1.abs();
+                                for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
+                                    if bw.abs() < min_w {
+                                        min_w = bw.abs();
+                                        min_idx = bi;
+                                    }
+                                }
+                                if w.abs() > min_w {
+                                    best[min_idx] = (i, w);
+                                }
+                            }
                         }
-                    }
-                    best.into_iter().map(|(i, w)| CachedEdge {
-                        from_layer,
-                        to_layer,
-                        from_idx: i,
-                        to_idx: r,
-                        weight: w,
-                        kind,
-                        is_longterm: {
-                            if longterm_min_presence == Some(0) {
-                                true
-                            } else if let Some(min_presence) = longterm_min_presence {
-                                if let Some(p) = presence {
-                                    if p.rows == nr && p.cols == nc {
-                                        let p_idx = row_base + i;
-                                        p.data.get(p_idx).copied().unwrap_or(0) >= min_presence
+                        best.into_iter()
+                            .map(|(i, w)| CachedEdge {
+                                from_layer,
+                                to_layer,
+                                from_idx: i,
+                                to_idx: r,
+                                weight: w,
+                                kind,
+                                is_longterm: {
+                                    if longterm_min_presence == Some(0) {
+                                        true
+                                    } else if let Some(min_presence) = longterm_min_presence {
+                                        if let Some(p) = presence {
+                                            if p.rows == nr && p.cols == nc {
+                                                let p_idx = row_base + i;
+                                                p.data.get(p_idx).copied().unwrap_or(0)
+                                                    >= min_presence
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        }
                                     } else {
                                         false
                                     }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        },
-                    }).collect()
-                }).collect();
+                                },
+                            })
+                            .collect()
+                    })
+                    .collect();
                 rows.into_iter().flatten().collect()
             }
             #[cfg(not(feature = "parallel"))]
@@ -1991,15 +2333,23 @@ impl App {
                     for i in 0..nc {
                         let idx = row_base + i;
                         let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
-                        if w.abs() <= 1e-8 { continue; }
-                        if best.len() < k { best.push((i, w)); }
-                        else {
+                        if w.abs() <= 1e-8 {
+                            continue;
+                        }
+                        if best.len() < k {
+                            best.push((i, w));
+                        } else {
                             let mut min_idx = 0usize;
                             let mut min_w = best[0].1.abs();
                             for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
-                                if bw.abs() < min_w { min_w = bw.abs(); min_idx = bi; }
+                                if bw.abs() < min_w {
+                                    min_w = bw.abs();
+                                    min_idx = bi;
+                                }
                             }
-                            if w.abs() > min_w { best[min_idx] = (i, w); }
+                            if w.abs() > min_w {
+                                best[min_idx] = (i, w);
+                            }
                         }
                     }
                     for (i, w) in best.into_iter() {
@@ -2035,18 +2385,18 @@ impl App {
         };
 
         if snap.net.num_sensory_neurons > 0 && snap.net.num_hidden_layers > 0 {
-             edges.extend(push_topk(-1, 0, &snap.w_in, snap.p_in.as_ref(), "overlay"));
+            edges.extend(push_topk(-1, 0, &snap.w_in, snap.p_in.as_ref(), "overlay"));
         }
         for l in 1..snap.net.num_hidden_layers {
-            if let Some(w) = snap.w_hh_fwd.get(l-1) {
+            if let Some(w) = snap.w_hh_fwd.get(l - 1) {
                 let p = snap.p_fwd.as_ref().and_then(|v| v.get(l - 1));
-                edges.extend(push_topk((l-1) as i32, l as i32, w, p, "overlay"));
+                edges.extend(push_topk((l - 1) as i32, l as i32, w, p, "overlay"));
             }
         }
         for l in 0..snap.net.num_hidden_layers.saturating_sub(1) {
             if let Some(w) = snap.w_hh_bwd.get(l) {
                 let p = snap.p_bwd.as_ref().and_then(|v| v.get(l));
-                edges.extend(push_topk((l+1) as i32, l as i32, w, p, "overlay"));
+                edges.extend(push_topk((l + 1) as i32, l as i32, w, p, "overlay"));
             }
         }
         for l in 0..snap.net.num_hidden_layers {
@@ -2069,12 +2419,12 @@ impl App {
         if snap.net.num_hidden_layers > 0 {
             sizes.push(snap.w_in.rows);
             for l in 1..snap.net.num_hidden_layers {
-                if let Some(w) = snap.w_hh_fwd.get(l-1) {
+                if let Some(w) = snap.w_hh_fwd.get(l - 1) {
                     sizes.push(w.rows);
                 }
             }
         }
-        
+
         let mut counts = Vec::new();
         if snap.net.num_hidden_layers > 0 {
             counts.resize(snap.net.num_hidden_layers, 0);
@@ -2107,34 +2457,51 @@ impl App {
                          to_layer: i32,
                          weights: &ndarray::Array2<f64>,
                          kind: &'static str,
-                         is_longterm: Box<dyn Fn(usize, usize) -> bool + Send + Sync>| -> Vec<CachedEdge> {
+                         is_longterm: Box<dyn Fn(usize, usize) -> bool + Send + Sync>|
+         -> Vec<CachedEdge> {
             let nr = weights.nrows();
             let nc = weights.ncols();
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                let rows: Vec<Vec<CachedEdge>> = (0..nr).into_par_iter().map(|r| {
-                    let mut best: Vec<(usize, f32)> = Vec::new();
-                    for i in 0..nc {
-                        let w = *weights.get((r, i)).unwrap_or(&0.0) as f32;
-                        if w.abs() <= 1e-8 { continue; }
-                        if best.len() < k { best.push((i, w)); }
-                        else {
-                            let mut min_idx = 0usize; let mut min_w = best[0].1.abs();
-                            for (bi, &(_, bw)) in best.iter().enumerate().skip(1) { if bw.abs() < min_w { min_w = bw.abs(); min_idx = bi; } }
-                            if w.abs() > min_w { best[min_idx] = (i, w); }
+                let rows: Vec<Vec<CachedEdge>> = (0..nr)
+                    .into_par_iter()
+                    .map(|r| {
+                        let mut best: Vec<(usize, f32)> = Vec::new();
+                        for i in 0..nc {
+                            let w = *weights.get((r, i)).unwrap_or(&0.0) as f32;
+                            if w.abs() <= 1e-8 {
+                                continue;
+                            }
+                            if best.len() < k {
+                                best.push((i, w));
+                            } else {
+                                let mut min_idx = 0usize;
+                                let mut min_w = best[0].1.abs();
+                                for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
+                                    if bw.abs() < min_w {
+                                        min_w = bw.abs();
+                                        min_idx = bi;
+                                    }
+                                }
+                                if w.abs() > min_w {
+                                    best[min_idx] = (i, w);
+                                }
+                            }
                         }
-                    }
-                    best.into_iter().map(|(i, w)| CachedEdge {
-                        from_layer,
-                        to_layer,
-                        from_idx: i,
-                        to_idx: r,
-                        weight: w,
-                        kind,
-                        is_longterm: is_longterm(r, i),
-                    }).collect()
-                }).collect();
+                        best.into_iter()
+                            .map(|(i, w)| CachedEdge {
+                                from_layer,
+                                to_layer,
+                                from_idx: i,
+                                to_idx: r,
+                                weight: w,
+                                kind,
+                                is_longterm: is_longterm(r, i),
+                            })
+                            .collect()
+                    })
+                    .collect();
                 rows.into_iter().flatten().collect()
             }
             #[cfg(not(feature = "parallel"))]
@@ -2144,12 +2511,23 @@ impl App {
                     let mut best: Vec<(usize, f32)> = Vec::new();
                     for i in 0..nc {
                         let w = *weights.get((r, i)).unwrap_or(&0.0) as f32;
-                        if w.abs() <= 1e-8 { continue; }
-                        if best.len() < k { best.push((i, w)); }
-                        else {
-                            let mut min_idx = 0usize; let mut min_w = best[0].1.abs();
-                            for (bi, &(_, bw)) in best.iter().enumerate().skip(1) { if bw.abs() < min_w { min_w = bw.abs(); min_idx = bi; } }
-                            if w.abs() > min_w { best[min_idx] = (i, w); }
+                        if w.abs() <= 1e-8 {
+                            continue;
+                        }
+                        if best.len() < k {
+                            best.push((i, w));
+                        } else {
+                            let mut min_idx = 0usize;
+                            let mut min_w = best[0].1.abs();
+                            for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
+                                if bw.abs() < min_w {
+                                    min_w = bw.abs();
+                                    min_idx = bi;
+                                }
+                            }
+                            if w.abs() > min_w {
+                                best[min_idx] = (i, w);
+                            }
                         }
                     }
                     for (i, w) in best.into_iter() {
@@ -2181,7 +2559,7 @@ impl App {
         }
         // H(l-1) -> H(l) fwd
         for l in 1..runner.net.num_hidden_layers {
-            if let Some(w) = runner.w_hh_fwd.get(l-1) {
+            if let Some(w) = runner.w_hh_fwd.get(l - 1) {
                 edges.extend(push_topk(
                     (l - 1) as i32,
                     l as i32,
@@ -2235,7 +2613,9 @@ impl App {
         self.sensory_positions.clear();
         self.hidden_positions.clear();
         self.output_positions.clear();
-        
+        #[cfg(feature = "growth3d")]
+        self.reset_topology_pid_states();
+
         let (n_s, n_l, n_o) = match &self.view_source {
             ViewSource::Standalone => {
                 if let Ok(r) = self.runner.try_read() {
@@ -2256,7 +2636,9 @@ impl App {
                 let mut cfg_opt: Option<NetworkConfig> = None;
                 if let Some(net_status) = self.dist_network_registry.get(id) {
                     if !net_status.config_json.is_empty() {
-                        if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&net_status.config_json) {
+                        if let Ok(cfg) =
+                            serde_json::from_str::<NetworkConfig>(&net_status.config_json)
+                        {
                             cfg_opt = Some(cfg);
                         }
                     }
@@ -2338,6 +2720,7 @@ impl App {
         };
 
         self.sensory_count = n_s;
+        self.output_count = n_o;
         self.hidden_positions = vec![vec![]; n_l];
         self.sensory_activity = vec![0.0; n_s];
         self.hidden_activity = (0..n_l).map(|_| Vec::new()).collect(); // will be resized in update_activity
@@ -2414,10 +2797,12 @@ impl App {
             model,
             learning,
         ));
-        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(
-            net_cfg.num_sensory_neurons,
-            self.random_spike_probability,
-        ))));
+        let _ = self
+            .sim_tx
+            .send(SimControl::SetProvider(Box::new(RandomProvider::new(
+                net_cfg.num_sensory_neurons,
+                self.random_spike_probability,
+            ))));
         let _ = self.sim_tx.send(SimControl::Reset);
         self.refresh_ui_buffers();
         self.local_net = net_cfg;
@@ -2477,7 +2862,12 @@ impl App {
         self.set_standalone_playing(true);
     }
 
-    fn apply_cluster_control(&mut self, network_id: &str, action: control_update::Action, status: &str) {
+    fn apply_cluster_control(
+        &mut self,
+        network_id: &str,
+        action: control_update::Action,
+        status: &str,
+    ) {
         let view_scope = match &self.view_source {
             ViewSource::LocalManaged(_) => "Local network",
             ViewSource::ClusterGlobal(_) => "Cluster network",
@@ -2491,7 +2881,9 @@ impl App {
                             control_update::Action::Start | control_update::Action::Repeat => {
                                 net_status.playing = true;
                             }
-                            control_update::Action::Stop | control_update::Action::Reset | control_update::Action::New => {
+                            control_update::Action::Stop
+                            | control_update::Action::Reset
+                            | control_update::Action::New => {
                                 net_status.playing = false;
                             }
                         }
@@ -2505,7 +2897,12 @@ impl App {
         } else {
             self.status = "Cluster control unavailable".into();
         }
-        if matches!(action, control_update::Action::Repeat | control_update::Action::Reset | control_update::Action::New) {
+        if matches!(
+            action,
+            control_update::Action::Repeat
+                | control_update::Action::Reset
+                | control_update::Action::New
+        ) {
             self.refresh_ui_buffers();
         }
     }
@@ -2513,15 +2910,30 @@ impl App {
     fn export_view_config_json(&self) -> Result<String, String> {
         match &self.view_source {
             ViewSource::Standalone => {
-                let runner = self.runner.try_read().map_err(|_| "Runner busy".to_string())?;
+                let runner = self
+                    .runner
+                    .try_read()
+                    .map_err(|_| "Runner busy".to_string())?;
                 runner.export_config_json().map_err(|e| e.to_string())
             }
             ViewSource::LocalManaged(id) => {
-                let node = self.distributed_node.as_ref().ok_or_else(|| "Local managed network unavailable".to_string())?;
-                let state = node.state.try_read().map_err(|_| "Cluster state busy".to_string())?;
-                let net_arc = state.networks.get(id).cloned().ok_or_else(|| "Local managed network not found".to_string())?;
+                let node = self
+                    .distributed_node
+                    .as_ref()
+                    .ok_or_else(|| "Local managed network unavailable".to_string())?;
+                let state = node
+                    .state
+                    .try_read()
+                    .map_err(|_| "Cluster state busy".to_string())?;
+                let net_arc = state
+                    .networks
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| "Local managed network not found".to_string())?;
                 drop(state);
-                let net = net_arc.try_read().map_err(|_| "Local managed network busy".to_string())?;
+                let net = net_arc
+                    .try_read()
+                    .map_err(|_| "Local managed network busy".to_string())?;
                 net.runner.export_config_json().map_err(|e| e.to_string())
             }
             ViewSource::ClusterGlobal(id) => {
@@ -2543,15 +2955,30 @@ impl App {
     fn export_view_network_json(&self) -> Result<String, String> {
         match &self.view_source {
             ViewSource::Standalone => {
-                let runner = self.runner.try_read().map_err(|_| "Runner busy".to_string())?;
+                let runner = self
+                    .runner
+                    .try_read()
+                    .map_err(|_| "Runner busy".to_string())?;
                 runner.export_network_json().map_err(|e| e.to_string())
             }
             ViewSource::LocalManaged(id) => {
-                let node = self.distributed_node.as_ref().ok_or_else(|| "Local managed network unavailable".to_string())?;
-                let state = node.state.try_read().map_err(|_| "Cluster state busy".to_string())?;
-                let net_arc = state.networks.get(id).cloned().ok_or_else(|| "Local managed network not found".to_string())?;
+                let node = self
+                    .distributed_node
+                    .as_ref()
+                    .ok_or_else(|| "Local managed network unavailable".to_string())?;
+                let state = node
+                    .state
+                    .try_read()
+                    .map_err(|_| "Cluster state busy".to_string())?;
+                let net_arc = state
+                    .networks
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| "Local managed network not found".to_string())?;
                 drop(state);
-                let net = net_arc.try_read().map_err(|_| "Local managed network busy".to_string())?;
+                let net = net_arc
+                    .try_read()
+                    .map_err(|_| "Local managed network busy".to_string())?;
                 net.runner.export_network_json().map_err(|e| e.to_string())
             }
             ViewSource::ClusterGlobal(id) => {
@@ -2565,7 +2992,14 @@ impl App {
         }
     }
 
-    fn queue_import(&mut self, kind: ImportKind, path: std::path::PathBuf, json: String, stdout: String, stderr: String) -> Result<(), String> {
+    fn queue_import(
+        &mut self,
+        kind: ImportKind,
+        path: std::path::PathBuf,
+        json: String,
+        stdout: String,
+        stderr: String,
+    ) -> Result<(), String> {
         let kind_str = match kind {
             ImportKind::Tflite => "TFLite",
             ImportKind::Onnx => "ONNX",
@@ -2580,7 +3014,10 @@ impl App {
                     self.pending_import = None;
                 }
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-                match self.sim_tx.send(SimControl::ImportNetworkWithReply(json, reply_tx)) {
+                match self
+                    .sim_tx
+                    .send(SimControl::ImportNetworkWithReply(json, reply_tx))
+                {
                     Ok(()) => {
                         self.cached_layer_sizes.clear();
                         self.cached_conn_counts.clear();
@@ -2601,34 +3038,77 @@ impl App {
                         self.status = status.clone();
                         Ok(())
                     }
-                    Err(_) => Err(format!("{} import failed: simulation channel closed", kind_str)),
+                    Err(_) => Err(format!(
+                        "{} import failed: simulation channel closed",
+                        kind_str
+                    )),
                 }
             }
-            ViewSource::LocalManaged(id) => {
-                self.import_network_json_to_local_managed(&id, &json, kind, &path).map_err(|e| e.to_string())
-            }
-            ViewSource::ClusterGlobal(_) => Err(format!("{} import not supported for cluster view", kind_str)),
+            ViewSource::LocalManaged(id) => self
+                .import_network_json_to_local_managed(&id, &json, kind, &path)
+                .map_err(|e| e.to_string()),
+            ViewSource::ClusterGlobal(_) => Err(format!(
+                "{} import not supported for cluster view",
+                kind_str
+            )),
         }
     }
 
-    fn apply_config_to_local_managed(&mut self, network_id: &str, net: NetworkConfig) -> Result<(), String> {
-        let node = self.distributed_node.as_ref().ok_or_else(|| "Local managed network unavailable".to_string())?;
-        let state = node.state.try_read().map_err(|_| "Cluster state busy".to_string())?;
-        let net_arc = state.networks.get(network_id).cloned().ok_or_else(|| "Local managed network not found".to_string())?;
+    fn apply_config_to_local_managed(
+        &mut self,
+        network_id: &str,
+        net: NetworkConfig,
+    ) -> Result<(), String> {
+        let node = self
+            .distributed_node
+            .as_ref()
+            .ok_or_else(|| "Local managed network unavailable".to_string())?;
+        let state = node
+            .state
+            .try_read()
+            .map_err(|_| "Cluster state busy".to_string())?;
+        let net_arc = state
+            .networks
+            .get(network_id)
+            .cloned()
+            .ok_or_else(|| "Local managed network not found".to_string())?;
         drop(state);
-        let mut net_guard = net_arc.try_write().map_err(|_| "Local managed network busy".to_string())?;
+        let mut net_guard = net_arc
+            .try_write()
+            .map_err(|_| "Local managed network busy".to_string())?;
         net_guard.runner.apply_config(net.clone());
         net_guard.initial_config = net;
         Ok(())
     }
 
-    fn import_network_json_to_local_managed(&mut self, network_id: &str, json: &str, kind: ImportKind, path: &std::path::Path) -> Result<(), String> {
-        let node = self.distributed_node.as_ref().ok_or_else(|| "Local managed network unavailable".to_string())?;
-        let state = node.state.try_read().map_err(|_| "Cluster state busy".to_string())?;
-        let net_arc = state.networks.get(network_id).cloned().ok_or_else(|| "Local managed network not found".to_string())?;
+    fn import_network_json_to_local_managed(
+        &mut self,
+        network_id: &str,
+        json: &str,
+        kind: ImportKind,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let node = self
+            .distributed_node
+            .as_ref()
+            .ok_or_else(|| "Local managed network unavailable".to_string())?;
+        let state = node
+            .state
+            .try_read()
+            .map_err(|_| "Cluster state busy".to_string())?;
+        let net_arc = state
+            .networks
+            .get(network_id)
+            .cloned()
+            .ok_or_else(|| "Local managed network not found".to_string())?;
         drop(state);
-        let mut net_guard = net_arc.try_write().map_err(|_| "Local managed network busy".to_string())?;
-        net_guard.runner.import_network_json(json).map_err(|e| e.to_string())?;
+        let mut net_guard = net_arc
+            .try_write()
+            .map_err(|_| "Local managed network busy".to_string())?;
+        net_guard
+            .runner
+            .import_network_json(json)
+            .map_err(|e| e.to_string())?;
         let kind_str = match kind {
             ImportKind::Tflite => "TFLite",
             ImportKind::Onnx => "ONNX",
@@ -2675,9 +3155,17 @@ impl App {
                 // If not playing, decay slightly.
                 if !self.playing {
                     let decay = 0.95f32;
-                    for v in &mut self.sensory_activity { *v *= decay; }
-                    for layer in &mut self.hidden_activity { for v in layer { *v *= decay; } }
-                    for v in &mut self.output_activity { *v *= decay; }
+                    for v in &mut self.sensory_activity {
+                        *v *= decay;
+                    }
+                    for layer in &mut self.hidden_activity {
+                        for v in layer {
+                            *v *= decay;
+                        }
+                    }
+                    for v in &mut self.output_activity {
+                        *v *= decay;
+                    }
                 }
             }
             ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => {
@@ -2690,9 +3178,17 @@ impl App {
                         } else {
                             // Decay if no data
                             let decay = 0.95f32;
-                            for v in &mut self.sensory_activity { *v *= decay; }
-                            for layer in &mut self.hidden_activity { for v in layer { *v *= decay; } }
-                            for v in &mut self.output_activity { *v *= decay; }
+                            for v in &mut self.sensory_activity {
+                                *v *= decay;
+                            }
+                            for layer in &mut self.hidden_activity {
+                                for v in layer {
+                                    *v *= decay;
+                                }
+                            }
+                            for v in &mut self.output_activity {
+                                *v *= decay;
+                            }
                             if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
                                 self.status = "Watching Cluster".into();
                             }
@@ -2700,9 +3196,17 @@ impl App {
                     } else {
                         // Locked, skip frame but decay to avoid stale activity
                         let decay = 0.95f32;
-                        for v in &mut self.sensory_activity { *v *= decay; }
-                        for layer in &mut self.hidden_activity { for v in layer { *v *= decay; } }
-                        for v in &mut self.output_activity { *v *= decay; }
+                        for v in &mut self.sensory_activity {
+                            *v *= decay;
+                        }
+                        for layer in &mut self.hidden_activity {
+                            for v in layer {
+                                *v *= decay;
+                            }
+                        }
+                        for v in &mut self.output_activity {
+                            *v *= decay;
+                        }
                         if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
                             self.status = "Watching Cluster".into();
                         }
@@ -2714,37 +3218,51 @@ impl App {
 
     fn sync_activity_from_runner(&mut self, runner: &Runner) {
         let decay = 0.90f32;
-        
+
         // 1. Sensory
         if self.sensory_activity.len() != runner.net.num_sensory_neurons {
-            self.sensory_activity.resize(runner.net.num_sensory_neurons, 0.0);
+            self.sensory_activity
+                .resize(runner.net.num_sensory_neurons, 0.0);
         }
-        self.last_sensory_spikes = runner.spk_hist_s
+        self.last_sensory_spikes = runner
+            .spk_hist_s
             .front()
             .map(|v| v.to_vec())
             .filter(|v| v.len() == runner.net.num_sensory_neurons)
             .unwrap_or_else(|| vec![0; runner.net.num_sensory_neurons]);
-        for v in &mut self.sensory_activity { *v *= decay; }
-        for (i, &sv) in runner.x_pre_in.iter().enumerate() {
-            if sv > 0.1 && i < self.sensory_activity.len() { self.sensory_activity[i] = 1.0; }
+        for v in &mut self.sensory_activity {
+            *v *= decay;
         }
-        
+        for (i, &sv) in runner.x_pre_in.iter().enumerate() {
+            if sv > 0.1 && i < self.sensory_activity.len() {
+                self.sensory_activity[i] = 1.0;
+            }
+        }
+
         // 2. Hidden
         if self.hidden_activity.len() != runner.net.num_hidden_layers {
-            self.hidden_activity = (0..runner.net.num_hidden_layers).map(|_| Vec::new()).collect();
+            self.hidden_activity = (0..runner.net.num_hidden_layers)
+                .map(|_| Vec::new())
+                .collect();
         }
         if self.previous_hidden_spikes.len() != runner.net.num_hidden_layers {
-            self.previous_hidden_spikes = (0..runner.net.num_hidden_layers).map(|_| Vec::new()).collect();
+            self.previous_hidden_spikes = (0..runner.net.num_hidden_layers)
+                .map(|_| Vec::new())
+                .collect();
         }
 
         for (li, sp) in runner.last_spk_h.iter().enumerate() {
             if li < self.hidden_activity.len() {
-                if self.hidden_activity[li].len() != sp.len() { self.hidden_activity[li].resize(sp.len(), 0.0); }
-                if self.previous_hidden_spikes[li].len() != sp.len() { self.previous_hidden_spikes[li].resize(sp.len(), 0); }
-                
+                if self.hidden_activity[li].len() != sp.len() {
+                    self.hidden_activity[li].resize(sp.len(), 0.0);
+                }
+                if self.previous_hidden_spikes[li].len() != sp.len() {
+                    self.previous_hidden_spikes[li].resize(sp.len(), 0);
+                }
+
                 for j in 0..sp.len() {
                     self.hidden_activity[li][j] *= decay;
-                    if sp[j] != 0 { 
+                    if sp[j] != 0 {
                         self.hidden_activity[li][j] = 1.0;
                         self.previous_hidden_spikes[li][j] = 1;
                     } else {
@@ -2753,10 +3271,11 @@ impl App {
                 }
             }
         }
-        
+
         // 3. Output
         if self.output_activity.len() != runner.net.num_output_neurons {
-            self.output_activity.resize(runner.net.num_output_neurons, 0.0);
+            self.output_activity
+                .resize(runner.net.num_output_neurons, 0.0);
         }
         let mut col = vec![0i8; runner.net.num_output_neurons];
         let mut any = false;
@@ -2768,13 +3287,16 @@ impl App {
                 any = true;
             }
         }
-        
+
         if any || (runner.t % 5 == 0) {
             self.raster_outputs.push_back(col);
-            if self.raster_outputs.len() > self.raster_cols { self.raster_outputs.pop_front(); }
+            if self.raster_outputs.len() > self.raster_cols {
+                self.raster_outputs.pop_front();
+            }
         }
-        
-        self.status = format!("Watching {}: t={} ms", 
+
+        self.status = format!(
+            "Watching {}: t={} ms",
             match &self.view_source {
                 ViewSource::Standalone => "Standalone",
                 ViewSource::LocalManaged(id) => id,
@@ -2786,31 +3308,51 @@ impl App {
 
     fn sync_activity_from_standalone(&mut self, runner: &Runner) {
         let (runner_t, num_sensory, num_hidden, num_output, runner_t_ms, x_pre_in) = (
-            runner.t, runner.net.num_sensory_neurons, runner.net.num_hidden_layers, runner.net.num_output_neurons, runner.t_ms, runner.x_pre_in.to_vec()
+            runner.t,
+            runner.net.num_sensory_neurons,
+            runner.net.num_hidden_layers,
+            runner.net.num_output_neurons,
+            runner.t_ms,
+            runner.x_pre_in.to_vec(),
         );
 
         let decay = 0.90f32;
-        if self.sensory_activity.len() != num_sensory { self.sensory_activity.resize(num_sensory, 0.0); }
-        self.last_sensory_spikes = runner.spk_hist_s
+        if self.sensory_activity.len() != num_sensory {
+            self.sensory_activity.resize(num_sensory, 0.0);
+        }
+        self.last_sensory_spikes = runner
+            .spk_hist_s
             .front()
             .map(|v| v.to_vec())
             .filter(|v| v.len() == num_sensory)
             .unwrap_or_else(|| vec![0; num_sensory]);
-        for v in &mut self.sensory_activity { *v *= decay; }
+        for v in &mut self.sensory_activity {
+            *v *= decay;
+        }
         for (i, &sv) in x_pre_in.iter().enumerate() {
-            if sv > 0.1 && i < self.sensory_activity.len() { self.sensory_activity[i] = 1.0; }
+            if sv > 0.1 && i < self.sensory_activity.len() {
+                self.sensory_activity[i] = 1.0;
+            }
         }
 
-        if self.hidden_activity.len() != num_hidden { self.hidden_activity = (0..num_hidden).map(|_| Vec::new()).collect(); }
-        if self.previous_hidden_spikes.len() != num_hidden { self.previous_hidden_spikes = (0..num_hidden).map(|_| Vec::new()).collect(); }
+        if self.hidden_activity.len() != num_hidden {
+            self.hidden_activity = (0..num_hidden).map(|_| Vec::new()).collect();
+        }
+        if self.previous_hidden_spikes.len() != num_hidden {
+            self.previous_hidden_spikes = (0..num_hidden).map(|_| Vec::new()).collect();
+        }
 
         for li in 0..num_hidden {
             let sp = runner.last_spk_h[li].clone();
-            if self.hidden_activity[li].len() != sp.len() { self.hidden_activity[li].resize(sp.len(), 0.0); }
-            if self.previous_hidden_spikes[li].len() != sp.len() { self.previous_hidden_spikes[li].resize(sp.len(), 0); }
+            if self.hidden_activity[li].len() != sp.len() {
+                self.hidden_activity[li].resize(sp.len(), 0.0);
+            }
+            if self.previous_hidden_spikes[li].len() != sp.len() {
+                self.previous_hidden_spikes[li].resize(sp.len(), 0);
+            }
             for j in 0..sp.len() {
                 self.hidden_activity[li][j] *= decay;
-                if sp[j] != 0 { 
+                if sp[j] != 0 {
                     self.hidden_activity[li][j] = 1.0;
                     self.previous_hidden_spikes[li][j] = 1;
                 } else {
@@ -2819,7 +3361,9 @@ impl App {
             }
         }
 
-        if self.output_activity.len() != num_output { self.output_activity.resize(num_output, 0.0); }
+        if self.output_activity.len() != num_output {
+            self.output_activity.resize(num_output, 0.0);
+        }
         let last_spk_o = runner.last_spk_o.to_vec();
         let mut col = vec![0i8; num_output];
         let mut any = false;
@@ -2833,7 +3377,9 @@ impl App {
         }
         if any || (runner_t % 5 == 0) {
             self.raster_outputs.push_back(col);
-            if self.raster_outputs.len() > self.raster_cols { self.raster_outputs.pop_front(); }
+            if self.raster_outputs.len() > self.raster_cols {
+                self.raster_outputs.pop_front();
+            }
         }
         self.status = format!("Watching Standalone: t={} ms", runner_t_ms as i64);
     }
@@ -2842,19 +3388,21 @@ impl App {
         view_source: &ViewSource,
         _brain_id: &String,
         view_node_filter: &Option<String>,
-        l: isize, 
-        default_color: egui::Color32, 
-        network_registry: &HashMap<String, NetworkStatus>
+        l: isize,
+        default_color: egui::Color32,
+        network_registry: &HashMap<String, NetworkStatus>,
     ) -> (egui::Color32, bool) {
         let brain_id = match view_source {
             ViewSource::Standalone => return (default_color, true),
             ViewSource::LocalManaged(id) => id,
             ViewSource::ClusterGlobal(id) => id,
         };
-        
+
         if let Some(net_status) = network_registry.get(brain_id) {
-            if l < 0 { return (egui::Color32::from_rgb(60, 140, 255), true); }
-            
+            if l < 0 {
+                return (egui::Color32::from_rgb(60, 140, 255), true);
+            }
+
             let mut owning_node: Option<&String> = None;
             for (nid, range) in &net_status.distribution {
                 if range.layers.contains(&(l as u32)) {
@@ -2862,32 +3410,39 @@ impl App {
                     break;
                 }
             }
-            
+
             if let Some(nid) = owning_node {
                 if let Some(ref filter) = view_node_filter {
-                    if nid != filter { return (default_color.gamma_multiply(0.15), false); }
+                    if nid != filter {
+                        return (default_color.gamma_multiply(0.15), false);
+                    }
                 }
-                
+
                 if matches!(view_source, ViewSource::ClusterGlobal(_)) {
                     let mut h = 0u64;
-                    for b in nid.bytes() { h = h.wrapping_mul(31).wrapping_add(b as u64); }
-                    let color = egui::epaint::Hsva::new((h % 360) as f32 / 360.0, 0.7, 0.8, 1.0).into();
+                    for b in nid.bytes() {
+                        h = h.wrapping_mul(31).wrapping_add(b as u64);
+                    }
+                    let color =
+                        egui::epaint::Hsva::new((h % 360) as f32 / 360.0, 0.7, 0.8, 1.0).into();
                     return (color, true);
                 }
             } else if view_node_filter.is_some() {
                 return (default_color.gamma_multiply(0.15), false);
             }
         }
-        
+
         (default_color, true)
     }
 
-
     fn update_probes_from_standalone(&mut self, runner: &Runner) {
-        if self.scope_paused { return; }
-        
+        if self.scope_paused {
+            return;
+        }
+
         let dt = runner.lif.dt.max(0.001) as f32;
-        let last_sensory_spikes = runner.spk_hist_s
+        let last_sensory_spikes = runner
+            .spk_hist_s
             .front()
             .map(|v| v.to_vec())
             .filter(|v| v.len() == runner.net.num_sensory_neurons)
@@ -2899,21 +3454,31 @@ impl App {
                 }
             });
         let desired_cap = ((self.scope_time_ms / dt).ceil() as usize).clamp(100, 20000);
-        
+
         let bands_guard = self.spectral_bands.try_read().ok();
-        let samples: Vec<f32> = self.probes.iter()
+        let samples: Vec<f32> = self
+            .probes
+            .iter()
             .map(|p| {
                 if p.enabled {
-                    sample_probe_value(runner, &last_sensory_spikes, bands_guard.as_deref().map(|v| v.as_slice()), p).unwrap_or(f32::NAN)
+                    sample_probe_value(
+                        runner,
+                        &last_sensory_spikes,
+                        bands_guard.as_deref().map(|v| v.as_slice()),
+                        p,
+                    )
+                    .unwrap_or(f32::NAN)
                 } else {
                     f32::NAN
                 }
             })
             .collect();
-            
+
         for (idx, val) in samples.into_iter().enumerate() {
             let pr = &mut self.probes[idx];
-            if !pr.enabled { continue; }
+            if !pr.enabled {
+                continue;
+            }
             if pr.capacity != desired_cap {
                 pr.data.clear();
                 pr.data.resize(desired_cap, 0.0);
@@ -2925,22 +3490,29 @@ impl App {
     }
 
     fn update_probes_from_snapshot(&mut self, dt: f32, sensory_spikes: &[i8]) {
-        if self.scope_paused { return; }
+        if self.scope_paused {
+            return;
+        }
         let dt = dt.max(0.001);
         let desired_cap = ((self.scope_time_ms / dt).ceil() as usize).clamp(100, 20000);
         let bands_guard = self.spectral_bands.try_read().ok();
-        let samples: Vec<f32> = self.probes.iter()
+        let samples: Vec<f32> = self
+            .probes
+            .iter()
             .map(|p| {
                 if !p.enabled {
                     f32::NAN
                 } else {
                     match (p.kind, p.target) {
-                        (ProbeKind::Spike, ProbeTarget::Sensory(i)) => {
-                            sensory_spikes.get(i).copied().map(|v| v as f32).unwrap_or(f32::NAN)
-                        }
-                        (ProbeKind::Level, ProbeTarget::Band(b)) => {
-                            bands_guard.as_deref().and_then(|bands| bands.get(b).copied()).unwrap_or(f32::NAN)
-                        }
+                        (ProbeKind::Spike, ProbeTarget::Sensory(i)) => sensory_spikes
+                            .get(i)
+                            .copied()
+                            .map(|v| v as f32)
+                            .unwrap_or(f32::NAN),
+                        (ProbeKind::Level, ProbeTarget::Band(b)) => bands_guard
+                            .as_deref()
+                            .and_then(|bands| bands.get(b).copied())
+                            .unwrap_or(f32::NAN),
                         _ => f32::NAN,
                     }
                 }
@@ -2948,7 +3520,9 @@ impl App {
             .collect();
         for (idx, val) in samples.into_iter().enumerate() {
             let pr = &mut self.probes[idx];
-            if !pr.enabled { continue; }
+            if !pr.enabled {
+                continue;
+            }
             if pr.capacity != desired_cap {
                 pr.data.clear();
                 pr.data.resize(desired_cap, 0.0);
@@ -2959,17 +3533,50 @@ impl App {
         }
     }
 
-
     #[cfg(all(feature = "robot_io", unix))]
     fn apply_ipc_config(&mut self, handshake: IpcHandshake) {
         self.ipc_last_handshake = Some(handshake.clone());
-        let n_s_raw = handshake.s_names.len();
-        let n_o_raw = handshake.o_names.len();
+        let (n_s_raw, n_o_raw) = resolve_ipc_handshake_sizes(
+            &handshake,
+            self.local_net.num_sensory_neurons.max(1),
+            self.local_net.num_output_neurons.max(1),
+        );
         let k = self.ipc_neurons_per_value.max(1);
-        
+
         let s_total = n_s_raw * k;
         let o_total = n_o_raw * k;
-        
+
+        let mut mapping = IoMapping::new(s_total, o_total);
+        if handshake.s_names.is_empty() {
+            for i in 0..n_s_raw {
+                mapping.add_port(PortSpec::new(
+                    format!("S{}", i),
+                    PortKind::Sensor,
+                    i * k,
+                    k,
+                ));
+            }
+        } else {
+            for (i, name) in handshake.s_names.iter().enumerate() {
+                mapping.add_port(PortSpec::new(name.clone(), PortKind::Sensor, i * k, k));
+            }
+        }
+        if handshake.o_names.is_empty() {
+            for i in 0..n_o_raw {
+                mapping.add_port(PortSpec::new(
+                    format!("O{}", i),
+                    PortKind::Actuator,
+                    i * k,
+                    k,
+                ));
+            }
+        } else {
+            for (i, name) in handshake.o_names.iter().enumerate() {
+                mapping.add_port(PortSpec::new(name.clone(), PortKind::Actuator, i * k, k));
+            }
+        }
+        self.ipc_mapping = Some(mapping);
+
         let _ = self.sim_tx.send(SimControl::ResizeSensory(s_total));
         let _ = self.sim_tx.send(SimControl::ResizeOutput(o_total));
         let reward_note = handshake.reward_name.as_deref().unwrap_or("none");
@@ -2978,25 +3585,29 @@ impl App {
             n_s_raw, k, n_o_raw, k, reward_note
         );
     }
-
 }
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum ProbeKind { Spike, Membrane, Current, Level }
+enum ProbeKind {
+    Spike,
+    Membrane,
+    Current,
+    Level,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
 enum ProbeTarget {
     Sensory(usize),
-    Hidden(usize, usize),        // (layer, j)
+    Hidden(usize, usize), // (layer, j)
     Output(usize),
-    ConnIn(usize, usize),        // (i -> j) S→H0
-    ConnFwd(usize, usize, usize),// (l, i -> j) H(l)→H(l+1)
-    ConnBwd(usize, usize, usize),// (l, i <- j) H(l+1)→H(l)
-    ConnOut(usize, usize),       // (j -> k) H_last→O
-    ConnRec(usize, usize, usize),// (l, i -> j) H(l)→H(l)
-    Band(usize),                 // Provider spectral band index
+    ConnIn(usize, usize),         // (i -> j) S→H0
+    ConnFwd(usize, usize, usize), // (l, i -> j) H(l)→H(l+1)
+    ConnBwd(usize, usize, usize), // (l, i <- j) H(l+1)→H(l)
+    ConnOut(usize, usize),        // (j -> k) H_last→O
+    ConnRec(usize, usize, usize), // (l, i -> j) H(l)→H(l)
+    Band(usize),                  // Provider spectral band index
 }
 
 #[cfg(feature = "ui")]
@@ -3015,6 +3626,181 @@ impl DetailBioOrient {
             DetailBioOrient::MirrorAxes => "Mirror dendrites left / axons right",
             DetailBioOrient::AlignAxonRight => "Auto-orient axon to right",
         }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone, Copy, Default)]
+struct UiPid2State {
+    pos: egui::Pos2,
+    prev_err: egui::Vec2,
+    integral: egui::Vec2,
+    initialized: bool,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone, Copy, Default)]
+struct UiPid3State {
+    pos: [f32; 3],
+    prev_err: [f32; 3],
+    integral: [f32; 3],
+    initialized: bool,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_pos2(
+    state: &mut UiPid2State,
+    target: egui::Pos2,
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> egui::Pos2 {
+    if !state.initialized {
+        state.pos = target;
+        state.prev_err = egui::Vec2::ZERO;
+        state.integral = egui::Vec2::ZERO;
+        state.initialized = true;
+        return target;
+    }
+    let err = target - state.pos;
+    state.integral += err * dt;
+    let integral_limit = 2000.0;
+    state.integral.x = state.integral.x.clamp(-integral_limit, integral_limit);
+    state.integral.y = state.integral.y.clamp(-integral_limit, integral_limit);
+    let derivative = (err - state.prev_err) * (1.0 / dt.max(0.001));
+    let mut delta = err * kp + state.integral * ki + derivative * kd;
+    let max_step = (2400.0 * dt).max(1.0);
+    let delta_sq = delta.length_sq();
+    if delta_sq > max_step * max_step {
+        delta *= max_step / delta_sq.sqrt();
+    }
+    state.pos += delta;
+    state.prev_err = err;
+    state.pos
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_positions(
+    states: &mut Vec<UiPid2State>,
+    targets: &[egui::Pos2],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> Vec<egui::Pos2> {
+    if states.len() != targets.len() {
+        states.resize(targets.len(), UiPid2State::default());
+    }
+    let mut out = Vec::with_capacity(targets.len());
+    for (idx, target) in targets.iter().enumerate() {
+        out.push(pid_smooth_pos2(&mut states[idx], *target, dt, kp, ki, kd));
+    }
+    out
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_layered_positions(
+    states: &mut Vec<Vec<UiPid2State>>,
+    targets: &[Vec<egui::Pos2>],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> Vec<Vec<egui::Pos2>> {
+    if states.len() != targets.len() {
+        states.resize_with(targets.len(), Vec::new);
+    }
+    let mut out = Vec::with_capacity(targets.len());
+    for (layer_idx, layer_targets) in targets.iter().enumerate() {
+        let layer_states = &mut states[layer_idx];
+        if layer_states.len() != layer_targets.len() {
+            layer_states.resize(layer_targets.len(), UiPid2State::default());
+        }
+        let mut layer_out = Vec::with_capacity(layer_targets.len());
+        for (idx, target) in layer_targets.iter().enumerate() {
+            layer_out.push(pid_smooth_pos2(
+                &mut layer_states[idx],
+                *target,
+                dt,
+                kp,
+                ki,
+                kd,
+            ));
+        }
+        out.push(layer_out);
+    }
+    out
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_vec3(
+    state: &mut UiPid3State,
+    target: [f32; 3],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> [f32; 3] {
+    if !state.initialized {
+        state.pos = target;
+        state.prev_err = [0.0; 3];
+        state.integral = [0.0; 3];
+        state.initialized = true;
+        return target;
+    }
+    let inv_dt = 1.0 / dt.max(0.001);
+    let mut delta = [0.0f32; 3];
+    for axis in 0..3 {
+        let err = target[axis] - state.pos[axis];
+        state.integral[axis] = (state.integral[axis] + err * dt).clamp(-2.0, 2.0);
+        let derivative = (err - state.prev_err[axis]) * inv_dt;
+        delta[axis] = err * kp + state.integral[axis] * ki + derivative * kd;
+        state.prev_err[axis] = err;
+    }
+    let delta_mag_sq = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2];
+    let max_step = (2.0 * dt).max(0.002);
+    if delta_mag_sq > max_step * max_step {
+        let scale = max_step / delta_mag_sq.sqrt();
+        delta[0] *= scale;
+        delta[1] *= scale;
+        delta[2] *= scale;
+    }
+    state.pos[0] += delta[0];
+    state.pos[1] += delta[1];
+    state.pos[2] += delta[2];
+    state.pos
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn centroid_of_projected_positions(
+    sensory: &[egui::Pos2],
+    hidden: &[Vec<egui::Pos2>],
+    output: &[egui::Pos2],
+) -> Option<egui::Pos2> {
+    let mut sum = egui::Vec2::ZERO;
+    let mut count = 0usize;
+    for p in sensory {
+        sum += p.to_vec2();
+        count += 1;
+    }
+    for layer in hidden {
+        for p in layer {
+            sum += p.to_vec2();
+            count += 1;
+        }
+    }
+    for p in output {
+        sum += p.to_vec2();
+        count += 1;
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(egui::pos2(
+            sum.x / count as f32,
+            sum.y / count as f32,
+        ))
     }
 }
 
@@ -3046,7 +3832,10 @@ fn pid_smooth_point(
     let err = target.sub(state.pos);
     state.integral = state.integral.add(err.mul(dt));
     let derivative = err.sub(state.prev_err).mul(1.0 / dt.max(0.001));
-    let delta = err.mul(kp).add(state.integral.mul(ki)).add(derivative.mul(kd));
+    let delta = err
+        .mul(kp)
+        .add(state.integral.mul(ki))
+        .add(derivative.mul(kd));
     state.pos = state.pos.add(delta);
     state.prev_err = err;
     state.pos
@@ -3094,11 +3883,30 @@ struct SnapshotTopo {
 
 #[cfg(feature = "ui")]
 impl Probe {
-    fn new(id: u32, name: String, color: egui::Color32, target: ProbeTarget, kind: ProbeKind, capacity: usize) -> Self {
-        Self { id, name, color, enabled: true, target, kind, data: vec![0.0; capacity], write_idx: 0, capacity }
+    fn new(
+        id: u32,
+        name: String,
+        color: egui::Color32,
+        target: ProbeTarget,
+        kind: ProbeKind,
+        capacity: usize,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            color,
+            enabled: true,
+            target,
+            kind,
+            data: vec![0.0; capacity],
+            write_idx: 0,
+            capacity,
+        }
     }
     fn push(&mut self, v: f32) {
-        if self.capacity == 0 { return; }
+        if self.capacity == 0 {
+            return;
+        }
         let idx = self.write_idx % self.capacity;
         self.data[idx] = v;
         self.write_idx = (self.write_idx + 1) % self.capacity;
@@ -3106,63 +3914,121 @@ impl Probe {
 }
 
 #[cfg(feature = "ui")]
-fn sample_probe_value(runner: &Runner, last_sensory_spikes: &[i8], last_bands: Option<&[f32]>, p: &Probe) -> Option<f32> {
+fn sample_probe_value(
+    runner: &Runner,
+    last_sensory_spikes: &[i8],
+    last_bands: Option<&[f32]>,
+    p: &Probe,
+) -> Option<f32> {
     let r = runner;
     match (p.kind, p.target) {
-        (ProbeKind::Spike, ProbeTarget::Sensory(i)) => last_sensory_spikes.get(i).copied().map(|v| v as f32),
-        (ProbeKind::Spike, ProbeTarget::Hidden(l, j)) => r.last_spk_h.get(l).and_then(|a| a.get(j)).copied().map(|v| v as f32),
-        (ProbeKind::Spike, ProbeTarget::Output(k)) => r.last_spk_o.get(k).copied().map(|v| v as f32),
-        (ProbeKind::Membrane, ProbeTarget::Hidden(l, j)) => r.v_h.get(l).and_then(|a| a.get(j)).copied().map(|v| v as f32),
+        (ProbeKind::Spike, ProbeTarget::Sensory(i)) => {
+            last_sensory_spikes.get(i).copied().map(|v| v as f32)
+        }
+        (ProbeKind::Spike, ProbeTarget::Hidden(l, j)) => r
+            .last_spk_h
+            .get(l)
+            .and_then(|a| a.get(j))
+            .copied()
+            .map(|v| v as f32),
+        (ProbeKind::Spike, ProbeTarget::Output(k)) => {
+            r.last_spk_o.get(k).copied().map(|v| v as f32)
+        }
+        (ProbeKind::Membrane, ProbeTarget::Hidden(l, j)) => r
+            .v_h
+            .get(l)
+            .and_then(|a| a.get(j))
+            .copied()
+            .map(|v| v as f32),
         (ProbeKind::Membrane, ProbeTarget::Output(k)) => r.v_o.get(k).copied().map(|v| v as f32),
-        (ProbeKind::Level, ProbeTarget::Band(b)) => last_bands.and_then(|bands| bands.get(b).copied()),
+        (ProbeKind::Level, ProbeTarget::Band(b)) => {
+            last_bands.and_then(|bands| bands.get(b).copied())
+        }
         (ProbeKind::Current, ProbeTarget::ConnIn(i, j)) => {
             // Approx per-connection current: weight * pre_spike (S→H0)
             if j < r.v_h.get(0).map(|a| a.len()).unwrap_or(0) && i < r.net.num_sensory_neurons {
                 let pre = last_sensory_spikes.get(i).copied().unwrap_or(0) as f64;
                 let w = *r.w_in.get((j, i)).unwrap_or(&0.0);
                 Some((pre * w) as f32)
-            } else { None }
+            } else {
+                None
+            }
         }
         (ProbeKind::Current, ProbeTarget::ConnFwd(l, i, j)) => {
             // Approx per-connection current: w * pre_spike (H→H)
-            if l < r.w_hh_fwd.len() && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0) && j < r.last_spk_h.get(l+1).map(|a| a.len()).unwrap_or(0) {
+            if l < r.w_hh_fwd.len()
+                && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0)
+                && j < r.last_spk_h.get(l + 1).map(|a| a.len()).unwrap_or(0)
+            {
                 let pre = r.last_spk_h[l].get(i).copied().unwrap_or(0) as f64;
                 let w = *r.w_hh_fwd[l].get((j, i)).unwrap_or(&0.0);
                 Some((pre * w) as f32)
-            } else { None }
+            } else {
+                None
+            }
         }
         (ProbeKind::Current, ProbeTarget::ConnBwd(l, i, j)) => {
             // Backward matrix: w_bwd(l)[i,j] with pre from layer l+1 index j
-            if l < r.w_hh_bwd.len() && j < r.last_spk_h.get(l+1).map(|a| a.len()).unwrap_or(0) && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0) {
-                let pre = r.last_spk_h[l+1].get(j).copied().unwrap_or(0) as f64;
+            if l < r.w_hh_bwd.len()
+                && j < r.last_spk_h.get(l + 1).map(|a| a.len()).unwrap_or(0)
+                && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0)
+            {
+                let pre = r.last_spk_h[l + 1].get(j).copied().unwrap_or(0) as f64;
                 let w = *r.w_hh_bwd[l].get((i, j)).unwrap_or(&0.0);
                 Some((pre * w) as f32)
-            } else { None }
+            } else {
+                None
+            }
         }
         (ProbeKind::Current, ProbeTarget::ConnOut(j, k)) => {
             // H_last→O: w_out[k,j] * pre_spike
             let l_count_h = r.last_spk_h.len();
-            if l_count_h == 0 { return None; }
-            if j < r.last_spk_h[l_count_h -1].len() && k < r.net.num_output_neurons {
-                let pre = r.last_spk_h[l_count_h -1].get(j).copied().unwrap_or(0) as f64;
+            if l_count_h == 0 {
+                return None;
+            }
+            if j < r.last_spk_h[l_count_h - 1].len() && k < r.net.num_output_neurons {
+                let pre = r.last_spk_h[l_count_h - 1].get(j).copied().unwrap_or(0) as f64;
                 let w = *r.w_out.get((k, j)).unwrap_or(&0.0);
                 Some((pre * w) as f32)
-            } else { None }
+            } else {
+                None
+            }
         }
         (ProbeKind::Current, ProbeTarget::ConnRec(l, i, j)) => {
-            if l < r.w_hh_rec.len() && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0) && j < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0) {
+            if l < r.w_hh_rec.len()
+                && i < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0)
+                && j < r.last_spk_h.get(l).map(|a| a.len()).unwrap_or(0)
+            {
                 let pre = r.last_spk_h[l].get(i).copied().unwrap_or(0) as f64;
                 let w = *r.w_hh_rec[l].get((j, i)).unwrap_or(&0.0);
                 Some((pre * w) as f32)
-            } else { None }
+            } else {
+                None
+            }
         }
         // Fallback: try total currents if available (UI Runner caches)
-        (ProbeKind::Current, ProbeTarget::Hidden(0, j)) => r.last_i_h0.as_ref().and_then(|v| v.get(j)).copied().map(|v| v as f32),
+        (ProbeKind::Current, ProbeTarget::Hidden(0, j)) => r
+            .last_i_h0
+            .as_ref()
+            .and_then(|v| v.get(j))
+            .copied()
+            .map(|v| v as f32),
         (ProbeKind::Current, ProbeTarget::Hidden(l, j)) => {
-            if l == 0 { return None; }
-            r.last_i_f.get(l).and_then(|v| v.get(j)).copied().map(|v| v as f32)
+            if l == 0 {
+                return None;
+            }
+            r.last_i_f
+                .get(l)
+                .and_then(|v| v.get(j))
+                .copied()
+                .map(|v| v as f32)
         }
-        (ProbeKind::Current, ProbeTarget::Output(k)) => r.last_i_o.as_ref().and_then(|v| v.get(k)).copied().map(|v| v as f32),
+        (ProbeKind::Current, ProbeTarget::Output(k)) => r
+            .last_i_o
+            .as_ref()
+            .and_then(|v| v.get(k))
+            .copied()
+            .map(|v| v as f32),
         _ => None,
     }
 }
@@ -3173,7 +4039,7 @@ fn sample_probe_value(runner: &Runner, last_sensory_spikes: &[i8], last_bands: O
 struct ProbeMeta {
     id: u32,
     name: String,
-    color_rgba: [u8;4],
+    color_rgba: [u8; 4],
     enabled: bool,
     kind: String,
     target: String,
@@ -3183,7 +4049,11 @@ struct ProbeMeta {
 impl App {
     // ---------------- Python tools helpers ----------------
     fn verify_python(p: &str) -> bool {
-        std::process::Command::new(p).arg("-V").output().map(|o| o.status.success()).unwrap_or(false)
+        std::process::Command::new(p)
+            .arg("-V")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     #[allow(dead_code)]
@@ -3193,19 +4063,43 @@ impl App {
 
     fn resolve_python_with_override(override_path: Option<String>) -> anyhow::Result<String> {
         // 1) User override
-        if let Some(p) = &override_path { if !p.is_empty() && Self::verify_python(p) { return Ok(p.clone()); } }
+        if let Some(p) = &override_path {
+            if !p.is_empty() && Self::verify_python(p) {
+                return Ok(p.clone());
+            }
+        }
         // 2) Env var
-        if let Ok(p) = std::env::var("NMD_PYTHON") { if Self::verify_python(&p) { return Ok(p); } }
+        if let Ok(p) = std::env::var("NMD_PYTHON") {
+            if Self::verify_python(&p) {
+                return Ok(p);
+            }
+        }
         // 3) .venv in cwd
         if let Ok(cwd) = std::env::current_dir() {
             let cand = cwd.join(".venv").join("bin").join("python");
-            if cand.exists() { let s = cand.to_string_lossy().to_string(); if Self::verify_python(&s) { return Ok(s); } }
+            if cand.exists() {
+                let s = cand.to_string_lossy().to_string();
+                if Self::verify_python(&s) {
+                    return Ok(s);
+                }
+            }
             let cand_win = cwd.join(".venv").join("Scripts").join("python.exe");
-            if cand_win.exists() { let s = cand_win.to_string_lossy().to_string(); if Self::verify_python(&s) { return Ok(s); } }
+            if cand_win.exists() {
+                let s = cand_win.to_string_lossy().to_string();
+                if Self::verify_python(&s) {
+                    return Ok(s);
+                }
+            }
         }
         // 4) PATH
-        for name in ["python3", "python"] { if Self::verify_python(name) { return Ok(name.to_string()); } }
-        Err(anyhow::anyhow!("No working Python interpreter found. Set NMD_PYTHON or configure a venv."))
+        for name in ["python3", "python"] {
+            if Self::verify_python(name) {
+                return Ok(name.to_string());
+            }
+        }
+        Err(anyhow::anyhow!(
+            "No working Python interpreter found. Set NMD_PYTHON or configure a venv."
+        ))
     }
 
     fn resolve_tool(script_file: &str) -> anyhow::Result<std::path::PathBuf> {
@@ -3216,47 +4110,67 @@ impl App {
         if let Ok(tools_dir) = std::env::var("NMD_TOOLS_DIR") {
             let p = Path::new(&tools_dir).join(script_file);
             tried.push(p.clone());
-            if p.exists() { return Ok(p); }
+            if p.exists() {
+                return Ok(p);
+            }
         }
 
         // 1) Relative to current working directory
         let rel = Path::new("tools").join(script_file);
         tried.push(rel.clone());
-        if rel.exists() { return Ok(rel); }
+        if rel.exists() {
+            return Ok(rel);
+        }
 
         // 2) CARGO_MANIFEST_DIR (project root) if available
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
             let p = Path::new(&manifest_dir).join("tools").join(script_file);
             tried.push(p.clone());
-            if p.exists() { return Ok(p); }
+            if p.exists() {
+                return Ok(p);
+            }
         }
 
         // 3) Next to current executable, and parents
         if let Ok(exe) = std::env::current_exe() {
             let mut cur = exe.parent().map(Path::to_path_buf);
-            for _ in 0..4 { // check a few ancestors
+            for _ in 0..4 {
+                // check a few ancestors
                 if let Some(dir) = cur {
                     let p = dir.join("tools").join(script_file);
                     tried.push(p.clone());
-                    if p.exists() { return Ok(p); }
+                    if p.exists() {
+                        return Ok(p);
+                    }
                     cur = dir.parent().map(Path::to_path_buf);
-                } else { break; }
+                } else {
+                    break;
+                }
             }
         }
 
         // Build helpful error listing attempted paths
         let mut msg = format!("Tool script not found: {}\nTried:\n", script_file);
-        for p in tried { msg.push_str(&format!(" - {}\n", p.display())); }
+        for p in tried {
+            msg.push_str(&format!(" - {}\n", p.display()));
+        }
         msg.push_str("Tip: set NMD_TOOLS_DIR to the folder containing the scripts, or run from the project root.\n");
         Err(anyhow::anyhow!(msg))
     }
 
-    fn run_tool_with_python(python_override: Option<String>, script_file: &str, args: &[std::ffi::OsString]) -> anyhow::Result<std::process::Output> {
-        let py = Self::resolve_python_with_override(python_override).map_err(|e| anyhow::anyhow!(format!("Python resolve failed: {}", e)))?;
+    fn run_tool_with_python(
+        python_override: Option<String>,
+        script_file: &str,
+        args: &[std::ffi::OsString],
+    ) -> anyhow::Result<std::process::Output> {
+        let py = Self::resolve_python_with_override(python_override)
+            .map_err(|e| anyhow::anyhow!(format!("Python resolve failed: {}", e)))?;
         let tool = Self::resolve_tool(script_file)?;
         let mut cmd = std::process::Command::new(&py);
         cmd.arg(tool.as_os_str());
-        for a in args { cmd.arg(a); }
+        for a in args {
+            cmd.arg(a);
+        }
         match cmd.output() {
             Ok(o) => Ok(o),
             Err(e) => {
@@ -3269,24 +4183,34 @@ impl App {
         }
     }
     fn export_probes_json(&self) -> anyhow::Result<String> {
-        let metas: Vec<ProbeMeta> = self.probes.iter().map(|p| ProbeMeta{
-            id: p.id,
-            name: p.name.clone(),
-            color_rgba: [p.color.r(), p.color.g(), p.color.b(), p.color.a()],
-            enabled: p.enabled,
-            kind: match p.kind { ProbeKind::Spike=>"Spike", ProbeKind::Membrane=>"Membrane", ProbeKind::Current=>"Current", ProbeKind::Level=>"Level" }.to_string(),
-            target: match p.target {
-                ProbeTarget::Sensory(i)=>format!("Sensory:{}", i),
-                ProbeTarget::Hidden(l,j)=>format!("Hidden:{},{}", l, j),
-                ProbeTarget::Output(k)=>format!("Output:{}", k),
-                ProbeTarget::ConnIn(i,j)=>format!("ConnIn:{},{}", i, j),
-                ProbeTarget::ConnFwd(l,i,j)=>format!("ConnFwd:{},{},{}", l,i,j),
-                ProbeTarget::ConnBwd(l,i,j)=>format!("ConnBwd:{},{},{}", l,i,j),
-                ProbeTarget::ConnOut(j,k)=>format!("ConnOut:{},{}", j,k),
-                ProbeTarget::ConnRec(l,i,j)=>format!("ConnRec:{},{},{}", l,i,j),
-                ProbeTarget::Band(b)=>format!("Band:{}", b),
-            },
-        }).collect();
+        let metas: Vec<ProbeMeta> = self
+            .probes
+            .iter()
+            .map(|p| ProbeMeta {
+                id: p.id,
+                name: p.name.clone(),
+                color_rgba: [p.color.r(), p.color.g(), p.color.b(), p.color.a()],
+                enabled: p.enabled,
+                kind: match p.kind {
+                    ProbeKind::Spike => "Spike",
+                    ProbeKind::Membrane => "Membrane",
+                    ProbeKind::Current => "Current",
+                    ProbeKind::Level => "Level",
+                }
+                .to_string(),
+                target: match p.target {
+                    ProbeTarget::Sensory(i) => format!("Sensory:{}", i),
+                    ProbeTarget::Hidden(l, j) => format!("Hidden:{},{}", l, j),
+                    ProbeTarget::Output(k) => format!("Output:{}", k),
+                    ProbeTarget::ConnIn(i, j) => format!("ConnIn:{},{}", i, j),
+                    ProbeTarget::ConnFwd(l, i, j) => format!("ConnFwd:{},{},{}", l, i, j),
+                    ProbeTarget::ConnBwd(l, i, j) => format!("ConnBwd:{},{},{}", l, i, j),
+                    ProbeTarget::ConnOut(j, k) => format!("ConnOut:{},{}", j, k),
+                    ProbeTarget::ConnRec(l, i, j) => format!("ConnRec:{},{},{}", l, i, j),
+                    ProbeTarget::Band(b) => format!("Band:{}", b),
+                },
+            })
+            .collect();
         Ok(serde_json::to_string_pretty(&metas)?)
     }
 
@@ -3296,7 +4220,13 @@ impl App {
         self.next_probe_id = 1;
         for m in metas {
             // parse kind
-            let kind = match m.kind.as_str() { "Spike"=>ProbeKind::Spike, "Membrane"=>ProbeKind::Membrane, "Current"=>ProbeKind::Current, "Level"=>ProbeKind::Level, _=>ProbeKind::Spike };
+            let kind = match m.kind.as_str() {
+                "Spike" => ProbeKind::Spike,
+                "Membrane" => ProbeKind::Membrane,
+                "Current" => ProbeKind::Current,
+                "Level" => ProbeKind::Level,
+                _ => ProbeKind::Spike,
+            };
             // parse target
             let target = if let Some(rest) = m.target.strip_prefix("Sensory:") {
                 ProbeTarget::Sensory(rest.parse::<usize>().unwrap_or(0))
@@ -3304,42 +4234,50 @@ impl App {
                 let mut it = rest.split(',');
                 let l = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::Hidden(l,j)
+                ProbeTarget::Hidden(l, j)
             } else if let Some(rest) = m.target.strip_prefix("Output:") {
                 ProbeTarget::Output(rest.parse::<usize>().unwrap_or(0))
             } else if let Some(rest) = m.target.strip_prefix("ConnIn:") {
                 let mut it = rest.split(',');
                 let i = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::ConnIn(i,j)
+                ProbeTarget::ConnIn(i, j)
             } else if let Some(rest) = m.target.strip_prefix("ConnFwd:") {
                 let mut it = rest.split(',');
                 let l = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let i = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::ConnFwd(l,i,j)
+                ProbeTarget::ConnFwd(l, i, j)
             } else if let Some(rest) = m.target.strip_prefix("ConnBwd:") {
                 let mut it = rest.split(',');
                 let l = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let i = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::ConnBwd(l,i,j)
+                ProbeTarget::ConnBwd(l, i, j)
             } else if let Some(rest) = m.target.strip_prefix("ConnOut:") {
                 let mut it = rest.split(',');
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let k = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::ConnOut(j,k)
+                ProbeTarget::ConnOut(j, k)
             } else if let Some(rest) = m.target.strip_prefix("ConnRec:") {
                 let mut it = rest.split(',');
                 let l = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let i = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
                 let j = it.next().and_then(|x| x.parse::<usize>().ok()).unwrap_or(0);
-                ProbeTarget::ConnRec(l,i,j)
+                ProbeTarget::ConnRec(l, i, j)
             } else if let Some(rest) = m.target.strip_prefix("Band:") {
                 ProbeTarget::Band(rest.parse::<usize>().unwrap_or(0))
-            } else { ProbeTarget::Sensory(0) };
-            let color = egui::Color32::from_rgba_unmultiplied(m.color_rgba[0], m.color_rgba[1], m.color_rgba[2], m.color_rgba[3]);
-            let id = self.next_probe_id; self.next_probe_id += 1;
+            } else {
+                ProbeTarget::Sensory(0)
+            };
+            let color = egui::Color32::from_rgba_unmultiplied(
+                m.color_rgba[0],
+                m.color_rgba[1],
+                m.color_rgba[2],
+                m.color_rgba[3],
+            );
+            let id = self.next_probe_id;
+            self.next_probe_id += 1;
             let mut pr = Probe::new(id, m.name, color, target, kind, 10_000);
             pr.enabled = m.enabled;
             self.probes.push(pr);
@@ -3367,23 +4305,47 @@ enum InputSource {
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum NeuronModelSel { Lif, Izh, Aarnn }
+enum NeuronModelSel {
+    Lif,
+    Izh,
+    Aarnn,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum IzhPreset { RS, FS, IB, CH, LTS, RZ, TC, P }
+enum IzhPreset {
+    RS,
+    FS,
+    IB,
+    CH,
+    LTS,
+    RZ,
+    TC,
+    P,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum LearningSel { Stdp, Hebb, Oja, Aarnn }
+enum LearningSel {
+    Stdp,
+    Hebb,
+    Oja,
+    Aarnn,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum NetworkLayout { Conventional, Aarnn }
+enum NetworkLayout {
+    Conventional,
+    Aarnn,
+}
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
-enum TfliteImportMode { Mlp, Cnn }
+enum TfliteImportMode {
+    Mlp,
+    Cnn,
+}
 
 #[cfg(feature = "ui")]
 #[derive(PartialEq, Clone, Debug)]
@@ -3399,30 +4361,46 @@ enum ContextPick {
     Sensory(usize),
     Hidden(usize, usize),
     Output(usize),
-    EdgeIn(usize, usize),              // S i -> H0 j
-    EdgeFwd(usize, usize, usize),      // H(l) i -> H(l+1) j
-    EdgeBwd(usize, usize, usize),      // H(l+1) j -> H(l) i
-    EdgeOut(usize, usize),             // H_last j -> O k
-    EdgeRec(usize, usize, usize),      // H(l) i -> H(l) j
+    EdgeIn(usize, usize),         // S i -> H0 j
+    EdgeFwd(usize, usize, usize), // H(l) i -> H(l+1) j
+    EdgeBwd(usize, usize, usize), // H(l+1) j -> H(l) i
+    EdgeOut(usize, usize),        // H_last j -> O k
+    EdgeRec(usize, usize, usize), // H(l) i -> H(l) j
 }
 
 impl ContextPick {
     fn is_neuron(&self) -> bool {
-        matches!(self, ContextPick::Sensory(_) | ContextPick::Hidden(_, _) | ContextPick::Output(_))
+        matches!(
+            self,
+            ContextPick::Sensory(_) | ContextPick::Hidden(_, _) | ContextPick::Output(_)
+        )
     }
 }
 
 #[cfg(feature = "ui")]
 fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
-    let ax = a.x; let ay = a.y; let bx = b.x; let by = b.y; let px = p.x; let py = p.y;
-    let vx = bx - ax; let vy = by - ay;
-    let wx = px - ax; let wy = py - ay;
-    let vv = vx*vx + vy*vy;
-    let t = if vv > 0.0 { (wx*vx + wy*vy) / vv } else { 0.0 };
+    let ax = a.x;
+    let ay = a.y;
+    let bx = b.x;
+    let by = b.y;
+    let px = p.x;
+    let py = p.y;
+    let vx = bx - ax;
+    let vy = by - ay;
+    let wx = px - ax;
+    let wy = py - ay;
+    let vv = vx * vx + vy * vy;
+    let t = if vv > 0.0 {
+        (wx * vx + wy * vy) / vv
+    } else {
+        0.0
+    };
     let t = t.clamp(0.0, 1.0);
-    let cx = ax + t*vx; let cy = ay + t*vy;
-    let dx = px - cx; let dy = py - cy;
-    (dx*dx + dy*dy).sqrt()
+    let cx = ax + t * vx;
+    let cy = ay + t * vy;
+    let dx = px - cx;
+    let dy = py - cy;
+    (dx * dx + dy * dy).sqrt()
 }
 
 #[cfg(feature = "ui")]
@@ -3480,77 +4458,124 @@ impl eframe::App for App {
         let bands_guard = spectral_arc.try_read().ok();
         #[cfg(all(feature = "robot_io", unix))]
         let ipc_stats_guard = ipc_stats_arc.try_read().ok();
-        
-        let (net_cloned, lif_cloned, stdp_cloned, model_cloned, learning_cloned, _t_ms_cloned, total_neurons_cloned, runner_ready): (NetworkConfig, LIFParams, STDPParams, NeuronModel, Learning, f64, usize, bool) = if let Ok(r) = runner_arc.try_read() {
-            (r.net.clone(), r.lif.clone(), r.stdp.clone(), r.neuron_model, r.learning, r.t_ms, r.total_neurons(), true)
+
+        let (
+            net_cloned,
+            lif_cloned,
+            stdp_cloned,
+            model_cloned,
+            learning_cloned,
+            _t_ms_cloned,
+            total_neurons_cloned,
+            runner_ready,
+        ): (
+            NetworkConfig,
+            LIFParams,
+            STDPParams,
+            NeuronModel,
+            Learning,
+            f64,
+            usize,
+            bool,
+        ) = if let Ok(r) = runner_arc.try_read() {
+            (
+                r.net.clone(),
+                r.lif.clone(),
+                r.stdp.clone(),
+                r.neuron_model,
+                r.learning,
+                r.t_ms,
+                r.total_neurons(),
+                true,
+            )
         } else {
             // Fallback to local values if simulation is writing (busy)
-            (self.local_net.clone(), LIFParams::default(), STDPParams::default(), NeuronModel::Aarnn, Learning::Aarnn, 0.0, 0, false)
+            (
+                self.local_net.clone(),
+                LIFParams::default(),
+                STDPParams::default(),
+                NeuronModel::Aarnn,
+                Learning::Aarnn,
+                0.0,
+                0,
+                false,
+            )
         };
 
-                // --- 1. Distributed State Sync ---
-                {
-                    observe_time!("App::update/dist_sync");
-                    if let Some(ref node) = self.distributed_node {
-                        if let Ok(mut state) = node.state.try_write() {
-                            if state.is_orchestrator {
-                                if !state.network_registry.contains_key(&self.brain_id) {
-                                    state.network_registry.insert(self.brain_id.clone(), crate::distributed::proto::NetworkStatus {
-                                        network_id: self.brain_id.clone(),
-                                        distribution: std::collections::HashMap::new(),
-                                        current_dt: lif_cloned.dt,
-                                        total_neurons: total_neurons_cloned as u64,
-                                        num_layers: (net_cloned.num_hidden_layers + 1) as u32,
-                                        desired_aarnn_depth: net_cloned.aarnn_layer_depth as u32,
-                                        config_json: serde_json::to_string(&net_cloned).unwrap_or_default(),
-                                        neuron_model: model_cloned.to_str().to_string(),
-                                        learning_rule: learning_cloned.to_str().to_string(),
-                                        playing: self.playing,
-                                    });
-                                } else {
-                                    let nodes_empty = state.nodes.is_empty();
-                                    if let Some(net_status) = state.network_registry.get_mut(&self.brain_id) {
-                                        if runner_ready {
-                                            // Only update total_neurons if it's non-zero or if we are the only node.
-                                            // This prevents flickering to 0 or local-only count in a distributed setup.
-                                            if total_neurons_cloned > 0 || nodes_empty {
-                                                net_status.total_neurons = net_status.total_neurons.max(total_neurons_cloned as u64);
-                                            }
-                                            net_status.current_dt = lif_cloned.dt;
-                                            net_status.num_layers = (net_cloned.num_hidden_layers + 1) as u32;
-                                            net_status.desired_aarnn_depth = net_cloned.aarnn_layer_depth as u32;
-                                            net_status.neuron_model = model_cloned.to_str().to_string();
-                                            net_status.learning_rule = learning_cloned.to_str().to_string();
-                                            if self.last_synced_config.as_ref() != Some(&net_cloned) {
-                                                self.last_config_json = serde_json::to_string(&net_cloned).unwrap_or_default();
-                                                self.last_synced_config = Some(net_cloned.clone());
-                                            }
-                                            net_status.config_json = self.last_config_json.clone();
-                                            if nodes_empty {
-                                                net_status.playing = self.playing;
-                                            }
-                                        }
+        // --- 1. Distributed State Sync ---
+        {
+            observe_time!("App::update/dist_sync");
+            if let Some(ref node) = self.distributed_node {
+                if let Ok(mut state) = node.state.try_write() {
+                    if state.is_orchestrator {
+                        if !state.network_registry.contains_key(&self.brain_id) {
+                            state.network_registry.insert(
+                                self.brain_id.clone(),
+                                crate::distributed::proto::NetworkStatus {
+                                    network_id: self.brain_id.clone(),
+                                    distribution: std::collections::HashMap::new(),
+                                    current_dt: lif_cloned.dt,
+                                    total_neurons: total_neurons_cloned as u64,
+                                    num_layers: (net_cloned.num_hidden_layers + 1) as u32,
+                                    desired_aarnn_depth: net_cloned.aarnn_layer_depth as u32,
+                                    config_json: serde_json::to_string(&net_cloned)
+                                        .unwrap_or_default(),
+                                    neuron_model: model_cloned.to_str().to_string(),
+                                    learning_rule: learning_cloned.to_str().to_string(),
+                                    playing: self.playing,
+                                },
+                            );
+                        } else {
+                            let nodes_empty = state.nodes.is_empty();
+                            if let Some(net_status) = state.network_registry.get_mut(&self.brain_id)
+                            {
+                                if runner_ready {
+                                    // Only update total_neurons if it's non-zero or if we are the only node.
+                                    // This prevents flickering to 0 or local-only count in a distributed setup.
+                                    if total_neurons_cloned > 0 || nodes_empty {
+                                        net_status.total_neurons = net_status
+                                            .total_neurons
+                                            .max(total_neurons_cloned as u64);
                                     }
-                                }
-                            }
-                    
-                            // Sync GA status to distributed state for heartbeat reporting
-                            state.ga_running = self.ga_running;
-                            if let Some(ga) = &self.ga_search {
-                                state.ga_generation = ga.generation as u32;
-                                state.ga_best_fitness = ga.best_fitness;
-                                if let Some(best) = &ga.best_config {
-                                    if self.last_ga_best_config.as_ref() != Some(best) {
-                                        self.last_ga_best_config_json = serde_json::to_string(best).unwrap_or_default();
-                                        self.last_ga_best_config = Some(best.clone());
+                                    net_status.current_dt = lif_cloned.dt;
+                                    net_status.num_layers =
+                                        (net_cloned.num_hidden_layers + 1) as u32;
+                                    net_status.desired_aarnn_depth =
+                                        net_cloned.aarnn_layer_depth as u32;
+                                    net_status.neuron_model = model_cloned.to_str().to_string();
+                                    net_status.learning_rule = learning_cloned.to_str().to_string();
+                                    if self.last_synced_config.as_ref() != Some(&net_cloned) {
+                                        self.last_config_json =
+                                            serde_json::to_string(&net_cloned).unwrap_or_default();
+                                        self.last_synced_config = Some(net_cloned.clone());
                                     }
-                                    state.ga_best_config_json = self.last_ga_best_config_json.clone();
+                                    net_status.config_json = self.last_config_json.clone();
+                                    if nodes_empty {
+                                        net_status.playing = self.playing;
+                                    }
                                 }
                             }
                         }
                     }
+
+                    // Sync GA status to distributed state for heartbeat reporting
+                    state.ga_running = self.ga_running;
+                    if let Some(ga) = &self.ga_search {
+                        state.ga_generation = ga.generation as u32;
+                        state.ga_best_fitness = ga.best_fitness;
+                        if let Some(best) = &ga.best_config {
+                            if self.last_ga_best_config.as_ref() != Some(best) {
+                                self.last_ga_best_config_json =
+                                    serde_json::to_string(best).unwrap_or_default();
+                                self.last_ga_best_config = Some(best.clone());
+                            }
+                            state.ga_best_config_json = self.last_ga_best_config_json.clone();
+                        }
+                    }
                 }
-        
+            }
+        }
+
         if let Some(ref node) = self.distributed_node {
             if let Ok(state) = node.state.try_read() {
                 self.dist_is_orchestrator = state.is_orchestrator;
@@ -3562,7 +4587,11 @@ impl eframe::App for App {
 
         while let Ok(msg) = self.cluster_snapshot_rx.try_recv() {
             match msg {
-                ClusterSnapshotMsg::Ok { network_id, node_id, snap } => {
+                ClusterSnapshotMsg::Ok {
+                    network_id,
+                    node_id,
+                    snap,
+                } => {
                     self.cluster_snapshot_inflight = false;
                     self.cluster_snapshot_last_fetch = Some(std::time::Instant::now());
                     self.cluster_snapshot_network_id = Some(network_id);
@@ -3571,10 +4600,11 @@ impl eframe::App for App {
                     {
                         self.cluster_topo_cache = snap.topo.clone();
                     }
-                    
+
                     // Re-calculate edges from the remote snapshot
                     let density = self.overlay_density;
-                    let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, &snap);
+                    let (edges, sizes, counts, output_count) =
+                        Self::compute_edges_from_snapshot(density, &snap);
                     self.cached_edges = edges;
                     self.cached_layer_sizes = sizes;
                     self.cached_conn_counts = counts;
@@ -3592,13 +4622,22 @@ impl eframe::App for App {
 
                     self.cluster_snapshot_cache = Some(snap);
                     self.status = "Remote snapshot updated (with connections)".to_string();
-                    
+
                     // Trigger layout recompute to ensure nodes are aligned
                     self.refresh_ui_buffers();
                 }
-                ClusterSnapshotMsg::Err { network_id, node_id, error } => {
+                ClusterSnapshotMsg::Err {
+                    network_id,
+                    node_id,
+                    error,
+                } => {
                     self.cluster_snapshot_inflight = false;
-                    nm_err!("[warn] Cluster snapshot failed (net={}, node={}): {}", network_id, node_id, error);
+                    nm_err!(
+                        "[warn] Cluster snapshot failed (net={}, node={}): {}",
+                        network_id,
+                        node_id,
+                        error
+                    );
                 }
             }
         }
@@ -3619,8 +4658,11 @@ impl eframe::App for App {
                             addr = format!("http://{}", addr);
                         }
                         let now = std::time::Instant::now();
-                        let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| now.duration_since(t) > std::time::Duration::from_secs(2));
-                        let needs_refresh = self.cluster_snapshot_network_id.as_deref() != Some(net_id)
+                        let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
+                            now.duration_since(t) > std::time::Duration::from_secs(2)
+                        });
+                        let needs_refresh = self.cluster_snapshot_network_id.as_deref()
+                            != Some(net_id)
                             || self.cluster_snapshot_node_id.as_deref() != Some(&node_id);
                         if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
                             self.cluster_snapshot_inflight = true;
@@ -3679,14 +4721,19 @@ impl eframe::App for App {
             } else if let Some(node) = self.distributed_node.clone() {
                 let (local_node_id, net_arc) = {
                     if let Ok(state) = node.state.try_read() {
-                        (Some(state.node_id.clone()), state.networks.get(net_id).cloned())
+                        (
+                            Some(state.node_id.clone()),
+                            state.networks.get(net_id).cloned(),
+                        )
                     } else {
                         (None, None)
                     }
                 };
                 if let (Some(local_node_id), Some(net_arc)) = (local_node_id, net_arc) {
                     let now = std::time::Instant::now();
-                    let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| now.duration_since(t) > std::time::Duration::from_secs(2));
+                    let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
+                        now.duration_since(t) > std::time::Duration::from_secs(2)
+                    });
                     let needs_refresh = self.cluster_snapshot_network_id.as_deref() != Some(net_id)
                         || self.cluster_snapshot_node_id.as_deref() != Some(local_node_id.as_str());
                     if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
@@ -3701,7 +4748,8 @@ impl eframe::App for App {
                                 self.cluster_topo_cache = snap.topo.clone();
                             }
                             let density = self.overlay_density;
-                            let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, &snap);
+                            let (edges, sizes, counts, output_count) =
+                                Self::compute_edges_from_snapshot(density, &snap);
                             self.cached_edges = edges;
                             self.cached_layer_sizes = sizes;
                             self.cached_conn_counts = counts;
@@ -3729,21 +4777,31 @@ impl eframe::App for App {
 
         while let Ok(msg) = self.remote_status_rx.try_recv() {
             match msg {
-                RemoteStatusMsg::Update { addr, nodes, networks } => {
-                    self.remote_statuses.insert(addr, RemoteStatusSnapshot {
-                        nodes,
-                        networks,
-                        last_error: None,
-                        last_update: std::time::Instant::now(),
-                    });
+                RemoteStatusMsg::Update {
+                    addr,
+                    nodes,
+                    networks,
+                } => {
+                    self.remote_statuses.insert(
+                        addr,
+                        RemoteStatusSnapshot {
+                            nodes,
+                            networks,
+                            last_error: None,
+                            last_update: std::time::Instant::now(),
+                        },
+                    );
                 }
                 RemoteStatusMsg::Error { addr, error } => {
-                    let entry = self.remote_statuses.entry(addr).or_insert(RemoteStatusSnapshot {
-                        nodes: HashMap::new(),
-                        networks: HashMap::new(),
-                        last_error: None,
-                        last_update: std::time::Instant::now(),
-                    });
+                    let entry = self
+                        .remote_statuses
+                        .entry(addr)
+                        .or_insert(RemoteStatusSnapshot {
+                            nodes: HashMap::new(),
+                            networks: HashMap::new(),
+                            last_error: None,
+                            last_update: std::time::Instant::now(),
+                        });
                     entry.last_error = Some(error);
                     entry.last_update = std::time::Instant::now();
                 }
@@ -3752,54 +4810,105 @@ impl eframe::App for App {
 
         while let Ok(msg) = self.tool_task_rx.try_recv() {
             match msg {
-                ToolTaskResult::TfliteImport { path, json, stdout, stderr, error } => {
+                ToolTaskResult::TfliteImport {
+                    path,
+                    json,
+                    stdout,
+                    stderr,
+                    error,
+                } => {
                     if let Some(err) = error {
-                        let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+                        let details = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
                         if details.is_empty() {
                             self.status = format!("TFLite import failed: {}", err);
-                            self.last_import_report = Some(format!("TFLite import failed: {}", err));
+                            self.last_import_report =
+                                Some(format!("TFLite import failed: {}", err));
                         } else {
                             self.status = format!("TFLite import failed: {} ({})", err, details);
-                            self.last_import_report = Some(format!("TFLite import failed: {} ({})", err, details));
+                            self.last_import_report =
+                                Some(format!("TFLite import failed: {} ({})", err, details));
                         }
                         nm_log!("[import] TFLite failed: {} {}", err, details);
                         continue;
                     }
                     let Some(json) = json else {
                         self.status = "TFLite import failed: missing output JSON".to_string();
-                        self.last_import_report = Some("TFLite import failed: missing output JSON".to_string());
+                        self.last_import_report =
+                            Some("TFLite import failed: missing output JSON".to_string());
                         nm_log!("[import] TFLite failed: missing output JSON");
                         continue;
                     };
                     let mut parsed = match serde_json::from_str::<serde_json::Value>(&json) {
                         Ok(v) => v,
                         Err(e) => {
-                            let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+                            let details = if stderr.trim().is_empty() {
+                                stdout.trim()
+                            } else {
+                                stderr.trim()
+                            };
                             if details.is_empty() {
                                 self.status = format!("TFLite import failed: invalid JSON ({})", e);
-                                self.last_import_report = Some(format!("TFLite import failed: invalid JSON ({})", e));
+                                self.last_import_report =
+                                    Some(format!("TFLite import failed: invalid JSON ({})", e));
                             } else {
-                                self.status = format!("TFLite import failed: invalid JSON ({}) ({})", e, details);
-                                self.last_import_report = Some(format!("TFLite import failed: invalid JSON ({}) ({})", e, details));
+                                self.status = format!(
+                                    "TFLite import failed: invalid JSON ({}) ({})",
+                                    e, details
+                                );
+                                self.last_import_report = Some(format!(
+                                    "TFLite import failed: invalid JSON ({}) ({})",
+                                    e, details
+                                ));
                             }
                             nm_log!("[import] TFLite failed: invalid JSON ({}) {}", e, details);
                             continue;
                         }
                     };
                     let mut missing = Vec::new();
-                    if parsed.get("net").is_none() { missing.push("net"); }
-                    if parsed.get("w_in").is_none() { missing.push("w_in"); }
-                    if parsed.get("w_out").is_none() { missing.push("w_out"); }
+                    if parsed.get("net").is_none() {
+                        missing.push("net");
+                    }
+                    if parsed.get("w_in").is_none() {
+                        missing.push("w_in");
+                    }
+                    if parsed.get("w_out").is_none() {
+                        missing.push("w_out");
+                    }
                     if !missing.is_empty() {
-                        let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
-                        if details.is_empty() {
-                            self.status = format!("TFLite import failed: missing fields {}", missing.join(", "));
-                            self.last_import_report = Some(format!("TFLite import failed: missing fields {}", missing.join(", ")));
+                        let details = if stderr.trim().is_empty() {
+                            stdout.trim()
                         } else {
-                            self.status = format!("TFLite import failed: missing fields {} ({})", missing.join(", "), details);
-                            self.last_import_report = Some(format!("TFLite import failed: missing fields {} ({})", missing.join(", "), details));
+                            stderr.trim()
+                        };
+                        if details.is_empty() {
+                            self.status = format!(
+                                "TFLite import failed: missing fields {}",
+                                missing.join(", ")
+                            );
+                            self.last_import_report = Some(format!(
+                                "TFLite import failed: missing fields {}",
+                                missing.join(", ")
+                            ));
+                        } else {
+                            self.status = format!(
+                                "TFLite import failed: missing fields {} ({})",
+                                missing.join(", "),
+                                details
+                            );
+                            self.last_import_report = Some(format!(
+                                "TFLite import failed: missing fields {} ({})",
+                                missing.join(", "),
+                                details
+                            ));
                         }
-                        nm_log!("[import] TFLite failed: missing fields {}", missing.join(", "));
+                        nm_log!(
+                            "[import] TFLite failed: missing fields {}",
+                            missing.join(", ")
+                        );
                         continue;
                     }
                     let allow_large = std::env::var("NMD_TFLITE_ALLOW_LARGE")
@@ -3819,7 +4928,11 @@ impl eframe::App for App {
                     let matrix_info = |val: &serde_json::Value| -> Option<(usize, usize, usize)> {
                         let rows = val.get("rows")?.as_u64()? as usize;
                         let cols = val.get("cols")?.as_u64()? as usize;
-                        let data_len = val.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                        let data_len = val
+                            .get("data")
+                            .and_then(|d| d.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
                         Some((rows, cols, data_len))
                     };
                     if let Some(w_in) = parsed.get("w_in").and_then(matrix_info) {
@@ -3832,7 +4945,8 @@ impl eframe::App for App {
                         hidden_layers = arr.len() + 1;
                         for mat in arr {
                             if let Some((rows, cols, _)) = matrix_info(mat) {
-                                total_params = total_params.saturating_add(rows.saturating_mul(cols));
+                                total_params =
+                                    total_params.saturating_add(rows.saturating_mul(cols));
                                 if rows.saturating_mul(cols) > max_params {
                                     oversize = Some((rows, cols));
                                     break;
@@ -3840,7 +4954,11 @@ impl eframe::App for App {
                             }
                         }
                     }
-                    if !allow_large && (hidden_layers > max_layers || total_params > max_params || oversize.is_some()) {
+                    if !allow_large
+                        && (hidden_layers > max_layers
+                            || total_params > max_params
+                            || oversize.is_some())
+                    {
                         let msg = if let Some((r, c)) = oversize {
                             format!(
                                 "TFLite import rejected: layer {}x{} too large (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
@@ -3864,20 +4982,30 @@ impl eframe::App for App {
                     }
                     if let Some(obj) = parsed.as_object_mut() {
                         if !obj.contains_key("w_hh_fwd") {
-                            obj.insert("w_hh_fwd".to_string(), serde_json::Value::Array(Vec::new()));
+                            obj.insert(
+                                "w_hh_fwd".to_string(),
+                                serde_json::Value::Array(Vec::new()),
+                            );
                         }
                         if !obj.contains_key("w_hh_bwd") {
-                            obj.insert("w_hh_bwd".to_string(), serde_json::Value::Array(Vec::new()));
+                            obj.insert(
+                                "w_hh_bwd".to_string(),
+                                serde_json::Value::Array(Vec::new()),
+                            );
                         }
                         if !obj.contains_key("w_hh_rec") {
-                            obj.insert("w_hh_rec".to_string(), serde_json::Value::Array(Vec::new()));
+                            obj.insert(
+                                "w_hh_rec".to_string(),
+                                serde_json::Value::Array(Vec::new()),
+                            );
                         }
                     }
                     let json = match serde_json::to_string(&parsed) {
                         Ok(s) => s,
                         Err(e) => {
                             self.status = format!("TFLite import failed: normalize JSON ({})", e);
-                            self.last_import_report = Some(format!("TFLite import failed: normalize JSON ({})", e));
+                            self.last_import_report =
+                                Some(format!("TFLite import failed: normalize JSON ({})", e));
                             nm_log!("[import] TFLite failed: normalize JSON ({})", e);
                             continue;
                         }
@@ -3888,7 +5016,10 @@ impl eframe::App for App {
                     match view_source {
                         ViewSource::Standalone => {
                             let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-                            match self.sim_tx.send(SimControl::ImportNetworkWithReply(json_for_sim, reply_tx)) {
+                            match self
+                                .sim_tx
+                                .send(SimControl::ImportNetworkWithReply(json_for_sim, reply_tx))
+                            {
                                 Ok(()) => {
                                     self.force_show_connections = false;
                                     self.pending_edge_cache = false;
@@ -3914,28 +5045,41 @@ impl eframe::App for App {
                                         result: None,
                                     });
                                     self.status = "Applying TFLite import...".to_string();
-                                    self.last_import_report = Some("Applying TFLite import...".to_string());
+                                    self.last_import_report =
+                                        Some("Applying TFLite import...".to_string());
                                     nm_log!("[import] TFLite applying import");
                                 }
                                 Err(_) => {
-                                    self.status = "TFLite import failed: simulation channel closed".to_string();
-                                    self.last_import_report = Some("TFLite import failed: simulation channel closed".to_string());
+                                    self.status = "TFLite import failed: simulation channel closed"
+                                        .to_string();
+                                    self.last_import_report = Some(
+                                        "TFLite import failed: simulation channel closed"
+                                            .to_string(),
+                                    );
                                     nm_log!("[import] TFLite failed: simulation channel closed");
                                 }
                             }
                         }
                         ViewSource::LocalManaged(id) => {
-                            match self.import_network_json_to_local_managed(&id, &json, ImportKind::Tflite, &path) {
+                            match self.import_network_json_to_local_managed(
+                                &id,
+                                &json,
+                                ImportKind::Tflite,
+                                &path,
+                            ) {
                                 Ok(()) => {}
                                 Err(e) => {
                                     self.status = format!("TFLite import failed: {}", e);
-                                    self.last_import_report = Some(format!("TFLite import failed: {}", e));
+                                    self.last_import_report =
+                                        Some(format!("TFLite import failed: {}", e));
                                 }
                             }
                         }
                         ViewSource::ClusterGlobal(_) => {
-                            self.status = "TFLite import not supported for cluster view".to_string();
-                            self.last_import_report = Some("TFLite import not supported for cluster view".to_string());
+                            self.status =
+                                "TFLite import not supported for cluster view".to_string();
+                            self.last_import_report =
+                                Some("TFLite import not supported for cluster view".to_string());
                         }
                     }
                 }
@@ -3944,17 +5088,15 @@ impl eframe::App for App {
                     self.last_import_report = Some("TFLite import canceled".to_string());
                     nm_log!("[import] TFLite canceled");
                 }
-                ToolTaskResult::PythonResolved { result } => {
-                    match result {
-                        Ok(p) => {
-                            self.python_path = Some(p.clone());
-                            self.status = format!("Using Python: {}", p);
-                        }
-                        Err(e) => {
-                            self.status = format!("Python not found: {}", e);
-                        }
+                ToolTaskResult::PythonResolved { result } => match result {
+                    Ok(p) => {
+                        self.python_path = Some(p.clone());
+                        self.status = format!("Using Python: {}", p);
                     }
-                }
+                    Err(e) => {
+                        self.status = format!("Python not found: {}", e);
+                    }
+                },
                 ToolTaskResult::FileWrite { kind, path, error } => {
                     if let Some(e) = error {
                         self.status = format!("Write failed: {}", e);
@@ -3968,7 +5110,12 @@ impl eframe::App for App {
                         self.status = format!("Saved {} to {}", label, path.display());
                     }
                 }
-                ToolTaskResult::FileRead { kind, path, data, error } => {
+                ToolTaskResult::FileRead {
+                    kind,
+                    path,
+                    data,
+                    error,
+                } => {
                     if let Some(e) = error {
                         self.status = format!("Read failed: {}", e);
                         continue;
@@ -3987,7 +5134,10 @@ impl eframe::App for App {
                                             self.local_net = net.clone();
                                             let _ = self.sim_tx.send(SimControl::ApplyConfig(net));
                                             self.refresh_ui_buffers();
-                                            self.status = format!("Loaded and applied config from {}", path.display());
+                                            self.status = format!(
+                                                "Loaded and applied config from {}",
+                                                path.display()
+                                            );
                                         }
                                         ViewSource::LocalManaged(id) => {
                                             match self.apply_config_to_local_managed(&id, net) {
@@ -3995,11 +5145,15 @@ impl eframe::App for App {
                                                     self.refresh_ui_buffers();
                                                     self.status = format!("Loaded config for local managed network from {}", path.display());
                                                 }
-                                                Err(e) => { self.status = format!("Load failed: {}", e); }
+                                                Err(e) => {
+                                                    self.status = format!("Load failed: {}", e);
+                                                }
                                             }
                                         }
                                         ViewSource::ClusterGlobal(_) => {
-                                            self.status = "Load Config not supported for cluster view".to_string();
+                                            self.status =
+                                                "Load Config not supported for cluster view"
+                                                    .to_string();
                                         }
                                     }
                                 }
@@ -4015,32 +5169,54 @@ impl eframe::App for App {
                             let view_source = self.view_source.clone();
                             match view_source {
                                 ViewSource::Standalone => {
-                                    let res = self.queue_import(ImportKind::Standard, path_for_pending, json_for_sim, String::new(), String::new());
+                                    let res = self.queue_import(
+                                        ImportKind::Standard,
+                                        path_for_pending,
+                                        json_for_sim,
+                                        String::new(),
+                                        String::new(),
+                                    );
                                     if let Err(e) = res {
                                         self.status = format!("Load failed: {}", e);
                                     }
                                 }
                                 ViewSource::LocalManaged(id) => {
-                                    match self.import_network_json_to_local_managed(&id, &json, ImportKind::Standard, &path) {
+                                    match self.import_network_json_to_local_managed(
+                                        &id,
+                                        &json,
+                                        ImportKind::Standard,
+                                        &path,
+                                    ) {
                                         Ok(()) => {}
-                                        Err(e) => { self.status = format!("Load failed: {}", e); }
+                                        Err(e) => {
+                                            self.status = format!("Load failed: {}", e);
+                                        }
                                     }
                                 }
                                 ViewSource::ClusterGlobal(_) => {
-                                    self.status = "Load Network not supported for cluster view".to_string();
+                                    self.status =
+                                        "Load Network not supported for cluster view".to_string();
                                 }
                             }
                         }
-                        FileTaskKind::LoadProbes => {
-                            match self.import_probes_json(&data) {
-                                Ok(()) => { self.status = format!("Loaded probes from {}", path.display()); }
-                                Err(e) => { self.status = format!("Load failed: {}", e); }
+                        FileTaskKind::LoadProbes => match self.import_probes_json(&data) {
+                            Ok(()) => {
+                                self.status = format!("Loaded probes from {}", path.display());
                             }
-                        }
+                            Err(e) => {
+                                self.status = format!("Load failed: {}", e);
+                            }
+                        },
                         _ => {}
                     }
                 }
-                ToolTaskResult::ToolExport { kind, path, stdout, stderr, error } => {
+                ToolTaskResult::ToolExport {
+                    kind,
+                    path,
+                    stdout,
+                    stderr,
+                    error,
+                } => {
                     let kind_str = match kind {
                         ToolExportKind::Onnx => "ONNX",
                         ToolExportKind::PyNN => "PyNN",
@@ -4049,17 +5225,29 @@ impl eframe::App for App {
                         ToolExportKind::Tflite => "TFLite",
                     };
                     if let Some(e) = error {
-                        let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+                        let details = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
                         if details.is_empty() {
                             self.status = format!("{} export failed: {}", kind_str, e);
                         } else {
-                            self.status = format!("{} export failed: {} ({})", kind_str, e, details);
+                            self.status =
+                                format!("{} export failed: {} ({})", kind_str, e, details);
                         }
                     } else {
                         self.status = format!("Exported {} to {}", kind_str, path.display());
                     }
                 }
-                ToolTaskResult::ToolImport { kind, path, json, stdout, stderr, error } => {
+                ToolTaskResult::ToolImport {
+                    kind,
+                    path,
+                    json,
+                    stdout,
+                    stderr,
+                    error,
+                } => {
                     let kind_str = match kind {
                         ImportKind::Tflite => "TFLite",
                         ImportKind::Onnx => "ONNX",
@@ -4069,11 +5257,16 @@ impl eframe::App for App {
                         ImportKind::Standard => "Network",
                     };
                     if let Some(e) = error {
-                        let details = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+                        let details = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
                         if details.is_empty() {
                             self.status = format!("{} import failed: {}", kind_str, e);
                         } else {
-                            self.status = format!("{} import failed: {} ({})", kind_str, e, details);
+                            self.status =
+                                format!("{} import failed: {} ({})", kind_str, e, details);
                         }
                         continue;
                     }
@@ -4110,18 +5303,35 @@ impl eframe::App for App {
             if !keep_pending {
                 match pending.result.as_ref() {
                     Some(Ok(())) => {
-                        let (net, model, learning, sizes, counts, _rebuild_edges) = if let Ok(r) = self.runner.try_read() {
-                            (r.net.clone(), r.neuron_model, r.learning, Self::cache_sizes_counts(&r),
-                             if self.show_static_overlays { Some(Self::compute_cached_edges(self.overlay_density, &r)) } else { None },
-                             self.show_static_overlays)
-                        } else {
-                            keep_pending = true;
-                            (self.local_net.clone(), NeuronModel::Lif, Learning::Stdp, (Vec::new(), Vec::new(), 0), None, false)
-                        };
+                        let (net, model, learning, sizes, counts, _rebuild_edges) =
+                            if let Ok(r) = self.runner.try_read() {
+                                (
+                                    r.net.clone(),
+                                    r.neuron_model,
+                                    r.learning,
+                                    Self::cache_sizes_counts(&r),
+                                    if self.show_static_overlays {
+                                        Some(Self::compute_cached_edges(self.overlay_density, &r))
+                                    } else {
+                                        None
+                                    },
+                                    self.show_static_overlays,
+                                )
+                            } else {
+                                keep_pending = true;
+                                (
+                                    self.local_net.clone(),
+                                    NeuronModel::Lif,
+                                    Learning::Stdp,
+                                    (Vec::new(), Vec::new(), 0),
+                                    None,
+                                    false,
+                                )
+                            };
 
                         if !keep_pending {
                             self.local_net = net;
-                            
+
                             if pending.kind == ImportKind::Tflite {
                                 self.neuron_model = NeuronModelSel::Lif;
                                 self.learning = LearningSel::Stdp;
@@ -4130,7 +5340,8 @@ impl eframe::App for App {
                                 if self.tflite_freeze_learning {
                                     let _ = self.sim_tx.send(SimControl::SetStdpEta(0.0));
                                 }
-                                self.sim_throttle_ms.store(self.tflite_sim_throttle_ms, Ordering::Relaxed);
+                                self.sim_throttle_ms
+                                    .store(self.tflite_sim_throttle_ms, Ordering::Relaxed);
                                 self.set_network_layout(NetworkLayout::Conventional, true);
                             } else {
                                 // Standard or ONNX: synchronize UI model selectors with the loaded model
@@ -4153,19 +5364,23 @@ impl eframe::App for App {
                             self.refresh_ui_buffers();
                             if matches!(self.input_source, InputSource::Random) {
                                 let n = self.local_net.num_sensory_neurons;
-                                let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(n, self.random_spike_probability))));
+                                let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(
+                                    RandomProvider::new(n, self.random_spike_probability),
+                                )));
                             } else if matches!(self.input_source, InputSource::Theta) {
                                 let n = self.local_net.num_sensory_neurons;
                                 let dt_ms = self.initial_lif.dt.max(0.001) as f32;
-                                let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(ThetaProvider::new(
-                                    n,
-                                    self.local_net.theta_rhythm_hz,
-                                    self.local_net.theta_rhythm_duty,
-                                    self.local_net.theta_rhythm_phase_jitter,
-                                    dt_ms,
-                                ))));
+                                let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(
+                                    ThetaProvider::new(
+                                        n,
+                                        self.local_net.theta_rhythm_hz,
+                                        self.local_net.theta_rhythm_duty,
+                                        self.local_net.theta_rhythm_phase_jitter,
+                                        dt_ms,
+                                    ),
+                                )));
                             }
-                            
+
                             self.cached_layer_sizes = sizes.0;
                             self.cached_conn_counts = sizes.1;
                             self.cached_output_conn_count = Some(sizes.2);
@@ -4180,10 +5395,10 @@ impl eframe::App for App {
                                     self.cached_skull_membrane = None;
                                 }
                             }
-                            
+
                             let layers = self.local_net.num_hidden_layers;
                             let h = self.local_net.num_hidden_per_layer_initial;
-                            
+
                             let kind_str = match pending.kind {
                                 ImportKind::Tflite => "TFLite",
                                 ImportKind::Onnx => "ONNX",
@@ -4204,9 +5419,13 @@ impl eframe::App for App {
                             self.status = summary.clone();
                             self.last_import_report = Some(summary.clone());
                             nm_log!("[import] {}", summary);
-                            let has_zero_io = self.local_net.num_sensory_neurons == 0 || self.local_net.num_output_neurons == 0;
+                            let has_zero_io = self.local_net.num_sensory_neurons == 0
+                                || self.local_net.num_output_neurons == 0;
                             if has_zero_io {
-                                let warn = format!("{} import warning: zero-sized input/output layers", kind_str);
+                                let warn = format!(
+                                    "{} import warning: zero-sized input/output layers",
+                                    kind_str
+                                );
                                 self.last_import_report = Some(format!("{} ({})", summary, warn));
                                 nm_log!("[import] {}", warn);
                             }
@@ -4221,13 +5440,20 @@ impl eframe::App for App {
                             ImportKind::Nir => "NIR",
                             ImportKind::Standard => "Network",
                         };
-                        let details = if pending.stderr.trim().is_empty() { pending.stdout.trim() } else { pending.stderr.trim() };
+                        let details = if pending.stderr.trim().is_empty() {
+                            pending.stdout.trim()
+                        } else {
+                            pending.stderr.trim()
+                        };
                         if details.is_empty() {
                             self.status = format!("{} import failed: {}", kind_str, e);
-                            self.last_import_report = Some(format!("{} import failed: {}", kind_str, e));
+                            self.last_import_report =
+                                Some(format!("{} import failed: {}", kind_str, e));
                         } else {
-                            self.status = format!("{} import failed: {} ({})", kind_str, e, details);
-                            self.last_import_report = Some(format!("{} import failed: {} ({})", kind_str, e, details));
+                            self.status =
+                                format!("{} import failed: {} ({})", kind_str, e, details);
+                            self.last_import_report =
+                                Some(format!("{} import failed: {} ({})", kind_str, e, details));
                         }
                         nm_log!("[import] {} failed: {} {}", kind_str, e, details);
                     }
@@ -4250,7 +5476,8 @@ impl eframe::App for App {
                     if let Ok(r) = self.runner.try_read() {
                         let snap = Box::new(r.snapshot());
                         std::thread::spawn(move || {
-                            let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, &snap);
+                            let (edges, sizes, counts, output_count) =
+                                Self::compute_edges_from_snapshot(density, &snap);
                             let _ = tx.send(EdgeCacheResult {
                                 edges,
                                 sizes,
@@ -4269,7 +5496,8 @@ impl eframe::App for App {
                                 let r = runner.blocking_read();
                                 Box::new(r.snapshot())
                             };
-                            let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, &snap);
+                            let (edges, sizes, counts, output_count) =
+                                Self::compute_edges_from_snapshot(density, &snap);
                             let _ = tx.send(EdgeCacheResult {
                                 edges,
                                 sizes,
@@ -4286,7 +5514,8 @@ impl eframe::App for App {
                 ViewSource::ClusterGlobal(_) => {
                     if let Some(snap) = &self.cluster_snapshot_cache {
                         let density = self.overlay_density;
-                        let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, snap);
+                        let (edges, sizes, counts, output_count) =
+                            Self::compute_edges_from_snapshot(density, snap);
                         self.cached_edges = edges;
                         self.cached_layer_sizes = sizes;
                         self.cached_conn_counts = counts;
@@ -4330,7 +5559,8 @@ impl eframe::App for App {
             if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
                 if let Some(snap) = &self.cluster_snapshot_cache {
                     let density = self.overlay_density;
-                    let (edges, sizes, counts, output_count) = Self::compute_edges_from_snapshot(density, snap);
+                    let (edges, sizes, counts, output_count) =
+                        Self::compute_edges_from_snapshot(density, snap);
                     self.cached_edges = edges;
                     self.cached_layer_sizes = sizes;
                     self.cached_conn_counts = counts;
@@ -4354,7 +5584,7 @@ impl eframe::App for App {
                 self.last_edge_cache_refresh = std::time::Instant::now();
             }
         }
-        
+
         let is_orchestrator = self.dist_is_orchestrator;
         let node_id = self.dist_node_id.clone();
         let connected_nodes = self.dist_nodes.clone();
@@ -4380,7 +5610,8 @@ impl eframe::App for App {
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         if self.ga_running {
-                            let reason = crate::ga::ga_abort_reason().unwrap_or_else(|| "worker_exit".to_string());
+                            let reason = crate::ga::ga_abort_reason()
+                                .unwrap_or_else(|| "worker_exit".to_string());
                             self.status = format!("GA Search stopped ({})", reason);
                         }
                         self.ga_running = false;
@@ -4392,17 +5623,22 @@ impl eframe::App for App {
                 }
             }
         }
-        
+
         if let Some(ga) = last_ga {
             self.ga_search = Some(ga);
             if let Some(ga_ref) = &self.ga_search {
                 self.ga_best_fitness = ga_ref.best_fitness;
-                
+
                 if self.ga_live_preview && self.ga_running {
                     // Update main network parameters with the "current" one from GA
                     // Pick the one that was just evaluated
-                    if let Some(ind) = ga_ref.population.get(ga_ref.current_eval_idx.saturating_sub(1)) {
-                        let _ = self.sim_tx.send(SimControl::ApplyConfig(ind.config.clone()));
+                    if let Some(ind) = ga_ref
+                        .population
+                        .get(ga_ref.current_eval_idx.saturating_sub(1))
+                    {
+                        let _ = self
+                            .sim_tx
+                            .send(SimControl::ApplyConfig(ind.config.clone()));
                     }
                 }
             }
@@ -4439,7 +5675,7 @@ impl eframe::App for App {
                 self.ga_abort_cleanup_done = true;
             }
         }
-        
+
         #[cfg(all(feature = "robot_io", unix))]
         if is_external_ipc {
             if let Some(stats) = ipc_stats_guard.as_deref() {
@@ -4450,6 +5686,16 @@ impl eframe::App for App {
                 self.ipc_packet_drop_count = stats.drop_count;
                 self.ipc_size_mismatch_count = stats.size_mismatch_count;
                 self.ipc_last_steps = stats.last_steps;
+                if let Some(hs) = stats.last_handshake.clone() {
+                    let unchanged = self
+                        .ipc_last_handshake
+                        .as_ref()
+                        .map(|old| old == &hs)
+                        .unwrap_or(false);
+                    if !unchanged {
+                        self.apply_ipc_config(hs);
+                    }
+                }
             }
         }
 
@@ -4466,10 +5712,22 @@ impl eframe::App for App {
                 } else {
                     // If locked by simulation, just decay current UI activity to keep it smooth
                     let decay = 0.95f32;
-                    for v in &mut self.sensory_activity { *v *= decay; }
-                    for layer in &mut self.hidden_activity { for v in layer { *v *= decay; } }
-                    for v in &mut self.output_activity { *v *= decay; }
-                    let snap_opt = self.sensory_spikes_snapshot.try_read().ok().map(|s| s.clone());
+                    for v in &mut self.sensory_activity {
+                        *v *= decay;
+                    }
+                    for layer in &mut self.hidden_activity {
+                        for v in layer {
+                            *v *= decay;
+                        }
+                    }
+                    for v in &mut self.output_activity {
+                        *v *= decay;
+                    }
+                    let snap_opt = self
+                        .sensory_spikes_snapshot
+                        .try_read()
+                        .ok()
+                        .map(|s| s.clone());
                     if let Some(snap) = snap_opt {
                         if !snap.is_empty() {
                             if self.sensory_activity.len() != snap.len() {
@@ -4477,7 +5735,9 @@ impl eframe::App for App {
                             }
                             self.last_sensory_spikes = snap.clone();
                             for (i, &sv) in snap.iter().enumerate() {
-                                if sv != 0 { self.sensory_activity[i] = 1.0; }
+                                if sv != 0 {
+                                    self.sensory_activity[i] = 1.0;
+                                }
                             }
                             self.update_probes_from_snapshot(lif_cloned.dt as f32, snap.as_slice());
                             self.status = format!(
@@ -4490,8 +5750,10 @@ impl eframe::App for App {
                     let ui_snap_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
                     if let Some(snap) = ui_snap_opt {
                         if !snap.hidden_spikes.is_empty() {
-                            self.hidden_activity.resize(snap.hidden_spikes.len(), Vec::new());
-                            self.previous_hidden_spikes.resize(snap.hidden_spikes.len(), Vec::new());
+                            self.hidden_activity
+                                .resize(snap.hidden_spikes.len(), Vec::new());
+                            self.previous_hidden_spikes
+                                .resize(snap.hidden_spikes.len(), Vec::new());
                             for (li, spk) in snap.hidden_spikes.iter().enumerate() {
                                 if self.hidden_activity[li].len() != spk.len() {
                                     self.hidden_activity[li] = vec![0.0; spk.len()];
@@ -4513,8 +5775,21 @@ impl eframe::App for App {
                             if self.output_activity.len() != snap.output_spikes.len() {
                                 self.output_activity.resize(snap.output_spikes.len(), 0.0);
                             }
+                            let mut col = vec![0i8; snap.output_spikes.len()];
+                            let mut any = false;
                             for (k, &sv) in snap.output_spikes.iter().enumerate() {
-                                if sv != 0 { self.output_activity[k] = 1.0; }
+                                if sv != 0 {
+                                    self.output_activity[k] = 1.0;
+                                    col[k] = 1;
+                                    any = true;
+                                }
+                            }
+                            let step = self.sim_step_counter.load(Ordering::Relaxed) as usize;
+                            if any || (step % 5 == 0) {
+                                self.raster_outputs.push_back(col);
+                                if self.raster_outputs.len() > self.raster_cols {
+                                    self.raster_outputs.pop_front();
+                                }
                             }
                         }
                     }
@@ -4527,7 +5802,7 @@ impl eframe::App for App {
         let dist_node_arc = self.distributed_node.clone();
         let state_arc = dist_node_arc.as_ref().map(|n| n.state.clone());
         let state_arc_for_controls = state_arc.clone();
-        
+
         // --- 2. Panels and Controls ---
         {
             observe_time!("App::update/render");
@@ -4536,7 +5811,7 @@ impl eframe::App for App {
             ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
         });
 
-        egui::SidePanel::right("controls").resizable(true).default_width(260.0).show(ctx, |ui| {
+            egui::SidePanel::right("controls").resizable(true).default_width(260.0).show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.heading("Controls");
@@ -5696,6 +6971,15 @@ impl eframe::App for App {
                     self.status = format!("Sensory resized to {}", self.sensory_count);
                     self.smoothed_equalizer_values.clear();
                 }
+                if ui
+                    .add(egui::Slider::new(&mut self.output_count, 1..=200).text("Output neurons"))
+                    .on_hover_text("Number of output neurons")
+                    .changed()
+                {
+                    let _ = self.sim_tx.send(SimControl::ResizeOutput(self.output_count));
+                    self.status = format!("Output resized to {}", self.output_count);
+                    self.raster_outputs.clear();
+                }
                 ui.horizontal(|ui| {
                     ui.label("Sensory target layer:").on_hover_text("Hidden layer index receiving sensory input. Index 0 is the first hidden layer.");
                     let mut has_s = self.local_net.sensory_target_layer.is_some();
@@ -5755,6 +7039,7 @@ impl eframe::App for App {
                         let num_o = net.num_output_neurons;
                         self.hidden_positions = vec![vec![]; num_l];
                         self.output_positions.clear();
+                        self.reset_topology_pid_states();
                         self.sensory_activity = vec![0.0; num_s];
                         self.hidden_activity = (0..num_l).map(|_| vec![0.0; num_h]).collect();
                         self.output_activity = vec![0.0; num_o];
@@ -7710,8 +8995,8 @@ impl eframe::App for App {
         });
     });
 
-        let state_arc_for_layout = state_arc.clone();
-        egui::CentralPanel::default().show(ctx, |ui| {
+            let state_arc_for_layout = state_arc.clone();
+            egui::CentralPanel::default().show(ctx, |ui| {
             // Main drawing area
             let avail = ui.available_size();
             let panel_rect = ui.allocate_space(avail).1;
@@ -8132,83 +9417,283 @@ impl eframe::App for App {
                 #[cfg(feature = "growth3d")]
                 if use_aarnn_layout {
                     if topo_enabled {
-                        // Compute world-space centroid of currently visible neurons to use as rotation pivot
-                        let mut sumx = 0.0f32; let mut sumy = 0.0f32; let mut sumz = 0.0f32; let mut cnt = 0usize;
+                        // Compute world-space centroid of currently visible neurons and smooth pivot with PID.
+                        let mut sumx = 0.0f32;
+                        let mut sumy = 0.0f32;
+                        let mut sumz = 0.0f32;
+                        let mut cnt = 0usize;
                         if cache_topology_active {
                             if let Some(topo) = self.cached_edge_topo.as_ref() {
-                                for l in &topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                                for n in &topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                                for n in &topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                                for l in &topo.layers {
+                                    for n in l {
+                                        sumx += n.x;
+                                        sumy += n.y;
+                                        sumz += n.z;
+                                        cnt += 1;
+                                    }
+                                }
+                                for n in &topo.sensory_nodes {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                                for n in &topo.output_nodes {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
-                                for l in &snap.topo_hidden { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                                for n in &snap.topo_sensory { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                                for n in &snap.topo_output { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                                for l in &snap.topo_hidden {
+                                    for n in l {
+                                        sumx += n.x;
+                                        sumy += n.y;
+                                        sumz += n.z;
+                                        cnt += 1;
+                                    }
+                                }
+                                for n in &snap.topo_sensory {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                                for n in &snap.topo_output {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
                             }
                         } else if let Some(active_runner) = active_runner_opt {
-                            for l in &active_runner.topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &active_runner.topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &active_runner.topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &active_runner.topo.layers {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &active_runner.topo.sensory_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &active_runner.topo.output_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(topo) = cluster_topo_opt {
-                            for l in &topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &topo.layers {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &topo.sensory_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &topo.output_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(ref snap) = ui_snapshot_opt {
-                            for l in &snap.topo_hidden { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &snap.topo_sensory { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &snap.topo_output { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &snap.topo_hidden {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &snap.topo_sensory {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &snap.topo_output {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         }
-                        if cnt > 0 { self.cam_pivot_world = (sumx/(cnt as f32), sumy/(cnt as f32), sumz/(cnt as f32)); }
+
+                        let dt_s = ctx.input(|i| i.unstable_dt).clamp(0.001, 0.1);
+                        if cnt > 0 {
+                            let pivot_target = [
+                                sumx / (cnt as f32),
+                                sumy / (cnt as f32),
+                                sumz / (cnt as f32),
+                            ];
+                            let (pivot_kp, pivot_kd) = if camera_interacting {
+                                (0.85, 0.02)
+                            } else {
+                                (0.24, 0.10)
+                            };
+                            let pivot_smoothed = pid_smooth_vec3(
+                                &mut self.cam_pivot_pid,
+                                pivot_target,
+                                dt_s,
+                                pivot_kp,
+                                0.0,
+                                pivot_kd,
+                            );
+                            self.cam_pivot_world =
+                                (pivot_smoothed[0], pivot_smoothed[1], pivot_smoothed[2]);
+                        }
                         let pivot = self.cam_pivot_world;
+                        let cam_pan = self.cam_pan;
 
                         let project = |n: &crate::topology::Node3D| -> egui::Pos2 {
-                            let (mut x3, mut y3, mut z3) = (n.x - pivot.0, n.y - pivot.1, n.z - pivot.2);
-                            // Rotate by yaw (around Y) then pitch (around X) around the world pivot
-                            let xz = x3*cy + z3*sy; let zz = -x3*sy + z3*cy; x3 = xz; z3 = zz;
-                            let yz = y3*cp - z3*sp; y3 = yz;
-                            egui::pos2(x_ref + x3 * scale_x + self.cam_pan.x, y_ref - y3 * scale_y + self.cam_pan.y)
+                            let (mut x3, mut y3, mut z3) =
+                                (n.x - pivot.0, n.y - pivot.1, n.z - pivot.2);
+                            // Rotate by yaw (around Y) then pitch (around X) around the world pivot.
+                            let xz = x3 * cy + z3 * sy;
+                            let zz = -x3 * sy + z3 * cy;
+                            x3 = xz;
+                            z3 = zz;
+                            let yz = y3 * cp - z3 * sp;
+                            y3 = yz;
+                            egui::pos2(
+                                x_ref + x3 * scale_x + cam_pan.x,
+                                y_ref - y3 * scale_y + cam_pan.y,
+                            )
                         };
+
+                        let mut target_sensory_positions: Vec<egui::Pos2> = Vec::new();
+                        let mut target_output_positions: Vec<egui::Pos2> = Vec::new();
+                        let mut target_hidden_positions: Vec<Vec<egui::Pos2>> = Vec::new();
 
                         if cache_topology_active {
                             if let Some(topo) = self.cached_edge_topo.as_ref() {
-                                self.sensory_positions = topo.sensory_nodes.iter().map(project).collect();
-                                self.output_positions = topo.output_nodes.iter().map(project).collect();
-                                self.hidden_positions = topo.layers.iter().map(|layer| {
-                                    layer.iter().map(project).collect()
-                                }).collect();
+                                target_sensory_positions =
+                                    topo.sensory_nodes.iter().map(project).collect();
+                                target_output_positions =
+                                    topo.output_nodes.iter().map(project).collect();
+                                target_hidden_positions = topo
+                                    .layers
+                                    .iter()
+                                    .map(|layer| layer.iter().map(project).collect())
+                                    .collect();
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
-                                self.sensory_positions = snap.topo_sensory.iter().map(project).collect();
-                                self.output_positions = snap.topo_output.iter().map(project).collect();
-                                self.hidden_positions = snap.topo_hidden.iter().map(|layer| {
-                                    layer.iter().map(project).collect()
-                                }).collect();
+                                target_sensory_positions =
+                                    snap.topo_sensory.iter().map(project).collect();
+                                target_output_positions =
+                                    snap.topo_output.iter().map(project).collect();
+                                target_hidden_positions = snap
+                                    .topo_hidden
+                                    .iter()
+                                    .map(|layer| layer.iter().map(project).collect())
+                                    .collect();
                             }
                         } else if let Some(active_runner) = active_runner_opt {
-                            self.sensory_positions = active_runner.topo.sensory_nodes.iter().map(project).collect();
-                            self.output_positions = active_runner.topo.output_nodes.iter().map(project).collect();
-                            self.hidden_positions = active_runner.topo.layers.iter().map(|layer: &Vec<crate::topology::Node3D>| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                active_runner.topo.sensory_nodes.iter().map(project).collect();
+                            target_output_positions =
+                                active_runner.topo.output_nodes.iter().map(project).collect();
+                            target_hidden_positions = active_runner
+                                .topo
+                                .layers
+                                .iter()
+                                .map(|layer: &Vec<crate::topology::Node3D>| {
+                                    layer.iter().map(project).collect()
+                                })
+                                .collect();
                         } else if let Some(topo) = cluster_topo_opt {
-                            self.sensory_positions = topo.sensory_nodes.iter().map(project).collect();
-                            self.output_positions = topo.output_nodes.iter().map(project).collect();
-                            self.hidden_positions = topo.layers.iter().map(|layer| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                topo.sensory_nodes.iter().map(project).collect();
+                            target_output_positions =
+                                topo.output_nodes.iter().map(project).collect();
+                            target_hidden_positions = topo
+                                .layers
+                                .iter()
+                                .map(|layer| layer.iter().map(project).collect())
+                                .collect();
                         } else if let Some(ref snap) = ui_snapshot_opt {
-                            self.sensory_positions = snap.topo_sensory.iter().map(project).collect();
-                            self.output_positions = snap.topo_output.iter().map(project).collect();
-                            self.hidden_positions = snap.topo_hidden.iter().map(|layer| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                snap.topo_sensory.iter().map(project).collect();
+                            target_output_positions =
+                                snap.topo_output.iter().map(project).collect();
+                            target_hidden_positions = snap
+                                .topo_hidden
+                                .iter()
+                                .map(|layer| layer.iter().map(project).collect())
+                                .collect();
                         }
-                        
-                        // Fallback if no hidden layers exist yet
-                        if self.hidden_positions.is_empty() {
-                            self.hidden_positions.push(vec![egui::pos2(x_ref + self.cam_pan.x, y_ref + self.cam_pan.y)]);
+
+                        // Fallback if no hidden layers exist yet.
+                        if target_hidden_positions.is_empty() {
+                            target_hidden_positions
+                                .push(vec![egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y)]);
+                        }
+
+                        let (pos_kp, pos_kd) = if camera_interacting {
+                            (0.9, 0.02)
+                        } else {
+                            (0.30, 0.10)
+                        };
+                        self.sensory_positions = pid_smooth_positions(
+                            &mut self.topo_pid_sensory,
+                            &target_sensory_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        self.hidden_positions = pid_smooth_layered_positions(
+                            &mut self.topo_pid_hidden,
+                            &target_hidden_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        self.output_positions = pid_smooth_positions(
+                            &mut self.topo_pid_output,
+                            &target_output_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        let desired_center_2d = egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y);
+                        let mut centroid_correction = egui::Vec2::ZERO;
+                        if let Some(curr_center_2d) = centroid_of_projected_positions(
+                            &self.sensory_positions,
+                            &self.hidden_positions,
+                            &self.output_positions,
+                        ) {
+                            centroid_correction = desired_center_2d - curr_center_2d;
+                            if centroid_correction.length_sq() > 1e-6 {
+                                for p in &mut self.sensory_positions {
+                                    *p += centroid_correction;
+                                }
+                                for layer in &mut self.hidden_positions {
+                                    for p in layer {
+                                        *p += centroid_correction;
+                                    }
+                                }
+                                for p in &mut self.output_positions {
+                                    *p += centroid_correction;
+                                }
+                            }
                         }
 
                         // Compute region label positions with smoothing
@@ -8221,24 +9706,61 @@ impl eframe::App for App {
                                     z: region.center[2],
                                     ..Default::default()
                                 };
-                                let target_pos = project(&node);
-                                // Push labels slightly outwards from the center to keep them clear of neurons
-                                let center_2d = egui::pos2(x_ref + self.cam_pan.x, y_ref + self.cam_pan.y);
-                                let mut dir = target_pos - center_2d;
-                                if dir.length() < 1.0 { dir = egui::vec2(1.0, 0.0); }
-                                let desired_label_pos = target_pos + dir.normalized() * 35.0;
+                                let name = region.name.clone();
+                                let target_raw = project(&node) + centroid_correction;
+                                let target_entry = self
+                                    .region_label_target_states
+                                    .entry(name.clone())
+                                    .or_insert(target_raw);
+                                let target_tau_s = if camera_interacting { 0.10 } else { 0.26 };
+                                let target_alpha = 1.0 - (-dt_s / target_tau_s).exp();
+                                target_entry.x += (target_raw.x - target_entry.x) * target_alpha;
+                                target_entry.y += (target_raw.y - target_entry.y) * target_alpha;
+                                let target_pos = *target_entry;
 
-                                // Persist and smooth label positions to prevent jumping
-                                let entry = self.region_label_states.entry(region.name.clone()).or_insert(desired_label_pos);
-                                let smoothing = 0.12; // Slow drift for stability
-                                entry.x = entry.x * (1.0 - smoothing) + desired_label_pos.x * smoothing;
-                                entry.y = entry.y * (1.0 - smoothing) + desired_label_pos.y * smoothing;
+                                // Keep the label on a stable side of its region target (sticky offset)
+                                // and move it with a speed cap to prevent visual jitter.
+                                let center_2d = desired_center_2d;
+                                let mut center_dir = target_pos - center_2d;
+                                if center_dir.length_sq() < 1.0 {
+                                    center_dir = egui::vec2(1.0, 0.0);
+                                }
+                                let label_distance = 35.0f32;
+                                let initial_label_pos =
+                                    target_pos + center_dir.normalized() * label_distance;
+                                let label_entry = self
+                                    .region_label_states
+                                    .entry(name.clone())
+                                    .or_insert(initial_label_pos);
+                                let mut sticky_dir = *label_entry - target_pos;
+                                if sticky_dir.length_sq() < 64.0 {
+                                    sticky_dir = center_dir;
+                                }
+                                if sticky_dir.length_sq() < 1.0 {
+                                    sticky_dir = egui::vec2(1.0, 0.0);
+                                }
+                                let desired_label_pos =
+                                    target_pos + sticky_dir.normalized() * label_distance;
+                                let label_tau_s = if camera_interacting { 0.09 } else { 0.34 };
+                                let label_alpha = 1.0 - (-dt_s / label_tau_s).exp();
+                                let mut step = (desired_label_pos - *label_entry) * label_alpha;
+                                let max_step = if camera_interacting {
+                                    220.0 * dt_s
+                                } else {
+                                    85.0 * dt_s
+                                };
+                                let step_len_sq = step.length_sq();
+                                if step_len_sq > max_step * max_step {
+                                    step *= max_step / step_len_sq.sqrt();
+                                }
+                                *label_entry += step;
 
-                                self.region_label_positions.push((region.name.clone(), *entry, target_pos));
+                                self.region_label_positions.push((name, *label_entry, target_pos));
                             }
                         }
                     } else {
                         // Grid layout when growth is disabled (apply camera transform)
+                        self.reset_topology_pid_states();
                         self.sensory_positions = (0..ns).map(|i|{
                             let y = top + height * ((i as f32 + 1.0) / (ns as f32 + 1.0));
                             let px = (left + dx) * self.camera_zoom + self.cam_pan.x;
@@ -8266,6 +9788,7 @@ impl eframe::App for App {
                     }
                 } else {
                     // Grid layout when growth is disabled (apply camera transform)
+                    self.reset_topology_pid_states();
                     self.sensory_positions = (0..ns).map(|i|{
                         let y = top + height * ((i as f32 + 1.0) / (ns as f32 + 1.0));
                         let px = (left + dx) * self.camera_zoom + self.cam_pan.x;
@@ -9953,53 +11476,40 @@ impl eframe::App for App {
             let mut detail_managed_arc = None;
             let mut detail_managed_guard = None;
             let mut detail_standalone_guard = None;
-            let mut detail_busy = false;
             let active_runner_opt: Option<&Runner> = match &self.view_source {
                 ViewSource::Standalone | ViewSource::ClusterGlobal(_) => {
-                    if let Ok(guard) = detail_runner_arc.try_read() {
-                        detail_standalone_guard = Some(guard);
-                        Some(&*detail_standalone_guard.as_ref().unwrap())
-                    } else {
-                        detail_busy = true;
-                        None
-                    }
-                },
+                    let guard = detail_runner_arc.blocking_read();
+                    detail_standalone_guard = Some(guard);
+                    Some(&*detail_standalone_guard.as_ref().unwrap())
+                }
                 ViewSource::LocalManaged(id) => {
                     if let Some(state_arc) = state_arc.as_ref() {
                         if let Ok(s) = state_arc.try_read() {
                             if let Some(net_arc) = s.networks.get(id) {
                                 let arc = net_arc.clone();
                                 detail_managed_arc = Some(arc);
-                                detail_managed_guard = detail_managed_arc.as_ref().unwrap().try_read().ok();
-                                if let Some(ref m) = detail_managed_guard {
-                                    Some(&m.runner)
-                                } else if let Ok(guard) = detail_runner_arc.try_read() {
-                                    detail_standalone_guard = Some(guard);
-                                    Some(&*detail_standalone_guard.as_ref().unwrap())
+                                if let Ok(guard) = detail_managed_arc.as_ref().unwrap().try_read() {
+                                    detail_managed_guard = Some(guard);
+                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 } else {
-                                    detail_busy = true;
-                                    None
+                                    let guard = detail_managed_arc.as_ref().unwrap().blocking_read();
+                                    detail_managed_guard = Some(guard);
+                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 }
-                            } else if let Ok(guard) = detail_runner_arc.try_read() {
+                            } else {
+                                let guard = detail_runner_arc.blocking_read();
                                 detail_standalone_guard = Some(guard);
                                 Some(&*detail_standalone_guard.as_ref().unwrap())
-                            } else {
-                                detail_busy = true;
-                                None
                             }
-                        } else if let Ok(guard) = detail_runner_arc.try_read() {
+                        } else {
+                            let guard = detail_runner_arc.blocking_read();
                             detail_standalone_guard = Some(guard);
                             Some(&*detail_standalone_guard.as_ref().unwrap())
-                        } else {
-                            detail_busy = true;
-                            None
                         }
-                    } else if let Ok(guard) = detail_runner_arc.try_read() {
+                    } else {
+                        let guard = detail_runner_arc.blocking_read();
                         detail_standalone_guard = Some(guard);
                         Some(&*detail_standalone_guard.as_ref().unwrap())
-                    } else {
-                        detail_busy = true;
-                        None
                     }
                 }
             };
@@ -10038,7 +11548,7 @@ impl eframe::App for App {
                 .open(&mut open)
                 .default_size(egui::vec2(600.0, 500.0))
                 .show(ctx, |ui| {
-                    if detail_busy || active_runner_opt.is_none() {
+                    if active_runner_opt.is_none() {
                         ui.label("Simulation busy...");
                         return;
                     }
@@ -10517,7 +12027,7 @@ impl eframe::App for App {
                         ui.label("No neuron selected. Right-click a neuron in the main view and select 'Detailed biological view'.");
                     }
                 });
-            
+
             // Sync back mutations
             self.selected_neuron_pick = selected_neuron_pick;
             self.detail_camera_zoom = detail_camera_zoom;

@@ -105,7 +105,11 @@ fn rotate_logs_if_needed() {
             let _ = std::fs::rename(&src, &dst);
         }
     }
-    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         if let Some(lock) = LOG_FILE.get() {
             if let Ok(mut guard) = lock.lock() {
                 *guard = BufWriter::new(file);
@@ -126,7 +130,13 @@ pub(crate) fn log_to_file(is_err: bool, msg: &str) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let prefix = if is_err { "ERR" } else { "OUT" };
-    let line = format!("[{}.{:03}] {} {}", now.as_secs(), now.subsec_millis(), prefix, msg);
+    let line = format!(
+        "[{}.{:03}] {} {}",
+        now.as_secs(),
+        now.subsec_millis(),
+        prefix,
+        msg
+    );
     if let Ok(mut guard) = lock.lock() {
         let _ = writeln!(guard, "{}", line);
     }
@@ -210,11 +220,15 @@ impl Metrics {
             data.clear();
             return;
         }
-        if data.is_empty() { return; }
-        
+        if data.is_empty() {
+            return;
+        }
+
         let mut sorted: Vec<_> = data.iter().collect();
         sorted.sort_by(|a, b| {
-            b.1.total_time.cmp(&a.1.total_time).then_with(|| b.1.count.cmp(&a.1.count))
+            b.1.total_time
+                .cmp(&a.1.total_time)
+                .then_with(|| b.1.count.cmp(&a.1.count))
         });
 
         eprintln!("\n--- [METRICS REPORT] ---");

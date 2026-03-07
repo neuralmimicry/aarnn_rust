@@ -51,10 +51,25 @@ pub struct PortSpec {
 #[allow(dead_code)]
 impl PortSpec {
     pub fn new(name: impl Into<String>, kind: PortKind, start: usize, len: usize) -> Self {
-        Self { name: name.into(), kind, start, length_neurons: len, neurons_per_value: 1, scale: 1.0, bias: 0.0 }
+        Self {
+            name: name.into(),
+            kind,
+            start,
+            length_neurons: len,
+            neurons_per_value: 1,
+            scale: 1.0,
+            bias: 0.0,
+        }
     }
-    pub fn with_neurons_per_value(mut self, n: usize) -> Self { self.neurons_per_value = n.max(1); self }
-    pub fn with_norm(mut self, scale: f32, bias: f32) -> Self { self.scale = scale; self.bias = bias; self }
+    pub fn with_neurons_per_value(mut self, n: usize) -> Self {
+        self.neurons_per_value = n.max(1);
+        self
+    }
+    pub fn with_norm(mut self, scale: f32, bias: f32) -> Self {
+        self.scale = scale;
+        self.bias = bias;
+        self
+    }
 }
 
 /// Mapping of named ports to index ranges for both sensory and actuator sides.
@@ -73,7 +88,13 @@ pub struct IoMapping {
 #[allow(dead_code)]
 impl IoMapping {
     pub fn new(sensory_size: usize, output_size: usize) -> Self {
-        Self { sensory_size, output_size, sensors: vec![], actuators: vec![], by_name: HashMap::new() }
+        Self {
+            sensory_size,
+            output_size,
+            sensors: vec![],
+            actuators: vec![],
+            by_name: HashMap::new(),
+        }
     }
     pub fn add_port(&mut self, port: PortSpec) {
         let name = port.name.clone();
@@ -83,23 +104,38 @@ impl IoMapping {
         }
         self.by_name.insert(name, port);
     }
-    pub fn port(&self, name: &str) -> Option<&PortSpec> { self.by_name.get(name) }
-    pub fn sensors(&self) -> &[PortSpec] { &self.sensors }
-    pub fn actuators(&self) -> &[PortSpec] { &self.actuators }
+    pub fn port(&self, name: &str) -> Option<&PortSpec> {
+        self.by_name.get(name)
+    }
+    pub fn sensors(&self) -> &[PortSpec] {
+        &self.sensors
+    }
+    pub fn actuators(&self) -> &[PortSpec] {
+        &self.actuators
+    }
 
     pub fn total_sensor_values(&self) -> usize {
-        self.sensors.iter().map(|p| p.length_neurons / p.neurons_per_value).sum()
+        self.sensors
+            .iter()
+            .map(|p| p.length_neurons / p.neurons_per_value)
+            .sum()
     }
 
     pub fn total_actuator_values(&self) -> usize {
-        self.actuators.iter().map(|p| p.length_neurons / p.neurons_per_value).sum()
+        self.actuators
+            .iter()
+            .map(|p| p.length_neurons / p.neurons_per_value)
+            .sum()
     }
 
     pub fn get_sensor_label(&self, index: usize) -> String {
         for p in &self.sensors {
             if index >= p.start && index < p.start + p.length_neurons {
-                if p.length_neurons == 1 { return p.name.clone(); }
-                else { return format!("{}[{}]", p.name, index - p.start); }
+                if p.length_neurons == 1 {
+                    return p.name.clone();
+                } else {
+                    return format!("{}[{}]", p.name, index - p.start);
+                }
             }
         }
         format!("S{}", index)
@@ -108,8 +144,11 @@ impl IoMapping {
     pub fn get_actuator_label(&self, index: usize) -> String {
         for p in &self.actuators {
             if index >= p.start && index < p.start + p.length_neurons {
-                if p.length_neurons == 1 { return p.name.clone(); }
-                else { return format!("{}[{}]", p.name, index - p.start); }
+                if p.length_neurons == 1 {
+                    return p.name.clone();
+                } else {
+                    return format!("{}[{}]", p.name, index - p.start);
+                }
             }
         }
         format!("O{}", index)
@@ -123,7 +162,9 @@ pub trait SensorSource {
     /// Implementations should write exactly `inputs.len()` elements.
     fn fill_inputs(&mut self, t_ms: f64, inputs: &mut [f32]);
     /// Optional external reward channel (0..1). Default is None.
-    fn reward(&self) -> Option<f32> { None }
+    fn reward(&self) -> Option<f32> {
+        None
+    }
 }
 
 /// Sink for actuator commands as contiguous float vector (length = `output_size`).
@@ -147,7 +188,11 @@ pub struct TimeSync {
 
 #[allow(dead_code)]
 impl TimeSync {
-    pub fn new() -> Self { Self { last_external_time: None } }
+    pub fn new() -> Self {
+        Self {
+            last_external_time: None,
+        }
+    }
 
     /// Calculate simulation delta (dt) from an external time value.
     ///
@@ -157,7 +202,11 @@ impl TimeSync {
     pub fn sync_dt(&mut self, val: f64, is_delta: bool, fallback_dt: f64) -> f64 {
         if is_delta {
             self.last_external_time = None; // Reset mode
-            if val > 0.0 { val } else { fallback_dt }
+            if val > 0.0 {
+                val
+            } else {
+                fallback_dt
+            }
         } else {
             let dt = if let Some(prev) = self.last_external_time {
                 val - prev
@@ -165,7 +214,11 @@ impl TimeSync {
                 fallback_dt
             };
             self.last_external_time = Some(val);
-            if dt > 0.0 { dt } else { fallback_dt }
+            if dt > 0.0 {
+                dt
+            } else {
+                fallback_dt
+            }
         }
     }
 }
@@ -181,7 +234,14 @@ pub struct Quantizer {
     pub probabilistic: bool,
 }
 
-impl Default for Quantizer { fn default() -> Self { Self { threshold: 0.5, probabilistic: true } } }
+impl Default for Quantizer {
+    fn default() -> Self {
+        Self {
+            threshold: 0.5,
+            probabilistic: true,
+        }
+    }
+}
 
 #[allow(dead_code)]
 impl Quantizer {
@@ -193,7 +253,7 @@ impl Quantizer {
                 let val = inputs.get(in_idx).copied().unwrap_or(0.0);
                 let val = (val * p.scale + p.bias).clamp(0.0, 1.0);
                 in_idx += 1;
-                
+
                 for n in 0..p.neurons_per_value {
                     let target = p.start + v * p.neurons_per_value + n;
                     if target < dst.len() {
@@ -250,18 +310,28 @@ impl InMemoryAdapter {
     pub fn new(mapping: IoMapping) -> Self {
         let inputs = vec![0.0; mapping.total_sensor_values()];
         let outputs = vec![0.0; mapping.total_actuator_values()];
-        Self { mapping, inputs, outputs }
+        Self {
+            mapping,
+            inputs,
+            outputs,
+        }
     }
-    pub fn mapping(&self) -> &IoMapping { &self.mapping }
+    pub fn mapping(&self) -> &IoMapping {
+        &self.mapping
+    }
     /// Overwrite a contiguous slice of the internal sensory buffer.
     pub fn set_inputs_at(&mut self, start: usize, data: &[f32]) {
         let end = start.saturating_add(data.len());
-        if end <= self.inputs.len() { self.inputs[start..end].copy_from_slice(data); }
+        if end <= self.inputs.len() {
+            self.inputs[start..end].copy_from_slice(data);
+        }
     }
     /// Read a contiguous slice of the internal actuator buffer.
     pub fn get_outputs_at(&self, start: usize, out: &mut [f32]) {
         let end = start.saturating_add(out.len());
-        if end <= self.outputs.len() { out.copy_from_slice(&self.outputs[start..end]); }
+        if end <= self.outputs.len() {
+            out.copy_from_slice(&self.outputs[start..end]);
+        }
     }
     pub fn set_port(&mut self, name: &str, values: &[f32]) {
         if let Some(p) = self.mapping.port(name) {
@@ -271,7 +341,9 @@ impl InMemoryAdapter {
                 // This requires iterating sensors to find the port's relative start.
                 let mut current_offset = 0;
                 for s in self.mapping.sensors() {
-                    if s.name == p.name { break; }
+                    if s.name == p.name {
+                        break;
+                    }
                     current_offset += s.length_neurons / s.neurons_per_value;
                 }
                 for (i, &v) in values.iter().enumerate() {
@@ -288,7 +360,9 @@ impl InMemoryAdapter {
             if num_vals == out.len() {
                 let mut current_offset = 0;
                 for a in self.mapping.actuators() {
-                    if a.name == p.name { break; }
+                    if a.name == p.name {
+                        break;
+                    }
                     current_offset += a.length_neurons / a.neurons_per_value;
                 }
                 for (i, d) in out.iter_mut().enumerate() {
@@ -310,7 +384,9 @@ impl SensorSource for InMemoryAdapter {
 
 #[allow(dead_code)]
 impl ActuatorSink for InMemoryAdapter {
-    fn consume_outputs(&mut self, _t_ms: f64, outputs: &[f32]) { self.outputs.copy_from_slice(outputs); }
+    fn consume_outputs(&mut self, _t_ms: f64, outputs: &[f32]) {
+        self.outputs.copy_from_slice(outputs);
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -340,11 +416,27 @@ pub struct ExternalRunnerBridge<S: SensorSource, A: ActuatorSink> {
 #[cfg(feature = "ui")]
 impl<S: SensorSource, A: ActuatorSink> ExternalRunnerBridge<S, A> {
     #[allow(dead_code)]
-    pub fn new(runner: Runner, mapping: IoMapping, sensor: S, actuator: A, quant: Quantizer) -> Self {
+    pub fn new(
+        runner: Runner,
+        mapping: IoMapping,
+        sensor: S,
+        actuator: A,
+        quant: Quantizer,
+    ) -> Self {
         let in_buf = vec![0.0; mapping.total_sensor_values()];
         let spk_s = vec![0; mapping.sensory_size];
         let out_buf = vec![0.0; mapping.total_actuator_values()];
-        Self { runner, mapping, sensor, actuator, quant, sync: TimeSync::new(), in_buf, spk_s, out_buf }
+        Self {
+            runner,
+            mapping,
+            sensor,
+            actuator,
+            quant,
+            sync: TimeSync::new(),
+            in_buf,
+            spk_s,
+            out_buf,
+        }
     }
     /// Advance one simulation step using external IO.
     ///
@@ -360,11 +452,16 @@ impl<S: SensorSource, A: ActuatorSink> ExternalRunnerBridge<S, A> {
         // Fill inputs and quantize to spikes
         self.sensor.fill_inputs(dt, &mut self.in_buf);
         self.runner.external_reward = self.sensor.reward().unwrap_or(0.0);
-        self.quant.to_spikes(&self.mapping, &self.in_buf, &mut self.spk_s);
+        self.quant
+            .to_spikes(&self.mapping, &self.in_buf, &mut self.spk_s);
         // Step the runner with external sensory spikes
         let out = self.runner.step(Some(&self.spk_s));
         // Convert outputs to floats and publish to actuator sink
-        self.quant.from_spikes(&self.mapping, out.spk_o.as_slice().unwrap(), &mut self.out_buf);
+        self.quant.from_spikes(
+            &self.mapping,
+            out.spk_o.as_slice().unwrap(),
+            &mut self.out_buf,
+        );
         self.actuator.consume_outputs(t_ms, &self.out_buf);
         out
     }
