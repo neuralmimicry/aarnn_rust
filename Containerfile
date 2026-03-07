@@ -142,7 +142,8 @@ COPY --from=builder /usr/local/share/opencv4/ /usr/local/share/opencv4/
 
 # Install Python requirements for tools
 COPY requirements.txt .
-RUN python3.12 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN python3.12 -m ensurepip --upgrade && \
+    python3.12 -m pip install --no-cache-dir --upgrade --ignore-installed setuptools wheel
 RUN python3.12 -m pip install --no-cache-dir --default-timeout=1000 --retries 10 "numpy<2.0.0"
 RUN python3.12 -m pip install --no-cache-dir --only-binary=PyQt6,PyQt6-Qt6,PyQt6-sip "PyQt6>=6.7.1"
 RUN python3.12 -m pip install --no-cache-dir --default-timeout=3600 --retries 10 \
