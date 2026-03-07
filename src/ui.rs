@@ -62,19 +62,33 @@ use tokio::sync::RwLock;
 use tonic::Request;
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-use crate::bridge::{IoMapping, Quantizer};
+use crate::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use std::os::unix::net::UnixDatagram;
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use std::path::PathBuf;
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-#[derive(serde::Deserialize, Clone)]
+#[derive(serde::Deserialize, Clone, PartialEq)]
 struct IpcHandshake {
+    #[serde(default)]
     s_names: Vec<String>,
+    #[serde(default)]
     o_names: Vec<String>,
     #[serde(default)]
     reward_name: Option<String>,
+    #[serde(default)]
+    sensory: Option<usize>,
+    #[serde(default)]
+    output: Option<usize>,
+    #[serde(default)]
+    expected_s: Option<usize>,
+    #[serde(default)]
+    expected_o: Option<usize>,
+    #[serde(default)]
+    num_sensory_neurons: Option<usize>,
+    #[serde(default)]
+    num_output_neurons: Option<usize>,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
@@ -140,13 +154,21 @@ impl IpcUdsServer {
                         match serde_json::from_slice::<IpcHandshake>(&self.req_buf[..n]) {
                             Ok(hs) => {
                                 self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
+                                nm_err!(
+                                    "[IpcUdsServer] Handshake received S_names={} O_names={}",
+                                    hs.s_names.len(),
+                                    hs.o_names.len()
+                                );
+                                self.send_size_hint_to_last_peer();
                                 let peer_str = self
                                     .last_peer
                                     .as_ref()
                                     .map(|p| p.to_string_lossy().to_string());
                                 return Some(IpcEvent::Config(hs, peer_str));
                             }
-                            Err(_) => {
+                            Err(err) => {
+                                nm_err!("[IpcUdsServer] Handshake parse failed: {}", err);
+                                self.recent_mismatches = self.recent_mismatches.saturating_add(1);
                                 continue;
                             }
                         }
@@ -179,6 +201,7 @@ impl IpcUdsServer {
                             }
                             Err(_) => {
                                 self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                                self.send_size_hint_to_addr(&addr);
                                 continue;
                             }
                         }
@@ -208,6 +231,7 @@ impl IpcUdsServer {
                         return Some(IpcEvent::Data(t_ms, reward, peer_str));
                     } else {
                         self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                        self.send_size_hint_to_addr(&addr);
                         continue;
                     }
                 }
@@ -231,6 +255,22 @@ impl IpcUdsServer {
         }
         Ok(())
     }
+    fn send_size_hint_to_last_peer(&self) {
+        if let Some(ref peer) = self.last_peer {
+            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            if let Err(e) = self.sock.send_to(hint.as_bytes(), peer) {
+                nm_err!("[IpcUdsServer] Failed to send size hint to peer {:?}: {}", peer, e);
+            }
+        }
+    }
+    fn send_size_hint_to_addr(&self, addr: &std::os::unix::net::SocketAddr) {
+        if let Some(path) = addr.as_pathname() {
+            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            if let Err(e) = self.sock.send_to(hint.as_bytes(), path) {
+                nm_err!("[IpcUdsServer] Failed to send size hint to addr {:?}: {}", path, e);
+            }
+        }
+    }
     #[allow(dead_code)]
     fn stop(&mut self) {}
     #[allow(dead_code)]
@@ -245,6 +285,26 @@ impl IpcUdsServer {
         self.recent_mismatches = 0;
         m
     }
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+fn resolve_ipc_handshake_sizes(handshake: &IpcHandshake, fallback_s: usize, fallback_o: usize) -> (usize, usize) {
+    let from_names_s = (!handshake.s_names.is_empty()).then_some(handshake.s_names.len());
+    let from_names_o = (!handshake.o_names.is_empty()).then_some(handshake.o_names.len());
+
+    let sensory = from_names_s
+        .or(handshake.sensory)
+        .or(handshake.expected_s)
+        .or(handshake.num_sensory_neurons)
+        .unwrap_or(fallback_s)
+        .max(1);
+    let output = from_names_o
+        .or(handshake.output)
+        .or(handshake.expected_o)
+        .or(handshake.num_output_neurons)
+        .unwrap_or(fallback_o)
+        .max(1);
+    (sensory, output)
 }
 
 #[cfg(all(feature = "ui", feature = "morpho", feature = "growth3d"))]
@@ -340,6 +400,8 @@ struct IpcStats {
     last_peer: Option<String>,
     last_receive_time: Option<std::time::Instant>,
     last_steps: usize,
+    #[cfg(all(feature = "robot_io", unix))]
+    last_handshake: Option<IpcHandshake>,
 }
 
 #[cfg(feature = "sysinfo")]
@@ -640,6 +702,7 @@ struct App {
     cam_running: bool,
     // EQ state (smoothed)
     smoothed_equalizer_values: Vec<f32>,
+    output_count: usize,
     // Network view cache
     last_rendered_panel_size: egui::Vec2,
     sensory_positions: Vec<egui::Pos2>,
@@ -684,7 +747,17 @@ struct App {
     #[cfg(feature = "growth3d")]
     cam_pivot_world: (f32, f32, f32),
     #[cfg(feature = "growth3d")]
+    cam_pivot_pid: UiPid3State,
+    #[cfg(feature = "growth3d")]
+    topo_pid_sensory: Vec<UiPid2State>,
+    #[cfg(feature = "growth3d")]
+    topo_pid_hidden: Vec<Vec<UiPid2State>>,
+    #[cfg(feature = "growth3d")]
+    topo_pid_output: Vec<UiPid2State>,
+    #[cfg(feature = "growth3d")]
     region_label_states: crate::morphology::FastHashMap<String, egui::Pos2>,
+    #[cfg(feature = "growth3d")]
+    region_label_target_states: crate::morphology::FastHashMap<String, egui::Pos2>,
     // Morphology overlays (optional)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     show_morpho_overlays: bool,
@@ -944,6 +1017,17 @@ impl App {
         }
     }
 
+    #[cfg(feature = "growth3d")]
+    fn reset_topology_pid_states(&mut self) {
+        self.cam_pivot_pid = UiPid3State::default();
+        self.topo_pid_sensory.clear();
+        self.topo_pid_hidden.clear();
+        self.topo_pid_output.clear();
+        self.region_label_states.clear();
+        self.region_label_target_states.clear();
+        self.region_label_positions.clear();
+    }
+
     fn clear_ui_caches(&mut self) {
         self.cached_edges.clear();
         self.cached_edges.shrink_to_fit();
@@ -955,6 +1039,7 @@ impl App {
         #[cfg(feature = "growth3d")]
         {
             self.cached_edge_topo = None;
+            self.reset_topology_pid_states();
         }
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
@@ -1149,6 +1234,8 @@ impl App {
             last_peer: None,
             last_receive_time: None,
             last_steps: 0,
+            #[cfg(all(feature = "robot_io", unix))]
+            last_handshake: None,
         }));
 
         let sim_runner = runner.clone();
@@ -1337,8 +1424,33 @@ impl App {
                                         stats.last_receive_time = Some(std::time::Instant::now());
                                     }
                                 }
-                                IpcEvent::Config(_hs, _peer) => {
-                                    // Handshake handling
+                                IpcEvent::Config(hs, peer) => {
+                                    let (new_s, new_o) =
+                                        resolve_ipc_handshake_sizes(&hs, srv.s, srv.o);
+                                    let resized = new_s != srv.s || new_o != srv.o;
+                                    if resized {
+                                        nm_err!(
+                                            "[IpcUdsServer] Applying handshake resize S={} O={}",
+                                            new_s,
+                                            new_o
+                                        );
+                                        srv.s = new_s;
+                                        srv.o = new_o;
+                                        sim_runner.blocking_write().resize_sensory(new_s);
+                                        sim_runner.blocking_write().resize_output(new_o);
+                                        sim_provider.set_num_sensory_neurons(new_s);
+                                    }
+                                    srv.send_size_hint_to_last_peer();
+                                    if let Ok(mut stats) = sim_ipc_stats.try_write() {
+                                        stats.connected = true;
+                                        stats.last_peer = peer;
+                                        stats.last_receive_time = Some(std::time::Instant::now());
+                                        stats.last_handshake = Some(hs);
+                                        if resized {
+                                            stats.size_mismatch_count =
+                                                stats.size_mismatch_count.saturating_add(1);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1361,6 +1473,8 @@ impl App {
                             }
                         };
                         if spikes_source.is_some() || ipc_dt.is_some() {
+                            #[cfg(all(feature = "robot_io", unix))]
+                            let mut ipc_reply_values: Option<Vec<f32>> = None;
                             let spikes = if let Some(s) = spikes_source {
                                 s
                             } else {
@@ -1405,6 +1519,20 @@ impl App {
                                         link.send_output_spikes(ts_us, out);
                                     }
                                 }
+                                #[cfg(all(feature = "robot_io", unix))]
+                                if let Some(ref srv) = sim_ipc_server {
+                                    let mut out = vec![0.0f32; srv.o];
+                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
+                                        for i in 0..out.len().min(src_slice.len()) {
+                                            out[i] = if src_slice[i] != 0 { 1.0 } else { 0.0 };
+                                        }
+                                    } else {
+                                        for i in 0..out.len().min(r.last_spk_o.len()) {
+                                            out[i] = if r.last_spk_o[i] != 0 { 1.0 } else { 0.0 };
+                                        }
+                                    }
+                                    ipc_reply_values = Some(out);
+                                }
                                 if let Ok(mut snap) = sim_ui_snapshot.try_write() {
                                     snap.sensory_spikes.clear();
                                     snap.sensory_spikes.extend_from_slice(&spikes);
@@ -1448,6 +1576,15 @@ impl App {
                                 }
                             } else {
                                 std::thread::sleep(std::time::Duration::from_millis(1));
+                            }
+                            #[cfg(all(feature = "robot_io", unix))]
+                            if let Some(out_vals) = ipc_reply_values {
+                                if let Some(ref mut srv) = sim_ipc_server {
+                                    let _ = srv.send_outputs(&out_vals);
+                                    if let Ok(mut stats) = sim_ipc_stats.try_write() {
+                                        stats.last_steps = 1;
+                                    }
+                                }
                             }
                         } else {
                             let mut last_bands: Option<Vec<f32>> = None;
@@ -1742,6 +1879,7 @@ impl App {
             #[cfg(feature = "webcam_input")]
             cam_running: false,
             smoothed_equalizer_values: Vec::new(),
+            output_count: o,
             last_rendered_panel_size: egui::vec2(0.0, 0.0),
             sensory_positions: Vec::new(),
             hidden_positions: vec![vec![]; l],
@@ -1776,7 +1914,17 @@ impl App {
             #[cfg(feature = "growth3d")]
             region_label_states: crate::morphology::FastHashMap::default(),
             #[cfg(feature = "growth3d")]
+            region_label_target_states: crate::morphology::FastHashMap::default(),
+            #[cfg(feature = "growth3d")]
             cam_pivot_world: (0.0, 0.0, 0.0),
+            #[cfg(feature = "growth3d")]
+            cam_pivot_pid: UiPid3State::default(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_sensory: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_hidden: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_output: Vec::new(),
             #[cfg(feature = "growth3d")]
             cached_skull_hull: Vec::new(),
             #[cfg(feature = "growth3d")]
@@ -2465,6 +2613,8 @@ impl App {
         self.sensory_positions.clear();
         self.hidden_positions.clear();
         self.output_positions.clear();
+        #[cfg(feature = "growth3d")]
+        self.reset_topology_pid_states();
 
         let (n_s, n_l, n_o) = match &self.view_source {
             ViewSource::Standalone => {
@@ -2570,6 +2720,7 @@ impl App {
         };
 
         self.sensory_count = n_s;
+        self.output_count = n_o;
         self.hidden_positions = vec![vec![]; n_l];
         self.sensory_activity = vec![0.0; n_s];
         self.hidden_activity = (0..n_l).map(|_| Vec::new()).collect(); // will be resized in update_activity
@@ -3385,12 +3536,46 @@ impl App {
     #[cfg(all(feature = "robot_io", unix))]
     fn apply_ipc_config(&mut self, handshake: IpcHandshake) {
         self.ipc_last_handshake = Some(handshake.clone());
-        let n_s_raw = handshake.s_names.len();
-        let n_o_raw = handshake.o_names.len();
+        let (n_s_raw, n_o_raw) = resolve_ipc_handshake_sizes(
+            &handshake,
+            self.local_net.num_sensory_neurons.max(1),
+            self.local_net.num_output_neurons.max(1),
+        );
         let k = self.ipc_neurons_per_value.max(1);
 
         let s_total = n_s_raw * k;
         let o_total = n_o_raw * k;
+
+        let mut mapping = IoMapping::new(s_total, o_total);
+        if handshake.s_names.is_empty() {
+            for i in 0..n_s_raw {
+                mapping.add_port(PortSpec::new(
+                    format!("S{}", i),
+                    PortKind::Sensor,
+                    i * k,
+                    k,
+                ));
+            }
+        } else {
+            for (i, name) in handshake.s_names.iter().enumerate() {
+                mapping.add_port(PortSpec::new(name.clone(), PortKind::Sensor, i * k, k));
+            }
+        }
+        if handshake.o_names.is_empty() {
+            for i in 0..n_o_raw {
+                mapping.add_port(PortSpec::new(
+                    format!("O{}", i),
+                    PortKind::Actuator,
+                    i * k,
+                    k,
+                ));
+            }
+        } else {
+            for (i, name) in handshake.o_names.iter().enumerate() {
+                mapping.add_port(PortSpec::new(name.clone(), PortKind::Actuator, i * k, k));
+            }
+        }
+        self.ipc_mapping = Some(mapping);
 
         let _ = self.sim_tx.send(SimControl::ResizeSensory(s_total));
         let _ = self.sim_tx.send(SimControl::ResizeOutput(o_total));
@@ -3441,6 +3626,181 @@ impl DetailBioOrient {
             DetailBioOrient::MirrorAxes => "Mirror dendrites left / axons right",
             DetailBioOrient::AlignAxonRight => "Auto-orient axon to right",
         }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone, Copy, Default)]
+struct UiPid2State {
+    pos: egui::Pos2,
+    prev_err: egui::Vec2,
+    integral: egui::Vec2,
+    initialized: bool,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone, Copy, Default)]
+struct UiPid3State {
+    pos: [f32; 3],
+    prev_err: [f32; 3],
+    integral: [f32; 3],
+    initialized: bool,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_pos2(
+    state: &mut UiPid2State,
+    target: egui::Pos2,
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> egui::Pos2 {
+    if !state.initialized {
+        state.pos = target;
+        state.prev_err = egui::Vec2::ZERO;
+        state.integral = egui::Vec2::ZERO;
+        state.initialized = true;
+        return target;
+    }
+    let err = target - state.pos;
+    state.integral += err * dt;
+    let integral_limit = 2000.0;
+    state.integral.x = state.integral.x.clamp(-integral_limit, integral_limit);
+    state.integral.y = state.integral.y.clamp(-integral_limit, integral_limit);
+    let derivative = (err - state.prev_err) * (1.0 / dt.max(0.001));
+    let mut delta = err * kp + state.integral * ki + derivative * kd;
+    let max_step = (2400.0 * dt).max(1.0);
+    let delta_sq = delta.length_sq();
+    if delta_sq > max_step * max_step {
+        delta *= max_step / delta_sq.sqrt();
+    }
+    state.pos += delta;
+    state.prev_err = err;
+    state.pos
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_positions(
+    states: &mut Vec<UiPid2State>,
+    targets: &[egui::Pos2],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> Vec<egui::Pos2> {
+    if states.len() != targets.len() {
+        states.resize(targets.len(), UiPid2State::default());
+    }
+    let mut out = Vec::with_capacity(targets.len());
+    for (idx, target) in targets.iter().enumerate() {
+        out.push(pid_smooth_pos2(&mut states[idx], *target, dt, kp, ki, kd));
+    }
+    out
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_layered_positions(
+    states: &mut Vec<Vec<UiPid2State>>,
+    targets: &[Vec<egui::Pos2>],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> Vec<Vec<egui::Pos2>> {
+    if states.len() != targets.len() {
+        states.resize_with(targets.len(), Vec::new);
+    }
+    let mut out = Vec::with_capacity(targets.len());
+    for (layer_idx, layer_targets) in targets.iter().enumerate() {
+        let layer_states = &mut states[layer_idx];
+        if layer_states.len() != layer_targets.len() {
+            layer_states.resize(layer_targets.len(), UiPid2State::default());
+        }
+        let mut layer_out = Vec::with_capacity(layer_targets.len());
+        for (idx, target) in layer_targets.iter().enumerate() {
+            layer_out.push(pid_smooth_pos2(
+                &mut layer_states[idx],
+                *target,
+                dt,
+                kp,
+                ki,
+                kd,
+            ));
+        }
+        out.push(layer_out);
+    }
+    out
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn pid_smooth_vec3(
+    state: &mut UiPid3State,
+    target: [f32; 3],
+    dt: f32,
+    kp: f32,
+    ki: f32,
+    kd: f32,
+) -> [f32; 3] {
+    if !state.initialized {
+        state.pos = target;
+        state.prev_err = [0.0; 3];
+        state.integral = [0.0; 3];
+        state.initialized = true;
+        return target;
+    }
+    let inv_dt = 1.0 / dt.max(0.001);
+    let mut delta = [0.0f32; 3];
+    for axis in 0..3 {
+        let err = target[axis] - state.pos[axis];
+        state.integral[axis] = (state.integral[axis] + err * dt).clamp(-2.0, 2.0);
+        let derivative = (err - state.prev_err[axis]) * inv_dt;
+        delta[axis] = err * kp + state.integral[axis] * ki + derivative * kd;
+        state.prev_err[axis] = err;
+    }
+    let delta_mag_sq = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2];
+    let max_step = (2.0 * dt).max(0.002);
+    if delta_mag_sq > max_step * max_step {
+        let scale = max_step / delta_mag_sq.sqrt();
+        delta[0] *= scale;
+        delta[1] *= scale;
+        delta[2] *= scale;
+    }
+    state.pos[0] += delta[0];
+    state.pos[1] += delta[1];
+    state.pos[2] += delta[2];
+    state.pos
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn centroid_of_projected_positions(
+    sensory: &[egui::Pos2],
+    hidden: &[Vec<egui::Pos2>],
+    output: &[egui::Pos2],
+) -> Option<egui::Pos2> {
+    let mut sum = egui::Vec2::ZERO;
+    let mut count = 0usize;
+    for p in sensory {
+        sum += p.to_vec2();
+        count += 1;
+    }
+    for layer in hidden {
+        for p in layer {
+            sum += p.to_vec2();
+            count += 1;
+        }
+    }
+    for p in output {
+        sum += p.to_vec2();
+        count += 1;
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(egui::pos2(
+            sum.x / count as f32,
+            sum.y / count as f32,
+        ))
     }
 }
 
@@ -5326,6 +5686,16 @@ impl eframe::App for App {
                 self.ipc_packet_drop_count = stats.drop_count;
                 self.ipc_size_mismatch_count = stats.size_mismatch_count;
                 self.ipc_last_steps = stats.last_steps;
+                if let Some(hs) = stats.last_handshake.clone() {
+                    let unchanged = self
+                        .ipc_last_handshake
+                        .as_ref()
+                        .map(|old| old == &hs)
+                        .unwrap_or(false);
+                    if !unchanged {
+                        self.apply_ipc_config(hs);
+                    }
+                }
             }
         }
 
@@ -5405,9 +5775,20 @@ impl eframe::App for App {
                             if self.output_activity.len() != snap.output_spikes.len() {
                                 self.output_activity.resize(snap.output_spikes.len(), 0.0);
                             }
+                            let mut col = vec![0i8; snap.output_spikes.len()];
+                            let mut any = false;
                             for (k, &sv) in snap.output_spikes.iter().enumerate() {
                                 if sv != 0 {
                                     self.output_activity[k] = 1.0;
+                                    col[k] = 1;
+                                    any = true;
+                                }
+                            }
+                            let step = self.sim_step_counter.load(Ordering::Relaxed) as usize;
+                            if any || (step % 5 == 0) {
+                                self.raster_outputs.push_back(col);
+                                if self.raster_outputs.len() > self.raster_cols {
+                                    self.raster_outputs.pop_front();
                                 }
                             }
                         }
@@ -6590,6 +6971,15 @@ impl eframe::App for App {
                     self.status = format!("Sensory resized to {}", self.sensory_count);
                     self.smoothed_equalizer_values.clear();
                 }
+                if ui
+                    .add(egui::Slider::new(&mut self.output_count, 1..=200).text("Output neurons"))
+                    .on_hover_text("Number of output neurons")
+                    .changed()
+                {
+                    let _ = self.sim_tx.send(SimControl::ResizeOutput(self.output_count));
+                    self.status = format!("Output resized to {}", self.output_count);
+                    self.raster_outputs.clear();
+                }
                 ui.horizontal(|ui| {
                     ui.label("Sensory target layer:").on_hover_text("Hidden layer index receiving sensory input. Index 0 is the first hidden layer.");
                     let mut has_s = self.local_net.sensory_target_layer.is_some();
@@ -6649,6 +7039,7 @@ impl eframe::App for App {
                         let num_o = net.num_output_neurons;
                         self.hidden_positions = vec![vec![]; num_l];
                         self.output_positions.clear();
+                        self.reset_topology_pid_states();
                         self.sensory_activity = vec![0.0; num_s];
                         self.hidden_activity = (0..num_l).map(|_| vec![0.0; num_h]).collect();
                         self.output_activity = vec![0.0; num_o];
@@ -9026,83 +9417,283 @@ impl eframe::App for App {
                 #[cfg(feature = "growth3d")]
                 if use_aarnn_layout {
                     if topo_enabled {
-                        // Compute world-space centroid of currently visible neurons to use as rotation pivot
-                        let mut sumx = 0.0f32; let mut sumy = 0.0f32; let mut sumz = 0.0f32; let mut cnt = 0usize;
+                        // Compute world-space centroid of currently visible neurons and smooth pivot with PID.
+                        let mut sumx = 0.0f32;
+                        let mut sumy = 0.0f32;
+                        let mut sumz = 0.0f32;
+                        let mut cnt = 0usize;
                         if cache_topology_active {
                             if let Some(topo) = self.cached_edge_topo.as_ref() {
-                                for l in &topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                                for n in &topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                                for n in &topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                                for l in &topo.layers {
+                                    for n in l {
+                                        sumx += n.x;
+                                        sumy += n.y;
+                                        sumz += n.z;
+                                        cnt += 1;
+                                    }
+                                }
+                                for n in &topo.sensory_nodes {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                                for n in &topo.output_nodes {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
-                                for l in &snap.topo_hidden { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                                for n in &snap.topo_sensory { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                                for n in &snap.topo_output { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                                for l in &snap.topo_hidden {
+                                    for n in l {
+                                        sumx += n.x;
+                                        sumy += n.y;
+                                        sumz += n.z;
+                                        cnt += 1;
+                                    }
+                                }
+                                for n in &snap.topo_sensory {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                                for n in &snap.topo_output {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
                             }
                         } else if let Some(active_runner) = active_runner_opt {
-                            for l in &active_runner.topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &active_runner.topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &active_runner.topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &active_runner.topo.layers {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &active_runner.topo.sensory_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &active_runner.topo.output_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(topo) = cluster_topo_opt {
-                            for l in &topo.layers { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &topo.sensory_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &topo.output_nodes { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &topo.layers {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &topo.sensory_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &topo.output_nodes {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(ref snap) = ui_snapshot_opt {
-                            for l in &snap.topo_hidden { for n in l { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; } }
-                            for n in &snap.topo_sensory { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
-                            for n in &snap.topo_output { sumx += n.x; sumy += n.y; sumz += n.z; cnt += 1; }
+                            for l in &snap.topo_hidden {
+                                for n in l {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                            }
+                            for n in &snap.topo_sensory {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &snap.topo_output {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         }
-                        if cnt > 0 { self.cam_pivot_world = (sumx/(cnt as f32), sumy/(cnt as f32), sumz/(cnt as f32)); }
+
+                        let dt_s = ctx.input(|i| i.unstable_dt).clamp(0.001, 0.1);
+                        if cnt > 0 {
+                            let pivot_target = [
+                                sumx / (cnt as f32),
+                                sumy / (cnt as f32),
+                                sumz / (cnt as f32),
+                            ];
+                            let (pivot_kp, pivot_kd) = if camera_interacting {
+                                (0.85, 0.02)
+                            } else {
+                                (0.24, 0.10)
+                            };
+                            let pivot_smoothed = pid_smooth_vec3(
+                                &mut self.cam_pivot_pid,
+                                pivot_target,
+                                dt_s,
+                                pivot_kp,
+                                0.0,
+                                pivot_kd,
+                            );
+                            self.cam_pivot_world =
+                                (pivot_smoothed[0], pivot_smoothed[1], pivot_smoothed[2]);
+                        }
                         let pivot = self.cam_pivot_world;
+                        let cam_pan = self.cam_pan;
 
                         let project = |n: &crate::topology::Node3D| -> egui::Pos2 {
-                            let (mut x3, mut y3, mut z3) = (n.x - pivot.0, n.y - pivot.1, n.z - pivot.2);
-                            // Rotate by yaw (around Y) then pitch (around X) around the world pivot
-                            let xz = x3*cy + z3*sy; let zz = -x3*sy + z3*cy; x3 = xz; z3 = zz;
-                            let yz = y3*cp - z3*sp; y3 = yz;
-                            egui::pos2(x_ref + x3 * scale_x + self.cam_pan.x, y_ref - y3 * scale_y + self.cam_pan.y)
+                            let (mut x3, mut y3, mut z3) =
+                                (n.x - pivot.0, n.y - pivot.1, n.z - pivot.2);
+                            // Rotate by yaw (around Y) then pitch (around X) around the world pivot.
+                            let xz = x3 * cy + z3 * sy;
+                            let zz = -x3 * sy + z3 * cy;
+                            x3 = xz;
+                            z3 = zz;
+                            let yz = y3 * cp - z3 * sp;
+                            y3 = yz;
+                            egui::pos2(
+                                x_ref + x3 * scale_x + cam_pan.x,
+                                y_ref - y3 * scale_y + cam_pan.y,
+                            )
                         };
+
+                        let mut target_sensory_positions: Vec<egui::Pos2> = Vec::new();
+                        let mut target_output_positions: Vec<egui::Pos2> = Vec::new();
+                        let mut target_hidden_positions: Vec<Vec<egui::Pos2>> = Vec::new();
 
                         if cache_topology_active {
                             if let Some(topo) = self.cached_edge_topo.as_ref() {
-                                self.sensory_positions = topo.sensory_nodes.iter().map(project).collect();
-                                self.output_positions = topo.output_nodes.iter().map(project).collect();
-                                self.hidden_positions = topo.layers.iter().map(|layer| {
-                                    layer.iter().map(project).collect()
-                                }).collect();
+                                target_sensory_positions =
+                                    topo.sensory_nodes.iter().map(project).collect();
+                                target_output_positions =
+                                    topo.output_nodes.iter().map(project).collect();
+                                target_hidden_positions = topo
+                                    .layers
+                                    .iter()
+                                    .map(|layer| layer.iter().map(project).collect())
+                                    .collect();
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
-                                self.sensory_positions = snap.topo_sensory.iter().map(project).collect();
-                                self.output_positions = snap.topo_output.iter().map(project).collect();
-                                self.hidden_positions = snap.topo_hidden.iter().map(|layer| {
-                                    layer.iter().map(project).collect()
-                                }).collect();
+                                target_sensory_positions =
+                                    snap.topo_sensory.iter().map(project).collect();
+                                target_output_positions =
+                                    snap.topo_output.iter().map(project).collect();
+                                target_hidden_positions = snap
+                                    .topo_hidden
+                                    .iter()
+                                    .map(|layer| layer.iter().map(project).collect())
+                                    .collect();
                             }
                         } else if let Some(active_runner) = active_runner_opt {
-                            self.sensory_positions = active_runner.topo.sensory_nodes.iter().map(project).collect();
-                            self.output_positions = active_runner.topo.output_nodes.iter().map(project).collect();
-                            self.hidden_positions = active_runner.topo.layers.iter().map(|layer: &Vec<crate::topology::Node3D>| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                active_runner.topo.sensory_nodes.iter().map(project).collect();
+                            target_output_positions =
+                                active_runner.topo.output_nodes.iter().map(project).collect();
+                            target_hidden_positions = active_runner
+                                .topo
+                                .layers
+                                .iter()
+                                .map(|layer: &Vec<crate::topology::Node3D>| {
+                                    layer.iter().map(project).collect()
+                                })
+                                .collect();
                         } else if let Some(topo) = cluster_topo_opt {
-                            self.sensory_positions = topo.sensory_nodes.iter().map(project).collect();
-                            self.output_positions = topo.output_nodes.iter().map(project).collect();
-                            self.hidden_positions = topo.layers.iter().map(|layer| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                topo.sensory_nodes.iter().map(project).collect();
+                            target_output_positions =
+                                topo.output_nodes.iter().map(project).collect();
+                            target_hidden_positions = topo
+                                .layers
+                                .iter()
+                                .map(|layer| layer.iter().map(project).collect())
+                                .collect();
                         } else if let Some(ref snap) = ui_snapshot_opt {
-                            self.sensory_positions = snap.topo_sensory.iter().map(project).collect();
-                            self.output_positions = snap.topo_output.iter().map(project).collect();
-                            self.hidden_positions = snap.topo_hidden.iter().map(|layer| {
-                                layer.iter().map(project).collect()
-                            }).collect();
+                            target_sensory_positions =
+                                snap.topo_sensory.iter().map(project).collect();
+                            target_output_positions =
+                                snap.topo_output.iter().map(project).collect();
+                            target_hidden_positions = snap
+                                .topo_hidden
+                                .iter()
+                                .map(|layer| layer.iter().map(project).collect())
+                                .collect();
                         }
-                        
-                        // Fallback if no hidden layers exist yet
-                        if self.hidden_positions.is_empty() {
-                            self.hidden_positions.push(vec![egui::pos2(x_ref + self.cam_pan.x, y_ref + self.cam_pan.y)]);
+
+                        // Fallback if no hidden layers exist yet.
+                        if target_hidden_positions.is_empty() {
+                            target_hidden_positions
+                                .push(vec![egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y)]);
+                        }
+
+                        let (pos_kp, pos_kd) = if camera_interacting {
+                            (0.9, 0.02)
+                        } else {
+                            (0.30, 0.10)
+                        };
+                        self.sensory_positions = pid_smooth_positions(
+                            &mut self.topo_pid_sensory,
+                            &target_sensory_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        self.hidden_positions = pid_smooth_layered_positions(
+                            &mut self.topo_pid_hidden,
+                            &target_hidden_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        self.output_positions = pid_smooth_positions(
+                            &mut self.topo_pid_output,
+                            &target_output_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
+                        let desired_center_2d = egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y);
+                        let mut centroid_correction = egui::Vec2::ZERO;
+                        if let Some(curr_center_2d) = centroid_of_projected_positions(
+                            &self.sensory_positions,
+                            &self.hidden_positions,
+                            &self.output_positions,
+                        ) {
+                            centroid_correction = desired_center_2d - curr_center_2d;
+                            if centroid_correction.length_sq() > 1e-6 {
+                                for p in &mut self.sensory_positions {
+                                    *p += centroid_correction;
+                                }
+                                for layer in &mut self.hidden_positions {
+                                    for p in layer {
+                                        *p += centroid_correction;
+                                    }
+                                }
+                                for p in &mut self.output_positions {
+                                    *p += centroid_correction;
+                                }
+                            }
                         }
 
                         // Compute region label positions with smoothing
@@ -9115,24 +9706,61 @@ impl eframe::App for App {
                                     z: region.center[2],
                                     ..Default::default()
                                 };
-                                let target_pos = project(&node);
-                                // Push labels slightly outwards from the center to keep them clear of neurons
-                                let center_2d = egui::pos2(x_ref + self.cam_pan.x, y_ref + self.cam_pan.y);
-                                let mut dir = target_pos - center_2d;
-                                if dir.length() < 1.0 { dir = egui::vec2(1.0, 0.0); }
-                                let desired_label_pos = target_pos + dir.normalized() * 35.0;
+                                let name = region.name.clone();
+                                let target_raw = project(&node) + centroid_correction;
+                                let target_entry = self
+                                    .region_label_target_states
+                                    .entry(name.clone())
+                                    .or_insert(target_raw);
+                                let target_tau_s = if camera_interacting { 0.10 } else { 0.26 };
+                                let target_alpha = 1.0 - (-dt_s / target_tau_s).exp();
+                                target_entry.x += (target_raw.x - target_entry.x) * target_alpha;
+                                target_entry.y += (target_raw.y - target_entry.y) * target_alpha;
+                                let target_pos = *target_entry;
 
-                                // Persist and smooth label positions to prevent jumping
-                                let entry = self.region_label_states.entry(region.name.clone()).or_insert(desired_label_pos);
-                                let smoothing = 0.12; // Slow drift for stability
-                                entry.x = entry.x * (1.0 - smoothing) + desired_label_pos.x * smoothing;
-                                entry.y = entry.y * (1.0 - smoothing) + desired_label_pos.y * smoothing;
+                                // Keep the label on a stable side of its region target (sticky offset)
+                                // and move it with a speed cap to prevent visual jitter.
+                                let center_2d = desired_center_2d;
+                                let mut center_dir = target_pos - center_2d;
+                                if center_dir.length_sq() < 1.0 {
+                                    center_dir = egui::vec2(1.0, 0.0);
+                                }
+                                let label_distance = 35.0f32;
+                                let initial_label_pos =
+                                    target_pos + center_dir.normalized() * label_distance;
+                                let label_entry = self
+                                    .region_label_states
+                                    .entry(name.clone())
+                                    .or_insert(initial_label_pos);
+                                let mut sticky_dir = *label_entry - target_pos;
+                                if sticky_dir.length_sq() < 64.0 {
+                                    sticky_dir = center_dir;
+                                }
+                                if sticky_dir.length_sq() < 1.0 {
+                                    sticky_dir = egui::vec2(1.0, 0.0);
+                                }
+                                let desired_label_pos =
+                                    target_pos + sticky_dir.normalized() * label_distance;
+                                let label_tau_s = if camera_interacting { 0.09 } else { 0.34 };
+                                let label_alpha = 1.0 - (-dt_s / label_tau_s).exp();
+                                let mut step = (desired_label_pos - *label_entry) * label_alpha;
+                                let max_step = if camera_interacting {
+                                    220.0 * dt_s
+                                } else {
+                                    85.0 * dt_s
+                                };
+                                let step_len_sq = step.length_sq();
+                                if step_len_sq > max_step * max_step {
+                                    step *= max_step / step_len_sq.sqrt();
+                                }
+                                *label_entry += step;
 
-                                self.region_label_positions.push((region.name.clone(), *entry, target_pos));
+                                self.region_label_positions.push((name, *label_entry, target_pos));
                             }
                         }
                     } else {
                         // Grid layout when growth is disabled (apply camera transform)
+                        self.reset_topology_pid_states();
                         self.sensory_positions = (0..ns).map(|i|{
                             let y = top + height * ((i as f32 + 1.0) / (ns as f32 + 1.0));
                             let px = (left + dx) * self.camera_zoom + self.cam_pan.x;
@@ -9160,6 +9788,7 @@ impl eframe::App for App {
                     }
                 } else {
                     // Grid layout when growth is disabled (apply camera transform)
+                    self.reset_topology_pid_states();
                     self.sensory_positions = (0..ns).map(|i|{
                         let y = top + height * ((i as f32 + 1.0) / (ns as f32 + 1.0));
                         let px = (left + dx) * self.camera_zoom + self.cam_pan.x;
@@ -10847,16 +11476,11 @@ impl eframe::App for App {
             let mut detail_managed_arc = None;
             let mut detail_managed_guard = None;
             let mut detail_standalone_guard = None;
-            let mut detail_busy = false;
             let active_runner_opt: Option<&Runner> = match &self.view_source {
                 ViewSource::Standalone | ViewSource::ClusterGlobal(_) => {
-                    if let Ok(guard) = detail_runner_arc.try_read() {
-                        detail_standalone_guard = Some(guard);
-                        Some(&*detail_standalone_guard.as_ref().unwrap())
-                    } else {
-                        detail_busy = true;
-                        None
-                    }
+                    let guard = detail_runner_arc.blocking_read();
+                    detail_standalone_guard = Some(guard);
+                    Some(&*detail_standalone_guard.as_ref().unwrap())
                 }
                 ViewSource::LocalManaged(id) => {
                     if let Some(state_arc) = state_arc.as_ref() {
@@ -10864,37 +11488,28 @@ impl eframe::App for App {
                             if let Some(net_arc) = s.networks.get(id) {
                                 let arc = net_arc.clone();
                                 detail_managed_arc = Some(arc);
-                                detail_managed_guard =
-                                    detail_managed_arc.as_ref().unwrap().try_read().ok();
-                                if let Some(ref m) = detail_managed_guard {
-                                    Some(&m.runner)
-                                } else if let Ok(guard) = detail_runner_arc.try_read() {
-                                    detail_standalone_guard = Some(guard);
-                                    Some(&*detail_standalone_guard.as_ref().unwrap())
+                                if let Ok(guard) = detail_managed_arc.as_ref().unwrap().try_read() {
+                                    detail_managed_guard = Some(guard);
+                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 } else {
-                                    detail_busy = true;
-                                    None
+                                    let guard = detail_managed_arc.as_ref().unwrap().blocking_read();
+                                    detail_managed_guard = Some(guard);
+                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 }
-                            } else if let Ok(guard) = detail_runner_arc.try_read() {
+                            } else {
+                                let guard = detail_runner_arc.blocking_read();
                                 detail_standalone_guard = Some(guard);
                                 Some(&*detail_standalone_guard.as_ref().unwrap())
-                            } else {
-                                detail_busy = true;
-                                None
                             }
-                        } else if let Ok(guard) = detail_runner_arc.try_read() {
+                        } else {
+                            let guard = detail_runner_arc.blocking_read();
                             detail_standalone_guard = Some(guard);
                             Some(&*detail_standalone_guard.as_ref().unwrap())
-                        } else {
-                            detail_busy = true;
-                            None
                         }
-                    } else if let Ok(guard) = detail_runner_arc.try_read() {
+                    } else {
+                        let guard = detail_runner_arc.blocking_read();
                         detail_standalone_guard = Some(guard);
                         Some(&*detail_standalone_guard.as_ref().unwrap())
-                    } else {
-                        detail_busy = true;
-                        None
                     }
                 }
             };
@@ -10933,7 +11548,7 @@ impl eframe::App for App {
                 .open(&mut open)
                 .default_size(egui::vec2(600.0, 500.0))
                 .show(ctx, |ui| {
-                    if detail_busy || active_runner_opt.is_none() {
+                    if active_runner_opt.is_none() {
                         ui.label("Simulation busy...");
                         return;
                     }
