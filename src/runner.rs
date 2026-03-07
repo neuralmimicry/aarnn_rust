@@ -11595,7 +11595,9 @@ impl Runner {
                     y: ny,
                     z: nz,
                 };
-                let start_empty = matches!(self.neuron_model, NeuronModel::Aarnn);
+                // AARNN previously started each spawned neuron fully empty, which can
+                // stall contact-based synapse formation in sparse regimes.
+                let start_empty = false;
                 self.morph.add_hidden_neuron(
                     0,
                     j_new,
@@ -13218,7 +13220,8 @@ impl Runner {
                     y: ny,
                     z: nz,
                 };
-                let start_empty = matches!(self.neuron_model, NeuronModel::Aarnn);
+                // Seed with minimal branches so morphology can form contacts quickly.
+                let start_empty = false;
                 self.morph.add_hidden_neuron(
                     l,
                     j_new,
@@ -13819,7 +13822,8 @@ impl Runner {
                     y: ny,
                     z: nz,
                 };
-                let start_empty = matches!(self.neuron_model, NeuronModel::Aarnn);
+                // Seed with minimal branches so morphology can form contacts quickly.
+                let start_empty = false;
                 self.morph.add_hidden_neuron(
                     target,
                     num_old_next_layer_neurons,
