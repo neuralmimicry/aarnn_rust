@@ -33,8 +33,12 @@ jobs:
     if: github.event_name == 'push'
     strategy:
       matrix:
-        arch: [amd64, arm64]
-    runs-on: [self-hosted, linux]
+        include:
+          - arch: amd64
+            runner_arch: x86
+          - arch: arm64
+            runner_arch: arm64
+    runs-on: [self-hosted, linux, "${{ matrix.runner_arch }}"]
     permissions:
       contents: read
       packages: write
