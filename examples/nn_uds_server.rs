@@ -144,7 +144,12 @@ fn build_mapping_with_names(
     let mut io_mapping = IoMapping::new(sensory_size, output_size);
 
     if sensory_names.is_empty() {
-        io_mapping.add_port(PortSpec::new("__S_ALL__", PortKind::Sensor, 0, sensory_size));
+        io_mapping.add_port(PortSpec::new(
+            "__S_ALL__",
+            PortKind::Sensor,
+            0,
+            sensory_size,
+        ));
     } else {
         for (idx, name) in sensory_names.iter().enumerate() {
             io_mapping.add_port(PortSpec::new(name.clone(), PortKind::Sensor, idx, 1));
@@ -335,8 +340,10 @@ fn main() -> io::Result<()> {
                                 &active_s_names,
                                 &active_o_names,
                             );
-                            runner =
-                                build_runner(io_mapping_srv.sensory_size, io_mapping_srv.output_size);
+                            runner = build_runner(
+                                io_mapping_srv.sensory_size,
+                                io_mapping_srv.output_size,
+                            );
                             expected_bytes = (1 + io_mapping_srv.sensory_size) * 4;
                             request_buffer.resize(expected_bytes.max(8192), 0);
                             output_buffer.resize(io_mapping_srv.output_size * 4, 0);

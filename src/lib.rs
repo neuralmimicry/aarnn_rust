@@ -36,6 +36,9 @@ pub mod bridge;
 
 /// Components for distributed simulation across multiple nodes.
 pub mod distributed;
+#[cfg(feature = "openmpi")]
+/// OpenMPI bootstrap and transport helpers.
+pub mod openmpi_runtime;
 /// Remote Direct Memory Access (RDMA) backend for low-latency distributed communication.
 pub mod rdma;
 /// Orchestration logic for running simulations in various modes.

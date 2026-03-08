@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neuromorphic API Swagger UI</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #11161c;
+        color: #d9e2ec;
+        font-family: "Noto Sans", "Segoe UI", sans-serif;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        border-bottom: 1px solid #2b3642;
+        background: #171d24;
+      }
+      .title {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .links {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .links a {
+        color: #d9e2ec;
+        text-decoration: none;
+        border: 1px solid #2f3f50;
+        border-radius: 6px;
+        padding: 5px 9px;
+        font-size: 12px;
+      }
+      .links a:hover {
+        color: #71e0b1;
+        border-color: #71e0b1;
+      }
+      .hint {
+        padding: 10px 16px;
+        border-bottom: 1px solid #2b3642;
+        background: #1f2530;
+        font-size: 13px;
+      }
+      .hint code {
+        background: #12171e;
+        border: 1px solid #2b3642;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      #swagger-ui {
+        max-width: 1300px;
+        margin: 0 auto;
+      }
+      .swagger-ui .topbar { display: none; }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">Neuromorphic API - Swagger UI</div>
+      <nav class="links">
+        <a href="/">Web UI</a>
+        <a href="/docs">Full Docs</a>
+        <a href="/api/openapi.json">OpenAPI JSON</a>
+      </nav>
+    </header>
+
+    <div class="hint">
+      Use <code>POST /api/login</code> first in local-auth mode. Requests are configured with
+      <code>credentials: include</code> so the <code>nm_session</code> cookie is sent automatically.
+    </div>
+
+    <div id="swagger-ui"></div>
+
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+    <script>
+      window.addEventListener("load", () => {
+        window.ui = SwaggerUIBundle({
+          url: "/api/openapi.json",
+          dom_id: "#swagger-ui",
+          deepLinking: true,
+          displayRequestDuration: true,
+          docExpansion: "list",
+          filter: true,
+          persistAuthorization: true,
+          tryItOutEnabled: true,
+          requestInterceptor: (req) => {
+            req.credentials = "include";
+            return req;
+          },
+          presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+          layout: "StandaloneLayout"
+        });
+      });
+    </script>
+  </body>
+</html>

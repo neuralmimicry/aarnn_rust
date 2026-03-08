@@ -1,8 +1,11 @@
+#![recursion_limit = "2048"]
+
 use aarnn_rust::distributed::proto::{
     control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
-    NetworkSnapshotRequest, NetworkUpdateRequest, StatusRequest,
+    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
 };
+use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -18,6 +21,7 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use clap::Parser;
+use futures_util::StreamExt;
 use openidconnect::{
     core::{
         CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims,
@@ -27,13 +31,14 @@ use openidconnect::{
     RedirectUrl, Scope, TokenResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
 type OidcClient = CoreClient<
@@ -345,6 +350,39 @@ struct ExportQuery {
 }
 
 #[derive(Deserialize)]
+struct AerInjectPayload {
+    addr: Option<String>,
+    network_id: String,
+    node_id: Option<String>,
+    step_index: Option<i64>,
+    aer_base: Option<u32>,
+    aer_payload_hex: Option<String>,
+    spike_indices: Option<Vec<u32>>,
+    is_backward: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct AerStreamQuery {
+    addr: Option<String>,
+    network_id: Option<String>,
+    node_id: Option<String>,
+    step_index: Option<i64>,
+    aer_base: Option<u32>,
+    is_backward: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct AerStreamFrame {
+    network_id: Option<String>,
+    node_id: Option<String>,
+    step_index: Option<i64>,
+    aer_base: Option<u32>,
+    aer_payload_hex: Option<String>,
+    spike_indices: Option<Vec<u32>>,
+    is_backward: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct LoginPayload {
     username: String,
     password: String,
@@ -467,6 +505,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let api = Router::new()
+        .route("/openapi.json", get(openapi_json))
         .route("/config", get(api_config))
         .route("/auth/mode", get(auth_mode_handler))
         .route("/me", get(me))
@@ -478,6 +517,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/snapshot", get(snapshot))
         .route("/activity", get(activity))
         .route("/export", get(export))
+        .route("/aer/inject", post(aer_inject))
+        .route("/aer/stream", post(aer_stream))
         .route("/update_network", post(update_network))
         .route("/control_network", post(control_network))
         .layer(middleware::from_fn_with_state(
@@ -489,6 +530,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index))
         .route("/app.js", get(app_js))
         .route("/style.css", get(style_css))
+        .route("/docs", get(docs_page))
+        .route("/docs/", get(docs_page))
+        .route("/docs/swagger", get(swagger_page))
+        .route("/docs/swagger/", get(swagger_page))
         .route("/auth/oidc/login", get(oidc_login))
         .route("/auth/oidc/callback", get(oidc_callback))
         .route("/auth/oidc/exchange", post(oidc_exchange))
@@ -527,6 +572,740 @@ async fn style_css() -> impl IntoResponse {
     (headers, include_str!("../../web_ui/style.css"))
 }
 
+async fn docs_page() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    (headers, include_str!("../../web_ui/docs.html"))
+}
+
+async fn swagger_page() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    (headers, include_str!("../../web_ui/swagger.html"))
+}
+
+async fn openapi_json(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(build_openapi_spec(&state))
+}
+
+fn build_openapi_spec(state: &AppState) -> Value {
+    let auth_mode = state.auth.mode.as_str();
+    let default_orchestrator = state
+        .default_orchestrator
+        .clone()
+        .unwrap_or_else(|| "(not configured)".to_string());
+    let auth_note = format!(
+        "Current runtime auth mode: `{}`. Protected endpoints require the `nm_session` cookie. \
+Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
+        auth_mode
+    );
+
+    json!({
+      "openapi": "3.0.3",
+      "info": {
+        "title": "Neuromorphic Web UI API",
+        "version": "1.0.0",
+        "description": format!(
+          "API for orchestrator status, network control, snapshots, activity, export, and user configuration.\n\n{}\n\nDefault orchestrator configured on this server: `{}`.",
+          auth_note,
+          default_orchestrator
+        )
+      },
+      "servers": [
+        { "url": "/", "description": "Current web-ui origin" }
+      ],
+      "externalDocs": {
+        "description": "Human-readable docs and usage guidance",
+        "url": "/docs"
+      },
+      "tags": [
+        { "name": "docs", "description": "API documentation endpoints" },
+        { "name": "auth", "description": "Authentication and session endpoints" },
+        { "name": "config", "description": "Web UI config bootstrap endpoints" },
+        { "name": "user", "description": "Per-user persisted configuration" },
+        { "name": "cluster", "description": "Cluster/system status and telemetry" },
+        { "name": "network", "description": "Network snapshot/activity/control/update/export APIs" },
+        { "name": "oidc", "description": "OIDC browser and token exchange endpoints" }
+      ],
+      "components": {
+        "securitySchemes": {
+          "cookieAuth": {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": "nm_session",
+            "description": "Session cookie set by /api/login or OIDC flow."
+          }
+        },
+        "schemas": {
+          "ErrorResponse": {
+            "type": "object",
+            "properties": {
+              "error": { "type": "string" }
+            },
+            "required": ["error"]
+          },
+          "AuthModeResponse": {
+            "type": "object",
+            "properties": {
+              "mode": { "type": "string", "enum": ["none", "local", "oidc"] },
+              "allow_signup": { "type": "boolean" }
+            },
+            "required": ["mode", "allow_signup"]
+          },
+          "UiConfigResponse": {
+            "type": "object",
+            "properties": {
+              "default_orchestrator": { "type": "string", "nullable": true, "description": "Default gRPC orchestrator address." }
+            }
+          },
+          "MeResponse": {
+            "type": "object",
+            "properties": {
+              "authenticated": { "type": "boolean" },
+              "mode": { "type": "string", "nullable": true },
+              "username": { "type": "string", "nullable": true }
+            },
+            "required": ["authenticated"]
+          },
+          "LoginPayload": {
+            "type": "object",
+            "properties": {
+              "username": { "type": "string" },
+              "password": { "type": "string", "format": "password" }
+            },
+            "required": ["username", "password"]
+          },
+          "SignupPayload": {
+            "type": "object",
+            "properties": {
+              "username": { "type": "string" },
+              "password": { "type": "string", "format": "password" }
+            },
+            "required": ["username", "password"]
+          },
+          "LoginResponse": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" },
+              "username": { "type": "string" }
+            },
+            "required": ["ok", "username"]
+          },
+          "SignupResponse": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"]
+          },
+          "LogoutResponse": {
+            "type": "object",
+            "properties": {
+              "ok": { "type": "boolean" }
+            },
+            "required": ["ok"]
+          },
+          "UserConfigPayload": {
+            "type": "object",
+            "properties": {
+              "config": { "type": "object", "additionalProperties": true }
+            },
+            "required": ["config"]
+          },
+          "UserConfigResponse": {
+            "type": "object",
+            "properties": {
+              "config": { "type": "object", "additionalProperties": true }
+            },
+            "required": ["config"]
+          },
+          "SuccessResponse": {
+            "type": "object",
+            "properties": {
+              "success": { "type": "boolean" }
+            },
+            "required": ["success"]
+          },
+          "NodeStatus": {
+            "type": "object",
+            "properties": {
+              "node_id": { "type": "string" },
+              "address": { "type": "string" },
+              "active_networks": { "type": "array", "items": { "type": "string" } },
+              "cpu_usage": { "type": "number" },
+              "total_ram": { "type": "integer", "format": "uint64" },
+              "available_ram": { "type": "integer", "format": "uint64" },
+              "num_gpus": { "type": "integer", "format": "uint32" },
+              "num_tpus": { "type": "integer", "format": "uint32" },
+              "num_fpgas": { "type": "integer", "format": "uint32" },
+              "capacity_score": { "type": "number" },
+              "desired_dt": { "type": "number" },
+              "num_neurons": { "type": "integer", "format": "uint64" },
+              "redundant_neurons": { "type": "integer", "format": "uint64" },
+              "current_aarnn_depth": { "type": "integer", "format": "uint32" },
+              "desired_aarnn_depth": { "type": "integer", "format": "uint32" },
+              "avg_step_time_ms": { "type": "number" },
+              "temperature_c": { "type": "number" },
+              "ga_running": { "type": "boolean" },
+              "ga_generation": { "type": "integer", "format": "uint32" },
+              "ga_best_fitness": { "type": "number" },
+              "ga_best_config_json": { "type": "string" },
+              "ga_pacing": { "type": "boolean" },
+              "ga_pacing_reason": { "type": "string" },
+              "ga_evaluating": { "type": "boolean" },
+              "ga_eval_progress": { "type": "number" },
+              "ga_total_evaluations": { "type": "integer", "format": "uint64" },
+              "ga_active_eval_seed": { "type": "integer", "format": "uint64" },
+              "ga_ramp_active": { "type": "boolean" },
+              "ga_ramp_population": { "type": "integer", "format": "uint32" },
+              "ga_ramp_worker_cap": { "type": "integer", "format": "uint32" },
+              "ga_ramp_sim_time_ms": { "type": "number" },
+              "ga_ramp_eval_ms": { "type": "integer", "format": "uint64" },
+              "ga_ramp_eval_neurons": { "type": "integer", "format": "uint64" },
+              "ga_ramp_eval_conns": { "type": "integer", "format": "uint64" },
+              "comm_protocol": { "type": "string" },
+              "peer_comm_protocols": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              }
+            },
+            "required": ["node_id", "address", "active_networks"]
+          },
+          "NetworkDistributionEntry": {
+            "type": "object",
+            "properties": {
+              "node_id": { "type": "string" },
+              "layers": { "type": "array", "items": { "type": "integer", "format": "uint32" } },
+              "layer_neuron_counts": {
+                "type": "object",
+                "additionalProperties": { "type": "integer", "format": "uint64" }
+              }
+            },
+            "required": ["node_id", "layers", "layer_neuron_counts"]
+          },
+          "NetworkStatus": {
+            "type": "object",
+            "properties": {
+              "network_id": { "type": "string" },
+              "current_dt": { "type": "number" },
+              "total_neurons": { "type": "integer", "format": "uint64" },
+              "num_layers": { "type": "integer", "format": "uint32" },
+              "desired_aarnn_depth": { "type": "integer", "format": "uint32" },
+              "playing": { "type": "boolean" },
+              "neuron_model": { "type": "string" },
+              "learning_rule": { "type": "string" },
+              "distribution": { "type": "array", "items": { "$ref": "#/components/schemas/NetworkDistributionEntry" } }
+            },
+            "required": ["network_id", "distribution"]
+          },
+          "StatusResponse": {
+            "type": "object",
+            "properties": {
+              "orchestrator": { "type": "string" },
+              "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/NodeStatus" } },
+              "networks": { "type": "array", "items": { "$ref": "#/components/schemas/NetworkStatus" } },
+              "timestamp_ms": { "type": "integer", "format": "uint64" }
+            },
+            "required": ["orchestrator", "nodes", "networks", "timestamp_ms"]
+          },
+          "SnapshotResponse": {
+            "type": "object",
+            "properties": {
+              "network_id": { "type": "string" },
+              "snapshot_json": { "type": "string", "description": "Serialized network snapshot JSON." },
+              "source": { "type": "string", "description": "Resolved node address used for this request." }
+            },
+            "required": ["network_id", "snapshot_json", "source"]
+          },
+          "ActivityIndices": {
+            "type": "object",
+            "properties": {
+              "indices": { "type": "array", "items": { "type": "integer", "format": "uint32" } }
+            },
+            "required": ["indices"]
+          },
+          "ActivityResponse": {
+            "type": "object",
+            "properties": {
+              "network_id": { "type": "string" },
+              "sensory": { "$ref": "#/components/schemas/ActivityIndices" },
+              "hidden": { "type": "array", "items": { "$ref": "#/components/schemas/ActivityIndices" } },
+              "output": { "$ref": "#/components/schemas/ActivityIndices" },
+              "source": { "type": "string" }
+            },
+            "required": ["network_id", "sensory", "hidden", "output", "source"]
+          },
+          "UpdateNetworkPayload": {
+            "type": "object",
+            "properties": {
+              "addr": { "type": "string", "nullable": true },
+              "network_id": { "type": "string" },
+              "config_json": { "type": "string", "nullable": true },
+              "neuron_model": { "type": "string", "nullable": true },
+              "learning_rule": { "type": "string", "nullable": true }
+            },
+            "required": ["network_id"]
+          },
+          "ControlNetworkPayload": {
+            "type": "object",
+            "properties": {
+              "addr": { "type": "string", "nullable": true },
+              "network_id": { "type": "string" },
+              "action": {
+                "type": "string",
+                "enum": ["start", "stop", "repeat", "reset", "new"]
+              }
+            },
+            "required": ["network_id", "action"]
+          },
+          "AerInjectPayload": {
+            "type": "object",
+            "properties": {
+              "addr": { "type": "string", "nullable": true, "description": "Orchestrator address; defaults to server config." },
+              "network_id": { "type": "string" },
+              "node_id": { "type": "string", "nullable": true, "description": "Optional specific node target." },
+              "step_index": { "type": "integer", "format": "int64", "nullable": true },
+              "aer_base": { "type": "integer", "format": "uint32", "nullable": true, "description": "Base address for decoding AER payload." },
+              "aer_payload_hex": { "type": "string", "nullable": true, "description": "Hex-encoded AER1 payload bytes." },
+              "spike_indices": { "type": "array", "items": { "type": "integer", "format": "uint32" }, "nullable": true, "description": "Fallback direct sensory spike indices." },
+              "is_backward": { "type": "boolean", "nullable": true, "description": "Reserved; normally false for sensory injection." }
+            },
+            "required": ["network_id"]
+          },
+          "AerInjectResponse": {
+            "type": "object",
+            "properties": {
+              "accepted": { "type": "integer", "format": "uint64" },
+              "target": { "type": "string" },
+              "network_id": { "type": "string" },
+              "frames": { "type": "integer", "format": "uint64", "nullable": true },
+              "mode": { "type": "string", "nullable": true }
+            },
+            "required": ["accepted", "target", "network_id"]
+          },
+          "OidcExchangePayload": {
+            "type": "object",
+            "properties": {
+              "access_token": { "type": "string", "nullable": true },
+              "id_token": { "type": "string", "nullable": true },
+              "next": { "type": "string", "nullable": true }
+            }
+          }
+        }
+      },
+      "paths": {
+        "/api/openapi.json": {
+          "get": {
+            "tags": ["docs"],
+            "summary": "Get OpenAPI specification",
+            "operationId": "getOpenApiSpec",
+            "responses": {
+              "200": {
+                "description": "OpenAPI v3 specification for this server."
+              }
+            }
+          }
+        },
+        "/api/config": {
+          "get": {
+            "tags": ["config"],
+            "summary": "Get web-ui bootstrap config",
+            "operationId": "getUiConfig",
+            "responses": {
+              "200": {
+                "description": "UI bootstrap configuration.",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UiConfigResponse" } } }
+              }
+            }
+          }
+        },
+        "/api/auth/mode": {
+          "get": {
+            "tags": ["auth"],
+            "summary": "Get auth mode",
+            "operationId": "getAuthMode",
+            "responses": {
+              "200": {
+                "description": "Authentication mode and signup capability.",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthModeResponse" } } }
+              }
+            }
+          }
+        },
+        "/api/me": {
+          "get": {
+            "tags": ["auth"],
+            "summary": "Get current session user",
+            "operationId": "getCurrentUser",
+            "responses": {
+              "200": {
+                "description": "Authenticated status.",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MeResponse" } } }
+              },
+              "401": {
+                "description": "No valid session cookie.",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+              }
+            }
+          }
+        },
+        "/api/login": {
+          "post": {
+            "tags": ["auth"],
+            "summary": "Login (local auth mode)",
+            "description": "On success sets `nm_session` cookie.",
+            "operationId": "loginLocal",
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/LoginPayload" },
+                  "examples": {
+                    "default": {
+                      "value": { "username": "admin", "password": "change-me" }
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Login successful.",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginResponse" } } }
+              },
+              "400": { "description": "Missing credentials or local auth disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Invalid credentials.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/signup": {
+          "post": {
+            "tags": ["auth"],
+            "summary": "Signup (if enabled)",
+            "operationId": "signupLocal",
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/SignupPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Signup successful.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignupResponse" } } } },
+              "400": { "description": "Invalid request or local auth disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Signup disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "409": { "description": "User exists.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/logout": {
+          "post": {
+            "tags": ["auth"],
+            "summary": "Logout session",
+            "operationId": "logout",
+            "security": [{ "cookieAuth": [] }],
+            "responses": {
+              "200": { "description": "Session cleared.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LogoutResponse" } } } }
+            }
+          }
+        },
+        "/api/user/config": {
+          "get": {
+            "tags": ["user"],
+            "summary": "Get saved user UI config",
+            "operationId": "getUserConfig",
+            "security": [{ "cookieAuth": [] }],
+            "responses": {
+              "200": { "description": "Saved config payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserConfigResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          },
+          "post": {
+            "tags": ["user"],
+            "summary": "Persist user UI config",
+            "operationId": "setUserConfig",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/UserConfigPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Config saved.", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/status": {
+          "get": {
+            "tags": ["cluster"],
+            "summary": "Get cluster/system status",
+            "operationId": "getSystemStatus",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              {
+                "name": "addr",
+                "in": "query",
+                "required": false,
+                "description": "Optional orchestrator gRPC address; defaults to server configured value.",
+                "schema": { "type": "string" }
+              }
+            ],
+            "responses": {
+              "200": { "description": "Cluster status payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatusResponse" } } } },
+              "400": { "description": "Missing orchestrator address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Unable to connect to orchestrator.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/snapshot": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Get network snapshot JSON",
+            "operationId": "getNetworkSnapshot",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "network_id", "in": "query", "required": true, "schema": { "type": "string" } },
+              { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "node_id", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional specific node in cluster to query." }
+            ],
+            "responses": {
+              "200": { "description": "Serialized network snapshot.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SnapshotResponse" } } } },
+              "400": { "description": "Missing network_id or address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Snapshot fetch failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/activity": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Get latest spike activity",
+            "operationId": "getNetworkActivity",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "network_id", "in": "query", "required": true, "schema": { "type": "string" } },
+              { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "node_id", "in": "query", "required": false, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "Activity vectors for sensory/hidden/output.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActivityResponse" } } } },
+              "400": { "description": "Missing network_id or address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Activity fetch failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/update_network": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Update network config/model/learning rule",
+            "operationId": "updateNetworkConfig",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/UpdateNetworkPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Update result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+              "400": { "description": "Missing orchestrator address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "500": { "description": "Update failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Connect failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/control_network": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Send control action (start/stop/repeat/reset/new)",
+            "operationId": "controlNetwork",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/ControlNetworkPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Control result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+              "400": { "description": "Invalid action or missing address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "500": { "description": "Update failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Connect failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/aer/inject": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Inject one AER exchange into a running network",
+            "description": "Injects sensory spikes into the next simulation step. Accepts either a hex-encoded AER payload (`aer_payload_hex`) or direct `spike_indices`.",
+            "operationId": "injectAerExchange",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/AerInjectPayload" },
+                  "examples": {
+                    "spikeIndices": {
+                      "value": {
+                        "network_id": "default",
+                        "spike_indices": [0, 4, 17]
+                      }
+                    },
+                    "aerPayloadHex": {
+                      "value": {
+                        "network_id": "default",
+                        "aer_base": 4096,
+                        "aer_payload_hex": "41455231b80b0000000000000100802001"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "AER exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
+              "400": { "description": "Invalid payload or missing fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/aer/stream": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Inject a stream of AER exchanges (NDJSON over HTTP)",
+            "description": "Accepts newline-delimited JSON frames in request body. Each frame can contain `aer_payload_hex` or `spike_indices`. Use `Content-Type: application/x-ndjson`.",
+            "operationId": "streamAerExchange",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "network_id", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional default network ID for all frames; if omitted each frame must include `network_id`." },
+              { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "node_id", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "step_index", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+              { "name": "aer_base", "in": "query", "required": false, "schema": { "type": "integer", "format": "uint32" } },
+              { "name": "is_backward", "in": "query", "required": false, "schema": { "type": "boolean" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/x-ndjson": {
+                  "schema": { "type": "string", "description": "NDJSON frames, one JSON object per line." },
+                  "examples": {
+                    "ndjson": {
+                      "value": "{\"spike_indices\":[0,1,2]}\\n{\"spike_indices\":[5,9]}\\n"
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Stream accepted and forwarded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
+              "400": { "description": "Invalid NDJSON or missing data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/export": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Export network using conversion tools",
+            "operationId": "exportNetwork",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "network_id", "in": "query", "required": true, "schema": { "type": "string" } },
+              { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["neuroml", "pynn", "nir", "onnx", "tflite"] } },
+              { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": {
+                "description": "Exported artifact file.",
+                "content": {
+                  "application/octet-stream": {
+                    "schema": { "type": "string", "format": "binary" }
+                  }
+                }
+              },
+              "400": { "description": "Missing/invalid parameters.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "500": { "description": "Tool or file processing failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Snapshot source unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/auth/oidc/login": {
+          "get": {
+            "tags": ["oidc"],
+            "summary": "Start browser OIDC login",
+            "operationId": "startOidcLogin",
+            "responses": {
+              "303": { "description": "Redirect to OIDC authorization endpoint." },
+              "503": { "description": "OIDC not configured.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/auth/oidc/callback": {
+          "get": {
+            "tags": ["oidc"],
+            "summary": "OIDC redirect callback handler",
+            "operationId": "oidcCallback",
+            "parameters": [
+              { "name": "code", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "state", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "error", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "error_description", "in": "query", "required": false, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "303": { "description": "Redirect to app after successful token exchange." },
+              "400": { "description": "Invalid callback payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/auth/oidc/exchange": {
+          "post": {
+            "tags": ["oidc"],
+            "summary": "Exchange OIDC tokens for local session",
+            "operationId": "oidcExchange",
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/OidcExchangePayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Session established; cookie set." },
+              "400": { "description": "Missing token payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "500": { "description": "OIDC validation failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        }
+      }
+    })
+}
+
 async fn api_auth_middleware(
     State(state): State<Arc<AppState>>,
     mut req: axum::http::Request<axum::body::Body>,
@@ -541,7 +1320,12 @@ async fn api_auth_middleware(
     let path = req.uri().path();
     if matches!(
         path,
-        "/api/config" | "/api/auth/mode" | "/api/login" | "/api/signup" | "/api/me"
+        "/api/openapi.json"
+            | "/api/config"
+            | "/api/auth/mode"
+            | "/api/login"
+            | "/api/signup"
+            | "/api/me"
     ) {
         return next.run(req).await;
     }
@@ -1136,10 +1920,21 @@ async fn status(
                 "cpu_usage": res.map(|r| r.cpu_usage).unwrap_or(0.0),
                 "total_ram": res.map(|r| r.total_ram).unwrap_or(0),
                 "available_ram": res.map(|r| r.available_ram).unwrap_or(0),
+                "num_gpus": res.map(|r| r.num_gpus).unwrap_or(0),
+                "num_tpus": res.map(|r| r.num_tpus).unwrap_or(0),
+                "num_fpgas": res.map(|r| r.num_fpgas).unwrap_or(0),
+                "capacity_score": res.map(|r| r.capacity_score).unwrap_or(0.0),
+                "desired_dt": res.map(|r| r.desired_dt).unwrap_or(0.0),
+                "num_neurons": res.map(|r| r.num_neurons).unwrap_or(0),
+                "redundant_neurons": res.map(|r| r.redundant_neurons).unwrap_or(0),
+                "current_aarnn_depth": res.map(|r| r.current_aarnn_depth).unwrap_or(0),
+                "desired_aarnn_depth": res.map(|r| r.desired_aarnn_depth).unwrap_or(0),
+                "avg_step_time_ms": res.map(|r| r.avg_step_time_ms).unwrap_or(0.0),
                 "temperature_c": res.map(|r| r.temperature_c).unwrap_or(-1.0),
                 "ga_running": res.map(|r| r.ga_running).unwrap_or(false),
                 "ga_generation": res.map(|r| r.ga_generation).unwrap_or(0),
                 "ga_best_fitness": res.map(|r| r.ga_best_fitness).unwrap_or(0.0),
+                "ga_best_config_json": res.map(|r| r.ga_best_config_json.clone()).unwrap_or_default(),
                 "ga_pacing": res.map(|r| r.ga_pacing).unwrap_or(false),
                 "ga_pacing_reason": res.map(|r| r.ga_pacing_reason.clone()).unwrap_or_default(),
                 "ga_evaluating": res.map(|r| r.ga_evaluating).unwrap_or(false),
@@ -1153,6 +1948,8 @@ async fn status(
                 "ga_ramp_eval_ms": res.map(|r| r.ga_ramp_eval_ms).unwrap_or(0),
                 "ga_ramp_eval_neurons": res.map(|r| r.ga_ramp_eval_neurons).unwrap_or(0),
                 "ga_ramp_eval_conns": res.map(|r| r.ga_ramp_eval_conns).unwrap_or(0),
+                "comm_protocol": res.map(|r| r.comm_protocol.clone()).unwrap_or_else(|| "unknown".to_string()),
+                "peer_comm_protocols": res.map(|r| r.peer_comm_protocols.clone()).unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();
@@ -1179,6 +1976,8 @@ async fn status(
                 "num_layers": n.num_layers,
                 "desired_aarnn_depth": n.desired_aarnn_depth,
                 "playing": n.playing,
+                "neuron_model": n.neuron_model,
+                "learning_rule": n.learning_rule,
                 "distribution": distribution,
             })
         })
@@ -1566,6 +2365,9 @@ async fn export(
     let (script, arg_in, arg_out, ext) = match format.as_str() {
         "neuroml" => ("export_neuroml.py", "--in-network", "--out-neuroml", "nml"),
         "pynn" => ("export_pynn.py", "--in-network", "--out-pynn", "py"),
+        "nir" => ("export_nir.py", "--in-network", "--out-nir", "nir"),
+        "onnx" => ("export_onnx.py", "--in", "--out", "onnx"),
+        "tflite" => ("export_tflite.py", "--in", "--out", "tflite"),
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1633,6 +2435,392 @@ async fn export(
 }
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
+
+fn normalize_target_addr(raw: &str) -> String {
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{}", raw)
+    }
+}
+
+fn resolve_addr_or_default(
+    addr: Option<String>,
+    default_addr: Option<String>,
+) -> Result<String, ApiError> {
+    let raw = addr.or(default_addr).ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "missing orchestrator address" })),
+    ))?;
+    Ok(normalize_target_addr(&raw))
+}
+
+fn decode_hex_payload(raw: Option<String>) -> Result<Vec<u8>, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    hex::decode(trimmed).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid aer_payload_hex: {}", e) })),
+        )
+    })
+}
+
+fn build_aer_batch(
+    network_id: String,
+    step_index: i64,
+    aer_base: u32,
+    is_backward: bool,
+    aer_payload_hex: Option<String>,
+    spike_indices: Option<Vec<u32>>,
+) -> Result<SpikeBatch, ApiError> {
+    let aer_payload = decode_hex_payload(aer_payload_hex)?;
+    let spike_indices = spike_indices.unwrap_or_default();
+    if aer_payload.is_empty() && spike_indices.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "either aer_payload_hex or spike_indices must be provided" })),
+        ));
+    }
+    Ok(SpikeBatch {
+        network_id,
+        layer_index: EXTERNAL_SENSORY_LAYER_INDEX,
+        step_index,
+        spike_indices,
+        is_backward,
+        aer_payload,
+        aer_base,
+    })
+}
+
+async fn send_aer_batches(
+    target_addr: String,
+    batches: Vec<SpikeBatch>,
+) -> Result<usize, ApiError> {
+    if batches.is_empty() {
+        return Ok(0);
+    }
+    let mut client = DistributedNeuromorphicClient::connect(target_addr.clone())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("connect failed: {}", e) })),
+            )
+        })?;
+
+    let (tx, rx) = mpsc::channel::<SpikeBatch>(batches.len().clamp(1, 256));
+    let outbound = ReceiverStream::new(rx);
+    let response = client
+        .stream_spikes(Request::new(outbound))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("stream_spikes failed: {}", e) })),
+            )
+        })?;
+    let mut inbound = response.into_inner();
+    let drain = tokio::spawn(async move { while let Ok(Some(_msg)) = inbound.message().await {} });
+
+    let mut accepted = 0usize;
+    for batch in batches {
+        tx.send(batch).await.map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("stream send failed: {}", e) })),
+            )
+        })?;
+        accepted += 1;
+    }
+    drop(tx);
+    let _ = drain.await;
+    Ok(accepted)
+}
+
+async fn aer_inject(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AerInjectPayload>,
+) -> impl IntoResponse {
+    let orchestrator_addr =
+        match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
+            Ok(addr) => addr,
+            Err(err) => return err.into_response(),
+        };
+
+    let target_addr = if payload.node_id.is_some() {
+        match resolve_network_addr(
+            orchestrator_addr.clone(),
+            &payload.network_id,
+            payload.node_id.clone(),
+        )
+        .await
+        {
+            Ok(addr) => addr,
+            Err(err) => return err.into_response(),
+        }
+    } else {
+        orchestrator_addr
+    };
+
+    let batch = match build_aer_batch(
+        payload.network_id.clone(),
+        payload.step_index.unwrap_or(0),
+        payload.aer_base.unwrap_or(0),
+        payload.is_backward.unwrap_or(false),
+        payload.aer_payload_hex,
+        payload.spike_indices,
+    ) {
+        Ok(batch) => batch,
+        Err(err) => return err.into_response(),
+    };
+
+    match send_aer_batches(target_addr.clone(), vec![batch]).await {
+        Ok(accepted) => (
+            StatusCode::OK,
+            Json(json!({
+                "accepted": accepted,
+                "target": target_addr,
+                "network_id": payload.network_id,
+            })),
+        )
+            .into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn aer_stream(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<AerStreamQuery>,
+    body: axum::body::Body,
+) -> impl IntoResponse {
+    let orchestrator_addr =
+        match resolve_addr_or_default(query.addr, state.default_orchestrator.clone()) {
+            Ok(addr) => addr,
+            Err(err) => return err.into_response(),
+        };
+
+    let query_network_id = query
+        .network_id
+        .clone()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+
+    let mut stream = body.into_data_stream();
+    let mut buffer = Vec::<u8>::new();
+    let mut parsed_lines = 0usize;
+    let mut queued = Vec::<SpikeBatch>::new();
+    let mut stream_network_id = query_network_id.clone();
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = match chunk_res {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("failed reading stream body: {}", e) })),
+                )
+                    .into_response()
+            }
+        };
+        buffer.extend_from_slice(&chunk);
+
+        while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
+            let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+            let line = match std::str::from_utf8(&line_bytes) {
+                Ok(s) => s.trim(),
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "stream line is not valid UTF-8" })),
+                    )
+                        .into_response()
+                }
+            };
+            if line.is_empty() {
+                continue;
+            }
+            parsed_lines += 1;
+            let frame: AerStreamFrame = match serde_json::from_str(line) {
+                Ok(f) => f,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("invalid NDJSON frame on line {}: {}", parsed_lines, e) })),
+                    )
+                        .into_response()
+                }
+            };
+
+            let frame_network_id = frame
+                .network_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .or_else(|| query_network_id.clone())
+                .unwrap_or_default();
+            if frame_network_id.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("missing network_id on frame line {}", parsed_lines) })),
+                )
+                    .into_response();
+            }
+            if let Some(expected) = &stream_network_id {
+                if frame_network_id != *expected {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("frame line {} network_id '{}' differs from stream network_id '{}'", parsed_lines, frame_network_id, expected) })),
+                    )
+                        .into_response();
+                }
+            } else {
+                stream_network_id = Some(frame_network_id.clone());
+            }
+            if frame.node_id.is_some() && frame.node_id != query.node_id {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("frame line {} node_id override is not supported for a single stream target", parsed_lines) })),
+                )
+                    .into_response();
+            }
+            let batch = match build_aer_batch(
+                frame_network_id,
+                frame.step_index.or(query.step_index).unwrap_or(0),
+                frame.aer_base.or(query.aer_base).unwrap_or(0),
+                frame.is_backward.or(query.is_backward).unwrap_or(false),
+                frame.aer_payload_hex,
+                frame.spike_indices,
+            ) {
+                Ok(batch) => batch,
+                Err(err) => return err.into_response(),
+            };
+            queued.push(batch);
+        }
+    }
+
+    if !buffer.is_empty() {
+        let line = match std::str::from_utf8(&buffer) {
+            Ok(s) => s.trim(),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "stream tail is not valid UTF-8" })),
+                )
+                    .into_response()
+            }
+        };
+        if !line.is_empty() {
+            parsed_lines += 1;
+            let frame: AerStreamFrame = match serde_json::from_str(line) {
+                Ok(f) => f,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("invalid NDJSON frame on final line {}: {}", parsed_lines, e) })),
+                    )
+                        .into_response()
+                }
+            };
+            let frame_network_id = frame
+                .network_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .or_else(|| query_network_id.clone())
+                .unwrap_or_default();
+            if frame_network_id.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("missing network_id on final line {}", parsed_lines) })),
+                )
+                    .into_response();
+            }
+            if let Some(expected) = &stream_network_id {
+                if frame_network_id != *expected {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": format!("final line network_id '{}' differs from stream network_id '{}'", frame_network_id, expected) })),
+                    )
+                        .into_response();
+                }
+            } else {
+                stream_network_id = Some(frame_network_id.clone());
+            }
+            if frame.node_id.is_some() && frame.node_id != query.node_id {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("final line node_id override is not supported for a single stream target") })),
+                )
+                    .into_response();
+            }
+            let batch = match build_aer_batch(
+                frame_network_id,
+                frame.step_index.or(query.step_index).unwrap_or(0),
+                frame.aer_base.or(query.aer_base).unwrap_or(0),
+                frame.is_backward.or(query.is_backward).unwrap_or(false),
+                frame.aer_payload_hex,
+                frame.spike_indices,
+            ) {
+                Ok(batch) => batch,
+                Err(err) => return err.into_response(),
+            };
+            queued.push(batch);
+        }
+    }
+
+    if queued.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "stream did not contain any AER frames" })),
+        )
+            .into_response();
+    }
+
+    let resolved_network_id = match stream_network_id {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing network_id (query or per-frame)" })),
+            )
+                .into_response()
+        }
+    };
+
+    let target_addr = if query.node_id.is_some() {
+        match resolve_network_addr(
+            orchestrator_addr.clone(),
+            &resolved_network_id,
+            query.node_id.clone(),
+        )
+        .await
+        {
+            Ok(addr) => addr,
+            Err(err) => return err.into_response(),
+        }
+    } else {
+        orchestrator_addr
+    };
+
+    match send_aer_batches(target_addr.clone(), queued).await {
+        Ok(accepted) => (
+            StatusCode::OK,
+            Json(json!({
+                "accepted": accepted,
+                "frames": parsed_lines,
+                "target": target_addr,
+                "network_id": resolved_network_id,
+                "mode": "ndjson-stream",
+            })),
+        )
+            .into_response(),
+        Err(err) => err.into_response(),
+    }
+}
 
 async fn resolve_network_addr(
     orchestrator_addr: String,

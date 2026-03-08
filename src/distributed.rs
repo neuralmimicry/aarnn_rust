@@ -30,6 +30,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+#[cfg(feature = "openmpi")]
+use prost::Message;
 use tokio::sync::{mpsc, RwLock};
 use tonic::{Request, Response, Status};
 
@@ -92,6 +94,17 @@ pub mod proto {
 }
 
 pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
+/// Special layer index used on `StreamSpikes` to inject sensory spikes from external
+/// AER/HTTP sources into the network's next simulation step.
+pub const EXTERNAL_SENSORY_LAYER_INDEX: u32 = u32::MAX;
+/// Timeout budget for burst-mode spike forwarding fallback.
+const SPIKE_BURST_TIMEOUT: Duration = Duration::from_millis(120);
+/// Timeout budget for short-lived gRPC connections used by burst forwarding.
+const SPIKE_BURST_CONNECT_TIMEOUT: Duration = Duration::from_millis(80);
+/// EWMA smoothing for per-peer transport latency tracking.
+const SPIKE_LATENCY_EWMA_ALPHA: f64 = 0.2;
+/// Consecutive failures before preferring the alternate transport method.
+const SPIKE_FAILOVER_STREAK: u32 = 3;
 
 use proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
 use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
@@ -288,6 +301,24 @@ fn peer_id_from_remote_addr(state: &NodeState, remote_addr: Option<SocketAddr>) 
     None
 }
 
+#[cfg(feature = "openmpi")]
+fn mpi_rank_from_node_id(node_id: &str) -> Option<i32> {
+    node_id.rsplit_once("_mpi")?.1.parse::<i32>().ok()
+}
+
+#[cfg(feature = "openmpi")]
+fn peer_id_from_mpi_rank(state: &NodeState, rank: i32) -> Option<String> {
+    if mpi_rank_from_node_id(&state.node_id) == Some(rank) {
+        return Some(state.node_id.clone());
+    }
+    for node_id in state.peers.keys() {
+        if mpi_rank_from_node_id(node_id) == Some(rank) {
+            return Some(node_id.clone());
+        }
+    }
+    None
+}
+
 fn normalize_peer_address(advertised: &str, remote_addr: Option<SocketAddr>) -> (String, String) {
     let trimmed = advertised.trim();
     let fallback_display = trimmed.to_string();
@@ -318,8 +349,9 @@ fn normalize_peer_address(advertised: &str, remote_addr: Option<SocketAddr>) -> 
     (display_addr, connect_addr)
 }
 
-async fn connect_peer(
+async fn connect_peer_with_timeout(
     addr: &str,
+    timeout_budget: Duration,
 ) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
     let target = if addr.starts_with("http://") || addr.starts_with("https://") {
         addr.to_string()
@@ -327,7 +359,7 @@ async fn connect_peer(
         format!("http://{}", addr)
     };
     match tokio::time::timeout(
-        Duration::from_secs(3),
+        timeout_budget,
         DistributedNeuromorphicClient::connect(target.clone()),
     )
     .await
@@ -336,6 +368,12 @@ async fn connect_peer(
         Ok(Err(e)) => Err(format!("connect failed for {}: {}", target, e)),
         Err(_) => Err(format!("connect timeout for {}", target)),
     }
+}
+
+async fn connect_peer(
+    addr: &str,
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
+    connect_peer_with_timeout(addr, Duration::from_secs(3)).await
 }
 
 /// Represents a partial or whole neural network running on this node.
@@ -351,6 +389,8 @@ pub struct ManagedNetwork {
     /// Last received step index per layer (forward/backward).
     pub remote_spike_steps_fwd: HashMap<u32, i64>,
     pub remote_spike_steps_bwd: HashMap<u32, i64>,
+    /// Optional external sensory spikes to apply on the next step.
+    pub external_sensory_spikes: Option<Vec<i8>>,
     pub avg_step_time_ms: f32,
     pub desired_aarnn_depth: u32,
     pub playing: bool,
@@ -363,6 +403,34 @@ pub struct ManagedNetwork {
 
 struct SpikeStreamHandle {
     tx: mpsc::Sender<SpikeBatch>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpikeTransportMethod {
+    Mpi,
+    PersistentStream,
+    BurstStream,
+}
+
+impl SpikeTransportMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            SpikeTransportMethod::Mpi => "mpi",
+            SpikeTransportMethod::PersistentStream => "persistent-grpc-stream",
+            SpikeTransportMethod::BurstStream => "burst-grpc-stream",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct SpikeTransportStats {
+    preferred: Option<SpikeTransportMethod>,
+    mpi_ewma_us: Option<f64>,
+    stream_ewma_us: Option<f64>,
+    burst_ewma_us: Option<f64>,
+    mpi_fail_streak: u32,
+    stream_fail_streak: u32,
+    burst_fail_streak: u32,
 }
 
 pub struct NodeState {
@@ -379,9 +447,12 @@ pub struct NodeState {
     >,
     pub _orchestrator_addr: Option<String>,
     pub is_orchestrator: bool,
-    pub spike_streams: HashMap<String, SpikeStreamHandle>,
-    pub spike_stream_backoff: HashMap<String, std::time::Instant>,
-    pub spike_drop_counts: HashMap<String, u64>,
+    spike_streams: HashMap<String, SpikeStreamHandle>,
+    spike_stream_backoff: HashMap<String, std::time::Instant>,
+    spike_drop_counts: HashMap<String, u64>,
+    spike_transport_stats: HashMap<String, SpikeTransportStats>,
+    #[cfg(feature = "openmpi")]
+    mpi_receiver_started: bool,
 
     // Cluster-wide status (only relevant if is_orchestrator)
     pub nodes: HashMap<String, NodeStatus>,
@@ -413,6 +484,193 @@ impl NodeState {
         }
         self.network_peers.retain(|_, peers| !peers.is_empty());
     }
+
+    fn choose_spike_transport(
+        &self,
+        key: &str,
+        has_stream: bool,
+        has_mpi: bool,
+    ) -> SpikeTransportMethod {
+        let mut available = vec![SpikeTransportMethod::BurstStream];
+        if has_stream {
+            available.push(SpikeTransportMethod::PersistentStream);
+        }
+        if has_mpi {
+            available.push(SpikeTransportMethod::Mpi);
+        }
+
+        let Some(stats) = self.spike_transport_stats.get(key) else {
+            return if has_mpi {
+                SpikeTransportMethod::Mpi
+            } else if has_stream {
+                SpikeTransportMethod::PersistentStream
+            } else {
+                SpikeTransportMethod::BurstStream
+            };
+        };
+
+        let fail_streak = |m: SpikeTransportMethod| -> u32 {
+            match m {
+                SpikeTransportMethod::Mpi => stats.mpi_fail_streak,
+                SpikeTransportMethod::PersistentStream => stats.stream_fail_streak,
+                SpikeTransportMethod::BurstStream => stats.burst_fail_streak,
+            }
+        };
+        let ewma = |m: SpikeTransportMethod| -> Option<f64> {
+            match m {
+                SpikeTransportMethod::Mpi => stats.mpi_ewma_us,
+                SpikeTransportMethod::PersistentStream => stats.stream_ewma_us,
+                SpikeTransportMethod::BurstStream => stats.burst_ewma_us,
+            }
+        };
+
+        let viable: Vec<SpikeTransportMethod> = available
+            .iter()
+            .copied()
+            .filter(|m| fail_streak(*m) < SPIKE_FAILOVER_STREAK)
+            .collect();
+        let candidates: Vec<SpikeTransportMethod> = if viable.is_empty() {
+            available.clone()
+        } else {
+            viable
+        };
+
+        if let Some(pref) = stats.preferred {
+            if candidates.contains(&pref) && fail_streak(pref) < SPIKE_FAILOVER_STREAK {
+                return pref;
+            }
+        }
+
+        let mut best_method = None;
+        let mut best_ewma = f64::MAX;
+        for method in &candidates {
+            if let Some(sample) = ewma(*method) {
+                if sample < best_ewma {
+                    best_ewma = sample;
+                    best_method = Some(*method);
+                }
+            }
+        }
+        if let Some(best) = best_method {
+            return best;
+        }
+
+        if has_mpi {
+            SpikeTransportMethod::Mpi
+        } else if has_stream {
+            SpikeTransportMethod::PersistentStream
+        } else {
+            SpikeTransportMethod::BurstStream
+        }
+    }
+
+    fn record_spike_transport_success(
+        &mut self,
+        key: &str,
+        method: SpikeTransportMethod,
+        elapsed: Duration,
+    ) {
+        fn update_ewma(slot: &mut Option<f64>, sample_us: f64) {
+            if let Some(cur) = slot {
+                *cur = (*cur * (1.0 - SPIKE_LATENCY_EWMA_ALPHA))
+                    + (sample_us * SPIKE_LATENCY_EWMA_ALPHA);
+            } else {
+                *slot = Some(sample_us);
+            }
+        }
+
+        let sample_us = elapsed.as_micros() as f64;
+        let stats = self
+            .spike_transport_stats
+            .entry(key.to_string())
+            .or_default();
+        let prev_pref = stats.preferred;
+
+        match method {
+            SpikeTransportMethod::Mpi => {
+                stats.mpi_fail_streak = 0;
+                update_ewma(&mut stats.mpi_ewma_us, sample_us);
+            }
+            SpikeTransportMethod::PersistentStream => {
+                stats.stream_fail_streak = 0;
+                update_ewma(&mut stats.stream_ewma_us, sample_us);
+            }
+            SpikeTransportMethod::BurstStream => {
+                stats.burst_fail_streak = 0;
+                update_ewma(&mut stats.burst_ewma_us, sample_us);
+            }
+        }
+
+        let mut best = (
+            SpikeTransportMethod::BurstStream,
+            stats.burst_ewma_us.unwrap_or(f64::MAX),
+        );
+        let stream_ewma = stats.stream_ewma_us.unwrap_or(f64::MAX);
+        if stream_ewma < best.1 {
+            best = (SpikeTransportMethod::PersistentStream, stream_ewma);
+        }
+        let mpi_ewma = stats.mpi_ewma_us.unwrap_or(f64::MAX);
+        if mpi_ewma < best.1 {
+            best = (SpikeTransportMethod::Mpi, mpi_ewma);
+        }
+        if best.1.is_finite() {
+            stats.preferred = Some(best.0);
+        } else {
+            stats.preferred = Some(method);
+        }
+
+        if prev_pref != stats.preferred {
+            nm_log!(
+                "[info] Spike transport switched for {} -> {}",
+                key,
+                stats.preferred.unwrap_or(method).as_str()
+            );
+        }
+    }
+
+    fn record_spike_transport_failure(&mut self, key: &str, method: SpikeTransportMethod) {
+        let stats = self
+            .spike_transport_stats
+            .entry(key.to_string())
+            .or_default();
+        match method {
+            SpikeTransportMethod::Mpi => {
+                stats.mpi_fail_streak = stats.mpi_fail_streak.saturating_add(1);
+                if stats.mpi_fail_streak >= SPIKE_FAILOVER_STREAK {
+                    stats.preferred = Some(if stats.stream_fail_streak < SPIKE_FAILOVER_STREAK {
+                        SpikeTransportMethod::PersistentStream
+                    } else {
+                        SpikeTransportMethod::BurstStream
+                    });
+                }
+            }
+            SpikeTransportMethod::PersistentStream => {
+                stats.stream_fail_streak = stats.stream_fail_streak.saturating_add(1);
+                if stats.stream_fail_streak >= SPIKE_FAILOVER_STREAK {
+                    stats.preferred = Some(if stats.mpi_fail_streak < SPIKE_FAILOVER_STREAK {
+                        SpikeTransportMethod::Mpi
+                    } else {
+                        SpikeTransportMethod::BurstStream
+                    });
+                }
+            }
+            SpikeTransportMethod::BurstStream => {
+                stats.burst_fail_streak = stats.burst_fail_streak.saturating_add(1);
+                if stats.burst_fail_streak >= SPIKE_FAILOVER_STREAK {
+                    stats.preferred = Some(if stats.mpi_fail_streak < SPIKE_FAILOVER_STREAK {
+                        SpikeTransportMethod::Mpi
+                    } else {
+                        SpikeTransportMethod::PersistentStream
+                    });
+                }
+            }
+        }
+    }
+
+    fn record_spike_drop(&mut self, key: &str, count: u64) {
+        let entry = self.spike_drop_counts.entry(key.to_string()).or_insert(0);
+        *entry = entry.saturating_add(count);
+    }
 }
 
 #[derive(Clone)]
@@ -436,6 +694,9 @@ impl DistributedNode {
                 spike_streams: HashMap::new(),
                 spike_stream_backoff: HashMap::new(),
                 spike_drop_counts: HashMap::new(),
+                spike_transport_stats: HashMap::new(),
+                #[cfg(feature = "openmpi")]
+                mpi_receiver_started: false,
                 nodes: HashMap::new(),
                 network_registry: HashMap::new(),
                 network_snapshots: HashMap::new(),
@@ -740,6 +1001,50 @@ impl DistributedNode {
             (0, 0, 0.0, 0, 0, 0)
         };
 
+        let (comm_protocol, peer_comm_protocols) = {
+            #[cfg(feature = "openmpi")]
+            let mpi_available = crate::openmpi_runtime::spike_transport_available();
+
+            let mut protocols = HashMap::new();
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for peer_id in state.peers.keys() {
+                let has_stream = state
+                    .spike_streams
+                    .get(peer_id)
+                    .map(|h| !h.tx.is_closed())
+                    .unwrap_or(false);
+                #[cfg(feature = "openmpi")]
+                let has_mpi = mpi_available && mpi_rank_from_node_id(peer_id).is_some();
+                #[cfg(not(feature = "openmpi"))]
+                let has_mpi = false;
+                let method = state
+                    .choose_spike_transport(peer_id, has_stream, has_mpi)
+                    .as_str()
+                    .to_string();
+                *counts.entry(method.clone()).or_insert(0) += 1;
+                protocols.insert(peer_id.clone(), method);
+            }
+
+            let summary = if protocols.is_empty() {
+                "local-only".to_string()
+            } else if counts.len() == 1 {
+                counts
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string())
+            } else {
+                let mut items = counts
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>();
+                items.sort();
+                format!("mixed ({})", items.join(", "))
+            };
+
+            (summary, protocols)
+        };
+
         Resources {
             cpu_usage: sys.global_cpu_usage(),
             total_ram: sys.total_memory(),
@@ -772,6 +1077,8 @@ impl DistributedNode {
             ga_ramp_eval_ms,
             ga_ramp_eval_neurons,
             ga_ramp_eval_conns,
+            comm_protocol,
+            peer_comm_protocols,
         }
     }
 
@@ -848,6 +1155,50 @@ impl DistributedNode {
         Vec::new()
     }
 
+    async fn send_spike_batches_burst(
+        &self,
+        key: &str,
+        addr: &str,
+        batches: Vec<SpikeBatch>,
+    ) -> Result<(), String> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+
+        let cached_client = {
+            let state = self.state.read().await;
+            state.clients.get(key).cloned()
+        };
+
+        let mut client = if let Some(client) = cached_client {
+            client
+        } else {
+            connect_peer_with_timeout(addr, SPIKE_BURST_CONNECT_TIMEOUT).await?
+        };
+
+        let (tx, rx) = mpsc::channel::<SpikeBatch>(batches.len().clamp(1, 256));
+        let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let response = client
+            .stream_spikes(Request::new(outbound))
+            .await
+            .map_err(|e| format!("burst stream start {} failed: {}", key, e))?;
+        let mut inbound = response.into_inner();
+        let drain =
+            tokio::spawn(async move { while let Ok(Some(_msg)) = inbound.message().await {} });
+
+        for batch in batches {
+            tx.send(batch)
+                .await
+                .map_err(|e| format!("burst stream send {} failed: {}", key, e))?;
+        }
+        drop(tx);
+        let _ = tokio::time::timeout(Duration::from_millis(20), drain).await;
+
+        let mut state = self.state.write().await;
+        state.clients.insert(key.to_string(), client);
+        Ok(())
+    }
+
     async fn request_spike_stream(&self, key: String, addr: String) {
         let now = std::time::Instant::now();
         {
@@ -899,6 +1250,177 @@ impl DistributedNode {
         });
     }
 
+    async fn handle_incoming_spike_batch(&self, batch: SpikeBatch, exclude_node: Option<String>) {
+        let (network, is_orchestrator) = {
+            let state_lock = self.state.read().await;
+            (
+                state_lock.networks.get(&batch.network_id).cloned(),
+                state_lock.is_orchestrator,
+            )
+        };
+
+        if let Some(net_arc) = network {
+            let mut net = net_arc.write().await;
+            if batch.layer_index == EXTERNAL_SENSORY_LAYER_INDEX {
+                let sensory_len = net.runner.net.num_sensory_neurons;
+                let mut spikes = vec![0i8; sensory_len];
+                let mut used_aer = false;
+                if !batch.aer_payload.is_empty()
+                    && decode_spikes(&batch.aer_payload, batch.aer_base, &mut spikes).is_ok()
+                {
+                    used_aer = true;
+                }
+                if !used_aer {
+                    for idx in &batch.spike_indices {
+                        let i = *idx as usize;
+                        if i < spikes.len() {
+                            spikes[i] = 1;
+                        }
+                    }
+                }
+                net.external_sensory_spikes = Some(spikes);
+            } else {
+                let layer_index = batch.layer_index as usize;
+                let layer_size = net.runner.layer_size(layer_index);
+                if layer_size != 0 {
+                    let is_assigned = net.runner.is_layer_assigned(layer_index);
+                    let is_redundant = net.redundant_layers.contains(&batch.layer_index);
+                    if !is_assigned || is_redundant {
+                        let step_map = if batch.is_backward {
+                            &mut net.remote_spike_steps_bwd
+                        } else {
+                            &mut net.remote_spike_steps_fwd
+                        };
+                        let stale = step_map
+                            .get(&batch.layer_index)
+                            .map(|prev| batch.step_index < *prev)
+                            .unwrap_or(false);
+                        if !stale {
+                            step_map.insert(batch.layer_index, batch.step_index);
+                            let mut spikes = vec![0i8; layer_size];
+                            let mut used_aer = false;
+                            if !batch.aer_payload.is_empty()
+                                && decode_spikes(&batch.aer_payload, batch.aer_base, &mut spikes)
+                                    .is_ok()
+                            {
+                                used_aer = true;
+                            }
+                            if !used_aer {
+                                for idx in &batch.spike_indices {
+                                    let i = *idx as usize;
+                                    if i < spikes.len() {
+                                        spikes[i] = 1;
+                                    }
+                                }
+                            }
+                            if batch.is_backward {
+                                net.remote_spikes_bwd.insert(batch.layer_index, spikes);
+                            } else {
+                                net.remote_spikes_fwd.insert(batch.layer_index, spikes);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if is_orchestrator {
+            self.send_spike_batches(
+                &batch.network_id,
+                std::slice::from_ref(&batch),
+                exclude_node.as_deref(),
+            )
+            .await;
+        }
+    }
+
+    #[cfg(feature = "openmpi")]
+    async fn send_spike_batches_mpi(
+        &self,
+        key: &str,
+        dest_rank: i32,
+        batches: Vec<SpikeBatch>,
+    ) -> Result<(), String> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        for batch in batches {
+            let payload = batch.encode_to_vec();
+            crate::openmpi_runtime::send_tagged_bytes(
+                dest_rank,
+                crate::openmpi_runtime::SPIKE_TRANSPORT_TAG,
+                &payload,
+            )
+            .map_err(|e| format!("MPI send to {} (rank {}) failed: {}", key, dest_rank, e))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "openmpi"))]
+    async fn send_spike_batches_mpi(
+        &self,
+        _key: &str,
+        _dest_rank: i32,
+        _batches: Vec<SpikeBatch>,
+    ) -> Result<(), String> {
+        Err("MPI transport not compiled in".to_string())
+    }
+
+    pub async fn start_optional_mpi_spike_receiver(&self) {
+        #[cfg(not(feature = "openmpi"))]
+        {
+            return;
+        }
+        #[cfg(feature = "openmpi")]
+        {
+            if !crate::openmpi_runtime::spike_transport_available() {
+                return;
+            }
+            {
+                let mut state = self.state.write().await;
+                if state.mpi_receiver_started {
+                    return;
+                }
+                state.mpi_receiver_started = true;
+            }
+            let node = self.clone();
+            tokio::spawn(async move {
+                nm_log!("[info] MPI spike transport receiver enabled");
+                loop {
+                    match crate::openmpi_runtime::try_recv_tagged_bytes(
+                        crate::openmpi_runtime::SPIKE_TRANSPORT_TAG,
+                    ) {
+                        Ok(Some((src_rank, payload))) => {
+                            let batch = match SpikeBatch::decode(payload.as_slice()) {
+                                Ok(batch) => batch,
+                                Err(e) => {
+                                    nm_err!(
+                                        "[warn] failed to decode MPI spike payload from rank {}: {}",
+                                        src_rank,
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+                            let exclude_node = {
+                                let state = node.state.read().await;
+                                peer_id_from_mpi_rank(&state, src_rank)
+                            };
+                            node.handle_incoming_spike_batch(batch, exclude_node).await;
+                        }
+                        Ok(None) => {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                        Err(e) => {
+                            nm_err!("[warn] MPI spike receive failed: {}", e);
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    }
+                }
+            });
+        }
+    }
+
     async fn send_spike_batches(
         &self,
         network_id: &str,
@@ -916,9 +1438,18 @@ impl DistributedNode {
         }
 
         for (key, addr) in targets {
-            let sender_opt = {
+            #[cfg(feature = "openmpi")]
+            let mpi_rank_opt = if crate::openmpi_runtime::spike_transport_available() {
+                mpi_rank_from_node_id(&key)
+            } else {
+                None
+            };
+            #[cfg(not(feature = "openmpi"))]
+            let mpi_rank_opt: Option<i32> = None;
+
+            let (sender_opt, preferred_transport) = {
                 let mut state = self.state.write().await;
-                if let Some(handle) = state.spike_streams.get(&key) {
+                let sender_opt = if let Some(handle) = state.spike_streams.get(&key) {
                     if !handle.tx.is_closed() {
                         Some(handle.tx.clone())
                     } else {
@@ -927,35 +1458,146 @@ impl DistributedNode {
                     }
                 } else {
                     None
-                }
+                };
+                let preferred =
+                    state.choose_spike_transport(&key, sender_opt.is_some(), mpi_rank_opt.is_some());
+                (sender_opt, preferred)
             };
 
-            let sender = match sender_opt {
-                Some(tx) => tx,
-                None => {
-                    self.request_spike_stream(key.clone(), addr.clone()).await;
-                    continue;
-                }
-            };
+            let mut methods = vec![preferred_transport];
+            if mpi_rank_opt.is_some() && !methods.contains(&SpikeTransportMethod::Mpi) {
+                methods.push(SpikeTransportMethod::Mpi);
+            }
+            if preferred_transport != SpikeTransportMethod::PersistentStream && sender_opt.is_some() {
+                methods.push(SpikeTransportMethod::PersistentStream);
+            }
+            if !methods.contains(&SpikeTransportMethod::BurstStream) {
+                methods.push(SpikeTransportMethod::BurstStream);
+            }
 
-            for batch in batches {
-                match sender.try_send(batch.clone()) {
-                    Ok(_) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        let mut state = self.state.write().await;
-                        let entry = state.spike_drop_counts.entry(key.clone()).or_insert(0);
-                        *entry = entry.saturating_add(1);
+            let mut remaining: Vec<SpikeBatch> = batches.to_vec();
+            let mut delivered = false;
+
+            for method in methods {
+                if remaining.is_empty() {
+                    delivered = true;
+                    break;
+                }
+
+                match method {
+                    SpikeTransportMethod::Mpi => {
+                        let Some(dest_rank) = mpi_rank_opt else {
+                            let mut state = self.state.write().await;
+                            state.record_spike_transport_failure(&key, method);
+                            continue;
+                        };
+                        let mpi_start = std::time::Instant::now();
+                        match self
+                            .send_spike_batches_mpi(&key, dest_rank, remaining.clone())
+                            .await
+                        {
+                            Ok(()) => {
+                                let mut state = self.state.write().await;
+                                state.record_spike_transport_success(
+                                    &key,
+                                    method,
+                                    mpi_start.elapsed(),
+                                );
+                                remaining.clear();
+                                delivered = true;
+                                break;
+                            }
+                            Err(e) => {
+                                nm_err!("[warn] MPI spike forwarding to {} failed: {}", key, e);
+                                let mut state = self.state.write().await;
+                                state.record_spike_transport_failure(&key, method);
+                            }
+                        }
                     }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    SpikeTransportMethod::PersistentStream => {
+                        let Some(sender) = sender_opt.clone() else {
+                            let mut state = self.state.write().await;
+                            state.record_spike_transport_failure(&key, method);
+                            continue;
+                        };
+                        let stream_start = std::time::Instant::now();
+                        let mut sent_count = 0usize;
+                        let mut stream_closed = false;
+                        for batch in &remaining {
+                            match sender.try_send(batch.clone()) {
+                                Ok(_) => sent_count += 1,
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => break,
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    stream_closed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if sent_count == remaining.len() {
+                            let mut state = self.state.write().await;
+                            state.record_spike_transport_success(
+                                &key,
+                                method,
+                                stream_start.elapsed(),
+                            );
+                            delivered = true;
+                            break;
+                        }
+
+                        remaining = remaining.split_off(sent_count);
                         let mut state = self.state.write().await;
-                        state.spike_streams.remove(&key);
-                        state.spike_stream_backoff.insert(
-                            key.clone(),
-                            std::time::Instant::now() + Duration::from_secs(2),
-                        );
-                        break;
+                        state.record_spike_transport_failure(&key, method);
+                        if stream_closed {
+                            state.spike_streams.remove(&key);
+                            state.spike_stream_backoff.insert(
+                                key.clone(),
+                                std::time::Instant::now() + Duration::from_secs(2),
+                            );
+                        }
+                    }
+                    SpikeTransportMethod::BurstStream => {
+                        self.request_spike_stream(key.clone(), addr.clone()).await;
+                        let burst_start = std::time::Instant::now();
+                        let burst_result = tokio::time::timeout(
+                            SPIKE_BURST_TIMEOUT,
+                            self.send_spike_batches_burst(&key, &addr, remaining.clone()),
+                        )
+                        .await;
+                        match burst_result {
+                            Ok(Ok(())) => {
+                                let mut state = self.state.write().await;
+                                state.record_spike_transport_success(
+                                    &key,
+                                    method,
+                                    burst_start.elapsed(),
+                                );
+                                remaining.clear();
+                                delivered = true;
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                nm_err!("[warn] burst spike forwarding to {} failed: {}", key, e);
+                                let mut state = self.state.write().await;
+                                state.record_spike_transport_failure(&key, method);
+                            }
+                            Err(_) => {
+                                nm_err!(
+                                    "[warn] burst spike forwarding to {} timed out after {:?}",
+                                    key,
+                                    SPIKE_BURST_TIMEOUT
+                                );
+                                let mut state = self.state.write().await;
+                                state.record_spike_transport_failure(&key, method);
+                            }
+                        }
                     }
                 }
+            }
+
+            if !delivered && !remaining.is_empty() {
+                let mut state = self.state.write().await;
+                state.record_spike_drop(&key, remaining.len() as u64);
             }
         }
     }
@@ -1294,6 +1936,7 @@ impl DistributedNode {
                             remote_spikes_bwd: HashMap::new(),
                             remote_spike_steps_fwd: HashMap::new(),
                             remote_spike_steps_bwd: HashMap::new(),
+                            external_sensory_spikes: None,
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
                             playing: true,
@@ -1383,7 +2026,12 @@ impl DistributedNode {
                     }
                 }
 
-                let out = net.runner.step(None);
+                let external_sensory = net.external_sensory_spikes.take();
+                let out = if let Some(ref sensory) = external_sensory {
+                    net.runner.step(Some(sensory.as_slice()))
+                } else {
+                    net.runner.step(None)
+                };
 
                 let step_index = out.t as i64;
                 let ts_us = (net.runner.t_ms * 1000.0) as u64;
@@ -1641,78 +2289,21 @@ impl DistributedNeuromorphic for DistributedNode {
     ) -> Result<Response<Self::StreamSpikesStream>, Status> {
         let remote_addr = request.remote_addr();
         let mut stream = request.into_inner();
-        let state = self.state.clone();
         let node = self.clone();
 
         let (_tx, rx) = mpsc::channel(128);
 
         tokio::spawn(async move {
             while let Some(batch) = stream.message().await.unwrap_or(None) {
-                let (networks, is_orchestrator, exclude_node) = {
-                    let state_lock = state.read().await;
-                    let net = state_lock.networks.get(&batch.network_id).cloned();
-                    let is_orchestrator = state_lock.is_orchestrator;
-                    let exclude = if is_orchestrator {
+                let exclude_node = {
+                    let state_lock = node.state.read().await;
+                    if state_lock.is_orchestrator {
                         peer_id_from_remote_addr(&state_lock, remote_addr)
                     } else {
                         None
-                    };
-                    (net, is_orchestrator, exclude)
+                    }
                 };
-
-                if let Some(net_arc) = networks {
-                    let mut net = net_arc.write().await;
-                    let layer_index = batch.layer_index as usize;
-                    let layer_size = net.runner.layer_size(layer_index);
-                    if layer_size == 0 {
-                        continue;
-                    }
-                    let is_assigned = net.runner.is_layer_assigned(layer_index);
-                    let is_redundant = net.redundant_layers.contains(&batch.layer_index);
-                    if is_assigned && !is_redundant {
-                        continue;
-                    }
-                    let step_map = if batch.is_backward {
-                        &mut net.remote_spike_steps_bwd
-                    } else {
-                        &mut net.remote_spike_steps_fwd
-                    };
-                    if let Some(prev) = step_map.get(&batch.layer_index) {
-                        if batch.step_index < *prev {
-                            continue;
-                        }
-                    }
-                    step_map.insert(batch.layer_index, batch.step_index);
-                    let mut spikes = vec![0i8; layer_size];
-                    let mut used_aer = false;
-                    if !batch.aer_payload.is_empty() {
-                        if decode_spikes(&batch.aer_payload, batch.aer_base, &mut spikes).is_ok() {
-                            used_aer = true;
-                        }
-                    }
-                    if !used_aer {
-                        for idx in &batch.spike_indices {
-                            let i = *idx as usize;
-                            if i < spikes.len() {
-                                spikes[i] = 1;
-                            }
-                        }
-                    }
-                    if batch.is_backward {
-                        net.remote_spikes_bwd.insert(batch.layer_index, spikes);
-                    } else {
-                        net.remote_spikes_fwd.insert(batch.layer_index, spikes);
-                    }
-                }
-
-                if is_orchestrator {
-                    node.send_spike_batches(
-                        &batch.network_id,
-                        std::slice::from_ref(&batch),
-                        exclude_node.as_deref(),
-                    )
-                    .await;
-                }
+                node.handle_incoming_spike_batch(batch, exclude_node).await;
             }
         });
 
@@ -1767,7 +2358,8 @@ impl DistributedNeuromorphic for DistributedNode {
                                 {
                                     // Keep layer metadata in sync for config-only updates too.
                                     let updated_layers = (net_cfg.num_hidden_layers + 1) as u32;
-                                    if updated_layers > 0 && updated_layers != net_status.num_layers {
+                                    if updated_layers > 0 && updated_layers != net_status.num_layers
+                                    {
                                         net_status.num_layers = updated_layers;
                                         needs_rebalance = true;
                                     }
@@ -2136,5 +2728,82 @@ impl DistributedNeuromorphic for DistributedNode {
             hidden,
             output: Some(output),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn spike_transport_defaults_to_persistent_when_available() {
+        let node = DistributedNode::new("test-node".to_string(), false);
+        let state = node.state.read().await;
+        assert_eq!(
+            state.choose_spike_transport("peer-a", true, false),
+            SpikeTransportMethod::PersistentStream
+        );
+        assert_eq!(
+            state.choose_spike_transport("peer-a", false, false),
+            SpikeTransportMethod::BurstStream
+        );
+    }
+
+    #[tokio::test]
+    async fn spike_transport_fails_over_after_stream_failures() {
+        let node = DistributedNode::new("test-node".to_string(), false);
+        let mut state = node.state.write().await;
+        for _ in 0..SPIKE_FAILOVER_STREAK {
+            state.record_spike_transport_failure("peer-b", SpikeTransportMethod::PersistentStream);
+        }
+        assert_eq!(
+            state.choose_spike_transport("peer-b", true, false),
+            SpikeTransportMethod::BurstStream
+        );
+    }
+
+    #[tokio::test]
+    async fn spike_transport_prefers_lower_latency_path() {
+        let node = DistributedNode::new("test-node".to_string(), false);
+        let mut state = node.state.write().await;
+        state.record_spike_transport_success(
+            "peer-c",
+            SpikeTransportMethod::PersistentStream,
+            Duration::from_micros(800),
+        );
+        state.record_spike_transport_success(
+            "peer-c",
+            SpikeTransportMethod::BurstStream,
+            Duration::from_micros(200),
+        );
+        assert_eq!(
+            state.choose_spike_transport("peer-c", true, false),
+            SpikeTransportMethod::BurstStream
+        );
+    }
+
+    #[tokio::test]
+    async fn spike_transport_prefers_mpi_when_lowest_latency() {
+        let node = DistributedNode::new("test-node".to_string(), false);
+        let mut state = node.state.write().await;
+        state.record_spike_transport_success(
+            "peer-d",
+            SpikeTransportMethod::PersistentStream,
+            Duration::from_micros(500),
+        );
+        state.record_spike_transport_success(
+            "peer-d",
+            SpikeTransportMethod::BurstStream,
+            Duration::from_micros(300),
+        );
+        state.record_spike_transport_success(
+            "peer-d",
+            SpikeTransportMethod::Mpi,
+            Duration::from_micros(120),
+        );
+        assert_eq!(
+            state.choose_spike_transport("peer-d", true, true),
+            SpikeTransportMethod::Mpi
+        );
     }
 }

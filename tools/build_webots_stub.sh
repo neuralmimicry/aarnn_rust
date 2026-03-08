@@ -45,9 +45,28 @@ if [[ -z "${CXX_CMD}" ]]; then
 fi
 
 echo "==> Building C++ stub with $CXX_CMD"
+ENABLE_OPENMP="${ENABLE_OPENMP:-auto}"
+openmp_cxxflags=()
+openmp_ldflags=()
+if [[ "$ENABLE_OPENMP" != "0" && "$ENABLE_OPENMP" != "false" ]]; then
+  probe_bin="/tmp/nm_openmp_probe.$$"
+  if printf 'int main(){return 0;}\n' | "$CXX_CMD" -std=c++17 -x c++ -fopenmp - -o "$probe_bin" >/dev/null 2>&1; then
+    openmp_cxxflags=(-fopenmp)
+    openmp_ldflags=(-fopenmp)
+    echo "==> OpenMP enabled for C++ stub build"
+    rm -f "$probe_bin"
+  elif [[ "$ENABLE_OPENMP" == "1" || "$ENABLE_OPENMP" == "true" ]]; then
+    echo "Error: OpenMP requested but compiler/linker does not support -fopenmp" >&2
+    exit 4
+  else
+    echo "==> OpenMP unavailable; building without OpenMP"
+  fi
+fi
+
 set -x
-"$CXX_CMD" -std=c++17 -O2 -Iinclude examples/webots_controller.cpp \
+"$CXX_CMD" -std=c++17 -O2 "${openmp_cxxflags[@]}" -Iinclude examples/webots_controller.cpp \
   -L "$OUT_DIR" -laarnn_rust \
+  "${openmp_ldflags[@]}" \
   -Wl,-rpath,'$ORIGIN' \
   -o "$OUT_DIR/webots_controller"
 set +x
