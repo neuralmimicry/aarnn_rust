@@ -453,6 +453,27 @@ function addTarget(addr) {
   }
 }
 
+async function bootstrapDefaultTarget() {
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) return "";
+    const cfg = await res.json();
+    const defaultAddr = normalizeAddr((cfg.default_orchestrator || "").trim());
+    if (!defaultAddr) return "";
+    if (!state.targets.includes(defaultAddr)) {
+      state.targets.push(defaultAddr);
+      saveTargets();
+      ensureCard(defaultAddr);
+    }
+    if (!state.active || !state.targets.includes(state.active)) {
+      setActive(defaultAddr);
+    }
+    return defaultAddr;
+  } catch (_) {
+    return "";
+  }
+}
+
 addButton.addEventListener("click", () => {
   addTarget(input.value);
   input.value = "";
@@ -1419,17 +1440,22 @@ async function sendControlAction(action) {
 }
 
 async function initTargets() {
+  const defaultAddr = await bootstrapDefaultTarget();
   if (state.targets.length === 0) {
     setPlaceholder();
     return;
   }
   state.targets.forEach((addr) => ensureCard(addr));
-  if (!state.active) {
-    setActive(state.targets[0]);
+  if (!state.active || !state.targets.includes(state.active)) {
+    setActive(defaultAddr || state.targets[0]);
   } else {
     setActive(state.active);
   }
   await pollAll();
+  if (defaultAddr && state.active !== defaultAddr && !state.statusByTarget.get(state.active)) {
+    setActive(defaultAddr);
+    await pollAll();
+  }
 }
 
 function formatBytes(bytes) {

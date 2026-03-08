@@ -374,6 +374,11 @@ struct AuthModeResponse {
     allow_signup: bool,
 }
 
+#[derive(Serialize)]
+struct UiConfigResponse {
+    default_orchestrator: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
@@ -462,6 +467,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let api = Router::new()
+        .route("/config", get(api_config))
         .route("/auth/mode", get(auth_mode_handler))
         .route("/me", get(me))
         .route("/login", post(login))
@@ -535,7 +541,7 @@ async fn api_auth_middleware(
     let path = req.uri().path();
     if matches!(
         path,
-        "/api/auth/mode" | "/api/login" | "/api/signup" | "/api/me"
+        "/api/config" | "/api/auth/mode" | "/api/login" | "/api/signup" | "/api/me"
     ) {
         return next.run(req).await;
     }
@@ -555,6 +561,12 @@ async fn auth_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     Json(AuthModeResponse {
         mode: state.auth.mode.as_str().to_string(),
         allow_signup: state.auth.allow_signup,
+    })
+}
+
+async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(UiConfigResponse {
+        default_orchestrator: state.default_orchestrator.clone(),
     })
 }
 
