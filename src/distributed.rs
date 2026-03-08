@@ -1760,6 +1760,22 @@ impl DistributedNeuromorphic for DistributedNode {
                                 {
                                     network_snapshots.insert(network_id.clone(), cfg_str);
                                     net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
+                                    // Snapshot imports should be redistributed across all active nodes.
+                                    needs_rebalance = true;
+                                } else if let Ok(net_cfg) =
+                                    serde_json::from_str::<NetworkConfig>(&net_status.config_json)
+                                {
+                                    // Keep layer metadata in sync for config-only updates too.
+                                    let updated_layers = (net_cfg.num_hidden_layers + 1) as u32;
+                                    if updated_layers > 0 && updated_layers != net_status.num_layers {
+                                        net_status.num_layers = updated_layers;
+                                        needs_rebalance = true;
+                                    }
+                                    // Avoid stale snapshot reuse after switching to config-only payloads.
+                                    network_snapshots.remove(&network_id);
+                                } else {
+                                    // Unknown payload shape: clear stale snapshots to avoid replaying old topology.
+                                    network_snapshots.remove(&network_id);
                                 }
                             }
                             if !c.neuron_model.is_empty() {

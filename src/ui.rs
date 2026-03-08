@@ -3109,6 +3109,34 @@ impl App {
             .runner
             .import_network_json(json)
             .map_err(|e| e.to_string())?;
+        let imported_layers = (net_guard.runner.net.num_hidden_layers + 1) as u32;
+        let imported_model = net_guard.runner.neuron_model.to_str().to_string();
+        let imported_learning = net_guard.runner.learning.to_str().to_string();
+        let imported_snapshot_json = json.to_string();
+        if let Some(node) = self.distributed_node.clone() {
+            let network_id = network_id.to_string();
+            self.runtime_handle.spawn(async move {
+                let mut should_rebalance = false;
+                {
+                    let mut state = node.state.write().await;
+                    if state.is_orchestrator {
+                        if let Some(net_status) = state.network_registry.get_mut(&network_id) {
+                            net_status.config_json = imported_snapshot_json.clone();
+                            net_status.num_layers = imported_layers;
+                            net_status.neuron_model = imported_model;
+                            net_status.learning_rule = imported_learning;
+                        }
+                        state
+                            .network_snapshots
+                            .insert(network_id.clone(), imported_snapshot_json);
+                        should_rebalance = true;
+                    }
+                }
+                if should_rebalance {
+                    node.rebalance_networks().await;
+                }
+            });
+        }
         let kind_str = match kind {
             ImportKind::Tflite => "TFLite",
             ImportKind::Onnx => "ONNX",
