@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neuromorphic API Documentation</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #16181b;
+        --panel: #1f242a;
+        --line: #2d3640;
+        --text: #dbe4ee;
+        --muted: #9fb0c1;
+        --accent: #41c98a;
+        --warn: #ffcc66;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Noto Sans", "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+      }
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(22, 24, 27, 0.95);
+        backdrop-filter: blur(6px);
+      }
+      .title { font-weight: 700; font-size: 16px; }
+      .links {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .links a {
+        color: var(--text);
+        text-decoration: none;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 13px;
+      }
+      .links a:hover { border-color: var(--accent); color: var(--accent); }
+      main {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .hero {
+        background: linear-gradient(145deg, #212a33, #1c2229);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 18px;
+        margin-bottom: 16px;
+      }
+      .hero h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+      }
+      .hero p { margin: 0 0 10px; color: var(--muted); }
+      .callout {
+        border-left: 3px solid var(--warn);
+        background: #27231a;
+        padding: 10px 12px;
+        border-radius: 4px;
+        color: #f3ddb0;
+        margin-top: 12px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #13171d;
+        border: 1px solid #2b3540;
+        border-radius: 4px;
+        padding: 1px 5px;
+        color: #c3ffe4;
+      }
+      pre {
+        margin: 8px 0;
+        padding: 10px;
+        border: 1px solid #2b3540;
+        border-radius: 8px;
+        background: #13171d;
+        overflow: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        border-bottom: 1px solid #2a323a;
+        text-align: left;
+        padding: 8px;
+        vertical-align: top;
+      }
+      th { color: #c5d8eb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .method {
+        display: inline-block;
+        min-width: 52px;
+        text-align: center;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .get { background: #1f3a25; color: #8fffbd; }
+      .post { background: #223449; color: #9fd4ff; }
+      .auth { color: #9fd4ff; }
+      .noauth { color: #a6b5c3; }
+      .footer-note {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      @media (max-width: 900px) {
+        table, thead, tbody, tr, th, td { display: block; }
+        thead { display: none; }
+        tr {
+          margin-bottom: 10px;
+          border: 1px solid #2a323a;
+          border-radius: 8px;
+          padding: 8px;
+        }
+        td {
+          border: none;
+          padding: 4px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">Neuromorphic API Documentation</div>
+      <nav class="links">
+        <a href="/">Web UI</a>
+        <a href="/docs/swagger">Swagger UI</a>
+        <a href="/api/openapi.json">OpenAPI JSON</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <h1>Full API Reference</h1>
+        <p>
+          This server exposes REST endpoints used by the web UI for authentication, cluster orchestration,
+          status streaming, control actions, and model export. The canonical machine-readable schema is available at
+          <code>/api/openapi.json</code>, and interactive execution is available at <code>/docs/swagger</code>.
+        </p>
+        <div class="callout">
+          Best-practice usage: call <code>GET /api/auth/mode</code> first, authenticate if required,
+          then call protected APIs with the <code>nm_session</code> cookie on the same origin.
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Authentication Flow</h2>
+        <p>
+          1. Discover mode via <code>GET /api/auth/mode</code>.
+          2. If <code>mode=local</code>, call <code>POST /api/login</code> with username/password.
+          3. If <code>mode=oidc</code>, use browser redirect via <code>GET /auth/oidc/login</code>.
+          4. Session cookie <code>nm_session</code> is then used for protected APIs.
+        </p>
+        <pre><code>curl -s http://localhost:8080/api/auth/mode
+curl -s -X POST http://localhost:8080/api/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"change-me"}' -i
+curl -s http://localhost:8080/api/status --cookie "nm_session=&lt;value&gt;"</code></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Endpoint Matrix</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Auth</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/openapi.json</code></td><td class="noauth">No</td><td>OpenAPI schema</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td class="noauth">No</td><td>Default orchestrator bootstrap config</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/auth/mode</code></td><td class="noauth">No</td><td>Auth mode and signup capability</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/me</code></td><td class="noauth">No</td><td>Current session/user status</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/login</code></td><td class="noauth">No</td><td>Local username/password login</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/signup</code></td><td class="noauth">No</td><td>Create local account (if enabled)</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/logout</code></td><td class="auth">Cookie</td><td>Clear active session</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/user/config</code></td><td class="auth">Cookie</td><td>Get per-user persisted UI config</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/user/config</code></td><td class="auth">Cookie</td><td>Save per-user UI config</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/status</code></td><td class="auth">Cookie</td><td>Cluster and network status snapshot</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/snapshot</code></td><td class="auth">Cookie</td><td>Network JSON snapshot</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/activity</code></td><td class="auth">Cookie</td><td>Latest spiking activity vectors</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/inject</code></td><td class="auth">Cookie</td><td>Inject a single AER exchange (hex payload or spike indices)</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/stream</code></td><td class="auth">Cookie</td><td>Stream NDJSON AER frames over HTTP(S) to a running network</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/update_network</code></td><td class="auth">Cookie</td><td>Apply config/model/rule updates</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/control_network</code></td><td class="auth">Cookie</td><td>Start/stop/repeat/reset/new controls</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/export</code></td><td class="auth">Cookie</td><td>Export to NeuroML/PyNN/NIR/ONNX/TFLite</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/login</code></td><td class="noauth">No</td><td>Start OIDC browser login</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/callback</code></td><td class="noauth">No</td><td>OIDC callback endpoint</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/auth/oidc/exchange</code></td><td class="noauth">No</td><td>Token-to-session exchange</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Interactive Usage</h2>
+        <p>
+          Use <a href="/docs/swagger" style="color: var(--accent)">Swagger UI</a> to test requests directly in-browser.
+          It is preconfigured for same-origin cookies so you can login and invoke protected endpoints in one session.
+        </p>
+        <p class="footer-note">
+          If OIDC mode is enabled, complete browser login first, then open Swagger UI to run authenticated API calls.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -41,6 +41,7 @@ REPO_ROOT := $(abspath ..)
 # Toolchain
 CXX ?= g++
 PROFILE ?= release
+ENABLE_OPENMP ?= auto
 
 TARGET_DIR := $(REPO_ROOT)/target/$(PROFILE)
 RUST_FEATURES := ffi_bridge
@@ -64,6 +65,22 @@ LIB_SO := $(TARGET_DIR)/libaarnn_rust.so
 #  - Absolute path to Webots lib/controller for standalone runs outside Webots
 RPATH_SELF := -Wl,-rpath,'$$ORIGIN'
 RPATH_WEBOTS := -Wl,-rpath,$(WEBOTS_HOME)/lib/controller
+
+OPENMP_CXXFLAGS :=
+OPENMP_LDFLAGS :=
+ifeq ($(ENABLE_OPENMP),1)
+OPENMP_CXXFLAGS += -fopenmp
+OPENMP_LDFLAGS += -fopenmp
+else ifeq ($(ENABLE_OPENMP),true)
+OPENMP_CXXFLAGS += -fopenmp
+OPENMP_LDFLAGS += -fopenmp
+else ifeq ($(ENABLE_OPENMP),auto)
+OPENMP_SUPPORTED := $(shell printf 'int main(){return 0;}\n' | $(CXX) -std=c++17 -x c++ -fopenmp -o /tmp/nm_openmp_probe_makefile - >/dev/null 2>&1 && rm -f /tmp/nm_openmp_probe_makefile && echo 1 || (rm -f /tmp/nm_openmp_probe_makefile; echo 0))
+ifeq ($(OPENMP_SUPPORTED),1)
+OPENMP_CXXFLAGS += -fopenmp
+OPENMP_LDFLAGS += -fopenmp
+endif
+endif
 
 .PHONY: all nao_nn_controller nao_nn_controller_uds clean help install
 
@@ -108,18 +125,18 @@ nao_nn_controller: $(TARGET_DIR)/libaarnn_rust.so
 	  fi; \
 	fi
 	@echo "[C++] Building examples/nao_nn_controller.cpp -> $(TARGET_DIR)/nao_nn_controller"
-	$(CXX) -std=c++17 -O2 $(INC) $(WEBOTS_INC) \
+	$(CXX) -std=c++17 -O2 $(OPENMP_CXXFLAGS) $(INC) $(WEBOTS_INC) \
 	  $(REPO_ROOT)/examples/nao_nn_controller.cpp \
-	  $(LIB_SO) -Wl,--no-as-needed $(WEBOTS_LIB) $(RPATH_SELF) $(RPATH_WEBOTS) \
+	  $(LIB_SO) -Wl,--no-as-needed $(WEBOTS_LIB) $(OPENMP_LDFLAGS) $(RPATH_SELF) $(RPATH_WEBOTS) \
 	  -o $(TARGET_DIR)/nao_nn_controller
 	@echo "Done. Run with: LD_LIBRARY_PATH=$(TARGET_DIR):$(WEBOTS_HOME)/lib/controller $(TARGET_DIR)/nao_nn_controller"
 
 nao_nn_controller_uds:
 	@mkdir -p $(TARGET_DIR)
 	@echo "[C++] Building examples/nao_nn_controller_uds.cpp -> $(TARGET_DIR)/nao_nn_controller_uds"
-	$(CXX) -std=c++17 -O2 $(INC) $(WEBOTS_INC) \
+	$(CXX) -std=c++17 -O2 $(OPENMP_CXXFLAGS) $(INC) $(WEBOTS_INC) \
 	  $(REPO_ROOT)/examples/nao_nn_controller_uds.cpp \
-	  $(WEBOTS_LIB) $(RPATH_WEBOTS) \
+	  $(WEBOTS_LIB) $(OPENMP_LDFLAGS) $(RPATH_WEBOTS) \
 	  -o $(TARGET_DIR)/nao_nn_controller_uds
 	@echo "Done. Install into your Webots project controllers folder as 'nao_nn_controller_uds' and set NM_SOCK if needed."
 
@@ -133,6 +150,7 @@ help:
 	@echo "Variables:"
 	@echo "  PROFILE=release|debug (default: release)"
 	@echo "  WEBOTS_HOME=/path/to/webots (default: /usr/local/webots)"
+	@echo "  ENABLE_OPENMP=auto|1|0 (default: auto)"
 
 # ---------------------------------------------------------------------------------
 # Webots global Makefile.include (kept for compatibility if WEBOTS_HOME is set).

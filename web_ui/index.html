@@ -14,6 +14,8 @@
           <div class="subtitle">Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)</div>
         </div>
         <div class="topbar-right">
+          <a class="btn ghost small" href="/docs" target="_blank" rel="noopener">Docs</a>
+          <a class="btn ghost small" href="/docs/swagger" target="_blank" rel="noopener">API</a>
           <span id="user-status">Signed out</span>
           <button class="btn ghost small" id="logout-btn" type="button">Logout</button>
         </div>
@@ -120,14 +122,17 @@
               <div>CPU: <span id="cpu">0.0%</span></div>
               <div>RAM: <span id="ram">0 MB</span></div>
               <div>Temp: <span id="temp">n/a</span></div>
-              <div>GPU: <span id="gpu">Detected (OpenCL)</span></div>
+              <div>GPU: <span id="gpu">Not detected</span></div>
               <div>GPU Status: <span id="gpu-status">Inactive</span></div>
-              <div>Threads: <span id="threads">-</span></div>
+              <div>Neurons: <span id="neurons">0</span></div>
+              <div>AARNN Depth: <span id="aarnn-depth-status">0/0</span></div>
+              <div>Capacity: <span id="capacity-score">0.00</span></div>
               <div>GA Running: <span id="ga-running">No</span></div>
               <div>GA Pacing: <span id="ga-pacing">No</span></div>
               <div>GA Ramp: <span id="ga-ramp">No</span></div>
               <div>Generation / Progress: <span id="ga-progress">-</span></div>
               <div>Best Fitness: <span id="ga-best">-</span></div>
+              <div>Cluster GA Evals: <span id="cluster-ga-evals">0</span></div>
               <div>Step time: <span id="step-time">0.00 ms</span></div>
             </div>
           </section>
@@ -208,16 +213,45 @@
           </section>
 
           <section class="panel">
+            <div class="panel-title">I/O Input Source</div>
+            <div class="panel-row io-row">
+              <label for="io-input-source">Source type</label>
+              <select id="io-input-source">
+                <option value="none">Disabled</option>
+                <option value="aer-http-stream">HTTP/HTTPS AER stream (NDJSON)</option>
+              </select>
+            </div>
+            <div class="panel-row io-row">
+              <label for="io-input-url">HTTP/HTTPS URL</label>
+              <input id="io-input-url" type="text" placeholder="https://host/aer.ndjson" />
+            </div>
+            <div class="panel-row io-row">
+              <label for="io-aer-base">AER base</label>
+              <input id="io-aer-base" type="number" min="0" step="1" value="0" />
+              <button class="btn ghost" id="io-source-toggle" type="button">Connect</button>
+            </div>
+            <div class="panel-row io-row">
+              <div>Status: <span id="io-source-status" class="io-status io-status-idle">Disconnected</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
             <div class="panel-title">Tools &amp; Model I/O</div>
             <div class="panel-row">
               <button class="btn" id="export-neuroml">Export NeuroML</button>
               <button class="btn" id="export-pynn">Export PyNN</button>
+              <button class="btn" id="export-nir">Export NIR</button>
+            </div>
+            <div class="panel-row">
+              <button class="btn" id="export-onnx">Export ONNX</button>
+              <button class="btn" id="export-tflite">Export TFLite</button>
             </div>
           </section>
 
           <section class="panel" id="cluster-panel">
             <div class="panel-title">Cluster Dashboard</div>
             <div class="panel-list" id="cluster-summary">
+              <div>Active target: <span id="active-target">-</span></div>
               <div>Nodes connected: <span id="nodes-count">0</span></div>
               <div>Active networks: <span id="networks-count">0</span></div>
             </div>

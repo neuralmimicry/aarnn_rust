@@ -27,6 +27,8 @@ mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
 mod network;
+#[cfg(feature = "openmpi")]
+mod openmpi_runtime;
 #[cfg(feature = "ui")]
 mod providers;
 mod rdma;
@@ -239,6 +241,106 @@ struct Cli {
     aer_max_packet_bytes: usize,
 }
 
+fn configure_openmp_runtime_env() {
+    let auto_enabled = std::env::var("NM_OPENMP_AUTO")
+        .ok()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true);
+    if !auto_enabled {
+        return;
+    }
+
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .max(1);
+
+    if std::env::var_os("OMP_NUM_THREADS").is_none() {
+        std::env::set_var("OMP_NUM_THREADS", threads.to_string());
+    }
+    if std::env::var_os("OMP_PROC_BIND").is_none() {
+        std::env::set_var("OMP_PROC_BIND", "close");
+    }
+    if std::env::var_os("OMP_PLACES").is_none() {
+        std::env::set_var("OMP_PLACES", "cores");
+    }
+}
+
+#[cfg(feature = "openmpi")]
+fn maybe_apply_openmpi_bootstrap(args: &mut Cli) -> anyhow::Result<()> {
+    let force_bootstrap = std::env::var("NM_MPI_FORCE_BOOTSTRAP")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let mpi_env_present = [
+        "OMPI_COMM_WORLD_SIZE",
+        "OMPI_COMM_WORLD_RANK",
+        "MPI_LOCALRANKID",
+        "PMI_SIZE",
+        "PMIX_RANK",
+    ]
+    .iter()
+    .any(|k| std::env::var_os(k).is_some());
+    if !force_bootstrap && !mpi_env_present {
+        return Ok(());
+    }
+
+    let bootstrap =
+        crate::openmpi_runtime::bootstrap(&args.grpc_addr, args.orchestrator_addr.as_deref())?;
+
+    let Some(bootstrap) = bootstrap else {
+        return Ok(());
+    };
+
+    let explicit_role = args.orchestrator || args.node;
+    if !explicit_role {
+        if bootstrap.rank == 0 {
+            args.orchestrator = true;
+        } else {
+            args.node = true;
+        }
+    }
+
+    if args.node && args.orchestrator_addr.is_none() {
+        args.orchestrator_addr = Some(bootstrap.orchestrator_addr.clone());
+    }
+
+    nm_log!(
+        "[info] OpenMPI bootstrap: rank={}/{}, local_rank={:?}, orchestrator={}",
+        bootstrap.rank,
+        bootstrap.size,
+        bootstrap.local_rank,
+        bootstrap.orchestrator_addr
+    );
+    if !explicit_role {
+        nm_log!(
+            "[info] OpenMPI auto-role selected: {}",
+            if args.orchestrator {
+                "orchestrator"
+            } else if args.node {
+                "node"
+            } else {
+                "standalone"
+            }
+        );
+    }
+    nm_log!(
+        "[info] OpenMPI spike transport: {}",
+        if crate::openmpi_runtime::spike_transport_available() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
+    Ok(())
+}
+
+#[cfg(not(feature = "openmpi"))]
+fn maybe_apply_openmpi_bootstrap(_args: &mut Cli) -> anyhow::Result<()> {
+    Ok(())
+}
+
 /// Main entry point for the AARNN.
 ///
 /// This function coordinates configuration loading, network building, and simulation execution.
@@ -247,11 +349,14 @@ struct Cli {
 /// 2. **UI Mode**: Launches an interactive GUI for real-time observation and manipulation.
 /// 3. **Distributed Mode**: Participates in a multi-node simulation cluster (as orchestrator or node).
 fn main() -> anyhow::Result<()> {
-    let args = Cli::parse();
+    let mut args = Cli::parse();
 
     if args.quiet {
         crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+
+    maybe_apply_openmpi_bootstrap(&mut args)?;
+    configure_openmp_runtime_env();
     if !crate::obs::is_silent() {
         let log_path = std::env::var("NM_LOG_PATH").ok();
         if let Some(path) = log_path.as_deref() {
@@ -907,8 +1012,26 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     };
     use tonic::transport::{Channel, Server};
 
-    let node_id = format!("{}_{}", args.brain_id, fastrand::u32(..));
+    let node_id = {
+        #[cfg(feature = "openmpi")]
+        {
+            if let Ok(rank_s) = std::env::var("OMPI_COMM_WORLD_RANK") {
+                if let Ok(rank) = rank_s.parse::<u32>() {
+                    format!("{}_mpi{}", args.brain_id, rank)
+                } else {
+                    format!("{}_{}", args.brain_id, fastrand::u32(..))
+                }
+            } else {
+                format!("{}_{}", args.brain_id, fastrand::u32(..))
+            }
+        }
+        #[cfg(not(feature = "openmpi"))]
+        {
+            format!("{}_{}", args.brain_id, fastrand::u32(..))
+        }
+    };
     let node = DistributedNode::new(node_id.clone(), args.orchestrator);
+    node.start_optional_mpi_spike_receiver().await;
 
     async fn connect_and_join(
         orchestrator_addr: &str,
@@ -1149,10 +1272,18 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 nm_log!("Nodes connected: {}", state.nodes.len());
                 for (id, status) in &state.nodes {
                     if let Some(res) = &status.resources {
-                        nm_log!(" - Node {}: CPU={:.1}%, RAM={}/{} MB, Neurons={}, Redundant={}, Depth={}/{}, Networks={:?}", 
-                            id, res.cpu_usage, res.available_ram / 1024 / 1024, res.total_ram / 1024 / 1024, 
-                            res.num_neurons, res.redundant_neurons, res.current_aarnn_depth, res.desired_aarnn_depth,
-                            status.active_networks);
+                        nm_log!(
+                            " - Node {}: CPU={:.1}%, RAM={}/{} MB, Neurons={}, Redundant={}, Depth={}/{}, Networks={:?}",
+                            id,
+                            res.cpu_usage,
+                            res.available_ram / 1024 / 1024,
+                            res.total_ram / 1024 / 1024,
+                            res.num_neurons,
+                            res.redundant_neurons,
+                            res.current_aarnn_depth,
+                            res.desired_aarnn_depth,
+                            status.active_networks
+                        );
                     }
                 }
                 nm_log!("Active Networks: {}", state.network_registry.len());
