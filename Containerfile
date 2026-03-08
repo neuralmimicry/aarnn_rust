@@ -45,6 +45,8 @@ RUN dnf install -y 'dnf-command(config-manager)' && \
     protobuf-compiler libnl3-devel \
     opencl-headers ocl-icd-devel \
     libibverbs-devel \
+    openmpi openmpi-devel \
+    libgomp \
     alsa-lib-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
     libXcomposite-devel libXdamage-devel libXfixes-devel libXext-devel \
     libXrender-devel mesa-libGL-devel gtk3-devel libxkbcommon-devel wayland-devel \
@@ -78,9 +80,13 @@ RUN git clone --depth 1 -b 4.x https://github.com/opencv/opencv.git && \
     make install && \
     rm -rf /tmp/opencv_build
 
-# Set environment for Rust build to find OpenCV
-ENV PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig"
-ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib"
+# Set environment for Rust build to find OpenCV + MPI
+# - OpenMPI on CentOS Stream installs wrappers/libs under /usr/lib64/openmpi
+# - mpi-sys respects MPI_PKG_CONFIG when set.
+ENV PATH="/usr/lib64/openmpi/bin:${PATH}"
+ENV MPI_PKG_CONFIG="ompi"
+ENV PKG_CONFIG_PATH="/usr/lib64/openmpi/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/lib64/pkgconfig"
+ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:/usr/local/lib64:/usr/local/lib"
 
 # Install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -121,6 +127,7 @@ RUN dnf install -y \
     fontconfig freetype \
     libjpeg-turbo libpng libtiff \
     libibverbs libnl3 \
+    openmpi libgomp \
     ocl-icd \
     mesa-libGL \
     libX11 libXext libXrender libICE libSM libXcursor libXi libXrandr \
@@ -165,7 +172,8 @@ RUN mkdir -p /app/outputs && chmod 777 /app/outputs
 # Environment variables for Hardware Discovery
 # - LD_LIBRARY_PATH: Ensure libraries like libopencv are found
 # - NM_LOG_DIR: Custom env var if supported, otherwise use default
-ENV LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:/usr/lib64"
+ENV PATH="/usr/lib64/openmpi/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:/usr/local/lib64:/usr/local/lib:/usr/lib64"
 ENV OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
 # OpenShift/Kubernetes security: Run as a non-privileged user
