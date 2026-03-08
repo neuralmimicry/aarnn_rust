@@ -22,6 +22,7 @@ axum = "0.8"
 axum-extra = { version = "0.12", features = ["cookie"] }
 argon2 = "0.5"
 openidconnect = { version = "4", features = ["reqwest"] }
+reqwest = { version = "0.12", features = ["blocking"] }
 hex = "0.4"
 time = "0.3"
 opencl3 = { version = "0.12", optional = true }
@@ -43,6 +44,7 @@ tracing = { version = "0.1", optional = true }
 image = { version = "0.25", optional = true }
 nokhwa = { version = "0.10", optional = true, default-features = false, features = ["input-native"] }
 ibverbs = { version = "0.9", optional = true }
+mpi = { version = "0.8", optional = true }
 
 [build-dependencies]
 tonic-build = "0.14"
@@ -153,6 +155,11 @@ rdma = [
     "dep:proc-macro2",
     "dep:bindgen",
     "dep:cmake",
+]
+
+# Enable OpenMPI-based distributed bootstrap and rank orchestration helpers
+openmpi = [
+    "dep:mpi",
 ]
 
 [lib]

@@ -440,6 +440,40 @@ select {
   color: #8a8a8a;
 }
 
+.io-row input[type="text"] {
+  flex: 1;
+  min-width: 180px;
+}
+
+.io-row select {
+  flex: 1;
+  min-width: 180px;
+}
+
+.io-row input[type="number"] {
+  width: 90px;
+}
+
+.io-status {
+  font-weight: 600;
+}
+
+.io-status-idle {
+  color: #b2b2b2;
+}
+
+.io-status-connecting {
+  color: #ffd37a;
+}
+
+.io-status-active {
+  color: #19e073;
+}
+
+.io-status-error {
+  color: #ff8a8a;
+}
+
 @media (max-width: 1100px) {
   .content {
     grid-template-columns: 1fr;

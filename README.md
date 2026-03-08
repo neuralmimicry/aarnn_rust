@@ -47,6 +47,47 @@ python experiments/rl/rl_router.py
 scripts/deploy.sh developer
 ```
 
+## Optional HPC modes
+
+### OpenMP (native C++ helpers/controllers)
+
+OpenMP is auto-detected for Webots/native C++ example builds.
+
+```bash
+# auto-detect OpenMP support (default)
+make -C examples nao_nn_controller
+
+# force-enable / force-disable
+make -C examples nao_nn_controller ENABLE_OPENMP=1
+make -C examples nao_nn_controller ENABLE_OPENMP=0
+```
+
+### OpenMPI (distributed bootstrap for `aarnn_rust`)
+
+Build with OpenMPI support and launch with `mpirun`; rank 0 becomes orchestrator
+and other ranks become worker nodes automatically when role flags are omitted.
+
+```bash
+cargo build --release --features openmpi
+mpirun -np 3 target/release/aarnn_rust --brain-id cluster --grpc-addr 0.0.0.0:50051
+```
+
+Useful env overrides:
+- `NM_MPI_ORCHESTRATOR_ADDR=http://host:50051` to force broadcast address.
+- `NM_MPI_ADVERTISE_ADDR=<ip-or-hostname>` to control rank-0 advertised host.
+- `NM_MPI_TRANSPORT=0` to disable MPI spike transport (keep gRPC transports only).
+- `NM_OPENMP_AUTO=0` to disable automatic OpenMP runtime env tuning.
+
+When `openmpi` is enabled, spike exchange can use three paths:
+- persistent gRPC stream
+- burst gRPC stream
+- MPI point-to-point
+
+The runtime keeps per-peer latency EWMAs and failure streaks and auto-selects the
+lowest-latency healthy transport, with automatic fallback on errors.
+If MPI reports only `Single`/`Funneled` threading support, MPI transport is
+auto-disabled for safety and gRPC transports remain active.
+
 ## Repository map
 
 - `scripts/` operational entrypoints

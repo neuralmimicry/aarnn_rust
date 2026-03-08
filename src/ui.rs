@@ -53,8 +53,10 @@ use crate::sim::{Learning, NeuronModel};
 use crate::stimuli::{AerIoConfig, AerLink};
 use rand::SeedableRng;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::io::BufRead;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::sync::RwLock;
@@ -67,6 +69,332 @@ use crate::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
 use std::os::unix::net::UnixDatagram;
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use std::path::PathBuf;
+
+#[cfg(feature = "ui")]
+#[derive(Clone)]
+struct HttpAerInputStatus {
+    connected: bool,
+    frames_received: u64,
+    status_text: String,
+    last_error: Option<String>,
+    last_frame_time: Option<std::time::Instant>,
+    source_url: String,
+}
+
+#[cfg(feature = "ui")]
+impl Default for HttpAerInputStatus {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            frames_received: 0,
+            status_text: "Disconnected".to_string(),
+            last_error: None,
+            last_frame_time: None,
+            source_url: String::new(),
+        }
+    }
+}
+
+#[cfg(feature = "ui")]
+#[derive(serde::Deserialize, Default)]
+struct HttpAerNdjsonFrame {
+    #[serde(default)]
+    aer_payload_hex: Option<String>,
+    #[serde(default)]
+    spike_indices: Option<Vec<usize>>,
+    #[serde(default)]
+    aer_base: Option<u32>,
+}
+
+#[cfg(feature = "ui")]
+struct HttpAerStreamProvider {
+    num_sensory_neurons: Arc<AtomicUsize>,
+    rx: std::sync::mpsc::Receiver<Vec<i8>>,
+    stop_flag: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    status: Arc<RwLock<HttpAerInputStatus>>,
+}
+
+#[cfg(feature = "ui")]
+impl HttpAerStreamProvider {
+    fn new(
+        source_url: String,
+        default_aer_base: u32,
+        num_sensory_neurons: usize,
+        status: Arc<RwLock<HttpAerInputStatus>>,
+    ) -> Self {
+        Self::update_status(&status, |s| {
+            s.connected = false;
+            s.frames_received = 0;
+            s.last_error = None;
+            s.last_frame_time = None;
+            s.source_url = source_url.clone();
+            s.status_text = "Connecting...".to_string();
+        });
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<i8>>();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let neuron_count = Arc::new(AtomicUsize::new(num_sensory_neurons));
+        let stop_flag_worker = stop_flag.clone();
+        let neuron_count_worker = neuron_count.clone();
+        let status_worker = status.clone();
+        let worker = std::thread::Builder::new()
+            .name("http-aer-stream".to_string())
+            .spawn(move || {
+                Self::run_worker(
+                    source_url,
+                    default_aer_base,
+                    neuron_count_worker,
+                    stop_flag_worker,
+                    tx,
+                    status_worker,
+                )
+            })
+            .ok();
+
+        Self {
+            num_sensory_neurons: neuron_count,
+            rx,
+            stop_flag,
+            worker,
+            status,
+        }
+    }
+
+    fn update_status<F: FnOnce(&mut HttpAerInputStatus)>(
+        status: &Arc<RwLock<HttpAerInputStatus>>,
+        update: F,
+    ) {
+        if let Ok(mut guard) = status.try_write() {
+            update(&mut guard);
+        }
+    }
+
+    fn apply_hex_payload(
+        hex_payload: &str,
+        aer_base: u32,
+        spikes: &mut [i8],
+    ) -> Result<(), String> {
+        let compact: String = hex_payload.chars().filter(|c| !c.is_whitespace()).collect();
+        let compact = compact
+            .strip_prefix("0x")
+            .or_else(|| compact.strip_prefix("0X"))
+            .unwrap_or(&compact);
+        if compact.is_empty() {
+            return Ok(());
+        }
+        let bytes = hex::decode(compact).map_err(|e| format!("invalid hex payload: {e}"))?;
+        crate::aer::decode_spikes(&bytes, aer_base, spikes)
+            .map_err(|e| format!("invalid AER payload: {:?}", e))?;
+        Ok(())
+    }
+
+    fn parse_line(
+        line: &str,
+        default_aer_base: u32,
+        sensory_len: usize,
+    ) -> Result<Option<Vec<i8>>, String> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let frame: HttpAerNdjsonFrame = if trimmed.starts_with('{') {
+            serde_json::from_str(trimmed).map_err(|e| format!("invalid NDJSON frame: {e}"))?
+        } else {
+            HttpAerNdjsonFrame {
+                aer_payload_hex: Some(trimmed.to_string()),
+                spike_indices: None,
+                aer_base: None,
+            }
+        };
+
+        let mut spikes = vec![0i8; sensory_len];
+        if let Some(indices) = frame.spike_indices {
+            for idx in indices {
+                if idx < spikes.len() {
+                    spikes[idx] = 1;
+                }
+            }
+        }
+        if let Some(payload_hex) = frame.aer_payload_hex.as_deref() {
+            Self::apply_hex_payload(
+                payload_hex,
+                frame.aer_base.unwrap_or(default_aer_base),
+                &mut spikes,
+            )?;
+        }
+        if spikes.iter().any(|&v| v != 0) {
+            Ok(Some(spikes))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn run_worker(
+        source_url: String,
+        default_aer_base: u32,
+        num_sensory_neurons: Arc<AtomicUsize>,
+        stop_flag: Arc<AtomicBool>,
+        tx: std::sync::mpsc::Sender<Vec<i8>>,
+        status: Arc<RwLock<HttpAerInputStatus>>,
+    ) {
+        let client = match reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                Self::update_status(&status, |s| {
+                    s.connected = false;
+                    s.last_error = Some(format!("HTTP client init failed: {e}"));
+                    s.status_text = "Source error".to_string();
+                });
+                return;
+            }
+        };
+
+        while !stop_flag.load(Ordering::Relaxed) {
+            Self::update_status(&status, |s| {
+                s.connected = false;
+                s.status_text = "Connecting...".to_string();
+                s.last_error = None;
+            });
+            let response = match client
+                .get(&source_url)
+                .header(reqwest::header::ACCEPT, "application/x-ndjson")
+                .send()
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    Self::update_status(&status, |s| {
+                        s.connected = false;
+                        s.last_error = Some(format!("connect failed: {e}"));
+                        s.status_text = "Source error".to_string();
+                    });
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+            };
+
+            if !response.status().is_success() {
+                let code = response.status();
+                Self::update_status(&status, |s| {
+                    s.connected = false;
+                    s.last_error = Some(format!("HTTP source returned {code}"));
+                    s.status_text = "Source error".to_string();
+                });
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+
+            Self::update_status(&status, |s| {
+                s.connected = true;
+                s.status_text = "Streaming".to_string();
+                s.last_error = None;
+            });
+
+            let mut reader = std::io::BufReader::new(response);
+            let mut line = String::new();
+            loop {
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        Self::update_status(&status, |s| {
+                            s.connected = false;
+                            s.status_text = "Stream closed (reconnecting)".to_string();
+                        });
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) {
+                            continue;
+                        }
+                        Self::update_status(&status, |s| {
+                            s.connected = false;
+                            s.last_error = Some(format!("stream read failed: {e}"));
+                            s.status_text = "Source error".to_string();
+                        });
+                        break;
+                    }
+                }
+
+                let sensory_len = num_sensory_neurons.load(Ordering::Relaxed);
+                match Self::parse_line(&line, default_aer_base, sensory_len) {
+                    Ok(Some(spikes)) => {
+                        if tx.send(spikes).is_err() {
+                            return;
+                        }
+                        Self::update_status(&status, |s| {
+                            s.connected = true;
+                            s.frames_received = s.frames_received.saturating_add(1);
+                            s.last_frame_time = Some(std::time::Instant::now());
+                            s.status_text = "Streaming".to_string();
+                            s.last_error = None;
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        Self::update_status(&status, |s| {
+                            s.last_error = Some(err);
+                            s.status_text = "Decode error".to_string();
+                        });
+                    }
+                }
+            }
+
+            if !stop_flag.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+
+        Self::update_status(&status, |s| {
+            s.connected = false;
+            s.status_text = "Disconnected".to_string();
+        });
+    }
+}
+
+#[cfg(feature = "ui")]
+impl SensoryProvider for HttpAerStreamProvider {
+    fn next_spikes(&mut self) -> Vec<i8> {
+        let mut latest: Option<Vec<i8>> = None;
+        while let Ok(spikes) = self.rx.try_recv() {
+            latest = Some(spikes);
+        }
+        if let Some(spikes) = latest {
+            spikes
+        } else {
+            vec![0i8; self.num_sensory_neurons.load(Ordering::Relaxed)]
+        }
+    }
+
+    fn stop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        self.worker.take();
+        Self::update_status(&self.status, |s| {
+            s.connected = false;
+            s.status_text = "Disconnected".to_string();
+        });
+    }
+
+    fn set_num_sensory_neurons(&mut self, n_s: usize) {
+        self.num_sensory_neurons.store(n_s, Ordering::Relaxed);
+    }
+}
+
+#[cfg(feature = "ui")]
+impl Drop for HttpAerStreamProvider {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+    }
+}
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 #[derive(serde::Deserialize, Clone, PartialEq)]
@@ -259,7 +587,11 @@ impl IpcUdsServer {
         if let Some(ref peer) = self.last_peer {
             let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
             if let Err(e) = self.sock.send_to(hint.as_bytes(), peer) {
-                nm_err!("[IpcUdsServer] Failed to send size hint to peer {:?}: {}", peer, e);
+                nm_err!(
+                    "[IpcUdsServer] Failed to send size hint to peer {:?}: {}",
+                    peer,
+                    e
+                );
             }
         }
     }
@@ -267,7 +599,11 @@ impl IpcUdsServer {
         if let Some(path) = addr.as_pathname() {
             let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
             if let Err(e) = self.sock.send_to(hint.as_bytes(), path) {
-                nm_err!("[IpcUdsServer] Failed to send size hint to addr {:?}: {}", path, e);
+                nm_err!(
+                    "[IpcUdsServer] Failed to send size hint to addr {:?}: {}",
+                    path,
+                    e
+                );
             }
         }
     }
@@ -288,7 +624,11 @@ impl IpcUdsServer {
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn resolve_ipc_handshake_sizes(handshake: &IpcHandshake, fallback_s: usize, fallback_o: usize) -> (usize, usize) {
+fn resolve_ipc_handshake_sizes(
+    handshake: &IpcHandshake,
+    fallback_s: usize,
+    fallback_o: usize,
+) -> (usize, usize) {
     let from_names_s = (!handshake.s_names.is_empty()).then_some(handshake.s_names.len());
     let from_names_o = (!handshake.o_names.is_empty()).then_some(handshake.o_names.len());
 
@@ -657,6 +997,9 @@ struct App {
     playing: bool,
     loop_feedback: bool,
     input_source: InputSource,
+    http_aer_source_url: String,
+    http_aer_base: u32,
+    http_aer_status: Arc<RwLock<HttpAerInputStatus>>,
     sensory_count: usize,
     neuron_model: NeuronModelSel,
     izh_preset: IzhPreset,
@@ -1831,6 +2174,13 @@ impl App {
             (snapshot, stop)
         };
 
+        let http_aer_source_url = std::env::var("NM_HTTP_AER_SOURCE_URL").unwrap_or_default();
+        let http_aer_base = std::env::var("NM_HTTP_AER_BASE")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let http_aer_status = Arc::new(RwLock::new(HttpAerInputStatus::default()));
+
         let mut app = Self {
             brain_id: brain_id.clone(),
             playing: false,
@@ -1843,6 +2193,9 @@ impl App {
             },
             #[cfg(not(all(feature = "robot_io", unix)))]
             input_source: InputSource::Random,
+            http_aer_source_url,
+            http_aer_base,
+            http_aer_status,
             sensory_count: n_s,
             neuron_model: NeuronModelSel::Aarnn,
             izh_preset: IzhPreset::RS,
@@ -2849,6 +3202,64 @@ impl App {
         self.status = status.to_string();
     }
 
+    fn set_http_aer_status_message(
+        &self,
+        connected: bool,
+        status_text: String,
+        last_error: Option<String>,
+    ) {
+        if let Ok(mut stats) = self.http_aer_status.try_write() {
+            stats.connected = connected;
+            stats.status_text = status_text;
+            stats.last_error = last_error;
+            if !connected {
+                stats.last_frame_time = None;
+            }
+        }
+    }
+
+    fn http_aer_status_snapshot(&self) -> HttpAerInputStatus {
+        if let Ok(stats) = self.http_aer_status.try_read() {
+            stats.clone()
+        } else {
+            HttpAerInputStatus::default()
+        }
+    }
+
+    fn connect_http_aer_source(&mut self, sensory_count: usize) {
+        let source_url = self.http_aer_source_url.trim().to_string();
+        if source_url.is_empty() {
+            self.set_http_aer_status_message(
+                false,
+                "Enter a source URL".to_string(),
+                Some("missing URL".to_string()),
+            );
+            self.status = "HTTP AER source URL is empty".to_string();
+            return;
+        }
+        if !source_url.starts_with("http://") && !source_url.starts_with("https://") {
+            self.set_http_aer_status_message(
+                false,
+                "Invalid URL".to_string(),
+                Some("URL must start with http:// or https://".to_string()),
+            );
+            self.status = "HTTP AER source URL must start with http:// or https://".to_string();
+            return;
+        }
+        self.http_aer_source_url = source_url.clone();
+        self.set_http_aer_status_message(true, "Connecting...".to_string(), None);
+        let provider = HttpAerStreamProvider::new(
+            source_url.clone(),
+            self.http_aer_base,
+            sensory_count.max(1),
+            self.http_aer_status.clone(),
+        );
+        let _ = self
+            .sim_tx
+            .send(SimControl::SetProvider(Box::new(provider)));
+        self.status = format!("HTTP AER source selected: {}", source_url);
+    }
+
     fn set_standalone_playing(&mut self, playing: bool) {
         self.playing = playing;
         self.playing_atomic.store(playing, Ordering::SeqCst);
@@ -3577,12 +3988,7 @@ impl App {
         let mut mapping = IoMapping::new(s_total, o_total);
         if handshake.s_names.is_empty() {
             for i in 0..n_s_raw {
-                mapping.add_port(PortSpec::new(
-                    format!("S{}", i),
-                    PortKind::Sensor,
-                    i * k,
-                    k,
-                ));
+                mapping.add_port(PortSpec::new(format!("S{}", i), PortKind::Sensor, i * k, k));
             }
         } else {
             for (i, name) in handshake.s_names.iter().enumerate() {
@@ -3825,10 +4231,7 @@ fn centroid_of_projected_positions(
     if count == 0 {
         None
     } else {
-        Some(egui::pos2(
-            sum.x / count as f32,
-            sum.y / count as f32,
-        ))
+        Some(egui::pos2(sum.x / count as f32, sum.y / count as f32))
     }
 }
 
@@ -4319,6 +4722,7 @@ impl App {
 enum InputSource {
     Random,
     Theta,
+    ExternalHttpAer,
     AudioFile,
     Microphone,
     #[cfg(feature = "image_input")]
@@ -5407,6 +5811,8 @@ impl eframe::App for App {
                                         dt_ms,
                                     ),
                                 )));
+                            } else if matches!(self.input_source, InputSource::ExternalHttpAer) {
+                                self.connect_http_aer_source(self.local_net.num_sensory_neurons);
                             }
 
                             self.cached_layer_sizes = sizes.0;
@@ -7770,6 +8176,8 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut self.input_source, InputSource::Random, "Random").on_hover_text("Per-sensor Bernoulli spikes with tunable probability");
                     ui.radio_value(&mut self.input_source, InputSource::Theta, "Theta").on_hover_text("Deterministic theta rhythm spikes (global oscillation)");
+                    ui.radio_value(&mut self.input_source, InputSource::ExternalHttpAer, "HTTP/HTTPS AER")
+                        .on_hover_text("Pull NDJSON AER frames from an HTTP/HTTPS stream and feed them into sensory spikes.");
                     ui.radio_value(&mut self.input_source, InputSource::AudioFile, "Audio File").on_hover_text("Decode audio file → spectral bands → probabilistic spikes");
                     ui.radio_value(&mut self.input_source, InputSource::Microphone, "Microphone").on_hover_text("Live mic capture → spectral bands → probabilistic spikes");
                     #[cfg(feature = "image_input")]
@@ -7807,10 +8215,58 @@ impl eframe::App for App {
                             { self.cam_running = false; }
                             self.status = "Input source set to Theta".to_string();
                         }
+                        InputSource::ExternalHttpAer => {
+                            self.mic_running = false;
+                            #[cfg(feature = "webcam_input")]
+                            { self.cam_running = false; }
+                            self.connect_http_aer_source(net_cloned.num_sensory_neurons);
+                        }
                         _ => {}
                     }
                 }
                 match self.input_source {
+                    InputSource::ExternalHttpAer => {
+                        ui.label("External AER stream over HTTP/HTTPS");
+                        ui.horizontal(|ui| {
+                            ui.label("Source URL");
+                            ui.text_edit_singleline(&mut self.http_aer_source_url)
+                                .on_hover_text("Remote NDJSON stream URL. Each line can be JSON with aer_payload_hex/spike_indices, or raw AER hex.");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("AER base");
+                            ui.add(
+                                egui::DragValue::new(&mut self.http_aer_base)
+                                    .range(0..=u32::MAX)
+                                    .speed(1.0),
+                            )
+                            .on_hover_text("Default base address used to decode incoming AER payloads.");
+                            if ui.button("Connect / Restart")
+                                .on_hover_text("Start or restart the HTTP AER source stream with current settings.")
+                                .clicked()
+                            {
+                                self.connect_http_aer_source(net_cloned.num_sensory_neurons);
+                            }
+                        });
+                        let stream_stats = self.http_aer_status_snapshot();
+                        let status_color = if stream_stats.connected {
+                            egui::Color32::GREEN
+                        } else if stream_stats.last_error.is_some() {
+                            egui::Color32::RED
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label("Status:");
+                            ui.colored_label(status_color, stream_stats.status_text.as_str());
+                        });
+                        ui.label(format!("Frames received: {}", stream_stats.frames_received));
+                        if let Some(last_frame) = stream_stats.last_frame_time {
+                            ui.label(format!("Last frame: {} ms ago", last_frame.elapsed().as_millis()));
+                        }
+                        if let Some(err) = stream_stats.last_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, format!("Last error: {}", err));
+                        }
+                    }
                     InputSource::AudioFile => {
                         if ui.button("Choose File...").on_hover_text("Open an audio file (wav, flac, ogg, mp3)").clicked() {
                             if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["wav","flac","ogg","mp3"]).pick_file() {
@@ -11520,7 +11976,8 @@ impl eframe::App for App {
                                     detail_managed_guard = Some(guard);
                                     Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 } else {
-                                    let guard = detail_managed_arc.as_ref().unwrap().blocking_read();
+                                    let guard =
+                                        detail_managed_arc.as_ref().unwrap().blocking_read();
                                     detail_managed_guard = Some(guard);
                                     Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 }

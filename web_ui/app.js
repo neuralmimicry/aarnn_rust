@@ -22,13 +22,19 @@ const newBtn = document.getElementById("new");
 const cpuEl = document.getElementById("cpu");
 const ramEl = document.getElementById("ram");
 const tempEl = document.getElementById("temp");
-const threadsEl = document.getElementById("threads");
+const gpuEl = document.getElementById("gpu");
+const gpuStatusEl = document.getElementById("gpu-status");
+const neuronsEl = document.getElementById("neurons");
+const depthStatusEl = document.getElementById("aarnn-depth-status");
+const capacityScoreEl = document.getElementById("capacity-score");
 const gaRunningEl = document.getElementById("ga-running");
 const gaPacingEl = document.getElementById("ga-pacing");
 const gaRampEl = document.getElementById("ga-ramp");
 const gaProgressEl = document.getElementById("ga-progress");
 const gaBestEl = document.getElementById("ga-best");
+const clusterGaEvalsEl = document.getElementById("cluster-ga-evals");
 const stepTimeEl = document.getElementById("step-time");
+const activeTargetEl = document.getElementById("active-target");
 const nodesCountEl = document.getElementById("nodes-count");
 const networksCountEl = document.getElementById("networks-count");
 const clusterNodesEl = document.getElementById("cluster-nodes");
@@ -51,6 +57,14 @@ const showRegionLabelsInput = document.getElementById("show-region-labels");
 const clumpingDesign = document.getElementById("clumping-design");
 const exportNeuromlBtn = document.getElementById("export-neuroml");
 const exportPynnBtn = document.getElementById("export-pynn");
+const exportNirBtn = document.getElementById("export-nir");
+const exportOnnxBtn = document.getElementById("export-onnx");
+const exportTfliteBtn = document.getElementById("export-tflite");
+const ioInputSource = document.getElementById("io-input-source");
+const ioInputUrl = document.getElementById("io-input-url");
+const ioAerBase = document.getElementById("io-aer-base");
+const ioSourceToggle = document.getElementById("io-source-toggle");
+const ioSourceStatus = document.getElementById("io-source-status");
 const authOverlay = document.getElementById("auth-overlay");
 const authMessage = document.getElementById("auth-message");
 const loginForm = document.getElementById("login-form");
@@ -91,6 +105,7 @@ const state = {
   lastModel: "",
   lastLearning: "",
   regionLabelStates: new Map(),
+  io: loadIoSettings(),
   authMode: "none",
   allowSignup: false,
   user: null,
@@ -100,17 +115,24 @@ const state = {
 
 let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
+let ioSourceRunner = null;
 
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
 
 function buildUserConfig() {
+  const ioConfig = {
+    sourceType: state.io.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+    sourceUrl: typeof state.io.sourceUrl === "string" ? state.io.sourceUrl : "",
+    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0,
+  };
   return {
     targets: state.targets,
     active: state.active,
     activeNetwork: state.activeNetwork,
     activeNode: state.activeNodeId,
     render: state.render,
+    io: ioConfig,
   };
 }
 
@@ -144,6 +166,12 @@ function applyUserConfig(cfg) {
     state.render = {
       ...loadRenderSettings(),
       ...cfg.render,
+    };
+  }
+  if (cfg.io && typeof cfg.io === "object") {
+    state.io = {
+      ...loadIoSettings(),
+      ...cfg.io,
     };
   }
   suppressUserConfigSave = false;
@@ -242,6 +270,53 @@ function loadRenderSettings() {
       showRegionLabels: true,
     };
   }
+}
+
+function loadIoSettings() {
+  try {
+    const raw = localStorage.getItem("nm_io");
+    if (!raw) throw new Error("missing");
+    const parsed = JSON.parse(raw);
+    return {
+      sourceType: parsed.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+      sourceUrl: typeof parsed.sourceUrl === "string" ? parsed.sourceUrl : "",
+      aerBase: Number.isFinite(Number(parsed.aerBase)) ? Math.max(0, Number(parsed.aerBase)) : 0,
+      streaming: false,
+      status: "Disconnected",
+      statusClass: "io-status-idle",
+      connectedAt: 0,
+      defaultAddr: "",
+      defaultNetworkId: "",
+    };
+  } catch (_) {
+    return {
+      sourceType: "none",
+      sourceUrl: "",
+      aerBase: 0,
+      streaming: false,
+      status: "Disconnected",
+      statusClass: "io-status-idle",
+      connectedAt: 0,
+      defaultAddr: "",
+      defaultNetworkId: "",
+    };
+  }
+}
+
+function saveIoSettings() {
+  const payload = {
+    sourceType: state.io.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+    sourceUrl: typeof state.io.sourceUrl === "string" ? state.io.sourceUrl.trim() : "",
+    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0,
+  };
+  state.io.sourceType = payload.sourceType;
+  state.io.sourceUrl = payload.sourceUrl;
+  state.io.aerBase = payload.aerBase;
+  if (state.userConfigEnabled) {
+    scheduleUserConfigSave();
+    return;
+  }
+  localStorage.setItem("nm_io", JSON.stringify(payload));
 }
 
 function saveRenderSettings() {
@@ -355,6 +430,7 @@ async function performLogin(username, password) {
     resetTargetsUi();
     await initTargets();
     syncRenderControls();
+    syncIoControls();
     hideAuthOverlay();
   } catch (e) {
     showAuthError("Login failed.");
@@ -384,6 +460,9 @@ async function performSignup(username, password) {
 }
 
 async function performLogout() {
+  if (state.io.streaming) {
+    stopIoSourceStream();
+  }
   try {
     await fetch("/api/logout", { method: "POST" });
   } catch (_) {}
@@ -412,6 +491,97 @@ function normalizeAddr(addr) {
     return `http://${addr}`;
   }
   return addr;
+}
+
+function statusHealthScore(status) {
+  if (!status || typeof status !== "object") return 0;
+  const nodes = Array.isArray(status.nodes) ? status.nodes.length : 0;
+  const networks = Array.isArray(status.networks) ? status.networks.length : 0;
+  return nodes * 100 + networks;
+}
+
+function nodeIdentity(node) {
+  if (!node || typeof node !== "object") return "";
+  if (node.node_id) return `id:${node.node_id}`;
+  if (node.address) return `addr:${node.address}`;
+  return "";
+}
+
+function mergeDistributions(base, incoming) {
+  const merged = new Map();
+  (Array.isArray(base) ? base : []).forEach((entry) => {
+    if (!entry || !entry.node_id) return;
+    merged.set(entry.node_id, entry);
+  });
+  (Array.isArray(incoming) ? incoming : []).forEach((entry) => {
+    if (!entry || !entry.node_id) return;
+    const current = merged.get(entry.node_id);
+    if (!current) {
+      merged.set(entry.node_id, entry);
+      return;
+    }
+    const currentLayers = Array.isArray(current.layers) ? current.layers.length : 0;
+    const nextLayers = Array.isArray(entry.layers) ? entry.layers.length : 0;
+    if (nextLayers > currentLayers) {
+      merged.set(entry.node_id, entry);
+    }
+  });
+  return Array.from(merged.values());
+}
+
+function aggregateClusterStatus() {
+  const nodesById = new Map();
+  const networksById = new Map();
+
+  state.statusByTarget.forEach((status) => {
+    const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
+    nodes.forEach((node) => {
+      const key = nodeIdentity(node);
+      if (!key) return;
+      const current = nodesById.get(key);
+      if (!current) {
+        nodesById.set(key, node);
+        return;
+      }
+      const currentNetworks = Array.isArray(current.active_networks) ? current.active_networks.length : 0;
+      const nextNetworks = Array.isArray(node.active_networks) ? node.active_networks.length : 0;
+      if (nextNetworks > currentNetworks || Number(node.capacity_score || 0) > Number(current.capacity_score || 0)) {
+        nodesById.set(key, node);
+      }
+    });
+
+    const networks = Array.isArray(status?.networks) ? status.networks : [];
+    networks.forEach((net) => {
+      if (!net || !net.network_id) return;
+      const current = networksById.get(net.network_id);
+      if (!current) {
+        networksById.set(net.network_id, net);
+        return;
+      }
+      const merged = {
+        ...current,
+        ...net,
+      };
+      merged.playing = Boolean(current.playing) || Boolean(net.playing);
+      merged.total_neurons = Math.max(Number(current.total_neurons || 0), Number(net.total_neurons || 0));
+      merged.num_layers = Math.max(Number(current.num_layers || 0), Number(net.num_layers || 0));
+      merged.desired_aarnn_depth = Math.max(
+        Number(current.desired_aarnn_depth || 0),
+        Number(net.desired_aarnn_depth || 0)
+      );
+      merged.distribution = mergeDistributions(current.distribution, net.distribution);
+      networksById.set(net.network_id, merged);
+    });
+  });
+
+  const nodes = Array.from(nodesById.values()).sort((a, b) =>
+    (a.node_id || a.address || "").localeCompare(b.node_id || b.address || "")
+  );
+  const networks = Array.from(networksById.values()).sort((a, b) =>
+    (a.network_id || "").localeCompare(b.network_id || "")
+  );
+
+  return { nodes, networks };
 }
 
 function ensureCard(addr) {
@@ -571,7 +741,7 @@ nodeSelect.addEventListener("change", () => {
   fetchSnapshotForActive();
 });
 
-function renderSidebar(nodes, networks) {
+function renderSidebar(nodes, networks, aggregate = null) {
   const formatGaPacing = (node) =>
     node && node.ga_pacing ? `Yes${node.ga_pacing_reason ? ` (${node.ga_pacing_reason})` : ""}` : "No";
   const formatGaRamp = (node) => {
@@ -581,22 +751,57 @@ function renderSidebar(nodes, networks) {
     const simMs = Number(node.ga_ramp_sim_time_ms || 0);
     return `pop ${pop} | workers ${workers} | sim ${simMs.toFixed(0)} ms`;
   };
-  if (!nodes.length) {
+  const formatComm = (node) => {
+    if (!node || typeof node !== "object") return "unknown";
+    const summary = node.comm_protocol || "unknown";
+    const peers = node.peer_comm_protocols && typeof node.peer_comm_protocols === "object"
+      ? Object.entries(node.peer_comm_protocols)
+          .map(([peer, proto]) => `${peer}:${proto}`)
+          .sort()
+      : [];
+    return peers.length ? `${summary} [${peers.join(", ")}]` : summary;
+  };
+
+  const dashboardNodes = aggregate?.nodes || nodes;
+  const dashboardNetworks = aggregate?.networks || networks;
+  const primary =
+    nodes.find((n) => state.activeNodeId && n.node_id === state.activeNodeId) ||
+    [...nodes].sort((a, b) => Number(b.capacity_score || 0) - Number(a.capacity_score || 0))[0] ||
+    null;
+
+  if (!primary) {
     cpuEl.textContent = "0.0%";
     ramEl.textContent = "0 MB";
     tempEl.textContent = "n/a";
+    gpuEl.textContent = "Not detected";
+    gpuStatusEl.textContent = "Inactive";
+    neuronsEl.textContent = "0";
+    depthStatusEl.textContent = "0/0";
+    capacityScoreEl.textContent = "0.00";
     gaRunningEl.textContent = "No";
     gaPacingEl.textContent = "No";
     gaRampEl.textContent = "No";
     gaProgressEl.textContent = "-";
     gaBestEl.textContent = "-";
+    stepTimeEl.textContent = "0.00 ms";
   } else {
-    const primary = nodes[0];
     const ramTotal = formatBytes(primary.total_ram);
     const ramAvail = formatBytes(primary.available_ram);
-    cpuEl.textContent = `${primary.cpu_usage.toFixed(1)}%`;
+    const gpuCount = Number(primary.num_gpus || 0);
+    const neuronCount = Number(primary.num_neurons || 0);
+    const redundant = Number(primary.redundant_neurons || 0);
+    const curDepth = Number(primary.current_aarnn_depth || 0);
+    const wantDepth = Number(primary.desired_aarnn_depth || 0);
+    const stepMs = Number(primary.avg_step_time_ms || 0);
+
+    cpuEl.textContent = `${Number(primary.cpu_usage || 0).toFixed(1)}%`;
     ramEl.textContent = `${ramAvail}/${ramTotal}`;
-    tempEl.textContent = primary.temperature_c > 0 ? `${primary.temperature_c.toFixed(1)} C` : "n/a";
+    tempEl.textContent = Number(primary.temperature_c || 0) > 0 ? `${Number(primary.temperature_c).toFixed(1)} C` : "n/a";
+    gpuEl.textContent = gpuCount > 0 ? `${gpuCount} detected (OpenCL)` : "Not detected";
+    gpuStatusEl.textContent = gpuCount > 0 ? (getActivePlaying() ? "Active" : "Idle") : "Inactive";
+    neuronsEl.textContent = redundant > 0 ? `${neuronCount} (+${redundant} redundant)` : `${neuronCount}`;
+    depthStatusEl.textContent = `${curDepth}/${wantDepth}`;
+    capacityScoreEl.textContent = Number(primary.capacity_score || 0).toFixed(2);
     gaRunningEl.textContent = primary.ga_running ? "Yes" : "No";
     gaPacingEl.textContent = formatGaPacing(primary);
     gaRampEl.textContent = formatGaRamp(primary);
@@ -607,21 +812,29 @@ function renderSidebar(nodes, networks) {
       : "-";
     gaBestEl.textContent =
       typeof primary.ga_best_fitness === "number" ? primary.ga_best_fitness.toFixed(3) : "-";
+    stepTimeEl.textContent = `${stepMs.toFixed(2)} ms`;
   }
-  nodesCountEl.textContent = nodes.length.toString();
-  networksCountEl.textContent = networks.length.toString();
+  activeTargetEl.textContent = state.active || "-";
+  nodesCountEl.textContent = dashboardNodes.length.toString();
+  networksCountEl.textContent = dashboardNetworks.length.toString();
 
-  const totalClusterEvals = nodes.reduce((sum, n) => sum + (n.ga_total_evaluations || 0), 0);
+  const totalClusterEvals = dashboardNodes.reduce((sum, n) => sum + (n.ga_total_evaluations || 0), 0);
+  clusterGaEvalsEl.textContent = totalClusterEvals.toString();
 
-  clusterNodesEl.innerHTML = nodes
+  clusterNodesEl.innerHTML = dashboardNodes
     .map((n) => {
       const ramTotal = formatBytes(n.total_ram);
       const ramAvail = formatBytes(n.available_ram);
-      const temp = n.temperature_c > 0 ? `${n.temperature_c.toFixed(1)} C` : "n/a";
+      const temp = Number(n.temperature_c || 0) > 0 ? `${Number(n.temperature_c).toFixed(1)} C` : "n/a";
       const pacing = n.ga_pacing ? `Pacing: ${n.ga_pacing_reason || "yes"}` : "Pacing: No";
       const ramp = formatGaRamp(n);
       const evals = n.ga_total_evaluations || 0;
       const share = totalClusterEvals > 0 ? ((evals / totalClusterEvals) * 100).toFixed(1) : "0.0";
+      const depth = `${Number(n.current_aarnn_depth || 0)}/${Number(n.desired_aarnn_depth || 0)}`;
+      const neurons = Number(n.num_neurons || 0);
+      const capacity = Number(n.capacity_score || 0).toFixed(2);
+      const comm = formatComm(n);
+      const nodeLabel = n.node_id || n.address || "node";
       let gaStatus = `GA Evals: ${evals} (${share}%)`;
       if (n.ga_running) {
         const best = typeof n.ga_best_fitness === "number" ? n.ga_best_fitness.toFixed(3) : "-";
@@ -634,16 +847,27 @@ function renderSidebar(nodes, networks) {
         gaStatus += ` | EVALUATING${n.ga_active_eval_seed > 0 ? ` (seed ${n.ga_active_eval_seed})` : ""}`;
       }
       return `<div class="line">${escapeHtml(
-        `${n.node_id} | CPU ${n.cpu_usage.toFixed(1)}% | RAM ${ramAvail}/${ramTotal} | Temp ${temp} | ${pacing}`
+        `${nodeLabel} | CPU ${Number(n.cpu_usage || 0).toFixed(1)}% | RAM ${ramAvail}/${ramTotal} | Temp ${temp} | Neurons ${neurons} | Depth ${depth} | Cap ${capacity} | Comm ${comm} | ${pacing}`
       )}<br/><small>${escapeHtml(gaStatus)}</small></div>`;
     })
     .join("");
 
-  clusterNetworksEl.innerHTML = networks
+  clusterNetworksEl.innerHTML = dashboardNetworks
     .map((n) => {
+      const stateLabel = n.playing ? "running" : "stopped";
+      const distribution = Array.isArray(n.distribution) ? n.distribution : [];
+      const distText = distribution
+        .map((d) => {
+          const counts = Object.entries(d.layer_neuron_counts || {})
+            .sort((a, b) => Number(a[0]) - Number(b[0]))
+            .map(([layer, count]) => `${layer}(${count})`)
+            .join(", ");
+          return `${d.node_id}: [${counts}]`;
+        })
+        .join(" | ");
       return `<div class="line">${escapeHtml(
-        `${n.network_id} | dt ${n.current_dt.toFixed(3)} ms | neurons ${n.total_neurons}`
-      )}</div>`;
+        `${n.network_id} | ${stateLabel} | dt ${Number(n.current_dt || 0).toFixed(3)} ms | neurons ${Number(n.total_neurons || 0)} | layers ${Number(n.num_layers || 0)}`
+      )}${distText ? `<br/><small>${escapeHtml(distText)}</small>` : ""}</div>`;
     })
     .join("");
 }
@@ -744,12 +968,21 @@ async function pollAll() {
     return;
   }
   if (!state.targets.length) {
+    state.statusByTarget.clear();
+    state.networksByTarget.clear();
+    state.active = "";
+    renderSidebar([], [], { nodes: [], networks: [] });
+    refreshNetworkSelect();
     return;
   }
   const results = await Promise.all(state.targets.map((addr) => pollTarget(addr)));
   results.forEach((result, idx) => {
     const addr = state.targets[idx];
-    if (!result) return;
+    if (!result) {
+      state.networksByTarget.delete(addr);
+      state.statusByTarget.delete(addr);
+      return;
+    }
     const networks = result.networks || [];
     state.networksByTarget.set(addr, networks);
     networks.forEach((n) => {
@@ -761,14 +994,30 @@ async function pollAll() {
       }
     });
     state.statusByTarget.set(addr, result);
-    if (!state.active) {
-      setActive(addr);
-    }
-    if (addr === state.active) {
-      renderSidebar(result.nodes || [], result.networks || []);
-      refreshNetworkSelect();
-    }
   });
+
+  if (!state.active || !state.targets.includes(state.active)) {
+    setActive(state.targets[0]);
+  }
+  if (statusHealthScore(state.statusByTarget.get(state.active)) === 0) {
+    let bestTarget = "";
+    let bestScore = 0;
+    state.targets.forEach((addr) => {
+      const score = statusHealthScore(state.statusByTarget.get(addr));
+      if (score > bestScore) {
+        bestScore = score;
+        bestTarget = addr;
+      }
+    });
+    if (bestTarget && bestTarget !== state.active) {
+      setActive(bestTarget);
+    }
+  }
+
+  const activeStatus = state.statusByTarget.get(state.active);
+  const aggregate = aggregateClusterStatus();
+  renderSidebar(activeStatus?.nodes || [], activeStatus?.networks || [], aggregate);
+  refreshNetworkSelect();
 }
 
 async function fetchSnapshotForActive() {
@@ -1246,13 +1495,19 @@ function setPlaceholder() {
   cpuEl.textContent = "0.0%";
   ramEl.textContent = "0 MB";
   tempEl.textContent = "n/a";
-  threadsEl.textContent = "-";
+  gpuEl.textContent = "Not detected";
+  gpuStatusEl.textContent = "Inactive";
+  neuronsEl.textContent = "0";
+  depthStatusEl.textContent = "0/0";
+  capacityScoreEl.textContent = "0.00";
   gaRunningEl.textContent = "No";
   gaPacingEl.textContent = "No";
   gaRampEl.textContent = "No";
   gaProgressEl.textContent = "-";
   gaBestEl.textContent = "-";
+  clusterGaEvalsEl.textContent = "0";
   stepTimeEl.textContent = "0.00 ms";
+  activeTargetEl.textContent = "-";
   nodesCountEl.textContent = "0";
   networksCountEl.textContent = "0";
   clusterNodesEl.innerHTML = "";
@@ -1452,9 +1707,27 @@ async function initTargets() {
     setActive(state.active);
   }
   await pollAll();
-  if (defaultAddr && state.active !== defaultAddr && !state.statusByTarget.get(state.active)) {
+  const activeScore = statusHealthScore(state.statusByTarget.get(state.active));
+  const defaultScore = statusHealthScore(state.statusByTarget.get(defaultAddr));
+  if (defaultAddr && state.active !== defaultAddr && defaultScore > activeScore) {
     setActive(defaultAddr);
     await pollAll();
+    return;
+  }
+  if (activeScore === 0) {
+    let bestTarget = "";
+    let bestScore = 0;
+    state.targets.forEach((addr) => {
+      const score = statusHealthScore(state.statusByTarget.get(addr));
+      if (score > bestScore) {
+        bestScore = score;
+        bestTarget = addr;
+      }
+    });
+    if (bestTarget && bestTarget !== state.active) {
+      setActive(bestTarget);
+      await pollAll();
+    }
   }
 }
 
@@ -1500,8 +1773,266 @@ function syncRenderControls() {
   showRegionLabelsInput.checked = state.render.showRegionLabels;
 }
 
+function setIoStatus(text, cssClass = "io-status-idle") {
+  state.io.status = text;
+  state.io.statusClass = cssClass;
+  if (!ioSourceStatus) return;
+  ioSourceStatus.textContent = text;
+  ioSourceStatus.classList.remove(
+    "io-status-idle",
+    "io-status-connecting",
+    "io-status-active",
+    "io-status-error"
+  );
+  ioSourceStatus.classList.add(cssClass);
+}
+
+function syncIoControls() {
+  if (!ioInputSource || !ioInputUrl || !ioAerBase || !ioSourceToggle) return;
+  ioInputSource.value = state.io.sourceType || "none";
+  ioInputUrl.value = state.io.sourceUrl || "";
+  ioAerBase.value = Number.isFinite(Number(state.io.aerBase)) ? Number(state.io.aerBase) : 0;
+
+  const sourceEnabled = ioInputSource.value === "aer-http-stream";
+  ioInputUrl.disabled = !sourceEnabled || state.io.streaming;
+  ioAerBase.disabled = !sourceEnabled || state.io.streaming;
+  ioSourceToggle.disabled = !sourceEnabled;
+  ioSourceToggle.textContent = state.io.streaming ? "Disconnect" : "Connect";
+
+  if (!state.io.status) {
+    setIoStatus("Disconnected", "io-status-idle");
+  } else if (ioSourceStatus) {
+    setIoStatus(state.io.status, state.io.statusClass || "io-status-idle");
+  }
+}
+
+function normalizeAerStreamFrame(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{")) {
+    return JSON.parse(trimmed);
+  }
+  return { aer_payload_hex: trimmed };
+}
+
+async function sendAerFrameToApi(frame, ctxDefaults) {
+  const payload = {
+    addr: ctxDefaults.addr,
+    network_id:
+      typeof frame.network_id === "string" && frame.network_id
+        ? frame.network_id
+        : ctxDefaults.networkId,
+    aer_base:
+      frame.aer_base !== undefined && frame.aer_base !== null
+        ? Number(frame.aer_base)
+        : Number(state.io.aerBase || 0),
+  };
+
+  if (typeof frame.node_id === "string" && frame.node_id) {
+    payload.node_id = frame.node_id;
+  }
+  if (typeof frame.step_index === "number" && Number.isFinite(frame.step_index)) {
+    payload.step_index = Math.trunc(frame.step_index);
+  }
+  if (typeof frame.is_backward === "boolean") {
+    payload.is_backward = frame.is_backward;
+  }
+  if (typeof frame.aer_payload_hex === "string" && frame.aer_payload_hex.trim()) {
+    payload.aer_payload_hex = frame.aer_payload_hex.trim();
+  }
+  if (Array.isArray(frame.spike_indices)) {
+    payload.spike_indices = frame.spike_indices
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v) && v >= 0)
+      .map((v) => Math.trunc(v));
+  }
+  if (!payload.aer_payload_hex && (!payload.spike_indices || payload.spike_indices.length === 0)) {
+    return;
+  }
+
+  const resp = await fetch("/api/aer/inject", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    let message = `AER inject failed (${resp.status})`;
+    try {
+      const err = await resp.json();
+      if (err && err.error) {
+        message = err.error;
+      }
+    } catch (_) {}
+    throw new Error(message);
+  }
+}
+
+async function startIoSourceStream() {
+  if (state.io.streaming) return;
+  if (state.io.sourceType !== "aer-http-stream") {
+    setIoStatus("Source disabled", "io-status-idle");
+    return;
+  }
+  if (!state.io.sourceUrl) {
+    setIoStatus("Enter a source URL", "io-status-error");
+    return;
+  }
+  if (!/^https?:\/\//i.test(state.io.sourceUrl)) {
+    setIoStatus("Source URL must start with http:// or https://", "io-status-error");
+    return;
+  }
+  if (!state.active || !state.activeNetwork) {
+    setIoStatus("Select active target + network first", "io-status-error");
+    return;
+  }
+
+  const controller = new AbortController();
+  const defaults = {
+    addr: state.active,
+    networkId: state.activeNetwork,
+  };
+  state.io.streaming = true;
+  state.io.connectedAt = Date.now();
+  state.io.defaultAddr = defaults.addr;
+  state.io.defaultNetworkId = defaults.networkId;
+  ioSourceRunner = { controller, frames: 0 };
+  syncIoControls();
+  setIoStatus("Connecting...", "io-status-connecting");
+
+  try {
+    const resp = await fetch(state.io.sourceUrl, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      throw new Error(`Source request failed (${resp.status})`);
+    }
+    if (!resp.body) {
+      throw new Error("Source returned no stream body");
+    }
+
+    setIoStatus(
+      `Streaming -> ${defaults.networkId}@${defaults.addr}`,
+      "io-status-active"
+    );
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (state.io.streaming) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const frame = normalizeAerStreamFrame(trimmed);
+        if (!frame) continue;
+        await sendAerFrameToApi(frame, defaults);
+        if (!ioSourceRunner) break;
+        ioSourceRunner.frames += 1;
+        if (ioSourceRunner.frames % 20 === 0) {
+          setIoStatus(
+            `Streaming ${ioSourceRunner.frames} frames -> ${defaults.networkId}@${defaults.addr}`,
+            "io-status-active"
+          );
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const frame = normalizeAerStreamFrame(buffer.trim());
+      if (frame) {
+        await sendAerFrameToApi(frame, defaults);
+        if (ioSourceRunner) {
+          ioSourceRunner.frames += 1;
+        }
+      }
+    }
+
+    if (!controller.signal.aborted) {
+      const total = ioSourceRunner ? ioSourceRunner.frames : 0;
+      setIoStatus(
+        `Disconnected (source closed, ${total} frames)`,
+        "io-status-idle"
+      );
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      setIoStatus("Disconnected", "io-status-idle");
+    } else {
+      setIoStatus(
+        `Source error: ${error instanceof Error ? error.message : String(error)}`,
+        "io-status-error"
+      );
+    }
+  } finally {
+    state.io.streaming = false;
+    ioSourceRunner = null;
+    syncIoControls();
+  }
+}
+
+function stopIoSourceStream() {
+  state.io.streaming = false;
+  if (ioSourceRunner && ioSourceRunner.controller) {
+    ioSourceRunner.controller.abort();
+  }
+  ioSourceRunner = null;
+  setIoStatus("Disconnected", "io-status-idle");
+  syncIoControls();
+}
+
+function attachIoControls() {
+  if (!ioInputSource || !ioInputUrl || !ioAerBase || !ioSourceToggle) return;
+  syncIoControls();
+
+  ioInputSource.addEventListener("change", () => {
+    state.io.sourceType = ioInputSource.value === "aer-http-stream" ? "aer-http-stream" : "none";
+    if (state.io.sourceType === "none" && state.io.streaming) {
+      stopIoSourceStream();
+    } else {
+      syncIoControls();
+    }
+    saveIoSettings();
+  });
+
+  ioInputUrl.addEventListener("change", () => {
+    state.io.sourceUrl = ioInputUrl.value.trim();
+    saveIoSettings();
+  });
+  ioInputUrl.addEventListener("blur", () => {
+    state.io.sourceUrl = ioInputUrl.value.trim();
+    saveIoSettings();
+  });
+
+  ioAerBase.addEventListener("change", () => {
+    const v = Number(ioAerBase.value);
+    state.io.aerBase = Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0;
+    ioAerBase.value = state.io.aerBase;
+    saveIoSettings();
+  });
+
+  ioSourceToggle.addEventListener("click", () => {
+    if (state.io.streaming) {
+      stopIoSourceStream();
+    } else {
+      startIoSourceStream();
+    }
+  });
+}
+
+window.addEventListener("beforeunload", () => {
+  if (state.io.streaming) {
+    stopIoSourceStream();
+  }
+});
+
 function attachControls() {
   syncRenderControls();
+  attachIoControls();
   layoutButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       setLayout(btn.dataset.layout);
@@ -1676,8 +2207,11 @@ async function exportModel(format) {
   window.open(url, '_blank');
 }
 
-exportNeuromlBtn.addEventListener("click", () => exportModel("neuroml"));
-exportPynnBtn.addEventListener("click", () => exportModel("pynn"));
+if (exportNeuromlBtn) exportNeuromlBtn.addEventListener("click", () => exportModel("neuroml"));
+if (exportPynnBtn) exportPynnBtn.addEventListener("click", () => exportModel("pynn"));
+if (exportNirBtn) exportNirBtn.addEventListener("click", () => exportModel("nir"));
+if (exportOnnxBtn) exportOnnxBtn.addEventListener("click", () => exportModel("onnx"));
+if (exportTfliteBtn) exportTfliteBtn.addEventListener("click", () => exportModel("tflite"));
 
 setInterval(pollAll, POLL_MS);
 setInterval(pollActivity, ACTIVITY_POLL_MS);
