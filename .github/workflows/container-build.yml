@@ -149,8 +149,31 @@ jobs:
 
           podman manifest rm "${IMAGE}:${BRANCH_TAG}" >/dev/null 2>&1 || true
           podman manifest create "${IMAGE}:${BRANCH_TAG}"
-          podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}"
+          podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}-amd64"
+          podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}-arm64"
           podman manifest push --all "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BRANCH_TAG}"
+
+      - name: Verify published manifests include amd64 and arm64
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          BUILD=${GITHUB_SHA}
+
+          verify_ref() {
+            local ref="$1"
+            local platform="$2"
+
+            echo "Verifying ${ref} for ${platform}"
+            podman pull --quiet --platform "${platform}" "docker://${ref}" >/dev/null
+          }
+
+          verify_ref "${IMAGE}:${BUILD}" "linux/amd64"
+          verify_ref "${IMAGE}:${BUILD}" "linux/arm64"
+
+          if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
+            BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+            verify_ref "${IMAGE}:${BRANCH_TAG}" "linux/amd64"
+            verify_ref "${IMAGE}:${BRANCH_TAG}" "linux/arm64"
+          fi
 
   promote:
     if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
@@ -184,7 +207,7 @@ jobs:
 
           podman manifest rm "${TARGET}" >/dev/null 2>&1 || true
           podman manifest create "${TARGET}"
-          podman manifest add "${TARGET}" "docker://${IMAGE}:${BUILD}"
+          podman manifest add --all "${TARGET}" "docker://${IMAGE}:${BUILD}"
           podman manifest push --all "${TARGET}" "docker://${TARGET}"
 
           echo "Promoted ${IMAGE}:${BUILD} -> ${TARGET}"
