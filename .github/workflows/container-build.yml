@@ -135,6 +135,7 @@ jobs:
           BUILD=${GITHUB_SHA}
 
           podman manifest rm "${IMAGE}:${BUILD}" >/dev/null 2>&1 || true
+          podman image rm -f "${IMAGE}:${BUILD}" >/dev/null 2>&1 || true
           podman manifest create "${IMAGE}:${BUILD}"
           podman manifest add "${IMAGE}:${BUILD}" "docker://${IMAGE}:${BUILD}-amd64"
           podman manifest add "${IMAGE}:${BUILD}" "docker://${IMAGE}:${BUILD}-arm64"
@@ -148,6 +149,7 @@ jobs:
           BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
 
           podman manifest rm "${IMAGE}:${BRANCH_TAG}" >/dev/null 2>&1 || true
+          podman image rm -f "${IMAGE}:${BRANCH_TAG}" >/dev/null 2>&1 || true
           podman manifest create "${IMAGE}:${BRANCH_TAG}"
           podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}-amd64"
           podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}-arm64"
@@ -206,6 +208,7 @@ jobs:
           TARGET="${IMAGE}:${ENV}-${TRACK}"
 
           podman manifest rm "${TARGET}" >/dev/null 2>&1 || true
+          podman image rm -f "${TARGET}" >/dev/null 2>&1 || true
           podman manifest create "${TARGET}"
           podman manifest add --all "${TARGET}" "docker://${IMAGE}:${BUILD}"
           podman manifest push --all "${TARGET}" "docker://${TARGET}"
