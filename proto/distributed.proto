@@ -121,6 +121,8 @@ message Resources {
   uint64 ga_ramp_eval_ms = 29;
   uint64 ga_ramp_eval_neurons = 30;
   uint64 ga_ramp_eval_conns = 31;
+  string comm_protocol = 32;
+  map<string, string> peer_comm_protocols = 33;
 }
 message HeartbeatRequest {
   string node_id = 1;

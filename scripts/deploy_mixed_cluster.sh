@@ -27,6 +27,8 @@ GHCR_EMAIL="${GHCR_EMAIL:-noreply@localhost}"
 GHCR_PULL_SECRET_NAME="${GHCR_PULL_SECRET_NAME:-ghcr-pull-secret}"
 USE_GHCR_PULL_SECRET="false"
 ROLLOUT_TIMEOUT_SECONDS="${ROLLOUT_TIMEOUT_SECONDS:-600}"
+K3S_KUBELET_CPU_FLAGS="${K3S_KUBELET_CPU_FLAGS:---kubelet-arg=cpu-cfs-quota=false --kubelet-arg=cpu-manager-policy=none}"
+ENABLE_GPU_PASSTHROUGH="${ENABLE_GPU_PASSTHROUGH:-true}"
 
 usage() {
   cat <<'USAGE'
@@ -52,10 +54,14 @@ Options:
   --ghcr-email <email>        Email for image pull secret (default: noreply@localhost).
   --ghcr-secret <name>        Kubernetes secret name for GHCR pull creds (default: ghcr-pull-secret).
   --rollout-timeout <seconds> Rollout timeout for orchestrator/web-ui/node workloads (default: 600).
+  --k3s-kubelet-cpu-flags <flags>
+                              Extra kubelet CPU flags for k3s install/update
+                              (default: --kubelet-arg=cpu-cfs-quota=false --kubelet-arg=cpu-manager-policy=none).
+  --no-gpu-passthrough        Disable default host GPU device passthrough (/dev + /sys) into pods.
   --help                      Show this help.
 
 Environment overrides are supported for the same fields:
-  SSH_USER, SSH_PORT, ORCHESTRATOR_IMAGE, NAMESPACE, INSTALL_K3S_CHANNEL, WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO, WEB_UI_LOCAL_PORT, REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS, STOP_SYSTEM_KUBELET, STOP_REMOTE_SYSTEM_KUBELET, GHCR_USERNAME, GHCR_TOKEN, GHCR_EMAIL, GHCR_PULL_SECRET_NAME, ROLLOUT_TIMEOUT_SECONDS
+  SSH_USER, SSH_PORT, ORCHESTRATOR_IMAGE, NAMESPACE, INSTALL_K3S_CHANNEL, WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO, WEB_UI_LOCAL_PORT, REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS, STOP_SYSTEM_KUBELET, STOP_REMOTE_SYSTEM_KUBELET, GHCR_USERNAME, GHCR_TOKEN, GHCR_EMAIL, GHCR_PULL_SECRET_NAME, ROLLOUT_TIMEOUT_SECONDS, K3S_KUBELET_CPU_FLAGS, ENABLE_GPU_PASSTHROUGH
 USAGE
 }
 
@@ -176,6 +182,14 @@ parse_args() {
         [[ $# -gt 0 ]] || fail "--rollout-timeout requires a value"
         ROLLOUT_TIMEOUT_SECONDS="$1"
         ;;
+      --k3s-kubelet-cpu-flags)
+        shift
+        [[ $# -gt 0 ]] || fail "--k3s-kubelet-cpu-flags requires a value"
+        K3S_KUBELET_CPU_FLAGS="$1"
+        ;;
+      --no-gpu-passthrough)
+        ENABLE_GPU_PASSTHROUGH="false"
+        ;;
       --help|-h)
         usage
         exit 0
@@ -211,7 +225,8 @@ install_k3s_server_local() {
   node_name="$(hostname -s)"
 
   if command -v k3s >/dev/null 2>&1; then
-    log "k3s already installed on localhost; ensuring service is running."
+    log "k3s already installed on localhost; refreshing service config and ensuring it is running."
+    curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644 ${K3S_KUBELET_CPU_FLAGS}" sh -
     sudo systemctl enable k3s >/dev/null 2>&1 || true
     if ! sudo systemctl restart k3s; then
       log "Initial local k3s start failed."
@@ -226,7 +241,7 @@ install_k3s_server_local() {
   fi
 
   log "Installing k3s server on localhost (${node_name}) via channel '${INSTALL_K3S_CHANNEL}'."
-  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644" sh -
+  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644 ${K3S_KUBELET_CPU_FLAGS}" sh -
   sudo systemctl enable k3s >/dev/null 2>&1 || true
   if ! sudo systemctl restart k3s; then
     log "Initial local k3s start failed."
@@ -347,7 +362,11 @@ if ss -lntp '( sport = :10248 or sport = :10250 )' 2>/dev/null | grep -q LISTEN;
   fi
 fi
 
-curl -sfL https://get.k3s.io | sh -
+k3s_exec="agent"
+if [ -n "${K3S_KUBELET_CPU_FLAGS:-}" ]; then
+  k3s_exec="${k3s_exec} ${K3S_KUBELET_CPU_FLAGS}"
+fi
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="${k3s_exec}" sh -
 systemctl enable --now k3s-agent || true
 for _ in $(seq 1 30); do
   if systemctl is-active --quiet k3s-agent; then
@@ -367,8 +386,8 @@ REMOTE
   printf -v remote_script_q "%q" "${remote_script}"
 
   printf -v remote_cmd_no_pass \
-    "LC_ALL=C LANG=C sudo -n env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q bash -lc %s" \
-    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${remote_script_q}"
+    "LC_ALL=C LANG=C sudo -n env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q K3S_KUBELET_CPU_FLAGS=%q bash -lc %s" \
+    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${K3S_KUBELET_CPU_FLAGS}" "${remote_script_q}"
   printf -v remote_diag_cmd_no_pass \
     "LC_ALL=C LANG=C sudo -n bash -lc %q" \
     "ss -lntp '( sport = :10248 or sport = :10250 )' || true; systemctl status kubelet --no-pager -l || true; systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true"
@@ -412,8 +431,8 @@ REMOTE
   fi
 
   printf -v remote_cmd_with_pass \
-    "LC_ALL=C LANG=C sudo -S -p '' env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q bash -lc %s" \
-    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${remote_script_q}"
+    "LC_ALL=C LANG=C sudo -S -p '' env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q K3S_KUBELET_CPU_FLAGS=%q bash -lc %s" \
+    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${K3S_KUBELET_CPU_FLAGS}" "${remote_script_q}"
   printf -v remote_diag_cmd_with_pass \
     "LC_ALL=C LANG=C sudo -S -p '' bash -lc %q" \
     "ss -lntp '( sport = :10248 or sport = :10250 )' || true; systemctl status kubelet --no-pager -l || true; systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true"
@@ -565,11 +584,27 @@ deploy_orchestrator() {
   local control_plane_node_name
   local sa_pull_secret_yaml=""
   local pod_pull_secret_yaml=""
+  local image_pull_policy="IfNotPresent"
+  local force_rollout_restart="false"
+  local gpu_pod_volumes_yaml=""
+  local gpu_container_mounts_yaml=""
+  local gpu_container_security_yaml=""
   control_plane_node_name="$(hostname -s)"
+
+  if [[ "${ORCHESTRATOR_IMAGE}" != *@sha256:* ]]; then
+    image_pull_policy="Always"
+    force_rollout_restart="true"
+  fi
 
   if [[ "${USE_GHCR_PULL_SECRET}" == "true" ]]; then
     sa_pull_secret_yaml=$'imagePullSecrets:\n  - name: '"${GHCR_PULL_SECRET_NAME}"
     pod_pull_secret_yaml=$'      imagePullSecrets:\n        - name: '"${GHCR_PULL_SECRET_NAME}"
+  fi
+
+  if [[ "${ENABLE_GPU_PASSTHROUGH}" == "true" ]]; then
+    gpu_container_security_yaml=$'          securityContext:\n            privileged: true\n            runAsUser: 0\n            runAsGroup: 0\n            allowPrivilegeEscalation: true'
+    gpu_container_mounts_yaml=$'          volumeMounts:\n            - name: host-dev\n              mountPath: /dev\n            - name: host-sys\n              mountPath: /sys\n              readOnly: true'
+    gpu_pod_volumes_yaml=$'      volumes:\n        - name: host-dev\n          hostPath:\n            path: /dev\n            type: Directory\n        - name: host-sys\n          hostPath:\n            path: /sys\n            type: Directory'
   fi
 
   log "Deploying orchestrator (${ORCHESTRATOR_IMAGE}) to namespace '${NAMESPACE}', pinned to ${control_plane_node_name}."
@@ -632,11 +667,22 @@ ${pod_pull_secret_yaml}
       containers:
         - name: neuromorphic
           image: ${ORCHESTRATOR_IMAGE}
-          args: ["--orchestrator", "--grpc-addr", "0.0.0.0:50051"]
+          imagePullPolicy: ${image_pull_policy}
+${gpu_container_security_yaml}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="${CORES}"
+              export TOKIO_WORKER_THREADS="${CORES}"
+              export NM_GA_RESERVE_CORES=0
+              exec ./aarnn_rust --orchestrator --grpc-addr 0.0.0.0:50051
+${gpu_container_mounts_yaml}
           ports:
             - containerPort: 50051
             - containerPort: 50050
               protocol: UDP
+${gpu_pod_volumes_yaml}
 ---
 apiVersion: v1
 kind: Service
@@ -684,10 +730,19 @@ ${pod_pull_secret_yaml}
       containers:
         - name: web-ui
           image: ${ORCHESTRATOR_IMAGE}
-          command: ["./web_ui"]
-          args: ["--listen", "0.0.0.0:8080", "--orchestrator", "http://orchestrator:50051"]
+          imagePullPolicy: ${image_pull_policy}
+${gpu_container_security_yaml}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="${CORES}"
+              export TOKIO_WORKER_THREADS="${CORES}"
+              exec ./web_ui --listen 0.0.0.0:8080 --orchestrator http://orchestrator:50051
+${gpu_container_mounts_yaml}
           ports:
             - containerPort: 8080
+${gpu_pod_volumes_yaml}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -719,8 +774,26 @@ ${pod_pull_secret_yaml}
       containers:
         - name: neuromorphic-node
           image: ${ORCHESTRATOR_IMAGE}
-          args: ["--node", "--orchestrator-addr", "http://orchestrator:50051", "--brain-id", "cluster"]
+          imagePullPolicy: ${image_pull_policy}
+${gpu_container_security_yaml}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="${CORES}"
+              export TOKIO_WORKER_THREADS="${CORES}"
+              export NM_GA_RESERVE_CORES=0
+              exec ./aarnn_rust --node --orchestrator-addr http://orchestrator:50051 --brain-id cluster
+${gpu_container_mounts_yaml}
+${gpu_pod_volumes_yaml}
 EOF
+
+  if [[ "${force_rollout_restart}" == "true" ]]; then
+    log "Mutable image tag detected; forcing rollout restart to pull latest image layers."
+    kubectl -n "${NAMESPACE}" rollout restart deployment/orchestrator >/dev/null
+    kubectl -n "${NAMESPACE}" rollout restart deployment/web-ui >/dev/null
+    kubectl -n "${NAMESPACE}" rollout restart daemonset/aarnn-node >/dev/null
+  fi
 
   rollout_or_fail deployment orchestrator "${ROLLOUT_TIMEOUT_SECONDS}s"
   rollout_or_fail deployment web-ui "${ROLLOUT_TIMEOUT_SECONDS}s"
@@ -734,6 +807,7 @@ verify_aarnn_network_operational() {
   local pf_log
   local status_log
   local probe_ok=0
+  local config_probe_ok=0
   local elapsed=0
   local expected_nodes
   local registered_nodes=-1
@@ -776,6 +850,9 @@ except Exception:
 PY
 )"
       if [[ "${registered_nodes}" =~ ^[0-9]+$ ]] && (( registered_nodes >= expected_nodes )); then
+        if curl -fsS --max-time 5 "http://127.0.0.1:${WEB_UI_LOCAL_PORT}/api/config" >/dev/null 2>&1; then
+          config_probe_ok=1
+        fi
         break
       fi
     fi
@@ -807,6 +884,9 @@ PY
 
   log "AARNN operational probe succeeded via web-ui (/api/status), registered nodes=${registered_nodes}."
   log "Status sample: ${status_preview}"
+  if [[ ${config_probe_ok} -ne 1 ]]; then
+    log "Warning: web-ui /api/config endpoint is unavailable in the deployed image; dashboard auto-connect may fail until workloads are updated."
+  fi
 }
 
 main() {
