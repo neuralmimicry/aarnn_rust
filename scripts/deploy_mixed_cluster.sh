@@ -494,6 +494,62 @@ show_workload_debug() {
   done < <(kubectl -n "${NAMESPACE}" get pods -l app=neuromorphic -o name || true)
 }
 
+show_node_connectivity_debug() {
+  local orchestrator_cluster_ip=""
+  local web_ui_cluster_ip=""
+  local kube_dns_cluster_ip=""
+
+  orchestrator_cluster_ip="$(kubectl -n "${NAMESPACE}" get svc orchestrator -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  web_ui_cluster_ip="$(kubectl -n "${NAMESPACE}" get svc web-ui -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  kube_dns_cluster_ip="$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+
+  log "Collecting AARNN node connectivity diagnostics."
+  while IFS=' ' read -r pod_name node_name pod_ip; do
+    [[ -n "${pod_name}" ]] || continue
+    log "Node pod probe: pod=${pod_name}, node=${node_name}, podIP=${pod_ip}"
+    kubectl -n "${NAMESPACE}" exec "${pod_name}" -- \
+      env \
+        ORCH_CLUSTER_IP="${orchestrator_cluster_ip}" \
+        WEBUI_CLUSTER_IP="${web_ui_cluster_ip}" \
+        KUBEDNS_CLUSTER_IP="${kube_dns_cluster_ip}" \
+      sh -lc 'python3 - <<'"'"'PY'"'"'
+import os
+import socket
+
+
+def tcp_check(host: str, port: int) -> str:
+    if not host:
+        return "skip(empty-host)"
+    sock = socket.socket()
+    sock.settimeout(3.0)
+    try:
+        sock.connect((host, port))
+        return "ok"
+    except Exception as exc:  # pragma: no cover - diagnostic path
+        return f"fail({exc})"
+    finally:
+        sock.close()
+
+
+def dns_check(name: str) -> str:
+    try:
+        infos = socket.getaddrinfo(name, 50051, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        addrs = sorted({item[4][0] for item in infos if item and len(item) >= 5})
+        return "ok->" + ",".join(addrs)
+    except Exception as exc:  # pragma: no cover - diagnostic path
+        return f"fail({exc})"
+
+
+print(f"dns(orchestrator)={dns_check('orchestrator')}")
+print(f"tcp(orchestrator:50051)={tcp_check('orchestrator', 50051)}")
+print(f"tcp(ORCH_CLUSTER_IP:50051)={tcp_check(os.environ.get('ORCH_CLUSTER_IP', ''), 50051)}")
+print(f"tcp(WEBUI_CLUSTER_IP:8080)={tcp_check(os.environ.get('WEBUI_CLUSTER_IP', ''), 8080)}")
+print(f"tcp(KUBEDNS_CLUSTER_IP:53)={tcp_check(os.environ.get('KUBEDNS_CLUSTER_IP', ''), 53)}")
+PY' || true
+    kubectl -n "${NAMESPACE}" logs "${pod_name}" --tail=80 || true
+  done < <(kubectl -n "${NAMESPACE}" get pods -l role=node -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{" "}{.status.podIP}{"\n"}{end}' || true)
+}
+
 rollout_or_fail() {
   local kind="$1"
   local name="$2"
@@ -742,6 +798,7 @@ PY
     status_preview="$(head -c 320 "${status_log}" | tr '\n' ' ')"
     rm -f "${pf_log}" "${status_log}"
     kubectl -n "${NAMESPACE}" get pods -l role=node -o wide || true
+    show_node_connectivity_debug
     fail "AARNN node registration incomplete: expected >= ${expected_nodes}, observed=${registered_nodes}. Status sample: ${status_preview}"
   fi
 
