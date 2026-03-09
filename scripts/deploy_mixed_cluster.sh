@@ -559,11 +559,20 @@ def dns_check(name: str) -> str:
         return f"fail({exc})"
 
 
-print(f"dns(orchestrator)={dns_check('orchestrator')}")
-print(f"tcp(orchestrator:50051)={tcp_check('orchestrator', 50051)}")
-print(f"tcp(ORCH_CLUSTER_IP:50051)={tcp_check(os.environ.get('ORCH_CLUSTER_IP', ''), 50051)}")
-print(f"tcp(WEBUI_CLUSTER_IP:8080)={tcp_check(os.environ.get('WEBUI_CLUSTER_IP', ''), 8080)}")
-print(f"tcp(KUBEDNS_CLUSTER_IP:53)={tcp_check(os.environ.get('KUBEDNS_CLUSTER_IP', ''), 53)}")
+print("dns(orchestrator)=" + dns_check("orchestrator"))
+print("tcp(orchestrator:50051)=" + tcp_check("orchestrator", 50051))
+print(
+    "tcp(ORCH_CLUSTER_IP:50051)="
+    + tcp_check(os.environ.get("ORCH_CLUSTER_IP", ""), 50051)
+)
+print(
+    "tcp(WEBUI_CLUSTER_IP:8080)="
+    + tcp_check(os.environ.get("WEBUI_CLUSTER_IP", ""), 8080)
+)
+print(
+    "tcp(KUBEDNS_CLUSTER_IP:53)="
+    + tcp_check(os.environ.get("KUBEDNS_CLUSTER_IP", ""), 53)
+)
 PY' || true
     kubectl -n "${NAMESPACE}" logs "${pod_name}" --tail=80 || true
   done < <(kubectl -n "${NAMESPACE}" get pods -l role=node -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{" "}{.status.podIP}{"\n"}{end}' || true)
@@ -672,9 +681,9 @@ ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
             - |
-              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
-              export RAYON_NUM_THREADS="${CORES}"
-              export TOKIO_WORKER_THREADS="${CORES}"
+              CORES="\$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="\${CORES}"
+              export TOKIO_WORKER_THREADS="\${CORES}"
               export NM_GA_RESERVE_CORES=0
               exec ./aarnn_rust --orchestrator --grpc-addr 0.0.0.0:50051
 ${gpu_container_mounts_yaml}
@@ -735,9 +744,9 @@ ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
             - |
-              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
-              export RAYON_NUM_THREADS="${CORES}"
-              export TOKIO_WORKER_THREADS="${CORES}"
+              CORES="\$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="\${CORES}"
+              export TOKIO_WORKER_THREADS="\${CORES}"
               exec ./web_ui --listen 0.0.0.0:8080 --orchestrator http://orchestrator:50051
 ${gpu_container_mounts_yaml}
           ports:
@@ -779,9 +788,9 @@ ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
             - |
-              CORES="$(nproc --all 2>/dev/null || nproc || echo 1)"
-              export RAYON_NUM_THREADS="${CORES}"
-              export TOKIO_WORKER_THREADS="${CORES}"
+              CORES="\$(nproc --all 2>/dev/null || nproc || echo 1)"
+              export RAYON_NUM_THREADS="\${CORES}"
+              export TOKIO_WORKER_THREADS="\${CORES}"
               export NM_GA_RESERVE_CORES=0
               exec ./aarnn_rust --node --orchestrator-addr http://orchestrator:50051 --brain-id cluster
 ${gpu_container_mounts_yaml}
