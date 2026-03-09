@@ -94,15 +94,29 @@ jobs:
           BUILD_ID="${{ steps.buildmeta.outputs.build_id }}"
           ARCH_TAG="${IMAGE}:${BUILD_ID}-${{ matrix.arch }}"
 
-          podman build \
-            --file ./Containerfile \
-            --platform "linux/${{ matrix.arch }}" \
-            --tag "${ARCH_TAG}" \
-            --build-arg "BUILD_ID=${BUILD_ID}" \
-            --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'all' }}" \
-            --build-arg "PYTHON_MIN_VERSION=3.12" \
-            --build-arg "PYTHON_FULL_VERSION=3.12.2" \
+          build_args=(
+            --file ./Containerfile
+            --platform "linux/${{ matrix.arch }}"
+            --tag "${ARCH_TAG}"
+            --build-arg "BUILD_ID=${BUILD_ID}"
+            --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'all' }}"
+            --build-arg "PYTHON_MIN_VERSION=3.12"
+            --build-arg "PYTHON_FULL_VERSION=3.12.2"
             .
+          )
+
+          set +e
+          podman build "${build_args[@]}"
+          build_rc=$?
+          set -e
+
+          if [ "${build_rc}" -ne 0 ]; then
+            echo "Initial podman build failed (exit=${build_rc})."
+            echo "Attempting one clean-cache rebuild (podman builder/image prune + --no-cache)."
+            podman builder prune -f || true
+            podman image prune -f || true
+            podman build --no-cache "${build_args[@]}"
+          fi
 
           podman push "${ARCH_TAG}"
 
