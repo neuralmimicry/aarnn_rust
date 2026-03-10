@@ -4613,8 +4613,44 @@ impl GASearch {
                 &mut total,
             );
             add_bool(bio.neuromodulation_enabled, &mut hits, &mut total);
+            add_bool(bio.dendritic_active_enabled, &mut hits, &mut total);
+            add_granular(
+                bio.dendritic_ca_tau_ms as f64,
+                60.0,
+                250.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.dendritic_plateau_tau_ms as f64,
+                120.0,
+                900.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.dendritic_ca_influx_gain as f64,
+                0.04,
+                0.25,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.dendritic_plateau_threshold as f64,
+                0.6,
+                1.5,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                bio.dendritic_plateau_gain as f64,
+                0.15,
+                0.8,
+                &mut hits,
+                &mut total,
+            );
 
-            // Next-10 AARNN plausibility priors (kept soft to avoid over-constraining search).
+            // Extended AARNN plausibility priors (kept soft to avoid over-constraining search).
             add_granular(
                 eval_config.aarnn_inhibitory_fraction as f64,
                 0.15,
@@ -4637,9 +4673,40 @@ impl GASearch {
                 &mut total,
             );
             add_granular(
+                eval_config.aarnn_gap_junction_radius as f64,
+                0.05,
+                0.35,
+                &mut hits,
+                &mut total,
+            );
+            add_bool(
+                eval_config.aarnn_gap_junction_inhibitory_only,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
                 eval_config.aarnn_nmda_voltage_sensitivity as f64,
                 0.02,
                 0.12,
+                &mut hits,
+                &mut total,
+            );
+            add_bool(
+                eval_config.volume_transmission_enabled,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.volume_transmission_radius as f64,
+                0.15,
+                0.6,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.volume_transmission_strength as f64,
+                0.02,
+                0.25,
                 &mut hits,
                 &mut total,
             );
@@ -4685,6 +4752,49 @@ impl GASearch {
                 &mut hits,
                 &mut total,
             );
+            add_bool(eval_config.aarnn_myelination_enabled, &mut hits, &mut total);
+            add_granular(
+                eval_config.aarnn_myelination_rate as f64,
+                0.0003,
+                0.01,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_demyelination_rate as f64,
+                0.0001,
+                0.005,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_myelination_activity_target as f64,
+                0.05,
+                0.25,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_myelin_min_conduction_gain as f64,
+                0.6,
+                1.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_myelin_max_conduction_gain as f64,
+                1.2,
+                3.0,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_myelin_initial as f64,
+                0.15,
+                0.7,
+                &mut hits,
+                &mut total,
+            );
 
             // Biological tendency: potentiation and depression gains are generally same-order,
             // with mild LTP dominance often observed in stable learning regimes.
@@ -4694,6 +4804,23 @@ impl GASearch {
                     .abs(),
                 0.0,
                 0.5,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                (eval_config.aarnn_myelin_max_conduction_gain as f64
+                    - eval_config.aarnn_myelin_min_conduction_gain as f64)
+                    .abs(),
+                0.3,
+                2.8,
+                &mut hits,
+                &mut total,
+            );
+            add_granular(
+                eval_config.aarnn_myelination_rate as f64
+                    - eval_config.aarnn_demyelination_rate as f64,
+                0.00005,
+                0.01,
                 &mut hits,
                 &mut total,
             );
@@ -4716,7 +4843,16 @@ impl GASearch {
             if bio.neuromodulation_enabled {
                 enabled += 1.0;
             }
-            enabled / 2.0
+            if bio.dendritic_active_enabled {
+                enabled += 1.0;
+            }
+            if eval_config.volume_transmission_enabled {
+                enabled += 1.0;
+            }
+            if eval_config.aarnn_myelination_enabled {
+                enabled += 1.0;
+            }
+            enabled / 5.0
         } else {
             0.0
         };
@@ -5047,16 +5183,29 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.aarnn_neuromod_error_gain = rng.random_range(0.0..3.0);
     cfg.aarnn_neuromod_activity_gain = rng.random_range(0.0..3.0);
     cfg.aarnn_neuromod_stability_gain = rng.random_range(0.0..3.0);
-    cfg.aarnn_inhibitory_fraction = rng.random_range(0.0..0.6);
-    cfg.aarnn_dale_strictness = rng.random_range(0.0..1.0);
-    cfg.aarnn_gap_junction_strength = rng.random_range(0.0..0.2);
-    cfg.aarnn_nmda_voltage_sensitivity = rng.random_range(0.0..0.2);
-    cfg.aarnn_triplet_ltp_gain = rng.random_range(0.0..2.0);
-    cfg.aarnn_triplet_ltd_gain = rng.random_range(0.0..2.0);
-    cfg.aarnn_synaptic_scaling_strength = rng.random_range(0.0..0.2);
-    cfg.aarnn_synaptic_scaling_target = rng.random_range(0.1..5.0);
-    cfg.aarnn_distance_attenuation_per_unit = rng.random_range(0.0..2.0);
-    cfg.aarnn_release_prob_heterogeneity = rng.random_range(0.0..1.0);
+    cfg.aarnn_inhibitory_fraction = rng.random_range(0.1..0.35);
+    cfg.aarnn_dale_strictness = rng.random_range(0.5..1.0);
+    cfg.aarnn_gap_junction_strength = rng.random_range(0.0..0.08);
+    cfg.aarnn_gap_junction_radius = rng.random_range(0.03..0.4);
+    cfg.aarnn_gap_junction_inhibitory_only = rng.random_bool(0.7);
+    cfg.aarnn_nmda_voltage_sensitivity = rng.random_range(0.01..0.15);
+    cfg.volume_transmission_enabled = rng.random_bool(0.6);
+    cfg.volume_transmission_radius = rng.random_range(0.1..0.8);
+    cfg.volume_transmission_strength = rng.random_range(0.0..0.3);
+    cfg.aarnn_triplet_ltp_gain = rng.random_range(0.05..1.0);
+    cfg.aarnn_triplet_ltd_gain = rng.random_range(0.03..0.8);
+    cfg.aarnn_synaptic_scaling_strength = rng.random_range(0.002..0.12);
+    cfg.aarnn_synaptic_scaling_target = rng.random_range(0.4..2.2);
+    cfg.aarnn_distance_attenuation_per_unit = rng.random_range(0.02..0.8);
+    cfg.aarnn_release_prob_heterogeneity = rng.random_range(0.01..0.5);
+    cfg.aarnn_myelination_enabled = rng.random_bool(0.6);
+    cfg.aarnn_myelination_rate = rng.random_range(0.0001..0.01);
+    cfg.aarnn_demyelination_rate = rng.random_range(0.00005..0.006);
+    cfg.aarnn_myelination_activity_target = rng.random_range(0.03..0.3);
+    cfg.aarnn_myelin_min_conduction_gain = rng.random_range(0.6..1.0);
+    cfg.aarnn_myelin_max_conduction_gain =
+        rng.random_range((cfg.aarnn_myelin_min_conduction_gain + 0.2)..3.2);
+    cfg.aarnn_myelin_initial = rng.random_range(0.1..0.8);
     cfg.synaptic_stabilization_strength = rng.random_range(0.0..1.0);
     cfg.component_decay_rate = rng.random_range(0.01..1.0);
     cfg.p_release_default = rng.random_range(0.0..1.0);
@@ -5099,6 +5248,12 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.aarnn_bio.gaba_tau_ms = rng.random_range(1.0..50.0);
     cfg.aarnn_bio.nmda_ratio = rng.random_range(0.0..1.0);
     cfg.aarnn_bio.synaptic_gain = rng.random_range(0.1..5.0);
+    cfg.aarnn_bio.dendritic_active_enabled = rng.random_bool(0.6);
+    cfg.aarnn_bio.dendritic_ca_tau_ms = rng.random_range(40.0..400.0);
+    cfg.aarnn_bio.dendritic_plateau_tau_ms = rng.random_range(100.0..1200.0);
+    cfg.aarnn_bio.dendritic_ca_influx_gain = rng.random_range(0.02..0.4);
+    cfg.aarnn_bio.dendritic_plateau_threshold = rng.random_range(0.4..2.0);
+    cfg.aarnn_bio.dendritic_plateau_gain = rng.random_range(0.05..1.2);
     cfg.aarnn_bio.adaptive_threshold_enabled = rng.random_bool(0.7);
     cfg.aarnn_bio.adaptive_threshold_tau_ms = rng.random_range(10.0..1000.0);
     cfg.aarnn_bio.adaptive_threshold_increment = rng.random_range(0.0..5.0);
@@ -5122,6 +5277,10 @@ fn randomize_config(base: &NetworkConfig, rng: &mut StdRng) -> NetworkConfig {
     cfg.neuron_removal_delay_ms = rng.random_range(500.0..180000.0);
     cfg.max_sensory_connections = rng.random_range(1..=128);
     cfg.max_output_connections = rng.random_range(1..=128);
+
+    if cfg.aarnn_myelin_max_conduction_gain <= cfg.aarnn_myelin_min_conduction_gain {
+        cfg.aarnn_myelin_max_conduction_gain = cfg.aarnn_myelin_min_conduction_gain + 0.2;
+    }
 
     if cfg.max_layers < cfg.num_hidden_layers {
         cfg.max_layers = cfg.num_hidden_layers;
@@ -5218,13 +5377,25 @@ fn crossover(p1: &NetworkConfig, p2: &NetworkConfig, rng: &mut StdRng) -> Networ
     crossover_field!(aarnn_inhibitory_fraction);
     crossover_field!(aarnn_dale_strictness);
     crossover_field!(aarnn_gap_junction_strength);
+    crossover_field!(aarnn_gap_junction_radius);
+    crossover_field!(aarnn_gap_junction_inhibitory_only);
     crossover_field!(aarnn_nmda_voltage_sensitivity);
+    crossover_field!(volume_transmission_enabled);
+    crossover_field!(volume_transmission_radius);
+    crossover_field!(volume_transmission_strength);
     crossover_field!(aarnn_triplet_ltp_gain);
     crossover_field!(aarnn_triplet_ltd_gain);
     crossover_field!(aarnn_synaptic_scaling_strength);
     crossover_field!(aarnn_synaptic_scaling_target);
     crossover_field!(aarnn_distance_attenuation_per_unit);
     crossover_field!(aarnn_release_prob_heterogeneity);
+    crossover_field!(aarnn_myelination_enabled);
+    crossover_field!(aarnn_myelination_rate);
+    crossover_field!(aarnn_demyelination_rate);
+    crossover_field!(aarnn_myelination_activity_target);
+    crossover_field!(aarnn_myelin_min_conduction_gain);
+    crossover_field!(aarnn_myelin_max_conduction_gain);
+    crossover_field!(aarnn_myelin_initial);
     crossover_field!(synaptic_stabilization_strength);
     crossover_field!(component_decay_rate);
     crossover_field!(p_release_default);
@@ -5296,6 +5467,24 @@ fn crossover(p1: &NetworkConfig, p2: &NetworkConfig, rng: &mut StdRng) -> Networ
         child.aarnn_bio.synaptic_gain = p2.aarnn_bio.synaptic_gain;
     }
     if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_active_enabled = p2.aarnn_bio.dendritic_active_enabled;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_ca_tau_ms = p2.aarnn_bio.dendritic_ca_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_plateau_tau_ms = p2.aarnn_bio.dendritic_plateau_tau_ms;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_ca_influx_gain = p2.aarnn_bio.dendritic_ca_influx_gain;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_plateau_threshold = p2.aarnn_bio.dendritic_plateau_threshold;
+    }
+    if rng.random_bool(0.5) {
+        child.aarnn_bio.dendritic_plateau_gain = p2.aarnn_bio.dendritic_plateau_gain;
+    }
+    if rng.random_bool(0.5) {
         child.aarnn_bio.adaptive_threshold_enabled = p2.aarnn_bio.adaptive_threshold_enabled;
     }
     if rng.random_bool(0.5) {
@@ -5337,6 +5526,9 @@ fn crossover(p1: &NetworkConfig, p2: &NetworkConfig, rng: &mut StdRng) -> Networ
 
     if child.max_layers < child.num_hidden_layers {
         child.max_layers = child.num_hidden_layers;
+    }
+    if child.aarnn_myelin_max_conduction_gain <= child.aarnn_myelin_min_conduction_gain {
+        child.aarnn_myelin_max_conduction_gain = child.aarnn_myelin_min_conduction_gain + 0.2;
     }
     sanitize_io_layers(&mut child);
 
@@ -5479,16 +5671,37 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
     mutate_field!(aarnn_neuromod_error_gain, 0.0..3.0);
     mutate_field!(aarnn_neuromod_activity_gain, 0.0..3.0);
     mutate_field!(aarnn_neuromod_stability_gain, 0.0..3.0);
-    mutate_field!(aarnn_inhibitory_fraction, 0.0..0.6);
-    mutate_field!(aarnn_dale_strictness, 0.0..1.0);
-    mutate_field!(aarnn_gap_junction_strength, 0.0..0.2);
-    mutate_field!(aarnn_nmda_voltage_sensitivity, 0.0..0.2);
-    mutate_field!(aarnn_triplet_ltp_gain, 0.0..2.0);
-    mutate_field!(aarnn_triplet_ltd_gain, 0.0..2.0);
-    mutate_field!(aarnn_synaptic_scaling_strength, 0.0..0.2);
-    mutate_field!(aarnn_synaptic_scaling_target, 0.1..5.0);
-    mutate_field!(aarnn_distance_attenuation_per_unit, 0.0..2.0);
-    mutate_field!(aarnn_release_prob_heterogeneity, 0.0..1.0);
+    mutate_field!(aarnn_inhibitory_fraction, 0.1..0.35);
+    mutate_field!(aarnn_dale_strictness, 0.5..1.0);
+    mutate_field!(aarnn_gap_junction_strength, 0.0..0.08);
+    mutate_field!(aarnn_gap_junction_radius, 0.03..0.4);
+    if rng.random_bool(rate) {
+        cfg.aarnn_gap_junction_inhibitory_only = rng.random_bool(0.7);
+        changed = true;
+    }
+    mutate_field!(aarnn_nmda_voltage_sensitivity, 0.01..0.15);
+    if rng.random_bool(rate) {
+        cfg.volume_transmission_enabled = rng.random_bool(0.6);
+        changed = true;
+    }
+    mutate_field!(volume_transmission_radius, 0.1..0.8);
+    mutate_field!(volume_transmission_strength, 0.0..0.3);
+    mutate_field!(aarnn_triplet_ltp_gain, 0.05..1.0);
+    mutate_field!(aarnn_triplet_ltd_gain, 0.03..0.8);
+    mutate_field!(aarnn_synaptic_scaling_strength, 0.002..0.12);
+    mutate_field!(aarnn_synaptic_scaling_target, 0.4..2.2);
+    mutate_field!(aarnn_distance_attenuation_per_unit, 0.02..0.8);
+    mutate_field!(aarnn_release_prob_heterogeneity, 0.01..0.5);
+    if rng.random_bool(rate) {
+        cfg.aarnn_myelination_enabled = rng.random_bool(0.6);
+        changed = true;
+    }
+    mutate_field!(aarnn_myelination_rate, 0.0001..0.01);
+    mutate_field!(aarnn_demyelination_rate, 0.00005..0.006);
+    mutate_field!(aarnn_myelination_activity_target, 0.03..0.3);
+    mutate_field!(aarnn_myelin_min_conduction_gain, 0.6..1.0);
+    mutate_field!(aarnn_myelin_max_conduction_gain, 0.8..3.2);
+    mutate_field!(aarnn_myelin_initial, 0.1..0.8);
     mutate_field!(synaptic_stabilization_strength, 0.0..1.0);
     mutate_field!(component_decay_rate, 0.01..1.0);
     mutate_field!(p_release_default, 0.0..1.0);
@@ -5588,6 +5801,30 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
         changed = true;
     }
     if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_active_enabled = rng.random_bool(0.6);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_ca_tau_ms = rng.random_range(40.0..400.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_plateau_tau_ms = rng.random_range(100.0..1200.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_ca_influx_gain = rng.random_range(0.02..0.4);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_plateau_threshold = rng.random_range(0.4..2.0);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
+        cfg.aarnn_bio.dendritic_plateau_gain = rng.random_range(0.05..1.2);
+        changed = true;
+    }
+    if rng.random_bool(rate) {
         cfg.aarnn_bio.adaptive_threshold_enabled = rng.random_bool(0.5);
         changed = true;
     }
@@ -5647,6 +5884,9 @@ fn mutate(cfg: &mut NetworkConfig, rate: f64, rng: &mut StdRng) {
 
     if cfg.max_layers < cfg.num_hidden_layers {
         cfg.max_layers = cfg.num_hidden_layers;
+    }
+    if cfg.aarnn_myelin_max_conduction_gain <= cfg.aarnn_myelin_min_conduction_gain {
+        cfg.aarnn_myelin_max_conduction_gain = cfg.aarnn_myelin_min_conduction_gain + 0.2;
     }
     sanitize_io_layers(cfg);
 }
@@ -5802,5 +6042,20 @@ mod tests {
         assert!((0.0..=3.0).contains(&cfg.aarnn_neuromod_baseline_ach));
         assert!((0.0..=3.0).contains(&cfg.aarnn_neuromod_baseline_serotonin));
         assert!((0.05..=1.0).contains(&cfg.columnar_spacing));
+        assert!((0.03..=0.4).contains(&cfg.aarnn_gap_junction_radius));
+        assert!((0.1..=0.8).contains(&cfg.volume_transmission_radius));
+        assert!((0.0..=0.3).contains(&cfg.volume_transmission_strength));
+        assert!((0.0001..=0.01).contains(&cfg.aarnn_myelination_rate));
+        assert!((0.00005..=0.006).contains(&cfg.aarnn_demyelination_rate));
+        assert!((0.03..=0.3).contains(&cfg.aarnn_myelination_activity_target));
+        assert!((0.6..=1.0).contains(&cfg.aarnn_myelin_min_conduction_gain));
+        assert!((0.8..=3.2).contains(&cfg.aarnn_myelin_max_conduction_gain));
+        assert!(cfg.aarnn_myelin_max_conduction_gain > cfg.aarnn_myelin_min_conduction_gain);
+        assert!((0.1..=0.8).contains(&cfg.aarnn_myelin_initial));
+        assert!((40.0..=400.0).contains(&cfg.aarnn_bio.dendritic_ca_tau_ms));
+        assert!((100.0..=1200.0).contains(&cfg.aarnn_bio.dendritic_plateau_tau_ms));
+        assert!((0.02..=0.4).contains(&cfg.aarnn_bio.dendritic_ca_influx_gain));
+        assert!((0.4..=2.0).contains(&cfg.aarnn_bio.dendritic_plateau_threshold));
+        assert!((0.05..=1.2).contains(&cfg.aarnn_bio.dendritic_plateau_gain));
     }
 }

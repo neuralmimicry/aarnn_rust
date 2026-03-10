@@ -3122,6 +3122,7 @@ impl Morphology {
         } else {
             0.0
         };
+        let region_scale = crate::config::brain_region_space_scale(&config.brain_regions);
         let column_spacing = config.columnar_spacing.max(0.01);
         let column_jitter = config.columnar_jitter.clamp(0.0, 1.0);
         if repulsion_strength <= 0.0 && clumping_strength <= 0.0 && column_strength <= 0.0 {
@@ -3207,9 +3208,9 @@ impl Morphology {
                                 config.brain_regions.iter().find(|r| &r.name == rname)
                             {
                                 clump_target = Some(Point3 {
-                                    x: region.center[0],
-                                    y: region.center[1],
-                                    z: region.center[2],
+                                    x: region.center[0] * region_scale,
+                                    y: region.center[1] * region_scale,
+                                    z: region.center[2] * region_scale,
                                 });
                                 found_region = true;
                             }
@@ -3360,6 +3361,11 @@ impl Morphology {
 
             // PID Control
             soma.integral_err = soma.integral_err.add(error.mul(dt));
+            let max_integral = (min_sep * 4.0).clamp(0.02, 0.2);
+            let integ_mag = soma.integral_err.mag();
+            if integ_mag > max_integral {
+                soma.integral_err = soma.integral_err.mul(max_integral / integ_mag);
+            }
             let derivative = error.sub(soma.prev_err).mul(1.0 / dt.max(0.001));
 
             let mut smoothed_disp = error
@@ -3368,7 +3374,7 @@ impl Morphology {
                 .add(derivative.mul(kd));
 
             // Clamp max displacement per step to avoid runaway drift
-            let max_move = 0.15f32;
+            let max_move = (min_sep * 0.25).clamp(0.001, 0.01);
             if smoothed_disp.mag() > max_move {
                 smoothed_disp = smoothed_disp.normalize().mul(max_move);
             }
@@ -3893,6 +3899,7 @@ impl Morphology {
         let consolidation = config.synaptic_consolidation_factor;
 
         // Attempt batched energy evaluation on GPU for stimuli updates
+        #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
         let mut stimuli_updated_via_gpu = false;
         #[cfg(feature = "opencl")]
         if let Some(cl) = _cl {
@@ -7783,5 +7790,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn spatial_forces_limit_single_step_soma_motion() {
+        use crate::config::BrainRegionConfig;
+        use crate::topology::Node3D;
+
+        let topo: Vec<Vec<Node3D>> = vec![vec![Node3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            region_name: Some("HugeRegion".to_string()),
+            ..Default::default()
+        }]];
+        let w_in = ndarray::Array2::<f64>::zeros((1, 0));
+        let w_hh_fwd: Vec<ndarray::Array2<f64>> = Vec::new();
+        let w_hh_bwd: Vec<ndarray::Array2<f64>> = Vec::new();
+        let w_out = ndarray::Array2::<f64>::zeros((0, 1));
+
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_sensory_neurons = 0;
+        config.num_output_neurons = 0;
+        config.min_node_sep = 0.02;
+        config.spatial_repulsion_strength = 0.0;
+        config.spatial_clumping_strength = 1.0;
+        config.columnar_enabled = false;
+        config.brain_regions.push(BrainRegionConfig {
+            name: "HugeRegion".to_string(),
+            shape: None,
+            center: [35.0, 0.0, 25.0],
+            radii: [35.0, 55.0, 30.0],
+            type_distribution: Vec::new(),
+        });
+
+        let mut m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &w_out,
+            &config,
+            false,
+        );
+        let p0 = m.somas[0][0].pos;
+        m.apply_spatial_forces(&config, true, 1.0);
+        let p1 = m.somas[0][0].pos;
+
+        let moved = p0.dist(p1);
+        let max_move = (config.min_node_sep * 0.25).clamp(0.001, 0.01) + 1e-6;
+        assert!(
+            moved <= max_move,
+            "Soma moved too far in one step: moved={moved:.6}, limit={max_move:.6}"
+        );
     }
 }

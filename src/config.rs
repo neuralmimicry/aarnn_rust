@@ -175,6 +175,18 @@ pub struct AarnnBioParams {
     pub nmda_ratio: f64,
     /// Global synaptic gain applied to filtered currents.
     pub synaptic_gain: f64,
+    /// Enable active dendritic compartment effects (calcium/plateau nonlinearity).
+    pub dendritic_active_enabled: bool,
+    /// Dendritic calcium integration time constant (ms).
+    pub dendritic_ca_tau_ms: f64,
+    /// Dendritic plateau state decay time constant (ms).
+    pub dendritic_plateau_tau_ms: f64,
+    /// Gain from local excitatory drive into dendritic calcium state.
+    pub dendritic_ca_influx_gain: f64,
+    /// Calcium threshold for triggering nonlinear dendritic plateau recruitment.
+    pub dendritic_plateau_threshold: f64,
+    /// Maximum multiplicative gain contributed by dendritic plateau state.
+    pub dendritic_plateau_gain: f64,
 
     /// Izhikevich preset name (e.g. "RS", "FS", "IB").
     pub izh_preset: String,
@@ -232,6 +244,12 @@ impl Default for AarnnBioParams {
             gaba_tau_ms: 10.0,
             nmda_ratio: 0.25,
             synaptic_gain: 1.0,
+            dendritic_active_enabled: true,
+            dendritic_ca_tau_ms: 120.0,
+            dendritic_plateau_tau_ms: 350.0,
+            dendritic_ca_influx_gain: 0.10,
+            dendritic_plateau_threshold: 1.0,
+            dendritic_plateau_gain: 0.40,
             izh_preset: "RS".to_string(),
             adaptive_threshold_enabled: true,
             adaptive_threshold_tau_ms: 200.0,
@@ -239,7 +257,7 @@ impl Default for AarnnBioParams {
             adaptive_threshold_min: -2.0,
             adaptive_threshold_max: 5.0,
             izh_refractory_ms: 2.0,
-            homeostasis_target_rate_hz: 5.0,
+            homeostasis_target_rate_hz: 3.0,
             homeostasis_tau_ms: 2000.0,
             homeostasis_gain: 0.25,
             neuromodulation_enabled: true,
@@ -330,8 +348,12 @@ fn apply_human_brain_design(cfg: &mut NetworkConfig) {
         center: [-35.0, 0.0, 25.0],
         radii: [35.0, 55.0, 30.0],
         type_distribution: vec![
-            ("Pyramidal".to_string(), 0.8),
-            ("Interneuron".to_string(), 0.2),
+            ("L2_3_Pyramidal".to_string(), 0.35),
+            ("L5_Pyramidal".to_string(), 0.25),
+            ("L6_Corticothalamic".to_string(), 0.15),
+            ("PV_Interneuron".to_string(), 0.10),
+            ("SOM_Interneuron".to_string(), 0.08),
+            ("VIP_Interneuron".to_string(), 0.07),
         ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
@@ -340,8 +362,12 @@ fn apply_human_brain_design(cfg: &mut NetworkConfig) {
         center: [35.0, 0.0, 25.0],
         radii: [35.0, 55.0, 30.0],
         type_distribution: vec![
-            ("Pyramidal".to_string(), 0.8),
-            ("Interneuron".to_string(), 0.2),
+            ("L2_3_Pyramidal".to_string(), 0.35),
+            ("L5_Pyramidal".to_string(), 0.25),
+            ("L6_Corticothalamic".to_string(), 0.15),
+            ("PV_Interneuron".to_string(), 0.10),
+            ("SOM_Interneuron".to_string(), 0.08),
+            ("VIP_Interneuron".to_string(), 0.07),
         ],
     });
     cfg.brain_regions.push(BrainRegionConfig {
@@ -914,6 +940,71 @@ pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
     cfg.clumping_design = design;
 }
 
+/// Compute a scale factor for region coordinates so they can be compared against
+/// runtime topology coordinates (typically normalized to about [-1, 1]).
+///
+/// Preset region layouts (e.g., HumanBrain) are authored in large anatomical units.
+/// Returning a scale here avoids hard global pulls/drift when those presets are
+/// used together with normalized runtime positions.
+#[cfg(feature = "growth3d")]
+pub fn brain_region_space_scale(regions: &[BrainRegionConfig]) -> f32 {
+    fn absorb(max_abs: &mut f32, v: f32) {
+        *max_abs = max_abs.max(v.abs());
+    }
+    fn absorb3(max_abs: &mut f32, v: [f32; 3]) {
+        absorb(max_abs, v[0]);
+        absorb(max_abs, v[1]);
+        absorb(max_abs, v[2]);
+    }
+
+    let mut max_abs = 0.0f32;
+    for region in regions {
+        absorb3(&mut max_abs, region.center);
+        absorb3(&mut max_abs, region.radii);
+        match &region.shape {
+            Some(RegionShape::Ellipsoid { center, radii }) => {
+                absorb3(&mut max_abs, *center);
+                absorb3(&mut max_abs, *radii);
+            }
+            Some(RegionShape::Torus { center, R, r, .. }) => {
+                absorb3(&mut max_abs, *center);
+                absorb(&mut max_abs, *R);
+                absorb(&mut max_abs, *r);
+            }
+            Some(RegionShape::Tube {
+                line_from,
+                line_to,
+                radius,
+            }) => {
+                absorb3(&mut max_abs, *line_from);
+                absorb3(&mut max_abs, *line_to);
+                absorb(&mut max_abs, *radius);
+            }
+            Some(RegionShape::RepeatedEllipsoids {
+                count,
+                center_start,
+                step,
+                radii,
+            }) => {
+                absorb3(&mut max_abs, *center_start);
+                absorb3(&mut max_abs, *step);
+                absorb3(&mut max_abs, *radii);
+                let last = count.saturating_sub(1) as f32;
+                absorb(&mut max_abs, center_start[0] + step[0] * last);
+                absorb(&mut max_abs, center_start[1] + step[1] * last);
+                absorb(&mut max_abs, center_start[2] + step[2] * last);
+            }
+            None => {}
+        }
+    }
+
+    if max_abs > 2.0 {
+        1.0 / max_abs
+    } else {
+        1.0
+    }
+}
+
 /// Apply the baseline AARNN biomimicry profile used by UI defaults:
 /// human-brain clumping + core AARNN growth/morphology/delay settings.
 pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
@@ -926,6 +1017,12 @@ pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.aarnn_bio = AarnnBioParams::default();
     cfg.aarnn_bio.stp_enabled = true;
     cfg.aarnn_bio.neuromodulation_enabled = true;
+    cfg.aarnn_bio.dendritic_active_enabled = true;
+    cfg.aarnn_bio.dendritic_ca_tau_ms = 120.0;
+    cfg.aarnn_bio.dendritic_plateau_tau_ms = 350.0;
+    cfg.aarnn_bio.dendritic_ca_influx_gain = 0.1;
+    cfg.aarnn_bio.dendritic_plateau_threshold = 1.0;
+    cfg.aarnn_bio.dendritic_plateau_gain = 0.4;
 
     cfg.aarnn_velocity = 10.0;
     cfg.axon_velocity = 20.0;
@@ -955,13 +1052,25 @@ pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.aarnn_inhibitory_fraction = 0.2;
     cfg.aarnn_dale_strictness = 0.75;
     cfg.aarnn_gap_junction_strength = 0.02;
+    cfg.aarnn_gap_junction_radius = 0.2;
+    cfg.aarnn_gap_junction_inhibitory_only = true;
     cfg.aarnn_nmda_voltage_sensitivity = 0.04;
+    cfg.volume_transmission_enabled = true;
+    cfg.volume_transmission_radius = 0.35;
+    cfg.volume_transmission_strength = 0.1;
     cfg.aarnn_triplet_ltp_gain = 0.25;
     cfg.aarnn_triplet_ltd_gain = 0.15;
     cfg.aarnn_synaptic_scaling_strength = 0.02;
     cfg.aarnn_synaptic_scaling_target = 1.0;
     cfg.aarnn_distance_attenuation_per_unit = 0.15;
     cfg.aarnn_release_prob_heterogeneity = 0.1;
+    cfg.aarnn_myelination_enabled = true;
+    cfg.aarnn_myelination_rate = 0.003;
+    cfg.aarnn_demyelination_rate = 0.0008;
+    cfg.aarnn_myelination_activity_target = 0.12;
+    cfg.aarnn_myelin_min_conduction_gain = 0.8;
+    cfg.aarnn_myelin_max_conduction_gain = 2.2;
+    cfg.aarnn_myelin_initial = 0.35;
 
     apply_clumping_design(cfg, ClumpingDesign::HumanBrain);
 }
@@ -983,6 +1092,87 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
             bio_params: AarnnBioParams {
                 izh_preset: "FS".to_string(),
                 synaptic_gain: 1.0,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg.neuron_types.iter().any(|t| t.name == "PV_Interneuron") {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "PV_Interneuron".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "FS".to_string(),
+                synaptic_gain: 1.1,
+                homeostasis_target_rate_hz: 12.0,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg.neuron_types.iter().any(|t| t.name == "SOM_Interneuron") {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "SOM_Interneuron".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "LTS".to_string(),
+                synaptic_gain: 0.9,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg.neuron_types.iter().any(|t| t.name == "VIP_Interneuron") {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "VIP_Interneuron".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "IB".to_string(),
+                neuromodulation_enabled: true,
+                synaptic_gain: 0.8,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg.neuron_types.iter().any(|t| t.name == "L2_3_Pyramidal") {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "L2_3_Pyramidal".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "RS".to_string(),
+                synaptic_gain: 1.05,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg
+        .neuron_types
+        .iter()
+        .any(|t| t.name == "L4_SpinyStellate")
+    {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "L4_SpinyStellate".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "RS".to_string(),
+                adaptive_threshold_enabled: true,
+                adaptive_threshold_increment: 1.2,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg.neuron_types.iter().any(|t| t.name == "L5_Pyramidal") {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "L5_Pyramidal".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "IB".to_string(),
+                synaptic_gain: 1.2,
+                ..AarnnBioParams::default()
+            },
+        });
+    }
+    if !cfg
+        .neuron_types
+        .iter()
+        .any(|t| t.name == "L6_Corticothalamic")
+    {
+        cfg.neuron_types.push(NeuronTypeConfig {
+            name: "L6_Corticothalamic".to_string(),
+            bio_params: AarnnBioParams {
+                izh_preset: "RS".to_string(),
+                synaptic_gain: 0.95,
                 ..AarnnBioParams::default()
             },
         });
@@ -1360,8 +1550,18 @@ pub struct NetworkConfig {
     pub aarnn_dale_strictness: f32,
     /// Electrical coupling strength between neurons in the same hidden layer (gap-junction-like).
     pub aarnn_gap_junction_strength: f32,
+    /// Locality radius for electrical coupling in normalized space; if <= 0, falls back to layer-mean coupling.
+    pub aarnn_gap_junction_radius: f32,
+    /// If true, electrical coupling is applied only among inhibitory-like neuron types.
+    pub aarnn_gap_junction_inhibitory_only: bool,
     /// Voltage sensitivity of NMDA gating (0 disables voltage dependence).
     pub aarnn_nmda_voltage_sensitivity: f32,
+    /// Enable neuromodulator volume transmission (diffusive local field).
+    pub volume_transmission_enabled: bool,
+    /// Spatial radius for local neuromodulator diffusion.
+    pub volume_transmission_radius: f32,
+    /// Gain applied to local volume-transmission modulation.
+    pub volume_transmission_strength: f32,
     /// Additional potentiation gain for triplet-like STDP modulation.
     pub aarnn_triplet_ltp_gain: f32,
     /// Additional depression gain for triplet-like STDP modulation.
@@ -1374,6 +1574,20 @@ pub struct NetworkConfig {
     pub aarnn_distance_attenuation_per_unit: f32,
     /// Per-synapse release-probability heterogeneity around `p_release_default` (0..1).
     pub aarnn_release_prob_heterogeneity: f32,
+    /// Enable activity-dependent myelination / demyelination of conduction.
+    pub aarnn_myelination_enabled: bool,
+    /// Myelin growth rate per ms for active synapses.
+    pub aarnn_myelination_rate: f32,
+    /// Myelin decay rate per ms for underused synapses.
+    pub aarnn_demyelination_rate: f32,
+    /// Activity target above which myelin tends to increase.
+    pub aarnn_myelination_activity_target: f32,
+    /// Minimum conduction gain for poorly myelinated pathways.
+    pub aarnn_myelin_min_conduction_gain: f32,
+    /// Maximum conduction gain for highly myelinated pathways.
+    pub aarnn_myelin_max_conduction_gain: f32,
+    /// Initial per-synapse myelin factor in [0,1].
+    pub aarnn_myelin_initial: f32,
     /// Factor by which local activity stabilizes and strengthens a synapse.
     pub synaptic_stabilization_strength: f32,
     /// Maximum distance between a dendrite bouton and an axon for synapse formation.
@@ -1534,13 +1748,25 @@ impl Default for NetworkConfig {
             aarnn_inhibitory_fraction: 0.2,
             aarnn_dale_strictness: 0.0,
             aarnn_gap_junction_strength: 0.0,
+            aarnn_gap_junction_radius: 0.0,
+            aarnn_gap_junction_inhibitory_only: false,
             aarnn_nmda_voltage_sensitivity: 0.0,
+            volume_transmission_enabled: false,
+            volume_transmission_radius: 0.3,
+            volume_transmission_strength: 0.0,
             aarnn_triplet_ltp_gain: 0.0,
             aarnn_triplet_ltd_gain: 0.0,
             aarnn_synaptic_scaling_strength: 0.0,
             aarnn_synaptic_scaling_target: 1.0,
             aarnn_distance_attenuation_per_unit: 0.0,
             aarnn_release_prob_heterogeneity: 0.0,
+            aarnn_myelination_enabled: false,
+            aarnn_myelination_rate: 0.0,
+            aarnn_demyelination_rate: 0.0,
+            aarnn_myelination_activity_target: 0.1,
+            aarnn_myelin_min_conduction_gain: 1.0,
+            aarnn_myelin_max_conduction_gain: 1.0,
+            aarnn_myelin_initial: 0.0,
             synaptic_stabilization_strength: 0.05,
             axon_contact_dist: 0.03,
             component_decay_rate: 0.99,
@@ -1629,8 +1855,32 @@ mod tests {
         assert_eq!(cfg.aarnn_layer_depth, 5);
         assert!(cfg.aarnn_bio.stp_enabled);
         assert!(cfg.aarnn_bio.neuromodulation_enabled);
+        assert!(cfg.aarnn_bio.dendritic_active_enabled);
+        assert!(cfg.aarnn_bio.dendritic_plateau_gain > 0.0);
         assert_eq!(cfg.aarnn_dale_strictness, 0.75);
         assert_eq!(cfg.aarnn_gap_junction_strength, 0.02);
+        assert_eq!(cfg.aarnn_gap_junction_radius, 0.2);
+        assert!(cfg.aarnn_gap_junction_inhibitory_only);
         assert_eq!(cfg.aarnn_nmda_voltage_sensitivity, 0.04);
+        assert!(cfg.volume_transmission_enabled);
+        assert_eq!(cfg.volume_transmission_radius, 0.35);
+        assert_eq!(cfg.volume_transmission_strength, 0.1);
+        assert!(cfg.neuron_types.iter().any(|t| t.name == "PV_Interneuron"));
+        assert!(cfg.neuron_types.iter().any(|t| t.name == "SOM_Interneuron"));
+        assert!(cfg.neuron_types.iter().any(|t| t.name == "VIP_Interneuron"));
+        assert!(cfg.neuron_types.iter().any(|t| t.name == "L2_3_Pyramidal"));
+        assert!(cfg
+            .neuron_types
+            .iter()
+            .any(|t| t.name == "L4_SpinyStellate"));
+        assert!(cfg.neuron_types.iter().any(|t| t.name == "L5_Pyramidal"));
+        assert!(cfg
+            .neuron_types
+            .iter()
+            .any(|t| t.name == "L6_Corticothalamic"));
+        assert!(cfg.aarnn_myelination_enabled);
+        assert!(cfg.aarnn_myelination_rate > 0.0);
+        assert!(cfg.aarnn_demyelination_rate > 0.0);
+        assert!(cfg.aarnn_myelin_max_conduction_gain > cfg.aarnn_myelin_min_conduction_gain);
     }
 }
