@@ -250,6 +250,10 @@ pub struct Runner {
     pub stp_x_s: Array1<f64>,
     pub stp_u_h: Vec<Array1<f64>>,
     pub stp_x_h: Vec<Array1<f64>>,
+    /// Dendritic calcium-like integration state per hidden neuron.
+    pub dend_ca_h: Vec<Array1<f64>>,
+    /// Dendritic plateau state per hidden neuron.
+    pub dend_plateau_h: Vec<Array1<f64>>,
 
     pub x_pre_in: Array1<f64>,
     pub pred_s: Array1<f64>,
@@ -301,6 +305,8 @@ pub struct Runner {
     pub syn_ax_len: Vec<f32>, // per-synapse axonal path length (exact)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub syn_den_len: Vec<f32>, // per-synapse dendritic path length (exact)
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_myelin: Vec<f32>, // per-synapse myelin state [0,1]
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub recv_in: Vec<Vec<(usize, usize)>>, // [H0] -> Vec<(i, syn_idx)>
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -808,6 +814,89 @@ impl Runner {
     }
 
     #[inline]
+    #[allow(unused_variables)]
+    fn hidden_bio_params(&self, layer: usize, neuron: usize) -> &crate::config::AarnnBioParams {
+        #[cfg(feature = "growth3d")]
+        {
+            if let Some(b) = self.bio_h.get(layer).and_then(|v| v.get(neuron)) {
+                return b;
+            }
+        }
+        &self.net.aarnn_bio
+    }
+
+    #[inline]
+    #[allow(unused_variables)]
+    fn hidden_dendritic_structure_signal(&self, layer: usize, neuron: usize) -> (f64, f64) {
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        {
+            if self.net.use_morphology {
+                if let Some(dend) = self.morph.dendrites.get(layer).and_then(|v| v.get(neuron)) {
+                    let stim = dend.stimuli.max(0.0) as f64;
+                    let branches = dend.tree.branches.len() as f64;
+                    let branch_factor = (1.0 + branches).ln().clamp(1.0, 2.5);
+                    return (stim, branch_factor);
+                }
+            }
+        }
+        (0.0, 1.0)
+    }
+
+    fn apply_active_dendritic_compartments_layer(&mut self, layer: usize, curr: &mut Array1<f64>) {
+        if !matches!(self.neuron_model, NeuronModel::Aarnn) || curr.is_empty() {
+            return;
+        }
+        if layer >= self.dend_ca_h.len() || layer >= self.dend_plateau_h.len() {
+            return;
+        }
+        let n = curr
+            .len()
+            .min(self.dend_ca_h[layer].len())
+            .min(self.dend_plateau_h[layer].len());
+        if n == 0 {
+            return;
+        }
+        let dt = self.lif.dt.max(0.001);
+        for j in 0..n {
+            let bio = self.hidden_bio_params(layer, j);
+            if !bio.dendritic_active_enabled {
+                continue;
+            }
+            let tau_ca = bio.dendritic_ca_tau_ms.max(1.0);
+            let tau_plateau = bio.dendritic_plateau_tau_ms.max(1.0);
+            let ca_decay = (-dt / tau_ca).exp();
+            let plateau_decay = (-dt / tau_plateau).exp();
+            let ca_influx = bio.dendritic_ca_influx_gain.max(0.0);
+            let plateau_threshold = bio.dendritic_plateau_threshold.max(0.0);
+            let plateau_gain = bio.dendritic_plateau_gain.max(0.0);
+            if ca_influx <= 0.0 || plateau_gain <= 0.0 {
+                continue;
+            }
+
+            let exc = curr[j].max(0.0);
+            let (dend_stim, branch_factor) = self.hidden_dendritic_structure_signal(layer, j);
+            let drive = 0.75 * exc + 0.25 * dend_stim * branch_factor;
+            let ca = (self.dend_ca_h[layer][j] * ca_decay + ca_influx * drive).clamp(0.0, 1.0e6);
+            self.dend_ca_h[layer][j] = ca;
+
+            let over = (ca - plateau_threshold).max(0.0);
+            let trigger = over / (1.0 + over);
+            let plateau = (self.dend_plateau_h[layer][j] * plateau_decay
+                + trigger * (1.0 - plateau_decay))
+                .clamp(0.0, 1.0);
+            self.dend_plateau_h[layer][j] = plateau;
+
+            let gain = (1.0 + plateau_gain * plateau * branch_factor).clamp(1.0, 3.0);
+            if curr[j] >= 0.0 {
+                curr[j] *= gain;
+            } else {
+                // Preserve inhibitory drive polarity while allowing weaker dendritic shaping of inhibition.
+                curr[j] *= 1.0 + 0.25 * (gain - 1.0);
+            }
+        }
+    }
+
+    #[inline]
     fn hash_to_unit(mut x: u64) -> f64 {
         x ^= x >> 33;
         x = x.wrapping_mul(0xff51afd7ed558ccd);
@@ -843,6 +932,189 @@ impl Runner {
         }
     }
 
+    #[cfg(feature = "growth3d")]
+    #[inline]
+    fn is_inhibitory_type_name(name: &str) -> bool {
+        let n = name.to_ascii_lowercase();
+        n.contains("interneuron")
+            || n.contains("gaba")
+            || n.contains("pv")
+            || n.contains("som")
+            || n.contains("vip")
+            || n.contains("basket")
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[inline]
+    fn is_neuromod_type_name(name: &str) -> bool {
+        let n = name.to_ascii_lowercase();
+        n.contains("neuromod") || n.contains("vip")
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[inline]
+    fn hidden_type_name(&self, layer: usize, neuron: usize) -> Option<&str> {
+        self.topo
+            .layers
+            .get(layer)
+            .and_then(|v| v.get(neuron))
+            .and_then(|n| n.type_name.as_deref())
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[inline]
+    fn hidden_is_inhibitory(&self, layer: usize, neuron: usize) -> bool {
+        if let Some(name) = self.hidden_type_name(layer, neuron) {
+            return Self::is_inhibitory_type_name(name);
+        }
+        false
+    }
+
+    #[allow(unused_variables)]
+    fn apply_gap_junction_coupling_layer(
+        &self,
+        curr: &mut Array1<f64>,
+        v: &Array1<f64>,
+        layer: usize,
+        strength: f64,
+    ) {
+        if strength <= 0.0 || curr.len() < 2 || v.len() != curr.len() {
+            return;
+        }
+        #[cfg(feature = "growth3d")]
+        {
+            let radius = self.net.aarnn_gap_junction_radius.max(0.0) as f64;
+            if radius > 0.0 {
+                let nodes_opt = self.topo.layers.get(layer);
+                if let Some(nodes) = nodes_opt {
+                    if nodes.len() == curr.len() {
+                        let inhibitory_only = self.net.aarnn_gap_junction_inhibitory_only;
+                        let mut delta = vec![0.0f64; curr.len()];
+                        let mut local_edges = 0usize;
+                        for j in 0..curr.len() {
+                            if inhibitory_only && !self.hidden_is_inhibitory(layer, j) {
+                                continue;
+                            }
+                            let pj = &nodes[j];
+                            let mut sum = 0.0f64;
+                            let mut wsum = 0.0f64;
+                            for i in 0..curr.len() {
+                                if i == j {
+                                    continue;
+                                }
+                                if inhibitory_only && !self.hidden_is_inhibitory(layer, i) {
+                                    continue;
+                                }
+                                let pi = &nodes[i];
+                                let dx = (pi.x - pj.x) as f64;
+                                let dy = (pi.y - pj.y) as f64;
+                                let dz = (pi.z - pj.z) as f64;
+                                let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                                if d <= radius && d > 1.0e-9 {
+                                    let w = (1.0 - d / radius).max(0.0);
+                                    sum += w * (v[i] - v[j]);
+                                    wsum += w;
+                                    local_edges += 1;
+                                }
+                            }
+                            if wsum > 1.0e-9 {
+                                delta[j] = strength * (sum / wsum);
+                            }
+                        }
+                        if local_edges > 0 {
+                            for j in 0..curr.len() {
+                                curr[j] += delta[j];
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        Self::apply_gap_junction_coupling(curr, v, strength);
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn compute_volume_transmission_factors(
+        &self,
+        active_h_indices: &[Vec<usize>],
+    ) -> Vec<Array1<f64>> {
+        let mut factors: Vec<Array1<f64>> = (0..self.net.num_hidden_layers)
+            .map(|l| Array1::from_elem(self.layer_size(l), 1.0))
+            .collect();
+        if !self.net.volume_transmission_enabled {
+            return factors;
+        }
+        let radius = self.net.volume_transmission_radius.max(0.01) as f64;
+        let strength = self.net.volume_transmission_strength.max(0.0) as f64;
+        if strength <= 0.0 {
+            return factors;
+        }
+        let mut sources: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for l in 0..self.net.num_hidden_layers {
+            let nodes = if let Some(nodes) = self.topo.layers.get(l) {
+                nodes
+            } else {
+                continue;
+            };
+            for &j in active_h_indices.get(l).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if j >= nodes.len() {
+                    continue;
+                }
+                if let Some(tn) = nodes[j].type_name.as_deref() {
+                    if !Self::is_neuromod_type_name(tn) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+                let n = &nodes[j];
+                sources.push((n.x as f64, n.y as f64, n.z as f64, 1.0));
+            }
+        }
+        if sources.is_empty() {
+            return factors;
+        }
+
+        let tone = ((self.neuromod_dopamine + self.neuromod_ach + self.neuromod_serotonin) / 3.0)
+            .clamp(0.0, 3.0) as f64;
+        let tone_scale = tone / 3.0;
+        let two_sigma2 = 2.0 * radius * radius;
+
+        for l in 0..self.net.num_hidden_layers {
+            let nodes = if let Some(nodes) = self.topo.layers.get(l) {
+                nodes
+            } else {
+                continue;
+            };
+            let n = self.layer_size(l).min(nodes.len());
+            for j in 0..n {
+                let p = &nodes[j];
+                let mut field = 0.0f64;
+                for (sx, sy, sz, amp) in &sources {
+                    let dx = p.x as f64 - *sx;
+                    let dy = p.y as f64 - *sy;
+                    let dz = p.z as f64 - *sz;
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    if d2 <= radius * radius {
+                        field += *amp * (-(d2 / two_sigma2)).exp();
+                    }
+                }
+                let gain = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
+                factors[l][j] = gain;
+            }
+        }
+        factors
+    }
+
+    #[cfg(not(feature = "growth3d"))]
+    fn compute_volume_transmission_factors(
+        &self,
+        _active_h_indices: &[Vec<usize>],
+    ) -> Vec<Array1<f64>> {
+        Vec::new()
+    }
+
     #[inline]
     fn is_inhibitory_presyn(pre_idx: usize, inhibitory_fraction: f64, salt: u64) -> bool {
         if inhibitory_fraction <= 0.0 {
@@ -875,13 +1147,50 @@ impl Runner {
         }
     }
 
+    #[cfg(feature = "growth3d")]
+    fn enforce_dale_matrix_cols_with_mask(
+        mat: &mut Array2<f64>,
+        inhibitory_mask: &[bool],
+        strictness: f64,
+        max_abs_w: f64,
+    ) {
+        if strictness <= 0.0 || mat.is_empty() {
+            return;
+        }
+        for j in 0..mat.nrows() {
+            for i in 0..mat.ncols() {
+                let w = mat[(j, i)];
+                let inhibitory = inhibitory_mask.get(i).copied().unwrap_or(false);
+                let target = if inhibitory { -w.abs() } else { w.abs() };
+                let blended = w + strictness * (target - w);
+                mat[(j, i)] = blended.clamp(-max_abs_w, max_abs_w);
+            }
+        }
+    }
+
     fn enforce_dale_constraints(&mut self) {
         let strictness = self.net.aarnn_dale_strictness.clamp(0.0, 1.0) as f64;
         let inhibitory_fraction = self.net.aarnn_inhibitory_fraction.clamp(0.0, 1.0) as f64;
-        if strictness <= 0.0 || inhibitory_fraction <= 0.0 {
+        if strictness <= 0.0 {
             return;
         }
         let max_abs_w = self.stdp.w_max.abs().max(self.stdp.w_min.abs()).max(1.0e-6);
+
+        #[cfg(feature = "growth3d")]
+        let explicit_hidden_types_available = self
+            .topo
+            .layers
+            .iter()
+            .flat_map(|layer| layer.iter())
+            .any(|n| n.type_name.is_some());
+
+        #[cfg(not(feature = "growth3d"))]
+        let explicit_hidden_types_available = false;
+
+        if !explicit_hidden_types_available && inhibitory_fraction <= 0.0 {
+            return;
+        }
+
         Self::enforce_dale_matrix_cols(
             &mut self.w_in,
             inhibitory_fraction,
@@ -889,40 +1198,128 @@ impl Runner {
             max_abs_w,
             0x1111,
         );
-        for (l, mat) in self.w_hh_fwd.iter_mut().enumerate() {
+
+        #[cfg(feature = "growth3d")]
+        {
+            for l in 0..self.w_hh_fwd.len() {
+                let cols = self.w_hh_fwd[l].ncols();
+                let mask: Vec<bool> = (0..cols)
+                    .map(|i| {
+                        if i < self.topo.layers.get(l).map(|v| v.len()).unwrap_or(0)
+                            && self.hidden_type_name(l, i).is_some()
+                        {
+                            self.hidden_is_inhibitory(l, i)
+                        } else {
+                            Self::is_inhibitory_presyn(i, inhibitory_fraction, 0x2200 + l as u64)
+                        }
+                    })
+                    .collect();
+                Self::enforce_dale_matrix_cols_with_mask(
+                    &mut self.w_hh_fwd[l],
+                    &mask,
+                    strictness,
+                    max_abs_w,
+                );
+            }
+            for l in 0..self.w_hh_bwd.len() {
+                let src_l = l + 1;
+                let cols = self.w_hh_bwd[l].ncols();
+                let mask: Vec<bool> = (0..cols)
+                    .map(|i| {
+                        if i < self.topo.layers.get(src_l).map(|v| v.len()).unwrap_or(0)
+                            && self.hidden_type_name(src_l, i).is_some()
+                        {
+                            self.hidden_is_inhibitory(src_l, i)
+                        } else {
+                            Self::is_inhibitory_presyn(i, inhibitory_fraction, 0x3300 + l as u64)
+                        }
+                    })
+                    .collect();
+                Self::enforce_dale_matrix_cols_with_mask(
+                    &mut self.w_hh_bwd[l],
+                    &mask,
+                    strictness,
+                    max_abs_w,
+                );
+            }
+            for l in 0..self.w_hh_rec.len() {
+                let cols = self.w_hh_rec[l].ncols();
+                let mask: Vec<bool> = (0..cols)
+                    .map(|i| {
+                        if i < self.topo.layers.get(l).map(|v| v.len()).unwrap_or(0)
+                            && self.hidden_type_name(l, i).is_some()
+                        {
+                            self.hidden_is_inhibitory(l, i)
+                        } else {
+                            Self::is_inhibitory_presyn(i, inhibitory_fraction, 0x4400 + l as u64)
+                        }
+                    })
+                    .collect();
+                Self::enforce_dale_matrix_cols_with_mask(
+                    &mut self.w_hh_rec[l],
+                    &mask,
+                    strictness,
+                    max_abs_w,
+                );
+            }
+            let (_, out_l) = self.get_io_layers();
+            let out_cols = self.w_out.ncols();
+            let out_mask: Vec<bool> = (0..out_cols)
+                .map(|i| {
+                    if i < self.topo.layers.get(out_l).map(|v| v.len()).unwrap_or(0)
+                        && self.hidden_type_name(out_l, i).is_some()
+                    {
+                        self.hidden_is_inhibitory(out_l, i)
+                    } else {
+                        Self::is_inhibitory_presyn(i, inhibitory_fraction, 0x5500)
+                    }
+                })
+                .collect();
+            Self::enforce_dale_matrix_cols_with_mask(
+                &mut self.w_out,
+                &out_mask,
+                strictness,
+                max_abs_w,
+            );
+        }
+
+        #[cfg(not(feature = "growth3d"))]
+        {
+            for (l, mat) in self.w_hh_fwd.iter_mut().enumerate() {
+                Self::enforce_dale_matrix_cols(
+                    mat,
+                    inhibitory_fraction,
+                    strictness,
+                    max_abs_w,
+                    0x2200 + l as u64,
+                );
+            }
+            for (l, mat) in self.w_hh_bwd.iter_mut().enumerate() {
+                Self::enforce_dale_matrix_cols(
+                    mat,
+                    inhibitory_fraction,
+                    strictness,
+                    max_abs_w,
+                    0x3300 + l as u64,
+                );
+            }
+            for (l, mat) in self.w_hh_rec.iter_mut().enumerate() {
+                Self::enforce_dale_matrix_cols(
+                    mat,
+                    inhibitory_fraction,
+                    strictness,
+                    max_abs_w,
+                    0x4400 + l as u64,
+                );
+            }
             Self::enforce_dale_matrix_cols(
-                mat,
+                &mut self.w_out,
                 inhibitory_fraction,
                 strictness,
                 max_abs_w,
-                0x2200 + l as u64,
+                0x5500,
             );
         }
-        for (l, mat) in self.w_hh_bwd.iter_mut().enumerate() {
-            Self::enforce_dale_matrix_cols(
-                mat,
-                inhibitory_fraction,
-                strictness,
-                max_abs_w,
-                0x3300 + l as u64,
-            );
-        }
-        for (l, mat) in self.w_hh_rec.iter_mut().enumerate() {
-            Self::enforce_dale_matrix_cols(
-                mat,
-                inhibitory_fraction,
-                strictness,
-                max_abs_w,
-                0x4400 + l as u64,
-            );
-        }
-        Self::enforce_dale_matrix_cols(
-            &mut self.w_out,
-            inhibitory_fraction,
-            strictness,
-            max_abs_w,
-            0x5500,
-        );
     }
 
     fn apply_synaptic_scaling_matrix_rows(mat: &mut Array2<f64>, strength: f64, target: f64) {
@@ -2747,6 +3144,8 @@ impl Runner {
             stp_x_s,
             stp_u_h,
             stp_x_h,
+            dend_ca_h: (0..l_count).map(|_| Array1::<f64>::zeros(h_size)).collect(),
+            dend_plateau_h: (0..l_count).map(|_| Array1::<f64>::zeros(h_size)).collect(),
             x_pre_in,
             pred_s,
             x_post_h,
@@ -2793,6 +3192,8 @@ impl Runner {
             syn_ax_len: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             syn_den_len: Vec::new(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_myelin: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             recv_in: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -3665,6 +4066,7 @@ impl Runner {
                 } else {
                     0.0
                 };
+                let (region_name, type_name) = self.allocate_region_and_type(x, y, 0.0, l_global);
                 topo.add_neuron(
                     l_global,
                     Node3D {
@@ -3672,6 +4074,8 @@ impl Runner {
                         y,
                         z: 0.0,
                         layer: l_global,
+                        region_name,
+                        type_name,
                         ..Default::default()
                     },
                 );
@@ -4658,6 +5062,11 @@ impl Runner {
             let r_target = hidden_rate.clamp(0.0, 1.0);
             self.resonance_level = self.resonance_level * r_retain + r_target * r_decay;
         }
+        let volume_transmission_factors = if is_aarnn {
+            self.compute_volume_transmission_factors(&active_h_indices)
+        } else {
+            Vec::new()
+        };
 
         {
             // push sensory spikes (including feedback) to history (front)
@@ -5679,7 +6088,16 @@ impl Runner {
             }
             if is_aarnn && num_hidden_0_neurons > 1 {
                 let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
-                Self::apply_gap_junction_coupling(&mut i_h0, &self.v_h[0], g_gap);
+                self.apply_gap_junction_coupling_layer(&mut i_h0, &self.v_h[0], 0, g_gap);
+            }
+            if let Some(factors_h0) = volume_transmission_factors.get(0) {
+                let n = num_hidden_0_neurons.min(factors_h0.len());
+                for j in 0..n {
+                    i_h0[j] *= factors_h0[j];
+                }
+            }
+            if is_aarnn {
+                self.apply_active_dendritic_compartments_layer(0, &mut i_h0);
             }
 
             // Update hidden layer 0 (parallel-friendly via temporary buffers)
@@ -7595,7 +8013,16 @@ impl Runner {
                 }
                 if is_aarnn && num_current_hidden_neurons > 1 {
                     let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
-                    Self::apply_gap_junction_coupling(&mut i_f, &self.v_h[l], g_gap);
+                    self.apply_gap_junction_coupling_layer(&mut i_f, &self.v_h[l], l, g_gap);
+                }
+                if let Some(factors_l) = volume_transmission_factors.get(l) {
+                    let n = num_current_hidden_neurons.min(factors_l.len());
+                    for j in 0..n {
+                        i_f[j] *= factors_l[j];
+                    }
+                }
+                if is_aarnn {
+                    self.apply_active_dendritic_compartments_layer(l, &mut i_f);
                 }
 
                 #[cfg(any(feature = "ui", feature = "growth3d"))]
@@ -10737,7 +11164,12 @@ impl Runner {
         if max_dist == 0.0 {
             max_dist = 1.0;
         }
-        let steps_delay_max = (max_dist / (vel * dt)).ceil() as usize;
+        let myelin_delay_scale = if self.net.aarnn_myelination_enabled {
+            1.0 / self.net.aarnn_myelin_min_conduction_gain.max(0.1)
+        } else {
+            1.0
+        };
+        let steps_delay_max = ((max_dist * myelin_delay_scale) / (vel * dt)).ceil() as usize;
         // hist_len must be at least steps_delay_max + 1 so index steps_delay is valid
         let new_hist = (steps_delay_max + 1).clamp(2, 128);
         if new_hist == self.hist_len {
@@ -10832,6 +11264,14 @@ impl Runner {
         self.syn_den_len.clear();
         self.syn_ax_len.resize(self.morph.synapses.len(), 0.0);
         self.syn_den_len.resize(self.morph.synapses.len(), 0.0);
+        let myelin_init = self.net.aarnn_myelin_initial.clamp(0.0, 1.0);
+        let old_myelin = std::mem::take(&mut self.syn_myelin);
+        self.syn_myelin
+            .resize(self.morph.synapses.len(), myelin_init);
+        let keep = old_myelin.len().min(self.syn_myelin.len());
+        if keep > 0 {
+            self.syn_myelin[..keep].copy_from_slice(&old_myelin[..keep]);
+        }
         // Prepare sparse adjacency lists
         self.recv_in = vec![Vec::new(); h_in_size];
         self.recv_fwd = (0..l_count_hidden.saturating_sub(1))
@@ -11102,10 +11542,15 @@ impl Runner {
                 self.net.aarnn_velocity.max(1e-6)
             };
             let base_lat = self.net.bouton_latency_ms.max(0.0);
+            let myelin_delay_scale = if self.net.aarnn_myelination_enabled {
+                1.0 / self.net.aarnn_myelin_min_conduction_gain.max(0.1)
+            } else {
+                1.0
+            };
             let max_total_ms = self.syn_ax_len.iter().zip(self.syn_den_len.iter()).fold(
                 0.0f32,
                 |m, (&ax, &den)| {
-                    let t = ax / v_ax + den / v_den + base_lat;
+                    let t = (ax / v_ax + den / v_den + base_lat) * myelin_delay_scale;
                     if t > m {
                         t
                     } else {
@@ -11330,6 +11775,76 @@ impl Runner {
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[inline]
+    fn syn_trace_activity_proxy(&self, syn: &crate::morphology::Synapse) -> f32 {
+        let pre = if syn.pre_layer < 0 {
+            self.x_pre_in.get(syn.pre_id).copied().unwrap_or(0.0)
+        } else {
+            self.x_pre_h
+                .get(syn.pre_layer as usize)
+                .and_then(|v| v.get(syn.pre_id))
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let post = if syn.post_layer >= 0 && (syn.post_layer as usize) < self.x_post_h.len() {
+            self.x_post_h[syn.post_layer as usize]
+                .get(syn.post_id)
+                .copied()
+                .unwrap_or(0.0)
+        } else {
+            self.x_post_o.get(syn.post_id).copied().unwrap_or(0.0)
+        };
+        (pre * post).max(0.0) as f32
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[inline]
+    fn syn_pre_axon_atp(&self, syn: &crate::morphology::Synapse) -> f32 {
+        match syn.pre_layer {
+            -1 => self
+                .morph
+                .sensory_axons
+                .get(syn.pre_id)
+                .map(|a| a.atp)
+                .unwrap_or(1.0),
+            l if l >= 0 && (l as usize) < self.morph.axons.len() => self.morph.axons[l as usize]
+                .get(syn.pre_id)
+                .map(|a| a.atp)
+                .unwrap_or(1.0),
+            _ => 1.0,
+        }
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn update_activity_dependent_myelination(&mut self, dt: f32) {
+        if !self.net.aarnn_myelination_enabled {
+            return;
+        }
+        let grow_rate = self.net.aarnn_myelination_rate.max(0.0);
+        let decay_rate = self.net.aarnn_demyelination_rate.max(0.0);
+        if grow_rate <= 0.0 && decay_rate <= 0.0 {
+            return;
+        }
+        let target = self.net.aarnn_myelination_activity_target.max(0.0);
+        let init = self.net.aarnn_myelin_initial.clamp(0.0, 1.0);
+        if self.syn_myelin.len() != self.morph.synapses.len() {
+            self.syn_myelin.resize(self.morph.synapses.len(), init);
+        }
+        for si in 0..self.morph.synapses.len() {
+            let syn = self.morph.synapses[si];
+            let activity = self.syn_trace_activity_proxy(&syn);
+            let my = self.syn_myelin[si].clamp(0.0, 1.0);
+            let above = (activity - target).max(0.0);
+            let below = (target - activity).max(0.0);
+            let ax_atp = self.syn_pre_axon_atp(&syn).clamp(0.0, 1.0);
+            let metabolic_stress = (1.0 - ax_atp).max(0.0);
+            let grow = grow_rate * dt * above * (1.0 - my);
+            let decay = decay_rate * dt * (below + 0.5 * metabolic_stress) * my;
+            self.syn_myelin[si] = (my + grow - decay).clamp(0.0, 1.0);
+        }
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
     fn apply_metabolic_update(&mut self, dt: f32) {
         observe_time!("morphology/metabolic_update");
         let recovery_rate = 0.0002 * dt; // ATP recovery per ms
@@ -11421,6 +11936,8 @@ impl Runner {
                 }
             }
         }
+
+        self.update_activity_dependent_myelination(dt);
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -11442,6 +11959,22 @@ impl Runner {
             let den_len = self.syn_den_len.get(syn_idx).copied().unwrap_or(0.0) as f64;
             let dist = (ax_len + den_len).max(0.0);
             atten = (-atten_k * dist).exp().clamp(1.0e-4, 1.0);
+        }
+        if self.net.aarnn_myelination_enabled {
+            let m = self
+                .syn_myelin
+                .get(syn_idx)
+                .copied()
+                .unwrap_or(self.net.aarnn_myelin_initial)
+                .clamp(0.0, 1.0) as f64;
+            let g_min = self.net.aarnn_myelin_min_conduction_gain.max(0.1) as f64;
+            let g_max =
+                self.net
+                    .aarnn_myelin_max_conduction_gain
+                    .max(self.net.aarnn_myelin_min_conduction_gain + 1.0e-3) as f64;
+            let conduction_gain = (g_min + (g_max - g_min) * m).max(1.0e-3);
+            steps = ((steps as f64) / conduction_gain).round() as usize;
+            atten *= (0.9 + 0.1 * m).clamp(0.5, 1.1);
         }
 
         if depth >= 3 {
@@ -11573,7 +12106,7 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let (nx, ny, nz) = self.place_node_near(0, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz);
+        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, 0);
         self.topo.add_neuron(
             0,
             Node3D {
@@ -12443,6 +12976,8 @@ impl Runner {
         resize_layer_vec!(self.rate_ema_h, f64, 0.0);
         resize_layer_vec!(self.stp_u_h, f64, bio.stp_u);
         resize_layer_vec!(self.stp_x_h, f64, 1.0);
+        resize_layer_vec!(self.dend_ca_h, f64, 0.0);
+        resize_layer_vec!(self.dend_plateau_h, f64, 0.0);
         let s_count = self.net.num_sensory_neurons;
         let o_count = self.net.num_output_neurons;
         #[cfg(feature = "growth3d")]
@@ -13011,8 +13546,15 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
-    fn allocate_region_and_type(&self, x: f32, y: f32, z: f32) -> (Option<String>, Option<String>) {
+    fn allocate_region_and_type(
+        &self,
+        x: f32,
+        y: f32,
+        z: f32,
+        layer: usize,
+    ) -> (Option<String>, Option<String>) {
         // 1. Find best‑matching region by geometry (supports ellipsoid, torus, tube)
+        let region_scale = crate::config::brain_region_space_scale(&self.net.brain_regions);
         let mut best_region = None;
         let mut best_metric = f32::MAX; // normalized distance; <1.0 means inside
         let mut have_inside = false;
@@ -13020,12 +13562,16 @@ impl Runner {
         for region in &self.net.brain_regions {
             let (inside, metric) = match &region.shape {
                 Some(crate::config::RegionShape::Ellipsoid { center, radii }) => {
-                    let dx = x - center[0];
-                    let dy = y - center[1];
-                    let dz = z - center[2];
-                    let q = (dx * dx) / (radii[0] * radii[0]).max(0.0)
-                        + (dy * dy) / (radii[1] * radii[1]).max(0.0)
-                        + (dz * dz) / (radii[2] * radii[2]).max(0.0);
+                    let cx = center[0] * region_scale;
+                    let cy = center[1] * region_scale;
+                    let cz = center[2] * region_scale;
+                    let rx = (radii[0].abs() * region_scale).max(1e-6);
+                    let ry = (radii[1].abs() * region_scale).max(1e-6);
+                    let rz = (radii[2].abs() * region_scale).max(1e-6);
+                    let dx = x - cx;
+                    let dy = y - cy;
+                    let dz = z - cz;
+                    let q = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz);
                     (q <= 1.0, q.sqrt())
                 }
                 Some(crate::config::RegionShape::Torus {
@@ -13035,18 +13581,23 @@ impl Runner {
                     plane,
                 }) => {
                     // Default to torus around Y‑axis for plane "x-z"
-                    let dx = x - center[0];
-                    let dy = y - center[1];
-                    let dz = z - center[2];
+                    let cx = center[0] * region_scale;
+                    let cy = center[1] * region_scale;
+                    let cz = center[2] * region_scale;
+                    let ring_r = (R.abs() * region_scale).max(1e-6);
+                    let tube_r = (r.abs() * region_scale).max(1e-6);
+                    let dx = x - cx;
+                    let dy = y - cy;
+                    let dz = z - cz;
                     let (radial, orth) = if plane.as_str() == "x-z" {
                         ((dx * dx + dz * dz).sqrt(), dy)
                     } else {
                         ((dy * dy + dz * dz).sqrt(), dx)
                     };
-                    let m = radial - *R;
+                    let m = radial - ring_r;
                     let t = (m * m + orth * orth).sqrt();
-                    let denom = if *r > 1e-6 { *r } else { 1e-6 };
-                    (t <= *r, t / denom)
+                    let denom = tube_r.max(1e-6);
+                    (t <= tube_r, t / denom)
                 }
                 Some(crate::config::RegionShape::Tube {
                     line_from,
@@ -13054,27 +13605,33 @@ impl Runner {
                     radius,
                 }) => {
                     // Distance from point to segment
-                    let px = x - line_from[0];
-                    let py = y - line_from[1];
-                    let pz = z - line_from[2];
-                    let vx = line_to[0] - line_from[0];
-                    let vy = line_to[1] - line_from[1];
-                    let vz = line_to[2] - line_from[2];
+                    let from_x = line_from[0] * region_scale;
+                    let from_y = line_from[1] * region_scale;
+                    let from_z = line_from[2] * region_scale;
+                    let to_x = line_to[0] * region_scale;
+                    let to_y = line_to[1] * region_scale;
+                    let to_z = line_to[2] * region_scale;
+                    let px = x - from_x;
+                    let py = y - from_y;
+                    let pz = z - from_z;
+                    let vx = to_x - from_x;
+                    let vy = to_y - from_y;
+                    let vz = to_z - from_z;
                     let v_len2 = vx * vx + vy * vy + vz * vz;
                     let mut t = 0.0f32;
                     if v_len2 > 1e-9 {
                         t = (px * vx + py * vy + pz * vz) / v_len2;
                     }
                     t = t.clamp(0.0, 1.0);
-                    let cx = line_from[0] + vx * t;
-                    let cy = line_from[1] + vy * t;
-                    let cz = line_from[2] + vz * t;
+                    let cx = from_x + vx * t;
+                    let cy = from_y + vy * t;
+                    let cz = from_z + vz * t;
                     let dx = x - cx;
                     let dy = y - cy;
                     let dz = z - cz;
                     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                    let denom = if *radius > 1e-6 { *radius } else { 1e-6 };
-                    (dist <= *radius, dist / denom)
+                    let tube_r = (radius.abs() * region_scale).max(1e-6);
+                    (dist <= tube_r, dist / tube_r)
                 }
                 Some(crate::config::RegionShape::RepeatedEllipsoids {
                     count,
@@ -13084,16 +13641,24 @@ impl Runner {
                 }) => {
                     let mut min_q = f32::MAX;
                     let mut any_inside = false;
+                    let sx = center_start[0] * region_scale;
+                    let sy = center_start[1] * region_scale;
+                    let sz = center_start[2] * region_scale;
+                    let stx = step[0] * region_scale;
+                    let sty = step[1] * region_scale;
+                    let stz = step[2] * region_scale;
+                    let rx = (radii[0].abs() * region_scale).max(1e-6);
+                    let ry = (radii[1].abs() * region_scale).max(1e-6);
+                    let rz = (radii[2].abs() * region_scale).max(1e-6);
                     for i in 0..*count {
-                        let cx = center_start[0] + step[0] * i as f32;
-                        let cy = center_start[1] + step[1] * i as f32;
-                        let cz = center_start[2] + step[2] * i as f32;
+                        let cx = sx + stx * i as f32;
+                        let cy = sy + sty * i as f32;
+                        let cz = sz + stz * i as f32;
                         let dx = x - cx;
                         let dy = y - cy;
                         let dz = z - cz;
-                        let q = (dx * dx) / (radii[0] * radii[0]).max(1e-9)
-                            + (dy * dy) / (radii[1] * radii[1]).max(1e-9)
-                            + (dz * dz) / (radii[2] * radii[2]).max(1e-9);
+                        let q =
+                            (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz);
                         if q <= 1.0 {
                             any_inside = true;
                         }
@@ -13105,12 +13670,15 @@ impl Runner {
                 }
                 None => {
                     // Legacy: treat as ellipsoid using center/radii
-                    let dx = x - region.center[0];
-                    let dy = y - region.center[1];
-                    let dz = z - region.center[2];
-                    let rx = region.radii[0].max(1e-6);
-                    let ry = region.radii[1].max(1e-6);
-                    let rz = region.radii[2].max(1e-6);
+                    let cx = region.center[0] * region_scale;
+                    let cy = region.center[1] * region_scale;
+                    let cz = region.center[2] * region_scale;
+                    let dx = x - cx;
+                    let dy = y - cy;
+                    let dz = z - cz;
+                    let rx = (region.radii[0].abs() * region_scale).max(1e-6);
+                    let ry = (region.radii[1].abs() * region_scale).max(1e-6);
+                    let rz = (region.radii[2].abs() * region_scale).max(1e-6);
                     let q = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz);
                     (q <= 1.0, q.sqrt())
                 }
@@ -13134,7 +13702,7 @@ impl Runner {
         let region_name = region.map(|r| r.name.clone());
 
         // 2. Allocate type based on distribution
-        let type_name = if let Some(r) = region {
+        let mut type_name = if let Some(r) = region {
             if r.type_distribution.is_empty() {
                 None
             } else {
@@ -13157,6 +13725,20 @@ impl Runner {
         } else {
             None
         };
+
+        if type_name.is_none() && matches!(self.neuron_model, NeuronModel::Aarnn) {
+            let canonical = match layer {
+                0 => "L2_3_Pyramidal",
+                1 => "L4_SpinyStellate",
+                2 => "L5_Pyramidal",
+                _ => "L6_Corticothalamic",
+            };
+            if self.net.neuron_types.iter().any(|t| t.name == canonical) {
+                type_name = Some(canonical.to_string());
+            } else if self.net.neuron_types.iter().any(|t| t.name == "Pyramidal") {
+                type_name = Some("Pyramidal".to_string());
+            }
+        }
 
         (region_name, type_name)
     }
@@ -13198,7 +13780,7 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let (nx, ny, nz) = self.place_node_near(l, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz);
+        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, l);
         self.topo.add_neuron(
             l,
             Node3D {
@@ -13800,7 +14382,7 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let (nx, ny, nz) = self.place_node_near(target, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz);
+        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, target);
         self.topo.add_neuron(
             target,
             Node3D {
@@ -16086,5 +16668,247 @@ mod tests {
         let spawned = r.apply_growth_queue();
         assert!(!spawned);
         assert_eq!(r.total_neurons(), 12);
+    }
+
+    #[test]
+    fn test_dale_constraints_respect_explicit_interneuron_type() {
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_dale_strictness = 1.0;
+        net.aarnn_inhibitory_fraction = 0.0; // explicit type labels should still drive sign constraints
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.spawn_neuron_l0(0); // ensure at least two hidden neurons
+        assert!(r.layer_size(0) >= 2);
+
+        r.topo.layers[0][0].type_name = Some("L2_3_Pyramidal".to_string());
+        r.topo.layers[0][1].type_name = Some("PV_Interneuron".to_string());
+
+        for row in 0..r.w_hh_rec[0].nrows() {
+            r.w_hh_rec[0][(row, 0)] = -0.4; // wrong sign for excitatory presyn
+            r.w_hh_rec[0][(row, 1)] = 0.4; // wrong sign for inhibitory presyn
+        }
+        r.enforce_dale_constraints();
+
+        for row in 0..r.w_hh_rec[0].nrows() {
+            assert!(
+                r.w_hh_rec[0][(row, 0)] >= -1e-9,
+                "Explicit excitatory type should enforce non-negative outgoing sign"
+            );
+            assert!(
+                r.w_hh_rec[0][(row, 1)] <= 1e-9,
+                "Explicit inhibitory type should enforce non-positive outgoing sign"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gap_junction_locality_prefers_near_neighbors() {
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_gap_junction_strength = 1.0;
+        net.aarnn_gap_junction_radius = 0.05;
+        net.aarnn_gap_junction_inhibitory_only = false;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.spawn_neuron_l0(0);
+        r.spawn_neuron_l0(0);
+        assert!(r.layer_size(0) >= 3);
+
+        r.topo.layers[0][0].x = 0.0;
+        r.topo.layers[0][0].y = 0.0;
+        r.topo.layers[0][0].z = 0.0;
+        r.topo.layers[0][1].x = 0.02; // local neighbor
+        r.topo.layers[0][1].y = 0.0;
+        r.topo.layers[0][1].z = 0.0;
+        r.topo.layers[0][2].x = 0.8; // distant neuron
+        r.topo.layers[0][2].y = 0.0;
+        r.topo.layers[0][2].z = 0.0;
+
+        let mut curr = Array1::<f64>::zeros(3);
+        let v = Array1::from_vec(vec![1.0, 0.0, 0.0]);
+        r.apply_gap_junction_coupling_layer(&mut curr, &v, 0, 1.0);
+        assert!(
+            curr[1] > curr[2] + 1.0e-6,
+            "Local gap-junction coupling should preferentially affect nearby neurons"
+        );
+    }
+
+    #[test]
+    fn test_volume_transmission_is_distance_weighted() {
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.volume_transmission_enabled = true;
+        net.volume_transmission_radius = 0.1;
+        net.volume_transmission_strength = 1.0;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.spawn_neuron_l0(0);
+        r.spawn_neuron_l0(0);
+        assert!(r.layer_size(0) >= 3);
+
+        r.topo.layers[0][0].type_name = Some("neuromod".to_string());
+        r.topo.layers[0][1].type_name = Some("L2_3_Pyramidal".to_string());
+        r.topo.layers[0][2].type_name = Some("L2_3_Pyramidal".to_string());
+        r.topo.layers[0][0].x = 0.0;
+        r.topo.layers[0][0].y = 0.0;
+        r.topo.layers[0][0].z = 0.0;
+        r.topo.layers[0][1].x = 0.02; // near neuromod source
+        r.topo.layers[0][1].y = 0.0;
+        r.topo.layers[0][1].z = 0.0;
+        r.topo.layers[0][2].x = 0.7; // far from neuromod source
+        r.topo.layers[0][2].y = 0.0;
+        r.topo.layers[0][2].z = 0.0;
+
+        r.neuromod_dopamine = 3.0;
+        r.neuromod_ach = 3.0;
+        r.neuromod_serotonin = 3.0;
+        let factors = r.compute_volume_transmission_factors(&[vec![0]]);
+        assert!(factors[0][1] > factors[0][2]);
+        assert!(factors[0][1] > 1.0);
+    }
+
+    #[test]
+    fn test_active_dendritic_compartments_boost_excitation() {
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_bio.dendritic_active_enabled = true;
+        net.aarnn_bio.dendritic_ca_influx_gain = 1.0;
+        net.aarnn_bio.dendritic_plateau_threshold = 0.0;
+        net.aarnn_bio.dendritic_plateau_gain = 1.0;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        let mut curr = Array1::from_vec(vec![1.0]);
+        r.apply_active_dendritic_compartments_layer(0, &mut curr);
+        assert!(curr[0] > 1.0);
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn test_myelin_level_modulates_delay() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelin_min_conduction_gain = 0.6;
+        net.aarnn_myelin_max_conduction_gain = 2.4;
+        net.aarnn_myelin_initial = 0.0;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::HiddenRec,
+            pre_layer: 0,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: None,
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_ax_steps = vec![12];
+        r.syn_den_steps = vec![0];
+        r.syn_ax_len = vec![0.0];
+        r.syn_den_len = vec![0.0];
+        r.syn_myelin = vec![0.0];
+
+        let (slow_steps, _) = r.syn_delay_and_atten(0);
+        r.syn_myelin[0] = 1.0;
+        let (fast_steps, _) = r.syn_delay_and_atten(0);
+        assert!(fast_steps < slow_steps);
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn test_myelination_waxes_with_activity_and_wanes_when_idle() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelination_rate = 0.02;
+        net.aarnn_demyelination_rate = 0.02;
+        net.aarnn_myelination_activity_target = 0.2;
+        net.aarnn_myelin_initial = 0.2;
+        net.num_sensory_neurons = 1;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::In,
+            pre_layer: -1,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: None,
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_myelin = vec![0.2];
+        if r.x_pre_in.is_empty() {
+            r.x_pre_in = Array1::from_vec(vec![0.0]);
+        }
+        if r.x_post_h.is_empty() {
+            r.x_post_h.push(Array1::from_vec(vec![0.0]));
+        } else if r.x_post_h[0].is_empty() {
+            r.x_post_h[0] = Array1::from_vec(vec![0.0]);
+        }
+
+        r.x_pre_in[0] = 1.0;
+        r.x_post_h[0][0] = 1.0;
+        r.update_activity_dependent_myelination(10.0);
+        assert!(r.syn_myelin[0] > 0.2);
+
+        let after_growth = r.syn_myelin[0];
+        r.x_pre_in[0] = 0.0;
+        r.x_post_h[0][0] = 0.0;
+        r.update_activity_dependent_myelination(50.0);
+        assert!(r.syn_myelin[0] < after_growth);
     }
 }

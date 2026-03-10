@@ -7312,6 +7312,24 @@ impl eframe::App for App {
                                 });
                                 ui.separator();
                                 ui.group(|ui| {
+                                    ui.label("Dendritic Nonlinearity");
+                                    changed |= ui.checkbox(&mut net.aarnn_bio.dendritic_active_enabled, "Enable active dendrites")
+                                        .on_hover_text("Adds calcium/plateau-like dendritic compartment integration for hidden neurons").changed();
+                                    ui.add_enabled_ui(net.aarnn_bio.dendritic_active_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_ca_tau_ms, 10.0..=1000.0).text("Dendritic Ca tau (ms)"))
+                                            .on_hover_text("Time constant for dendritic calcium integration").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_tau_ms, 20.0..=2000.0).text("Plateau tau (ms)"))
+                                            .on_hover_text("Decay time constant of dendritic plateau state").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_ca_influx_gain, 0.0..=1.0).text("Ca influx gain"))
+                                            .on_hover_text("How strongly excitatory drive enters dendritic calcium state").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_threshold, 0.0..=5.0).text("Plateau threshold"))
+                                            .on_hover_text("Calcium level needed to recruit nonlinear dendritic boost").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_gain, 0.0..=2.0).text("Plateau gain"))
+                                            .on_hover_text("Maximum dendritic multiplicative gain contribution").changed();
+                                    });
+                                });
+                                ui.separator();
+                                ui.group(|ui| {
                                     ui.label("Advanced Bio Interactions");
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_inhibitory_fraction, 0.0..=0.8).text("Inhibitory fraction"))
                                         .on_hover_text("Fraction of presynaptic neurons treated as inhibitory for Dale-style sign constraints").changed();
@@ -7319,8 +7337,20 @@ impl eframe::App for App {
                                         .on_hover_text("0 disables Dale enforcement; 1 enforces strict fixed-sign output per presynaptic neuron").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_gap_junction_strength, 0.0..=0.2).text("Gap junction strength"))
                                         .on_hover_text("Electrical coupling term that nudges same-layer membrane potentials toward their local mean").changed();
+                                    changed |= ui.add(egui::Slider::new(&mut net.aarnn_gap_junction_radius, 0.0..=0.5).text("Gap junction radius"))
+                                        .on_hover_text("Locality radius for gap-junction coupling in normalized space; 0 falls back to global mean coupling").changed();
+                                    changed |= ui.checkbox(&mut net.aarnn_gap_junction_inhibitory_only, "Gap junctions inhibitory-only")
+                                        .on_hover_text("Restrict electrical coupling to inhibitory/interneuron-like neuron types").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_nmda_voltage_sensitivity, 0.0..=0.2).text("NMDA voltage sensitivity"))
                                         .on_hover_text("Voltage-dependent NMDA gating strength (0 disables voltage gating)").changed();
+                                    changed |= ui.checkbox(&mut net.volume_transmission_enabled, "Enable volume transmission")
+                                        .on_hover_text("Enable local neuromodulator diffusion-like gain fields around active neuromodulatory neurons").changed();
+                                    ui.add_enabled_ui(net.volume_transmission_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.volume_transmission_radius, 0.05..=1.0).text("Volume radius"))
+                                            .on_hover_text("Spatial radius of neuromodulator field spread").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.volume_transmission_strength, 0.0..=1.0).text("Volume strength"))
+                                            .on_hover_text("Gain applied by local neuromodulator field to hidden-layer input current").changed();
+                                    });
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_triplet_ltp_gain, 0.0..=2.0).text("Triplet LTP gain"))
                                         .on_hover_text("Scales an activity-based potentiation term in AARNN/STDP learning-rate modulation").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_triplet_ltd_gain, 0.0..=2.0).text("Triplet LTD gain"))
@@ -7333,6 +7363,22 @@ impl eframe::App for App {
                                         .on_hover_text("Exponential attenuation of transmitted signals based on morphology path length").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_release_prob_heterogeneity, 0.0..=1.0).text("Release heterogeneity"))
                                         .on_hover_text("Per-synapse variation around baseline release probability `p_release_default`").changed();
+                                    changed |= ui.checkbox(&mut net.aarnn_myelination_enabled, "Enable myelination dynamics")
+                                        .on_hover_text("Activity-dependent myelination/demyelination that modulates conduction delay").changed();
+                                    ui.add_enabled_ui(net.aarnn_myelination_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelination_rate, 0.0..=0.02).text("Myelination rate"))
+                                            .on_hover_text("Growth rate of myelin for sufficiently active synapses").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_demyelination_rate, 0.0..=0.02).text("Demyelination rate"))
+                                            .on_hover_text("Decay rate of myelin for underused or metabolically stressed pathways").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelination_activity_target, 0.0..=1.0).text("Myelination target"))
+                                            .on_hover_text("Activity threshold above which myelin tends to increase").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_min_conduction_gain, 0.2..=2.0).text("Myelin min gain"))
+                                            .on_hover_text("Conduction factor at low myelin (values <1 slow conduction)").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_max_conduction_gain, 0.5..=4.0).text("Myelin max gain"))
+                                            .on_hover_text("Conduction factor at high myelin (higher values speed conduction)").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_initial, 0.0..=1.0).text("Initial myelin"))
+                                            .on_hover_text("Initial myelin state assigned to newly formed synapses").changed();
+                                    });
                                 });
                             });
 
