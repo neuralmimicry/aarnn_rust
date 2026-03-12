@@ -520,13 +520,28 @@ remote_start_bg() {
     local tag="$2"
     local cmd_str="$3"
     local remote_log_dir="${4:-$REMOTE_ROOT_DIR/logs}"
+    local cmd_b64
+    cmd_b64="$(printf "%s" "$cmd_str" | base64 | tr -d '\n')"
     local output
-    output="$(remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" "$remote_log_dir" "$tag" "$cmd_str" <<'EOS'
+    output="$(remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" "$remote_log_dir" "$tag" "$cmd_b64" <<'EOS'
 set -euo pipefail
 ROOT="$1"
 LOG_DIR="$2"
 TAG="$3"
-CMD="$4"
+CMD_B64="$4"
+if command -v base64 >/dev/null 2>&1; then
+    CMD="$(printf '%s' "$CMD_B64" | base64 -d)"
+elif command -v python3 >/dev/null 2>&1; then
+    CMD="$(python3 - "$CMD_B64" <<'PY'
+import base64
+import sys
+print(base64.b64decode(sys.argv[1]).decode("utf-8"), end="")
+PY
+)"
+else
+    echo "Neither base64 nor python3 is available to decode remote command."
+    exit 1
+fi
 mkdir -p "$LOG_DIR"
 cd "$ROOT"
 nohup bash -lc "$CMD" >"$LOG_DIR/$TAG.log" 2>&1 &
@@ -534,7 +549,7 @@ echo $!
 EOS
 )"
     local pid
-    pid="$(echo "$output" | tr -d '\r\n[:space:]')"
+    pid="$(echo "$output" | awk '/^[0-9]+$/ {v=$0} END {print v}')"
     if [ -z "$pid" ] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
         echo "Failed to start remote process '$tag' on $host (output: $output)"
         return 1
@@ -555,6 +570,60 @@ wait_for_remote_port() {
         sleep 0.3
     done
     return 1
+}
+
+remote_is_port_free() {
+    local host="$1"
+    local port="$2"
+    remote_exec_script "$host" bash -s -- "$port" <<'EOS' >/dev/null 2>&1
+set -euo pipefail
+PORT="$1"
+if command -v ss >/dev/null 2>&1; then
+    if ss -H -ltn | awk '{print $4}' | awk -F: '{print $NF}' | grep -qx "$PORT"; then
+        exit 1
+    fi
+    if ss -H -lun | awk '{print $4}' | awk -F: '{print $NF}' | grep -qx "$PORT"; then
+        exit 1
+    fi
+fi
+exit 0
+EOS
+}
+
+find_remote_free_port() {
+    local host="$1"
+    local start="${2:-50051}"
+    local output
+    output="$(remote_exec_script "$host" bash -s -- "$start" <<'EOS'
+set -euo pipefail
+START="$1"
+is_port_free() {
+    local p="$1"
+    if command -v ss >/dev/null 2>&1; then
+        if ss -H -ltn | awk '{print $4}' | awk -F: '{print $NF}' | grep -qx "$p"; then
+            return 1
+        fi
+        if ss -H -lun | awk '{print $4}' | awk -F: '{print $NF}' | grep -qx "$p"; then
+            return 1
+        fi
+    fi
+    return 0
+}
+p="$START"
+while [ "$p" -le 65535 ]; do
+    if is_port_free "$p"; then
+        echo "$p"
+        exit 0
+    fi
+    p=$((p + 1))
+done
+exit 1
+EOS
+)" || return 1
+    local port
+    port="$(echo "$output" | awk '/^[0-9]+$/ {v=$0} END {print v}')"
+    [ -n "$port" ] || return 1
+    printf "%s" "$port"
 }
 
 wait_for_http_ready() {
@@ -1307,7 +1376,19 @@ start_remote_cluster_runtime() {
     fi
 
     local brain="${BRAINS[0]}"
-    local orch_port="${ORCHESTRATOR_PORT:-50051}"
+    local orch_port=""
+    if [ -n "$ORCHESTRATOR_PORT" ]; then
+        orch_port="$ORCHESTRATOR_PORT"
+        if ! remote_is_port_free "$orchestrator_host" "$orch_port"; then
+            echo "Configured orchestrator port is already in use on $orchestrator_host:$orch_port"
+            exit 1
+        fi
+    else
+        orch_port="$(find_remote_free_port "$orchestrator_host" 50051)" || {
+            echo "Failed to allocate remote orchestrator port on $orchestrator_host"
+            exit 1
+        }
+    fi
     ORCHESTRATOR_PORT="$orch_port"
 
     local remote_network=""
@@ -1341,7 +1422,11 @@ start_remote_cluster_runtime() {
             echo "Skipping remote node on $host (SSH unreachable)."
             continue
         fi
-        local node_port="$node_port_start"
+        local node_port
+        node_port="$(find_remote_free_port "$host" "$node_port_start")" || {
+            echo "Failed to allocate remote node port on $host"
+            exit 1
+        }
         node_port_start=$((node_port_start + 7))
         local node_weight
         node_weight="$(remote_weight_for_host "$host")"
@@ -1365,6 +1450,12 @@ start_remote_cluster_runtime() {
         remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
         NODE_PORTS["$host"]="$node_port"
     done
+
+    if ! remote_is_port_free "$web_ui_host" "$REMOTE_WEB_UI_PORT"; then
+        echo "Remote web_ui port is already in use on $web_ui_host:$REMOTE_WEB_UI_PORT"
+        echo "Set --remote-web-ui-port to a free port."
+        exit 1
+    fi
 
     local web_ui_cmd=(
         target/release/web_ui
