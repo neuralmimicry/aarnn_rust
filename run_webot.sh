@@ -58,8 +58,8 @@ cleanup() {
             if [ -z "${host:-}" ] || [ -z "${pid:-}" ]; then
                 continue
             fi
-            "${REMOTE_SSH_ARGV[@]}" "$host" "kill -TERM $pid" >/dev/null 2>&1 || true
-            "${REMOTE_SSH_ARGV[@]}" "$host" "sleep 0.2; kill -KILL $pid" >/dev/null 2>&1 || true
+            "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "kill -TERM $pid" >/dev/null 2>&1 || true
+            "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "sleep 0.2; kill -KILL $pid" >/dev/null 2>&1 || true
             echo "  remote $tag on $host (pid $pid) stopped"
         done
     fi
@@ -101,6 +101,7 @@ Options:
   --remote-web-ui-host <host|auto|off>
                            Host for web_ui process in remote mode (default: auto; picks strongest host).
   --remote-web-ui-port <n> Remote web_ui listen port (default: 8080).
+  --no-remote-pre-clean Do not stop previous remote aarnn_rust/web_ui processes before launch.
   --remote-webots-host <host>
                            Informational local Webots host label (default: 192.168.1.70).
   --remote-ssh-opts <str>  Extra SSH options appended to remote launch commands.
@@ -119,7 +120,8 @@ Environment overrides:
   SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_ORCHESTRATOR_PORT,
   NM_NODE_UI_HIDDEN, NM_REMOTE_COMPUTE, NM_REMOTE_HOSTS, NM_REMOTE_HOST_WEIGHTS,
   NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
-  NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR.
+  NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR,
+  NM_REMOTE_PRE_CLEAN.
 USAGE
 }
 
@@ -159,6 +161,8 @@ REMOTE_WEB_UI_HOST="${NM_REMOTE_WEB_UI_HOST:-auto}"
 REMOTE_WEB_UI_PORT="${NM_REMOTE_WEB_UI_PORT:-8080}"
 REMOTE_WEBOTS_HOST="${NM_REMOTE_WEBOTS_HOST:-192.168.1.70}"
 REMOTE_SSH_OPTS="${NM_REMOTE_SSH_OPTS:-}"
+REMOTE_QUIET="${NM_REMOTE_QUIET:-1}"
+REMOTE_PRE_CLEAN="${NM_REMOTE_PRE_CLEAN:-1}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -266,6 +270,9 @@ while [ "$#" -gt 0 ]; do
             shift
             REMOTE_WEBOTS_HOST="${1:-$REMOTE_WEBOTS_HOST}"
             ;;
+        --no-remote-pre-clean)
+            REMOTE_PRE_CLEAN=0
+            ;;
         --remote-ssh-opts)
             shift
             REMOTE_SSH_OPTS="${1:-$REMOTE_SSH_OPTS}"
@@ -315,6 +322,8 @@ SKIP_CONTROLLER_BUILD="$(normalize_bool SKIP_CONTROLLER_BUILD "$SKIP_CONTROLLER_
 NODE_UI_HIDDEN="$(normalize_bool NODE_UI_HIDDEN "$NODE_UI_HIDDEN")" || exit 1
 SINGLE_ORCHESTRATOR_UI="$(normalize_bool SINGLE_ORCHESTRATOR_UI "$SINGLE_ORCHESTRATOR_UI")" || exit 1
 REMOTE_COMPUTE="$(normalize_bool REMOTE_COMPUTE "$REMOTE_COMPUTE")" || exit 1
+REMOTE_QUIET="$(normalize_bool REMOTE_QUIET "$REMOTE_QUIET")" || exit 1
+REMOTE_PRE_CLEAN="$(normalize_bool REMOTE_PRE_CLEAN "$REMOTE_PRE_CLEAN")" || exit 1
 
 if [ "$WEBOTS_MODE" != "pause" ] && [ "$WEBOTS_MODE" != "realtime" ] && [ "$WEBOTS_MODE" != "fast" ]; then
     echo "Invalid --webots-mode '$WEBOTS_MODE' (must be pause, realtime, or fast)."
@@ -477,6 +486,33 @@ init_remote_ssh() {
     REMOTE_SSH_READY=1
 }
 
+sync_remote_source_tree() {
+    local host="$1"
+    if ! command -v rsync >/dev/null 2>&1; then
+        echo "rsync not found locally; skipping source sync to $host."
+        return 0
+    fi
+    if [ -z "$REMOTE_USER" ]; then
+        echo "Missing remote user for source sync."
+        return 1
+    fi
+    remote_exec_script "$host" "mkdir -p \"$REMOTE_ROOT_DIR\"" >/dev/null 2>&1 || return 1
+    rsync -az \
+        --delete \
+        --exclude '.git/' \
+        --exclude '.idea/' \
+        --exclude '.venv/' \
+        --exclude 'target/' \
+        --exclude 'logs/' \
+        --exclude '__pycache__/' \
+        --exclude '*.pyc' \
+        --exclude 'node_modules/' \
+        --exclude '.cache/' \
+        -e "${REMOTE_SSH_ARGV[*]}" \
+        "$ROOT_DIR/" \
+        "${REMOTE_USER}@${host}:$REMOTE_ROOT_DIR/"
+}
+
 remote_reachable() {
     local host="$1"
     "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "echo ok" >/dev/null 2>&1
@@ -504,6 +540,58 @@ remote_exec_script() {
     local host="$1"
     shift
     "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "$@"
+}
+
+remote_preclean_host() {
+    local host="$1"
+    remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" <<'EOS'
+set -euo pipefail
+ROOT="$1"
+patterns=(
+    "$ROOT/target/release/aarnn_rust --orchestrator"
+    "$ROOT/target/release/aarnn_rust --node"
+    "target/release/aarnn_rust --orchestrator"
+    "target/release/aarnn_rust --node"
+    "$ROOT/target/release/web_ui --listen"
+    "target/release/web_ui --listen"
+)
+
+matched=0
+for pattern in "${patterns[@]}"; do
+    if pgrep -u "$USER" -f "$pattern" >/dev/null 2>&1; then
+        matched=1
+        pkill -TERM -u "$USER" -f "$pattern" >/dev/null 2>&1 || true
+    fi
+done
+
+if [ "$matched" -eq 1 ]; then
+    sleep 0.4
+    for pattern in "${patterns[@]}"; do
+        pkill -KILL -u "$USER" -f "$pattern" >/dev/null 2>&1 || true
+    done
+fi
+
+echo "$matched"
+EOS
+}
+
+remote_preclean_runtime() {
+    local host
+    local cleaned_any=0
+    for host in "${REMOTE_HOST_LIST[@]}"; do
+        if ! remote_reachable "$host"; then
+            continue
+        fi
+        local matched
+        matched="$(remote_preclean_host "$host" 2>/dev/null || echo "0")"
+        if [ "$matched" = "1" ]; then
+            cleaned_any=1
+            echo "Stopped prior remote runtime processes on $host."
+        fi
+    done
+    if [ "$cleaned_any" -eq 0 ]; then
+        echo "No prior remote runtime processes were detected on compute hosts."
+    fi
 }
 
 register_remote_proc() {
@@ -1118,6 +1206,11 @@ build_remote_compute_binaries() {
             echo "Skipping remote build on $host (SSH unreachable)."
             continue
         fi
+        echo "Syncing local source tree to $host ..."
+        if ! sync_remote_source_tree "$host"; then
+            echo "Remote source sync failed on $host"
+            exit 1
+        fi
         echo "Building remote binaries on $host ..."
         if ! remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" <<'EOS'
 set -euo pipefail
@@ -1341,6 +1434,10 @@ start_remote_cluster_runtime() {
         exit 1
     fi
 
+    if [ "$REMOTE_PRE_CLEAN" -eq 1 ]; then
+        remote_preclean_runtime
+    fi
+
     if [ "$BUILD" -eq 1 ]; then
         build_remote_compute_binaries
     fi
@@ -1400,7 +1497,16 @@ start_remote_cluster_runtime() {
         remote_config="$(remote_path_for_local "$CONFIG_FILE")"
     fi
 
-    local orch_cmd=(target/release/aarnn_rust --orchestrator --brain-id "$brain" --grpc-addr "0.0.0.0:$orch_port" --quiet)
+    local orch_cmd=(
+        env "NM_DISTRIBUTE_STARTUP_SNAPSHOT=0"
+        target/release/aarnn_rust
+        --orchestrator
+        --brain-id "$brain"
+        --grpc-addr "0.0.0.0:$orch_port"
+    )
+    if [ "$REMOTE_QUIET" -eq 1 ]; then
+        orch_cmd+=(--quiet)
+    fi
     if [ -n "$remote_config" ]; then
         orch_cmd+=(--config "$remote_config")
     fi
@@ -1431,14 +1537,16 @@ start_remote_cluster_runtime() {
         local node_weight
         node_weight="$(remote_weight_for_host "$host")"
         local node_cmd=(
-            env "NM_CAPACITY_MULTIPLIER=$node_weight"
+            env "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=1"
             target/release/aarnn_rust
             --node
             --brain-id "$brain"
             --grpc-addr "0.0.0.0:$node_port"
             --orchestrator-addr "http://$orchestrator_host:$orch_port"
-            --quiet
         )
+        if [ "$REMOTE_QUIET" -eq 1 ]; then
+            node_cmd+=(--quiet)
+        fi
         if [ -n "$remote_config" ]; then
             node_cmd+=(--config "$remote_config")
         fi
@@ -1617,6 +1725,8 @@ if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote orchestrator host: $REMOTE_ORCHESTRATOR_HOST"
     echo "  remote web_ui host: $REMOTE_WEB_UI_HOST"
     echo "  remote web_ui port: $REMOTE_WEB_UI_PORT"
+    echo "  remote quiet mode: $REMOTE_QUIET"
+    echo "  remote pre-clean: $REMOTE_PRE_CLEAN"
     echo "  local webots host label: $REMOTE_WEBOTS_HOST"
 fi
 echo "  start webots: $START_WEBOTS"

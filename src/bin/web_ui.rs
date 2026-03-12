@@ -12,7 +12,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Form, Query, State},
+    extract::{DefaultBodyLimit, Form, Query, State},
     http::{HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Redirect},
@@ -32,7 +32,8 @@ use openidconnect::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -49,6 +50,17 @@ type OidcClient = CoreClient<
     EndpointMaybeSet,
     EndpointMaybeSet,
 >;
+
+const WEB_UI_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+
+async fn connect_cluster_client(
+    addr: String,
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, tonic::transport::Error> {
+    let client = DistributedNeuromorphicClient::connect(addr).await?;
+    Ok(client
+        .max_decoding_message_size(WEB_UI_GRPC_MAX_MESSAGE_BYTES)
+        .max_encoding_message_size(WEB_UI_GRPC_MAX_MESSAGE_BYTES))
+}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -521,6 +533,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/aer/stream", post(aer_stream))
         .route("/update_network", post(update_network))
         .route("/control_network", post(control_network))
+        .layer(DefaultBodyLimit::max(WEB_UI_GRPC_MAX_MESSAGE_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,
@@ -1883,7 +1896,7 @@ async fn status(
         }
     };
 
-    let mut client = match DistributedNeuromorphicClient::connect(addr.clone()).await {
+    let mut client = match connect_cluster_client(addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2038,7 +2051,7 @@ async fn snapshot(
             Err(resp) => return resp.into_response(),
         };
 
-    let mut client = match DistributedNeuromorphicClient::connect(target_addr.clone()).await {
+    let mut client = match connect_cluster_client(target_addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2114,7 +2127,7 @@ async fn activity(
             Err(resp) => return resp.into_response(),
         };
 
-    let mut client = match DistributedNeuromorphicClient::connect(target_addr.clone()).await {
+    let mut client = match connect_cluster_client(target_addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2183,7 +2196,7 @@ async fn update_network(
         }
     };
 
-    let mut client = match DistributedNeuromorphicClient::connect(addr.clone()).await {
+    let mut client = match connect_cluster_client(addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2260,7 +2273,7 @@ async fn control_network(
         }
     };
 
-    let mut client = match DistributedNeuromorphicClient::connect(addr.clone()).await {
+    let mut client = match connect_cluster_client(addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2332,7 +2345,7 @@ async fn export(
         Err(resp) => return resp.into_response(),
     };
 
-    let mut client = match DistributedNeuromorphicClient::connect(target_addr.clone()).await {
+    let mut client = match connect_cluster_client(target_addr.clone()).await {
         Ok(client) => client,
         Err(e) => {
             return (
@@ -2505,7 +2518,7 @@ async fn send_aer_batches(
     if batches.is_empty() {
         return Ok(0);
     }
-    let mut client = DistributedNeuromorphicClient::connect(target_addr.clone())
+    let mut client = connect_cluster_client(target_addr.clone())
         .await
         .map_err(|e| {
             (
@@ -2827,7 +2840,7 @@ async fn resolve_network_addr(
     network_id: &str,
     node_id: Option<String>,
 ) -> Result<String, ApiError> {
-    let mut client = DistributedNeuromorphicClient::connect(orchestrator_addr.clone())
+    let mut client = connect_cluster_client(orchestrator_addr.clone())
         .await
         .map_err(|e| {
             (
@@ -2847,25 +2860,93 @@ async fn resolve_network_addr(
         })?
         .into_inner();
 
-    let candidate = if let Some(node_id) = node_id {
-        status
-            .nodes
-            .iter()
-            .find(|n| n.node_id == node_id)
-            .map(|n| n.address.clone())
-    } else {
-        status
-            .nodes
-            .iter()
-            .find(|n| n.active_networks.iter().any(|id| id == network_id))
-            .map(|n| n.address.clone())
+    let normalize_addr = |addr: &str| -> String {
+        if addr.starts_with("http://") || addr.starts_with("https://") {
+            addr.to_string()
+        } else {
+            format!("http://{}", addr)
+        }
     };
 
-    let target = candidate.unwrap_or(orchestrator_addr);
-    let target = if target.starts_with("http://") || target.starts_with("https://") {
-        target
-    } else {
-        format!("http://{}", target)
+    let mut candidates: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push_candidate = |addr: String| {
+        let normalized = normalize_addr(&addr);
+        if seen.insert(normalized.clone()) {
+            candidates.push(normalized);
+        }
     };
+
+    // Honor an explicitly selected node first (if it currently advertises the network).
+    if let Some(req_node_id) = node_id {
+        if let Some(node) = status.nodes.iter().find(|n| {
+            n.node_id == req_node_id && n.active_networks.iter().any(|id| id == network_id)
+        }) {
+            push_candidate(node.address.clone());
+        }
+    }
+
+    // Prefer the node that currently reports the largest shard for this network.
+    if let Some(net) = status.networks.iter().find(|n| n.network_id == network_id) {
+        let mut ranked = net
+            .distribution
+            .iter()
+            .map(|(nid, range)| {
+                let covered_layers = range.layers.len();
+                let covered_neurons = range
+                    .layer_neuron_counts
+                    .values()
+                    .copied()
+                    .map(u64::from)
+                    .sum::<u64>();
+                (covered_layers, covered_neurons, nid.clone())
+            })
+            .collect::<Vec<_>>();
+
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)).then_with(|| a.2.cmp(&b.2))
+        });
+
+        for (_, _, nid) in ranked {
+            if let Some(node) = status.nodes.iter().find(|n| {
+                n.node_id == nid && n.active_networks.iter().any(|id| id == network_id)
+            }) {
+                push_candidate(node.address.clone());
+            }
+        }
+    }
+
+    // Fall back to the most capable currently-active node.
+    let mut active_nodes = status
+        .nodes
+        .iter()
+        .filter(|n| n.active_networks.iter().any(|id| id == network_id))
+        .collect::<Vec<_>>();
+    active_nodes.sort_by(|a, b| {
+        let a_neurons = a.resources.as_ref().map(|r| r.num_neurons).unwrap_or(0);
+        let b_neurons = b.resources.as_ref().map(|r| r.num_neurons).unwrap_or(0);
+        let a_capacity = a.resources.as_ref().map(|r| r.capacity_score).unwrap_or(0.0);
+        let b_capacity = b.resources.as_ref().map(|r| r.capacity_score).unwrap_or(0.0);
+
+        b_neurons
+            .cmp(&a_neurons)
+            .then_with(|| b_capacity.partial_cmp(&a_capacity).unwrap_or(Ordering::Equal))
+            .then_with(|| a.node_id.cmp(&b.node_id))
+    });
+    for node in active_nodes {
+        push_candidate(node.address.clone());
+    }
+
+    push_candidate(orchestrator_addr);
+
+    let target = candidates
+        .first()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "no available node address for requested network" })),
+            )
+        })?;
     Ok(target)
 }

@@ -53,6 +53,8 @@ use crate::runner::Runner;
 use crate::stimuli::{AerIoConfig, AerLink};
 use std::sync::atomic::AtomicBool;
 
+const NM_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+
 /// Supported neuron models for simulation.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
 enum NeuronModel {
@@ -461,6 +463,10 @@ fn main() -> anyhow::Result<()> {
                 let snapshot_json = startup_snapshot_json.clone();
                 let neuron_model = args.neuron_model.to_str().to_string();
                 let learning_rule = args.learning.to_str().to_string();
+                let distribute_startup_snapshot = std::env::var("NM_DISTRIBUTE_STARTUP_SNAPSHOT")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(true);
                 rt.block_on(async move {
                     {
                         let mut state = node.state.write().await;
@@ -473,10 +479,16 @@ fn main() -> anyhow::Result<()> {
                             net_status.neuron_model = neuron_model;
                             net_status.learning_rule = learning_rule;
                         }
-                        if let Some(snapshot_json) = snapshot_json {
+                        if distribute_startup_snapshot {
+                            if let Some(snapshot_json) = snapshot_json {
+                                state
+                                    .network_snapshots
+                                    .insert(brain_id.clone(), snapshot_json);
+                            }
+                        } else {
                             state
                                 .network_snapshots
-                                .insert(brain_id.clone(), snapshot_json);
+                                .remove(&brain_id);
                         }
                     }
                     node.rebalance_networks().await;
@@ -1011,6 +1023,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     use crate::distributed::proto::{HeartbeatRequest, JoinRequest};
     use crate::distributed::{
         proto::distributed_neuromorphic_server::DistributedNeuromorphicServer, DistributedNode,
+        ManagedNetwork,
     };
     use tonic::transport::{Channel, Server};
 
@@ -1035,6 +1048,110 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let node = DistributedNode::new(node_id.clone(), args.orchestrator);
     node.start_optional_mpi_spike_receiver().await;
 
+    // In node role, pre-load the startup config/snapshot from local files so a
+    // large snapshot doesn't have to be delivered in one heartbeat response.
+    if args.node {
+        let preload_enabled = std::env::var("NM_PRELOAD_NODE_NETWORK")
+            .ok()
+            .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+            .unwrap_or(true);
+        if preload_enabled {
+            let mut preload_snapshot_json: Option<String> = None;
+            let mut preload_cfg: Option<NetworkConfig> = None;
+
+            if let Some(network_path) = args.network.as_deref() {
+                if let Ok(s) = std::fs::read_to_string(network_path) {
+                    if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                        preload_snapshot_json = Some(s);
+                        preload_cfg = Some(snap.net);
+                    }
+                }
+            }
+
+            if preload_cfg.is_none() {
+                let cfg_path = std::path::Path::new(&args.config);
+                if cfg_path.exists() {
+                    if let Ok(s) = std::fs::read_to_string(cfg_path) {
+                        if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                            preload_snapshot_json = Some(s);
+                            preload_cfg = Some(snap.net);
+                        } else if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&s) {
+                            preload_cfg = Some(cfg);
+                        }
+                    }
+                }
+            }
+
+            if let Some(mut cfg) = preload_cfg {
+                if matches!(args.neuron_model, NeuronModel::Aarnn)
+                    || matches!(args.learning, LearningRule::Aarnn)
+                {
+                    cfg.growth_enabled = true;
+                    cfg.use_morphology = true;
+                    cfg.aarnn_layer_depth = 5;
+                }
+
+                let model = match args.neuron_model {
+                    NeuronModel::Lif => sim::NeuronModel::Lif,
+                    NeuronModel::Izh => {
+                        sim::NeuronModel::Izh(IzhikevichParams::from_preset(&args.izh_type, 1.0))
+                    }
+                    NeuronModel::Aarnn => sim::NeuronModel::Aarnn,
+                };
+                let learning = match args.learning {
+                    LearningRule::Stdp => sim::Learning::Stdp,
+                    LearningRule::Hebb => sim::Learning::Hebb,
+                    LearningRule::Oja => sim::Learning::Oja,
+                    LearningRule::Aarnn => sim::Learning::Aarnn,
+                };
+
+                let lif = LIFParams::default();
+                let stdp = STDPParams::default();
+                let mut runner =
+                    Runner::new(lif.clone(), stdp.clone(), cfg.clone(), model, learning);
+
+                if let Some(json) = preload_snapshot_json.as_deref() {
+                    if let Err(e) = runner.import_network_json(json) {
+                        nm_err!(
+                            "[warn] Failed to preload startup snapshot for node {}: {}",
+                            args.brain_id,
+                            e
+                        );
+                    }
+                }
+
+                let total_layers = (runner.net.num_hidden_layers + 1) as u32;
+                let assigned_layers: Vec<u32> = (0..total_layers).collect();
+                let desired_depth = runner.net.aarnn_layer_depth as u32;
+                let initial_config = runner.net.clone();
+
+                let mut state = node.state.write().await;
+                state.networks.insert(
+                    args.brain_id.clone(),
+                    std::sync::Arc::new(tokio::sync::RwLock::new(ManagedNetwork {
+                        id: args.brain_id.clone(),
+                        runner,
+                        assigned_layers,
+                        redundant_layers: Vec::new(),
+                        remote_spikes_fwd: std::collections::HashMap::new(),
+                        remote_spikes_bwd: std::collections::HashMap::new(),
+                        remote_spike_steps_fwd: std::collections::HashMap::new(),
+                        remote_spike_steps_bwd: std::collections::HashMap::new(),
+                        external_sensory_spikes: None,
+                        avg_step_time_ms: 0.0,
+                        desired_aarnn_depth: desired_depth,
+                        playing: true,
+                        initial_config,
+                        initial_model: model,
+                        initial_learning: learning,
+                        initial_lif: lif,
+                        initial_stdp: stdp,
+                    })),
+                );
+            }
+        }
+    }
+
     async fn connect_and_join(
         orchestrator_addr: &str,
         node_id: &str,
@@ -1044,6 +1161,9 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         let mut client = DistributedNeuromorphicClient::connect(orchestrator_addr.to_string())
             .await
             .map_err(|e| format!("connect: {e}"))?;
+        client = client
+            .max_decoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)
+            .max_encoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES);
         let resources = node.get_resources().await;
         let network_resources = node.get_network_resources().await;
         let join_req = JoinRequest {
@@ -1098,7 +1218,11 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             }
         };
         if let Err(e) = Server::builder()
-            .add_service(DistributedNeuromorphicServer::new(node_clone))
+            .add_service(
+                DistributedNeuromorphicServer::new(node_clone)
+                    .max_decoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)
+                    .max_encoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES),
+            )
             .serve_with_shutdown(addr, shutdown)
             .await
         {

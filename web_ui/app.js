@@ -652,6 +652,9 @@ addButton.addEventListener("click", () => {
 function setActive(addr) {
   state.active = addr;
   saveActive();
+  // Node IDs are ephemeral in clustered runs; default to Auto when switching target.
+  state.activeNodeId = "";
+  saveActiveNode();
   state.cards.forEach((card, key) => {
     if (key === addr) {
       card.btn.classList.add("active");
@@ -687,6 +690,8 @@ function refreshNetworkSelect() {
   if (!networks.some((n) => n.network_id === current)) {
     state.activeNetwork = networks[0].network_id;
     saveActiveNetwork();
+    state.activeNodeId = "";
+    saveActiveNode();
   }
   networkSelect.value = state.activeNetwork;
   refreshNodeSelect();
@@ -701,6 +706,8 @@ function refreshNetworkSelect() {
 networkSelect.addEventListener("change", () => {
   state.activeNetwork = networkSelect.value;
   saveActiveNetwork();
+  state.activeNodeId = "";
+  saveActiveNode();
   refreshNodeSelect();
   if (state.activeNetwork && state.activeNetwork !== state.lastNetworkId) {
     state.lastNetworkId = state.activeNetwork;
