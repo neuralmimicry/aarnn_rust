@@ -1062,8 +1062,167 @@ if ! command -v cargo >/dev/null 2>&1; then
     echo "cargo not found on remote host. Install Rust/cargo or ensure ~/.cargo/env exists."
     exit 127
 fi
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+unique_lines() {
+    awk '!seen[$0]++'
+}
+
+extract_version() {
+    local path="$1"
+    local base
+    base="$(basename "$path")"
+    if [[ "$base" =~ \.so\.([0-9]+([.][0-9]+)*)$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    return 1
+}
+
+version_major() {
+    local version="$1"
+    printf '%s\n' "${version%%.*}"
+}
+
+build_search_dirs() {
+    {
+        printf '%s\n' \
+            /usr/local/lib \
+            /usr/local/lib64 \
+            /usr/lib \
+            /usr/lib64 \
+            /lib \
+            /lib64 \
+            /usr/lib/x86_64-linux-gnu \
+            /opt/homebrew/lib \
+            /opt/local/lib
+        compgen -G '/usr/lib/llvm-*/lib' || true
+        compgen -G '/usr/local/llvm*/lib' || true
+        compgen -G '/opt/llvm*/lib' || true
+        if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+            tr ':' '\n' <<<"${LD_LIBRARY_PATH}"
+        fi
+    } | sed '/^$/d' | unique_lines
+}
+
+pick_best_libclang() {
+    local dir candidate version major
+    while IFS= read -r dir; do
+        [[ -d "$dir" ]] || continue
+        while IFS= read -r candidate; do
+            version="$(extract_version "$candidate" || true)"
+            [[ -n "$version" ]] || continue
+            major="$(version_major "$version")"
+            [[ "$major" =~ ^[0-9]+$ ]] || continue
+            if (( major < 22 )); then
+                printf '%s\t%s\n' "$version" "$candidate"
+            fi
+        done < <(
+            find "$dir" -maxdepth 1 \( -type f -o -type l \) \
+                \( -name 'libclang.so.*' -o -name 'libclang-*.so.*' \) 2>/dev/null || true
+        )
+    done < <(build_search_dirs) \
+        | sort -t $'\t' -k1,1V \
+        | tail -n 1 \
+        | cut -f2-
+}
+
+find_matching_clang() {
+    local lib_dir="$1"
+    local candidate
+    for candidate in \
+        "${lib_dir%/lib}/bin/clang" \
+        "${lib_dir%/lib64}/bin/clang" \
+        /usr/local/bin/clang \
+        /usr/bin/clang
+    do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_matching_llvm_config() {
+    local lib_dir="$1"
+    local candidate
+    for candidate in \
+        "${lib_dir%/lib}/bin/llvm-config" \
+        "${lib_dir%/lib64}/bin/llvm-config" \
+        /usr/local/bin/llvm-config \
+        /usr/bin/llvm-config
+    do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+clang_major_version() {
+    local clang_bin="$1"
+    local version_line version major
+    version_line="$("$clang_bin" --version 2>/dev/null | head -n 1 || true)"
+    [[ -n "$version_line" ]] || return 1
+    if [[ "$version_line" =~ clang[[:space:]]+version[[:space:]]+([0-9]+([.][0-9]+)*) ]]; then
+        version="${BASH_REMATCH[1]}"
+        major="$(version_major "$version")"
+        printf '%s\n' "$major"
+        return 0
+    fi
+    return 1
+}
+
+configure_compatible_clang_env() {
+    local libclang_path
+    libclang_path="$(pick_best_libclang)"
+    if [[ -z "$libclang_path" ]]; then
+        echo "[remote-build] compatible libclang (<22) not found; continuing with current environment"
+        return 0
+    fi
+
+    local lib_dir
+    lib_dir="$(dirname "$libclang_path")"
+    local clang_bin llvm_config_bin clang_major
+    clang_bin="$(find_matching_clang "$lib_dir" || true)"
+    llvm_config_bin="$(find_matching_llvm_config "$lib_dir" || true)"
+    if [[ -z "$clang_bin" ]] || [[ -z "$llvm_config_bin" ]]; then
+        echo "[remote-build] matching clang/llvm-config not found for $libclang_path; continuing with current environment"
+        return 0
+    fi
+    clang_major="$(clang_major_version "$clang_bin" || true)"
+    if [[ -z "$clang_major" ]] || (( clang_major >= 22 )); then
+        echo "[remote-build] clang from $clang_bin is incompatible; continuing with current environment"
+        return 0
+    fi
+
+    export PATH
+    PATH="$(dirname "$clang_bin"):${PATH}"
+    export LIBCLANG_PATH="$libclang_path"
+    export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export LLVM_CONFIG_PATH="$llvm_config_bin"
+    export CLANG_PATH="$clang_bin"
+    echo "[remote-build] using libclang=$LIBCLANG_PATH clang=$CLANG_PATH llvm-config=$LLVM_CONFIG_PATH"
+}
+
+configure_compatible_clang_env
+
+if have_cmd mpicc; then
+    export MPICC
+    MPICC="$(command -v mpicc)"
+fi
+if have_cmd mpicxx; then
+    export MPICXX
+    MPICXX="$(command -v mpicxx)"
+fi
+
 cd "$ROOT"
-cargo build --release --bin aarnn_rust --all-features
+cargo build --release --bin aarnn_rust
 cargo build --release --bin web_ui
 EOS
         then
