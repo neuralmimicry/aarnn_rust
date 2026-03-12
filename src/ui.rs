@@ -2488,6 +2488,14 @@ impl App {
         if remote_only {
             app.status = "Remote-only UI (local simulation disabled)".into();
         }
+        let auto_remote_count = app.add_remote_orchestrators_from_env();
+        if auto_remote_count > 0 {
+            app.status = format!(
+                "Remote-only UI (auto-connected {} orchestrator{})",
+                auto_remote_count,
+                if auto_remote_count == 1 { "" } else { "s" }
+            );
+        }
 
         #[cfg(all(feature = "robot_io", unix))]
         if _ipc_enabled {
@@ -2521,6 +2529,100 @@ impl App {
 
 #[cfg(feature = "ui")]
 impl App {
+    fn normalize_remote_orchestrator_addr(addr: &str) -> Option<String> {
+        let mut normalized = addr.trim().to_string();
+        if normalized.is_empty() {
+            return None;
+        }
+        if !normalized.starts_with("http://") && !normalized.starts_with("https://") {
+            normalized = format!("http://{}", normalized);
+        }
+        Some(normalized)
+    }
+
+    fn add_remote_orchestrator_connection(&mut self, addr: &str) -> bool {
+        let Some(addr) = Self::normalize_remote_orchestrator_addr(addr) else {
+            return false;
+        };
+        if self.remote_connections.iter().any(|c| c.addr == addr) {
+            return false;
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let tx = self.remote_status_tx.clone();
+        let addr_clone = addr.clone();
+        let rt = self.runtime_handle.clone();
+        rt.spawn(async move {
+            loop {
+                if stop_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+                match DistributedNeuromorphicClient::connect(addr_clone.clone()).await {
+                    Ok(mut client) => {
+                        match client.get_system_status(Request::new(StatusRequest {})).await {
+                            Ok(resp) => {
+                                let status = resp.into_inner();
+                                let nodes = status
+                                    .nodes
+                                    .into_iter()
+                                    .map(|n| (n.node_id.clone(), n))
+                                    .collect();
+                                let networks = status
+                                    .networks
+                                    .into_iter()
+                                    .map(|n| (n.network_id.clone(), n))
+                                    .collect();
+                                let _ = tx.send(RemoteStatusMsg::Update {
+                                    addr: addr_clone.clone(),
+                                    nodes,
+                                    networks,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(RemoteStatusMsg::Error {
+                                    addr: addr_clone.clone(),
+                                    error: format!("Status error: {}", e),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(RemoteStatusMsg::Error {
+                            addr: addr_clone.clone(),
+                            error: format!("Connect error: {}", e),
+                        });
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
+        self.remote_connections.push(RemoteConnection { addr, stop });
+        true
+    }
+
+    fn add_remote_orchestrators_from_env(&mut self) -> usize {
+        let raw = std::env::var("NM_UI_REMOTE_ORCHESTRATORS")
+            .ok()
+            .or_else(|| std::env::var("NM_REMOTE_ORCHESTRATORS").ok())
+            .unwrap_or_default();
+        if raw.trim().is_empty() {
+            return 0;
+        }
+
+        let mut added = 0usize;
+        for token in raw.split([',', ';', ' ']) {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if self.add_remote_orchestrator_connection(trimmed) {
+                added += 1;
+            }
+        }
+        added
+    }
+
     fn apply_aarnn_bio_defaults(&mut self) {
         let mut net = self.local_net.clone();
         // Canonical baseline: AARNN biomimicry profile with human-brain clumping.
@@ -6530,57 +6632,8 @@ impl eframe::App for App {
                         ui.label("Address");
                         ui.text_edit_singleline(&mut self.remote_addr_input);
                         if ui.button("Add").clicked() {
-                            let mut addr = self.remote_addr_input.trim().to_string();
-                            if !addr.is_empty() {
-                                if !addr.starts_with("http://") && !addr.starts_with("https://") {
-                                    addr = format!("http://{}", addr);
-                                }
-                                let exists = self.remote_connections.iter().any(|c| c.addr == addr);
-                                if !exists {
-                                    let stop = Arc::new(AtomicBool::new(false));
-                                    let stop_clone = stop.clone();
-                                    let tx = self.remote_status_tx.clone();
-                                    let addr_clone = addr.clone();
-                                    let rt = self.runtime_handle.clone();
-                                    rt.spawn(async move {
-                                        loop {
-                                            if stop_clone.load(Ordering::SeqCst) {
-                                                break;
-                                            }
-                                            match DistributedNeuromorphicClient::connect(addr_clone.clone()).await {
-                                                Ok(mut client) => {
-                                                    match client.get_system_status(Request::new(StatusRequest {})).await {
-                                                        Ok(resp) => {
-                                                            let status = resp.into_inner();
-                                                            let nodes = status.nodes.into_iter().map(|n| (n.node_id.clone(), n)).collect();
-                                                            let networks = status.networks.into_iter().map(|n| (n.network_id.clone(), n)).collect();
-                                                            let _ = tx.send(RemoteStatusMsg::Update {
-                                                                addr: addr_clone.clone(),
-                                                                nodes,
-                                                                networks,
-                                                            });
-                                                        }
-                                                        Err(e) => {
-                                                            let _ = tx.send(RemoteStatusMsg::Error {
-                                                                addr: addr_clone.clone(),
-                                                                error: format!("Status error: {}", e),
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    let _ = tx.send(RemoteStatusMsg::Error {
-                                                        addr: addr_clone.clone(),
-                                                        error: format!("Connect error: {}", e),
-                                                    });
-                                                }
-                                            }
-                                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                        }
-                                    });
-                                    self.remote_connections.push(RemoteConnection { addr, stop });
-                                }
-                            }
+                            let addr_input = self.remote_addr_input.clone();
+                            let _ = self.add_remote_orchestrator_connection(&addr_input);
                         }
                     });
 

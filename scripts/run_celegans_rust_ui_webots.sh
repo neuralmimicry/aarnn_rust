@@ -24,9 +24,22 @@ if [ -n "${ORCHESTRATOR_PORT:-}" ]; then
 fi
 
 if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
-  REMOTE_UI_MODE="${REMOTE_UI_MODE:-rust}"
+  REMOTE_UI_MODE="${REMOTE_UI_MODE:-web}"
+  LOCAL_RUST_UI="${LOCAL_RUST_UI:-1}"
   EXTRA_ARGS+=(--remote-compute)
   EXTRA_ARGS+=(--remote-ui-mode "$REMOTE_UI_MODE")
+  case "$LOCAL_RUST_UI" in
+    1|true|TRUE|yes|YES|on|ON)
+      EXTRA_ARGS+=(--local-rust-ui)
+      ;;
+    0|false|FALSE|no|NO|off|OFF)
+      EXTRA_ARGS+=(--no-local-rust-ui)
+      ;;
+    *)
+      echo "Invalid LOCAL_RUST_UI='$LOCAL_RUST_UI' (use 0/1, true/false, yes/no)"
+      exit 1
+      ;;
+  esac
   if [ -n "${REMOTE_HOSTS:-}" ]; then
     EXTRA_ARGS+=(--remote-hosts "$REMOTE_HOSTS")
   fi

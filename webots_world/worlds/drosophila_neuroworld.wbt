@@ -1,0 +1,322 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "../protos/DrosophilaRobot.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation 0.2413571298348519 -0.9568337613679344 0.16245018235004453 4.147536566868645
+  position 0.05587760533114102 0.6488540704626902 1.0361880242305197
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  floorSize 1.8 1.8
+  wallHeight 0.08
+}
+# Fruit-scale terrain and clutter for rich sensory gradients.
+Solid {
+  translation 0 0.028 0
+  name "fermenting_fruit_core"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.91 0.62 0.24
+        roughness 0.43
+      }
+      geometry Cylinder {
+        radius 0.12
+        height 0.056
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.12
+    height 0.056
+  }
+}
+Solid {
+  translation 0.24 0.019 0.20
+  name "fruit_chunk_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.87 0.33 0.18
+        roughness 0.38
+      }
+      geometry Sphere {
+        radius 0.036
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.036
+  }
+}
+Solid {
+  translation -0.30 0.018 -0.16
+  name "fruit_chunk_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.79 0.20 0.17
+        roughness 0.36
+      }
+      geometry Sphere {
+        radius 0.032
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.032
+  }
+}
+Solid {
+  translation -0.10 0.030 0.37
+  name "flower_stem_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.31 0.63 0.26
+        roughness 0.58
+      }
+      geometry Cylinder {
+        radius 0.012
+        height 0.06
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.012
+    height 0.06
+  }
+}
+Solid {
+  translation 0.11 0.030 -0.34
+  name "flower_stem_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.28 0.56 0.30
+        roughness 0.58
+      }
+      geometry Cylinder {
+        radius 0.011
+        height 0.06
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.011
+    height 0.06
+  }
+}
+# Narrow channels and corners for directional exploration.
+Solid {
+  translation 0.45 0.024 0.02
+  rotation 0 1 0 0.45
+  name "twig_wall_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.49 0.31 0.17
+        roughness 0.66
+      }
+      geometry Box {
+        size 0.44 0.048 0.03
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.44 0.048 0.03
+  }
+}
+Solid {
+  translation -0.43 0.024 0.07
+  rotation 0 1 0 -0.68
+  name "twig_wall_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.43 0.28 0.14
+        roughness 0.66
+      }
+      geometry Box {
+        size 0.40 0.048 0.03
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.40 0.048 0.03
+  }
+}
+Solid {
+  translation 0.02 0.024 -0.48
+  rotation 0 1 0 1.12
+  name "twig_wall_c"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.46 0.32 0.19
+        roughness 0.66
+      }
+      geometry Box {
+        size 0.34 0.048 0.03
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.34 0.048 0.03
+  }
+}
+# Uneven patches create changing inertial/contact stimuli.
+Solid {
+  translation -0.52 0.028 -0.35
+  rotation 0 0 1 -0.35
+  name "leaf_ramp_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.29 0.52 0.22
+        roughness 0.49
+      }
+      geometry Box {
+        size 0.22 0.06 0.14
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.22 0.06 0.14
+  }
+}
+Solid {
+  translation 0.56 0.029 0.34
+  rotation 0 0 1 0.32
+  name "leaf_ramp_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.25 0.49 0.24
+        roughness 0.49
+      }
+      geometry Box {
+        size 0.22 0.06 0.14
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.22 0.06 0.14
+  }
+}
+# Dynamic particles and bars keep gradients non-static.
+Solid {
+  translation 0.18 0.016 -0.19
+  linearVelocity -0.38 0 0.27
+  angularVelocity 0 6.4 0
+  name "pollen_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.96 0.88 0.21
+        roughness 0.28
+      }
+      geometry Sphere {
+        radius 0.012
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.012
+  }
+  physics Physics {
+    density -1
+    mass 0.003
+  }
+}
+Solid {
+  translation -0.24 0.016 0.22
+  linearVelocity 0.42 0 -0.24
+  angularVelocity 0 5.9 0
+  name "pollen_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.93 0.72 0.16
+        roughness 0.28
+      }
+      geometry Sphere {
+        radius 0.011
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.011
+  }
+  physics Physics {
+    density -1
+    mass 0.0025
+  }
+}
+Solid {
+  translation 0.38 0.018 0.41
+  rotation 0 1 0 0.78
+  linearVelocity -0.19 0 -0.34
+  angularVelocity 0 4.8 0
+  name "odor_bar_a"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.34 0.79 0.55
+        roughness 0.35
+      }
+      geometry Box {
+        size 0.16 0.036 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.16 0.036 0.02
+  }
+  physics Physics {
+    density -1
+    mass 0.004
+  }
+}
+Solid {
+  translation -0.37 0.018 -0.40
+  rotation 0 1 0 -0.62
+  linearVelocity 0.21 0 0.32
+  angularVelocity 0 5.2 0
+  name "odor_bar_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.37 0.64 0.82
+        roughness 0.35
+      }
+      geometry Box {
+        size 0.15 0.036 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.15 0.036 0.02
+  }
+  physics Physics {
+    density -1
+    mass 0.004
+  }
+}
+DrosophilaRobot {
+  translation -0.62 0.016 -0.58
+  name "Drosophila"
+  controller "nao_nn_controller_uds"
+  controllerArgs [
+    "NM_BRAINS=default"
+  ]
+}
