@@ -23,7 +23,10 @@
 use ndarray::{s, Array1, Array2};
 
 #[cfg(feature = "opencl")]
-use crate::cl_compute::{CLBuffers, OpenCLManager};
+use crate::cl_compute::{
+    Buffer, CLBuffers, ExecuteKernel, OpenCLManager, CL_MEM_READ_ONLY,
+    CL_MEM_READ_WRITE, CL_TRUE,
+};
 #[cfg(feature = "growth3d")]
 use crate::config::AarnnBioParams;
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
@@ -33,16 +36,6 @@ use crate::network::{build_network, BuiltNetwork};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
 use crate::topology::{Node3D, Topology3D};
-#[cfg(feature = "opencl")]
-use opencl3::error_codes::ClError;
-#[cfg(feature = "opencl")]
-use opencl3::kernel::ExecuteKernel;
-#[cfg(feature = "opencl")]
-use opencl3::memory::Buffer;
-#[cfg(feature = "opencl")]
-use opencl3::memory::{CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
-#[cfg(feature = "opencl")]
-use opencl3::types::CL_TRUE;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -6883,7 +6876,7 @@ impl Runner {
                                                         )
                                                         .enqueue_nd_range(&cl.queue)
                                                 } else {
-                                                    Err(ClError(-1))
+                                                    Err(crate::cl_compute::ClError(-1))
                                                 }
                                             } else {
                                                 if let Some(delays) = sparse_fwd.delays.as_ref() {
@@ -6909,7 +6902,7 @@ impl Runner {
                                                         )
                                                         .enqueue_nd_range(&cl.queue)
                                                 } else {
-                                                    Err(ClError(-1))
+                                                    Err(crate::cl_compute::ClError(-1))
                                                 }
                                             };
                                             if let Err(e) = fwd_res {
@@ -7041,7 +7034,7 @@ impl Runner {
                                                                 )
                                                                 .enqueue_nd_range(&cl.queue)
                                                         } else {
-                                                            Err(ClError(-1))
+                                                            Err(crate::cl_compute::ClError(-1))
                                                         }
                                                     } else {
                                                         if let Some(delays) =
@@ -7070,7 +7063,7 @@ impl Runner {
                                                                 )
                                                                 .enqueue_nd_range(&cl.queue)
                                                         } else {
-                                                            Err(ClError(-1))
+                                                            Err(crate::cl_compute::ClError(-1))
                                                         }
                                                     };
                                                     if let Err(e) = bwd_res {

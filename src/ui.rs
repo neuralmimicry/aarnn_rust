@@ -6395,9 +6395,29 @@ impl eframe::App for App {
                     }
                     #[cfg(feature = "opencl")]
                     {
-                        let cl_status = self.runner.try_read().map(|r| r.cl.is_some()).ok();
+                        let cl_status = self
+                            .runner
+                            .try_read()
+                            .map(|r| {
+                                r.cl.as_ref()
+                                    .map(|cl| (cl.execution_target(), cl.is_cuda_backend()))
+                            })
+                            .ok();
                         match cl_status {
-                            Some(true) => {
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, true))) => {
+                                ui.label("GPU: Detected (CUDA)");
+                                if self.playing {
+                                    let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
+                                    if !use_aarnn || !net_cloned.use_morphology {
+                                        ui.label("GPU Status: Active (Dense CUDA path)");
+                                    } else {
+                                        ui.label("GPU Status: Active (Sparse CUDA path)");
+                                    }
+                                } else {
+                                    ui.label("GPU Status: Inactive");
+                                }
+                            }
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, false))) => {
                                 ui.label("GPU: Detected (OpenCL)");
                                 if self.playing {
                                     let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
@@ -6410,7 +6430,15 @@ impl eframe::App for App {
                                     ui.label("GPU Status: Inactive");
                                 }
                             }
-                            Some(false) => {
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Cpu, _))) => {
+                                ui.label("GPU: Not Detected (OpenCL CPU fallback)");
+                                if self.playing {
+                                    ui.label("GPU Status: Active (OpenCL CPU path)");
+                                } else {
+                                    ui.label("GPU Status: Inactive");
+                                }
+                            }
+                            Some(None) => {
                                 ui.label("GPU: Not Detected");
                             }
                             None => {

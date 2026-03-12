@@ -26,6 +26,7 @@ reqwest = { version = "0.13", features = ["blocking"] }
 hex = "0.4"
 time = "0.3"
 opencl3 = { version = ">=0.12.3", optional = true }
+cudarc = { version = "0.19.3", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-12000"] }
 num_cpus = { version = "1.17", optional = true }
 tonic = { version = "0.14" }
 tonic-prost = "0.14"
@@ -111,6 +112,11 @@ core_affinity = ["dep:core_affinity"]
 # Enable GPU acceleration with OpenCL
 opencl = [
     "dep:opencl3",
+]
+
+# Enable CUDA acceleration backend (used as fallback when OpenCL GPU is unavailable)
+cuda = [
+    "dep:cudarc",
 ]
 
 # Optional: observability (timings/logs)

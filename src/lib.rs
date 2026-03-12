@@ -61,6 +61,10 @@ pub mod providers;
 pub mod ui;
 
 #[cfg(feature = "opencl")]
+/// Backend-agnostic GPU runtime facade used by OpenCL/CUDA execution.
+pub mod gpu_api;
+
+#[cfg(feature = "opencl")]
 /// OpenCL kernels and host-side drivers for GPGPU acceleration.
 pub mod cl_compute;
 
