@@ -1053,6 +1053,15 @@ build_remote_compute_binaries() {
         if ! remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" <<'EOS'
 set -euo pipefail
 ROOT="$1"
+if [ -f "$HOME/.cargo/env" ]; then
+    # Non-interactive ssh shells skip ~/.bashrc; source cargo explicitly.
+    . "$HOME/.cargo/env"
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "cargo not found on remote host. Install Rust/cargo or ensure ~/.cargo/env exists."
+    exit 127
+fi
 cd "$ROOT"
 cargo build --release --bin aarnn_rust --all-features
 cargo build --release --bin web_ui
