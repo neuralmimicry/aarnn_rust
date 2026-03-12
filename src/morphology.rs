@@ -47,13 +47,9 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(feature = "opencl")]
 use crate::cl_compute::OpenCLManager;
 #[cfg(feature = "opencl")]
-use opencl3::error_codes::ClError;
-#[cfg(feature = "opencl")]
-use opencl3::kernel::ExecuteKernel;
-#[cfg(feature = "opencl")]
-use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
-#[cfg(feature = "opencl")]
-use opencl3::types::CL_TRUE;
+use crate::cl_compute::{
+    Buffer, ClError, ExecuteKernel, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
+};
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Point3 {

@@ -2096,20 +2096,39 @@ fn ga_thread_opencl_manager() -> Option<Arc<OpenCLManager>> {
         let mut mgr = cell.borrow_mut();
         if mgr.is_none() {
             let indices = ga_opencl_device_indices();
-            let device_ids = if indices.is_empty() {
-                gpu_device_ids_for_indices(None).ok()?
+            let gpu_device_ids = if indices.is_empty() {
+                match gpu_device_ids_for_indices(None) {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        nm_err!("[warn] GA OpenCL GPU discovery failed: {}", e);
+                        Vec::new()
+                    }
+                }
             } else {
-                gpu_device_ids_for_indices(Some(indices.as_slice())).ok()?
+                match gpu_device_ids_for_indices(Some(indices.as_slice())) {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        nm_err!("[warn] GA OpenCL GPU discovery failed: {}", e);
+                        Vec::new()
+                    }
+                }
             };
-            let thread_idx = std::thread::current()
-                .name()
-                .and_then(|name| name.rsplit('-').next())
-                .and_then(|suffix| suffix.parse::<usize>().ok())
-                .unwrap_or_else(|| GA_OPENCL_FALLBACK_IDX.fetch_add(1, Ordering::SeqCst));
-            let device_id = device_ids[thread_idx % device_ids.len()];
-            *mgr = OpenCLManager::new_with_device_id(device_id)
-                .ok()
-                .map(Arc::new);
+            if !gpu_device_ids.is_empty() {
+                let thread_idx = std::thread::current()
+                    .name()
+                    .and_then(|name| name.rsplit('-').next())
+                    .and_then(|suffix| suffix.parse::<usize>().ok())
+                    .unwrap_or_else(|| GA_OPENCL_FALLBACK_IDX.fetch_add(1, Ordering::SeqCst));
+                let device_id = gpu_device_ids[thread_idx % gpu_device_ids.len()];
+                *mgr = OpenCLManager::new_with_device_id(device_id)
+                    .ok()
+                    .map(Arc::new);
+            }
+            if mgr.is_none() {
+                *mgr = OpenCLManager::new_with_preferred_device_index(0)
+                    .ok()
+                    .map(Arc::new);
+            }
             if mgr.is_none() {
                 nm_err!("[warn] GA OpenCL requested but per-thread manager failed to initialize.");
             }

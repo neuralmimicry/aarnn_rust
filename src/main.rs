@@ -20,6 +20,8 @@ mod affinity;
 mod bridge;
 #[cfg(feature = "opencl")]
 mod cl_compute;
+#[cfg(feature = "opencl")]
+mod gpu_api;
 mod config;
 mod distributed;
 mod ga;
