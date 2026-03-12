@@ -2045,46 +2045,49 @@ async fn snapshot(
         }
     };
 
-    let target_addr =
-        match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
-            Ok(a) => a,
+    let target_addrs =
+        match resolve_network_addrs(addr.clone(), &network_id, query.node_id.clone()).await {
+            Ok(addrs) => addrs,
             Err(resp) => return resp.into_response(),
         };
 
-    let mut client = match connect_cluster_client(target_addr.clone()).await {
-        Ok(client) => client,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("connect failed: {}", e) })),
-            )
-                .into_response();
-        }
-    };
+    let mut last_error = String::from("no candidate target attempted");
+    for target_addr in target_addrs {
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = format!("connect failed via {}: {}", target_addr, e);
+                continue;
+            }
+        };
 
-    let resp = match client
-        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
-            network_id: network_id.clone(),
-        }))
-        .await
-    {
-        Ok(resp) => resp.into_inner(),
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("snapshot failed: {}", e) })),
-            )
-                .into_response();
+        match client
+            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+                network_id: network_id.clone(),
+            }))
+            .await
+        {
+            Ok(resp) => {
+                let resp = resp.into_inner();
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "network_id": resp.network_id,
+                        "snapshot_json": resp.snapshot_json,
+                        "source": target_addr,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                last_error = format!("snapshot failed via {}: {}", target_addr, e);
+            }
         }
-    };
+    }
 
     (
-        StatusCode::OK,
-        Json(json!({
-            "network_id": resp.network_id,
-            "snapshot_json": resp.snapshot_json,
-            "source": target_addr,
-        })),
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": last_error })),
     )
         .into_response()
 }
@@ -2121,52 +2124,55 @@ async fn activity(
         }
     };
 
-    let target_addr =
-        match resolve_network_addr(addr.clone(), &network_id, query.node_id.clone()).await {
-            Ok(a) => a,
+    let target_addrs =
+        match resolve_network_addrs(addr.clone(), &network_id, query.node_id.clone()).await {
+            Ok(addrs) => addrs,
             Err(resp) => return resp.into_response(),
         };
 
-    let mut client = match connect_cluster_client(target_addr.clone()).await {
-        Ok(client) => client,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("connect failed: {}", e) })),
-            )
-                .into_response();
-        }
-    };
+    let mut last_error = String::from("no candidate target attempted");
+    for target_addr in target_addrs {
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = format!("connect failed via {}: {}", target_addr, e);
+                continue;
+            }
+        };
 
-    let resp = match client
-        .get_network_activity(Request::new(NetworkActivityRequest {
-            network_id: network_id.clone(),
-        }))
-        .await
-    {
-        Ok(resp) => resp.into_inner(),
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("activity failed: {}", e) })),
-            )
-                .into_response();
-        }
-    };
+        match client
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: network_id.clone(),
+            }))
+            .await
+        {
+            Ok(resp) => {
+                let resp = resp.into_inner();
+                let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
+                let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
+                let output = resp.output.map(|o| o.indices).unwrap_or_default();
 
-    let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
-    let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
-    let output = resp.output.map(|o| o.indices).unwrap_or_default();
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "network_id": resp.network_id,
+                        "sensory": { "indices": sensory },
+                        "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
+                        "output": { "indices": output },
+                        "source": target_addr,
+                    })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                last_error = format!("activity failed via {}: {}", target_addr, e);
+            }
+        }
+    }
 
     (
-        StatusCode::OK,
-        Json(json!({
-            "network_id": resp.network_id,
-            "sensory": { "indices": sensory },
-            "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
-            "output": { "indices": output },
-            "source": target_addr,
-        })),
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": last_error })),
     )
         .into_response()
 }
@@ -2340,39 +2346,46 @@ async fn export(
         }
     };
 
-    let target_addr = match resolve_network_addr(addr.clone(), &network_id, None).await {
-        Ok(a) => a,
+    let target_addrs = match resolve_network_addrs(addr.clone(), &network_id, None).await {
+        Ok(addrs) => addrs,
         Err(resp) => return resp.into_response(),
     };
 
-    let mut client = match connect_cluster_client(target_addr.clone()).await {
-        Ok(client) => client,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("connect failed: {}", e) })),
-            )
-                .into_response();
+    let mut snapshot_json: Option<String> = None;
+    let mut last_error = String::from("no candidate target attempted");
+    for target_addr in target_addrs {
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = format!("connect failed via {}: {}", target_addr, e);
+                continue;
+            }
+        };
+
+        match client
+            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+                network_id: network_id.clone(),
+            }))
+            .await
+        {
+            Ok(resp) => {
+                snapshot_json = Some(resp.into_inner().snapshot_json);
+                break;
+            }
+            Err(e) => {
+                last_error = format!("snapshot failed via {}: {}", target_addr, e);
+            }
         }
+    }
+
+    let Some(snapshot_json) = snapshot_json else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": last_error })),
+        )
+            .into_response();
     };
 
-    let resp = match client
-        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
-            network_id: network_id.clone(),
-        }))
-        .await
-    {
-        Ok(resp) => resp.into_inner(),
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("snapshot failed: {}", e) })),
-            )
-                .into_response();
-        }
-    };
-
-    let snapshot_json = resp.snapshot_json;
     let format = query.format.to_lowercase();
 
     let (script, arg_in, arg_out, ext) = match format.as_str() {
@@ -2835,11 +2848,11 @@ async fn aer_stream(
     }
 }
 
-async fn resolve_network_addr(
+async fn resolve_network_addrs(
     orchestrator_addr: String,
     network_id: &str,
     node_id: Option<String>,
-) -> Result<String, ApiError> {
+) -> Result<Vec<String>, ApiError> {
     let mut client = connect_cluster_client(orchestrator_addr.clone())
         .await
         .map_err(|e| {
@@ -2939,14 +2952,26 @@ async fn resolve_network_addr(
 
     push_candidate(orchestrator_addr);
 
-    let target = candidates
-        .first()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "no available node address for requested network" })),
-            )
-        })?;
-    Ok(target)
+    if candidates.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "no available node address for requested network" })),
+        ));
+    }
+    Ok(candidates)
+}
+
+async fn resolve_network_addr(
+    orchestrator_addr: String,
+    network_id: &str,
+    node_id: Option<String>,
+) -> Result<String, ApiError> {
+    let targets = resolve_network_addrs(orchestrator_addr, network_id, node_id).await?;
+    match targets.first() {
+        Some(addr) => Ok(addr.clone()),
+        None => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "no candidate target address resolved" })),
+        )),
+    }
 }
