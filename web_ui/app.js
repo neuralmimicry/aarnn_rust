@@ -111,6 +111,7 @@ const state = {
   user: null,
   userConfigEnabled: false,
   lastSnapshotPollAt: 0,
+  snapshotFailures: 0,
 };
 
 let snapshotFetchInFlight = false;
@@ -652,6 +653,7 @@ addButton.addEventListener("click", () => {
 function setActive(addr) {
   state.active = addr;
   saveActive();
+  state.snapshotFailures = 0;
   // Node IDs are ephemeral in clustered runs; default to Auto when switching target.
   state.activeNodeId = "";
   saveActiveNode();
@@ -706,6 +708,7 @@ function refreshNetworkSelect() {
 networkSelect.addEventListener("change", () => {
   state.activeNetwork = networkSelect.value;
   saveActiveNetwork();
+  state.snapshotFailures = 0;
   state.activeNodeId = "";
   saveActiveNode();
   refreshNodeSelect();
@@ -1056,6 +1059,7 @@ async function fetchSnapshotForActive() {
         const snapshot = JSON.parse(data.snapshot_json);
         const currentKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
         if (requestKey === currentKey) {
+          state.snapshotFailures = 0;
           state.snapshot = snapshot;
           syncControlsToSnapshot(snapshot);
           const rebuild = () => {
@@ -1080,9 +1084,13 @@ async function fetchSnapshotForActive() {
     if (clearGraph) {
       const currentKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
       if (currentKey === requestKey) {
-        state.graph = null;
-        state.snapshot = null;
-        drawNetwork();
+        state.snapshotFailures = (state.snapshotFailures || 0) + 1;
+        // Keep the last rendered graph through brief transport hiccups.
+        if (state.snapshotFailures >= 3) {
+          state.graph = null;
+          state.snapshot = null;
+          drawNetwork();
+        }
       }
     }
     snapshotFetchInFlight = false;

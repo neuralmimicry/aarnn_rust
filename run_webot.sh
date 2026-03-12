@@ -8,6 +8,8 @@ PIDS=()
 REMOTE_PROC_HOSTS=()
 REMOTE_PROC_PIDS=()
 REMOTE_PROC_TAGS=()
+REMOTE_CONTAINER_HOSTS=()
+REMOTE_CONTAINER_NAMES=()
 REMOTE_SSH_ARGV=()
 REMOTE_SSH_READY=0
 CLEANED_UP=0
@@ -63,6 +65,24 @@ cleanup() {
             echo "  remote $tag on $host (pid $pid) stopped"
         done
     fi
+
+    if [ "${#REMOTE_CONTAINER_NAMES[@]}" -gt 0 ] && [ "$REMOTE_SSH_READY" -eq 1 ]; then
+        local i
+        for i in "${!REMOTE_CONTAINER_NAMES[@]}"; do
+            local host="${REMOTE_CONTAINER_HOSTS[$i]}"
+            local name="${REMOTE_CONTAINER_NAMES[$i]}"
+            if [ -z "${host:-}" ] || [ -z "${name:-}" ]; then
+                continue
+            fi
+            remote_exec_script "$host" bash -s -- "$name" <<'EOS' >/dev/null 2>&1 || true
+set -euo pipefail
+NAME="$1"
+if command -v podman >/dev/null 2>&1; then
+    podman rm -f "$NAME" >/dev/null 2>&1 || true
+fi
+EOS
+        done
+    fi
 }
 
 trap 'exit 0' SIGINT SIGTERM
@@ -101,6 +121,12 @@ Options:
   --remote-web-ui-host <host|auto|off>
                            Host for web_ui process in remote mode (default: auto; picks strongest host).
   --remote-web-ui-port <n> Remote web_ui listen port (default: 8080).
+  --remote-web-ui-api-port <n>
+                           Remote web_ui API port when using --remote-ui-mode rust (default: auto).
+  --remote-ui-mode <web|rust>
+                           Browser UI backend in remote mode:
+                           web  = current web_ui frontend (default)
+                           rust = actual Rust UI via noVNC (identical UI/CX)
   --no-remote-pre-clean Do not stop previous remote aarnn_rust/web_ui processes before launch.
   --remote-webots-host <host>
                            Informational local Webots host label (default: 192.168.1.70).
@@ -120,8 +146,8 @@ Environment overrides:
   SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_ORCHESTRATOR_PORT,
   NM_NODE_UI_HIDDEN, NM_REMOTE_COMPUTE, NM_REMOTE_HOSTS, NM_REMOTE_HOST_WEIGHTS,
   NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
-  NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR,
-  NM_REMOTE_PRE_CLEAN.
+  NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEB_UI_API_PORT, NM_REMOTE_UI_MODE,
+  NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR, NM_REMOTE_PRE_CLEAN.
 USAGE
 }
 
@@ -159,6 +185,8 @@ REMOTE_LOG_DIR="${NM_REMOTE_LOG_DIR:-$REMOTE_ROOT_DIR/logs}"
 REMOTE_ORCHESTRATOR_HOST="${NM_REMOTE_ORCHESTRATOR_HOST:-auto}"
 REMOTE_WEB_UI_HOST="${NM_REMOTE_WEB_UI_HOST:-auto}"
 REMOTE_WEB_UI_PORT="${NM_REMOTE_WEB_UI_PORT:-8080}"
+REMOTE_WEB_UI_API_PORT="${NM_REMOTE_WEB_UI_API_PORT:-}"
+REMOTE_UI_MODE="${NM_REMOTE_UI_MODE:-web}"
 REMOTE_WEBOTS_HOST="${NM_REMOTE_WEBOTS_HOST:-192.168.1.70}"
 REMOTE_SSH_OPTS="${NM_REMOTE_SSH_OPTS:-}"
 REMOTE_QUIET="${NM_REMOTE_QUIET:-1}"
@@ -266,6 +294,14 @@ while [ "$#" -gt 0 ]; do
             shift
             REMOTE_WEB_UI_PORT="${1:-$REMOTE_WEB_UI_PORT}"
             ;;
+        --remote-web-ui-api-port)
+            shift
+            REMOTE_WEB_UI_API_PORT="${1:-$REMOTE_WEB_UI_API_PORT}"
+            ;;
+        --remote-ui-mode)
+            shift
+            REMOTE_UI_MODE="${1:-$REMOTE_UI_MODE}"
+            ;;
         --remote-webots-host)
             shift
             REMOTE_WEBOTS_HOST="${1:-$REMOTE_WEBOTS_HOST}"
@@ -352,6 +388,16 @@ fi
 
 if ! [[ "$REMOTE_WEB_UI_PORT" =~ ^[0-9]+$ ]]; then
     echo "Invalid --remote-web-ui-port '$REMOTE_WEB_UI_PORT' (must be an integer)."
+    exit 1
+fi
+
+if [ -n "$REMOTE_WEB_UI_API_PORT" ] && ! [[ "$REMOTE_WEB_UI_API_PORT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid --remote-web-ui-api-port '$REMOTE_WEB_UI_API_PORT' (must be an integer)."
+    exit 1
+fi
+
+if [ "$REMOTE_UI_MODE" != "web" ] && [ "$REMOTE_UI_MODE" != "rust" ]; then
+    echo "Invalid --remote-ui-mode '$REMOTE_UI_MODE' (must be web or rust)."
     exit 1
 fi
 
@@ -571,6 +617,13 @@ if [ "$matched" -eq 1 ]; then
     done
 fi
 
+if command -v podman >/dev/null 2>&1; then
+    if podman ps -aq --filter label=nm.runtime=rust_ui_novnc | grep -q .; then
+        matched=1
+        podman ps -aq --filter label=nm.runtime=rust_ui_novnc | xargs -r podman rm -f >/dev/null 2>&1 || true
+    fi
+fi
+
 echo "$matched"
 EOS
 }
@@ -601,6 +654,13 @@ register_remote_proc() {
     REMOTE_PROC_HOSTS+=("$host")
     REMOTE_PROC_PIDS+=("$pid")
     REMOTE_PROC_TAGS+=("$tag")
+}
+
+register_remote_container() {
+    local host="$1"
+    local name="$2"
+    REMOTE_CONTAINER_HOSTS+=("$host")
+    REMOTE_CONTAINER_NAMES+=("$name")
 }
 
 remote_start_bg() {
@@ -644,6 +704,72 @@ EOS
     fi
     register_remote_proc "$host" "$pid" "$tag"
     echo "$pid"
+}
+
+wait_for_remote_socket_path() {
+    local host="$1"
+    local socket_path="$2"
+    local timeout_s="${3:-20}"
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if remote_exec_script "$host" bash -s -- "$socket_path" <<'EOS' >/dev/null 2>&1
+set -euo pipefail
+SOCKET_PATH="$1"
+[ -S "$SOCKET_PATH" ]
+EOS
+        then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
+start_remote_rust_ui_novnc() {
+    local host="$1"
+    local browser_port="$2"
+    local brain="$3"
+    local container_name
+    container_name="nm-rust-ui-novnc-${brain}-${browser_port}"
+    local output
+    output="$(remote_exec_script "$host" bash -s -- "$browser_port" "$container_name" <<'EOS'
+set -euo pipefail
+PORT="$1"
+CONTAINER_NAME="$2"
+IMAGE="${NM_REMOTE_NOVNC_IMAGE:-docker.io/theasp/novnc:latest}"
+if ! command -v podman >/dev/null 2>&1; then
+    echo "podman not found on remote host"
+    exit 127
+fi
+podman rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+CID="$(
+    podman run -d \
+      --name "$CONTAINER_NAME" \
+      --label nm.runtime=rust_ui_novnc \
+      --label nm.runtime.hosted_by=run_webot \
+      -p "${PORT}:8080" \
+      -v /tmp/.X11-unix:/tmp/.X11-unix \
+      -e DISPLAY=:0 \
+      -e RUN_XTERM=no \
+      -e DISPLAY_WIDTH="${NM_REMOTE_UI_WIDTH:-1920}" \
+      -e DISPLAY_HEIGHT="${NM_REMOTE_UI_HEIGHT:-1080}" \
+      "$IMAGE"
+)"
+if [ -z "$CID" ]; then
+    exit 1
+fi
+echo "$CID"
+EOS
+    )" || return 1
+    if [ -z "$output" ]; then
+        return 1
+    fi
+    register_remote_container "$host" "$container_name"
+    if ! wait_for_remote_socket_path "$host" "/tmp/.X11-unix/X0" 20; then
+        echo "Remote noVNC container did not expose /tmp/.X11-unix/X0 on $host"
+        return 1
+    fi
+    return 0
 }
 
 wait_for_remote_port() {
@@ -1455,6 +1581,7 @@ start_remote_cluster_runtime() {
         exit 1
     fi
 
+    local brain="${BRAINS[0]}"
     local web_ui_host="$REMOTE_WEB_UI_HOST"
     if [ "$web_ui_host" = "off" ]; then
         echo "--remote-web-ui-host=off is unsupported with Webots bridge mode."
@@ -1462,6 +1589,12 @@ start_remote_cluster_runtime() {
     fi
     if [ "$web_ui_host" = "auto" ]; then
         web_ui_host="$(choose_best_remote_host)"
+    fi
+    if [ "$REMOTE_UI_MODE" = "rust" ]; then
+        if [ "$web_ui_host" != "$orchestrator_host" ]; then
+            echo "remote-ui-mode=rust requires browser UI on orchestrator host; using $orchestrator_host."
+        fi
+        web_ui_host="$orchestrator_host"
     fi
     if [ -z "$web_ui_host" ]; then
         echo "Failed to pick a reachable web_ui host."
@@ -1472,7 +1605,6 @@ start_remote_cluster_runtime() {
         exit 1
     fi
 
-    local brain="${BRAINS[0]}"
     local orch_port=""
     if [ -n "$ORCHESTRATOR_PORT" ]; then
         orch_port="$ORCHESTRATOR_PORT"
@@ -1497,6 +1629,47 @@ start_remote_cluster_runtime() {
         remote_config="$(remote_path_for_local "$CONFIG_FILE")"
     fi
 
+    local web_ui_api_port="$REMOTE_WEB_UI_PORT"
+    local web_ui_api_url=""
+    local browser_ui_url=""
+    if [ "$REMOTE_UI_MODE" = "rust" ]; then
+        if ! remote_is_port_free "$web_ui_host" "$REMOTE_WEB_UI_PORT"; then
+            echo "Remote Rust UI browser port is already in use on $web_ui_host:$REMOTE_WEB_UI_PORT"
+            echo "Set --remote-web-ui-port to a free port."
+            exit 1
+        fi
+
+        if [ -n "$REMOTE_WEB_UI_API_PORT" ]; then
+            web_ui_api_port="$REMOTE_WEB_UI_API_PORT"
+        else
+            web_ui_api_port="$(find_remote_free_port "$web_ui_host" 8081)" || {
+                echo "Failed to allocate remote web_ui API port on $web_ui_host"
+                exit 1
+            }
+        fi
+        if [ "$web_ui_api_port" = "$REMOTE_WEB_UI_PORT" ]; then
+            echo "remote-ui-mode=rust requires browser and API ports to differ."
+            echo "Set --remote-web-ui-api-port to a free port not equal to $REMOTE_WEB_UI_PORT."
+            exit 1
+        fi
+        if ! remote_is_port_free "$web_ui_host" "$web_ui_api_port"; then
+            echo "Remote web_ui API port is already in use on $web_ui_host:$web_ui_api_port"
+            echo "Set --remote-web-ui-api-port to a free port."
+            exit 1
+        fi
+
+        if ! start_remote_rust_ui_novnc "$web_ui_host" "$REMOTE_WEB_UI_PORT" "$brain"; then
+            echo "Failed to start remote Rust UI noVNC endpoint on $web_ui_host:$REMOTE_WEB_UI_PORT"
+            echo "Ensure podman is installed and can pull/run docker.io/theasp/novnc:latest."
+            exit 1
+        fi
+        if ! wait_for_http_ready "http://$web_ui_host:$REMOTE_WEB_UI_PORT/vnc.html" 40; then
+            echo "Remote Rust UI noVNC endpoint did not become ready on $web_ui_host:$REMOTE_WEB_UI_PORT"
+            exit 1
+        fi
+        browser_ui_url="http://$web_ui_host:$REMOTE_WEB_UI_PORT/vnc.html?autoconnect=true&resize=scale&show_dot=true"
+    fi
+
     local orch_cmd=(
         env "NM_DISTRIBUTE_STARTUP_SNAPSHOT=0"
         target/release/aarnn_rust
@@ -1504,6 +1677,20 @@ start_remote_cluster_runtime() {
         --brain-id "$brain"
         --grpc-addr "0.0.0.0:$orch_port"
     )
+    if [ "$REMOTE_UI_MODE" = "rust" ]; then
+        orch_cmd=(
+            env
+            "NM_DISTRIBUTE_STARTUP_SNAPSHOT=0"
+            "DISPLAY=:0"
+            "LIBGL_ALWAYS_SOFTWARE=1"
+            "MESA_LOADER_DRIVER_OVERRIDE=llvmpipe"
+            target/release/aarnn_rust
+            --orchestrator
+            --brain-id "$brain"
+            --grpc-addr "0.0.0.0:$orch_port"
+            --ui
+        )
+    fi
     if [ "$REMOTE_QUIET" -eq 1 ]; then
         orch_cmd+=(--quiet)
     fi
@@ -1559,15 +1746,17 @@ start_remote_cluster_runtime() {
         NODE_PORTS["$host"]="$node_port"
     done
 
-    if ! remote_is_port_free "$web_ui_host" "$REMOTE_WEB_UI_PORT"; then
-        echo "Remote web_ui port is already in use on $web_ui_host:$REMOTE_WEB_UI_PORT"
-        echo "Set --remote-web-ui-port to a free port."
-        exit 1
+    if [ "$REMOTE_UI_MODE" = "web" ]; then
+        if ! remote_is_port_free "$web_ui_host" "$REMOTE_WEB_UI_PORT"; then
+            echo "Remote web_ui port is already in use on $web_ui_host:$REMOTE_WEB_UI_PORT"
+            echo "Set --remote-web-ui-port to a free port."
+            exit 1
+        fi
     fi
 
     local web_ui_cmd=(
         target/release/web_ui
-        --listen "0.0.0.0:$REMOTE_WEB_UI_PORT"
+        --listen "0.0.0.0:$web_ui_api_port"
         --orchestrator "http://$orchestrator_host:$orch_port"
         --auth-mode none
     )
@@ -1575,12 +1764,15 @@ start_remote_cluster_runtime() {
     web_ui_cmd_str="$(cmd_to_string "${web_ui_cmd[@]}")"
     remote_start_bg "$web_ui_host" "remote_web_ui_${brain}" "$web_ui_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
 
-    local web_ui_url="http://$web_ui_host:$REMOTE_WEB_UI_PORT"
-    if ! wait_for_http_ready "$web_ui_url/api/config" 40; then
-        echo "Remote web_ui did not become ready at $web_ui_url"
+    web_ui_api_url="http://$web_ui_host:$web_ui_api_port"
+    if [ "$REMOTE_UI_MODE" = "web" ]; then
+        browser_ui_url="$web_ui_api_url"
+    fi
+    if ! wait_for_http_ready "$web_ui_api_url/api/config" 40; then
+        echo "Remote web_ui API did not become ready at $web_ui_api_url"
         exit 1
     fi
-    if ! wait_for_cluster_distribution "$web_ui_url" "http://$orchestrator_host:$orch_port" "$brain" 45; then
+    if ! wait_for_cluster_distribution "$web_ui_api_url" "http://$orchestrator_host:$orch_port" "$brain" 45; then
         echo "Cluster distribution for network '$brain' was not ready in time."
         exit 1
     fi
@@ -1594,7 +1786,7 @@ start_remote_cluster_runtime() {
     local bridge_cmd=(
         python3 "$bridge_tool"
         --socket "$socket_path"
-        --web-ui-url "$web_ui_url"
+        --web-ui-url "$web_ui_api_url"
         --orchestrator "http://$orchestrator_host:$orch_port"
         --network-id "$brain"
         --threshold "$THRESHOLD"
@@ -1613,7 +1805,8 @@ start_remote_cluster_runtime() {
     echo "Remote compute runtime ready:"
     echo "  webots host (local): $REMOTE_WEBOTS_HOST"
     echo "  orchestrator host: $orchestrator_host:$orch_port"
-    echo "  web_ui host: $web_ui_url"
+    echo "  browser ui: $browser_ui_url"
+    echo "  web_ui api: $web_ui_api_url"
     echo "  remote root: $REMOTE_ROOT_DIR"
     echo "  remote logs: $REMOTE_LOG_DIR"
     echo "  local bridge socket: $socket_path"
@@ -1724,7 +1917,11 @@ if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote root: $REMOTE_ROOT_DIR"
     echo "  remote orchestrator host: $REMOTE_ORCHESTRATOR_HOST"
     echo "  remote web_ui host: $REMOTE_WEB_UI_HOST"
+    echo "  remote ui mode: $REMOTE_UI_MODE"
     echo "  remote web_ui port: $REMOTE_WEB_UI_PORT"
+    if [ "$REMOTE_UI_MODE" = "rust" ]; then
+        echo "  remote web_ui api port: ${REMOTE_WEB_UI_API_PORT:-auto}"
+    fi
     echo "  remote quiet mode: $REMOTE_QUIET"
     echo "  remote pre-clean: $REMOTE_PRE_CLEAN"
     echo "  local webots host label: $REMOTE_WEBOTS_HOST"
@@ -1790,7 +1987,11 @@ fi
 echo
 if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "Webots remote cluster runtime is running (remote orchestrator + remote nodes + local bridge)."
-    echo "web_ui is running on the selected remote host for cluster visibility/control."
+    if [ "$REMOTE_UI_MODE" = "rust" ]; then
+        echo "Browser UI is the Rust orchestrator UI via noVNC; web_ui API is running on a side port."
+    else
+        echo "web_ui is running on the selected remote host for cluster visibility/control."
+    fi
 elif [ "$RUNTIME" = "cluster" ]; then
     echo "Webots cluster runtime is running (orchestrator + IPC nodes)."
     echo "Use orchestrator UI for cluster controls; each brain node hosts IPC on its socket."

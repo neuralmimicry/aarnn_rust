@@ -24,7 +24,9 @@ if [ -n "${ORCHESTRATOR_PORT:-}" ]; then
 fi
 
 if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
+  REMOTE_UI_MODE="${REMOTE_UI_MODE:-rust}"
   EXTRA_ARGS+=(--remote-compute)
+  EXTRA_ARGS+=(--remote-ui-mode "$REMOTE_UI_MODE")
   if [ -n "${REMOTE_HOSTS:-}" ]; then
     EXTRA_ARGS+=(--remote-hosts "$REMOTE_HOSTS")
   fi
@@ -45,6 +47,9 @@ if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
   fi
   if [ -n "${REMOTE_WEB_UI_PORT:-}" ]; then
     EXTRA_ARGS+=(--remote-web-ui-port "$REMOTE_WEB_UI_PORT")
+  fi
+  if [ -n "${REMOTE_WEB_UI_API_PORT:-}" ]; then
+    EXTRA_ARGS+=(--remote-web-ui-api-port "$REMOTE_WEB_UI_API_PORT")
   fi
   if [ -n "${REMOTE_WEBOTS_HOST:-}" ]; then
     EXTRA_ARGS+=(--remote-webots-host "$REMOTE_WEBOTS_HOST")
