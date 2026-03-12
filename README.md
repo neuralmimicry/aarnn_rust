@@ -122,6 +122,52 @@ Useful env overrides:
 - `ORCHESTRATOR_PORT=50051` (used by Rust UI/Web UI wrappers)
 - `WEB_UI_LISTEN=0.0.0.0:8080` (web UI wrapper only)
 
+## Webots Drosophila Runtime
+
+This repo also includes a Drosophila (fruit fly) connectome pipeline and Webots assets:
+
+- `scripts/build_drosophila_network_json.py`
+- `network_drosophila.json`
+- `webots_world/protos/DrosophilaRobot.proto`
+- `webots_world/worlds/drosophila_neuroworld.wbt`
+- `webots_world/configs/config_drosophila_webots.json`
+
+Regenerate the projected Drosophila network from BANC v626:
+
+```bash
+python3 scripts/build_drosophila_network_json.py \
+  --neurons "data/drosophila/BANC v626/neurons.csv.gz" \
+  --connections "data/drosophila/BANC v626/connections_princeton.csv.gz" \
+  --output network_drosophila.json \
+  --max-sensory 34 \
+  --max-hidden 1024 \
+  --max-output 48
+```
+
+Regenerate Drosophila Webots assets for the current network:
+
+```bash
+python3 scripts/build_webots_drosophila_assets.py --network network_drosophila.json
+```
+
+Run end-to-end by interface:
+
+```bash
+# CLI backend mode (UDS server runtime)
+scripts/run_drosophila_cli_webots.sh
+
+# Native Rust UI mode
+scripts/run_drosophila_rust_ui_webots.sh
+
+# Web UI mode (starts backend + web_ui server)
+scripts/run_drosophila_web_ui_webots.sh
+```
+
+Useful env overrides:
+- `DROSOPHILA_REBUILD_NETWORK=1` to force rebuilding `network_drosophila.json`.
+- `DROSOPHILA_MAX_SENSORY`, `DROSOPHILA_MAX_HIDDEN`, `DROSOPHILA_MAX_OUTPUT`.
+- `DROSOPHILA_MIN_SYN_COUNT` and `DROSOPHILA_WEIGHT_TRANSFORM`.
+
 ## Repository map
 
 - `scripts/` operational entrypoints

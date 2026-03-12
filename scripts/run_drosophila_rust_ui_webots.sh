@@ -4,16 +4,39 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-NETWORK_FILE="${NETWORK_FILE:-$ROOT_DIR/network_celegans.json}"
-CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_celegans_webots.json}"
-WORLD_FILE="${WORLD_FILE:-$ROOT_DIR/webots_world/worlds/celegans_neuroworld.wbt}"
+NETWORK_FILE="${NETWORK_FILE:-$ROOT_DIR/network_drosophila.json}"
+CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_drosophila_webots.json}"
+WORLD_FILE="${WORLD_FILE:-$ROOT_DIR/webots_world/worlds/drosophila_neuroworld.wbt}"
 REMOTE_COMPUTE="${REMOTE_COMPUTE:-0}"
+
+DROSOPHILA_NEURONS_FILE="${DROSOPHILA_NEURONS_FILE:-$ROOT_DIR/data/drosophila/BANC v626/neurons.csv.gz}"
+DROSOPHILA_CONNECTIONS_FILE="${DROSOPHILA_CONNECTIONS_FILE:-$ROOT_DIR/data/drosophila/BANC v626/connections_princeton.csv.gz}"
+DROSOPHILA_TEMPLATE_FILE="${DROSOPHILA_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
+DROSOPHILA_MAX_SENSORY="${DROSOPHILA_MAX_SENSORY:-34}"
+DROSOPHILA_MAX_HIDDEN="${DROSOPHILA_MAX_HIDDEN:-2048}"
+DROSOPHILA_MAX_OUTPUT="${DROSOPHILA_MAX_OUTPUT:-48}"
+DROSOPHILA_MIN_SYN_COUNT="${DROSOPHILA_MIN_SYN_COUNT:-1}"
+DROSOPHILA_WEIGHT_TRANSFORM="${DROSOPHILA_WEIGHT_TRANSFORM:-sqrt}"
+DROSOPHILA_REBUILD_NETWORK="${DROSOPHILA_REBUILD_NETWORK:-0}"
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec "$ROOT_DIR/run_webot.sh" --help
 fi
 
-python3 "$ROOT_DIR/scripts/build_webots_celegans_assets.py" \
+if [ "$DROSOPHILA_REBUILD_NETWORK" = "1" ] || [ ! -f "$NETWORK_FILE" ]; then
+  python3 "$ROOT_DIR/scripts/build_drosophila_network_json.py" \
+    --neurons "$DROSOPHILA_NEURONS_FILE" \
+    --connections "$DROSOPHILA_CONNECTIONS_FILE" \
+    --template "$DROSOPHILA_TEMPLATE_FILE" \
+    --output "$NETWORK_FILE" \
+    --max-sensory "$DROSOPHILA_MAX_SENSORY" \
+    --max-hidden "$DROSOPHILA_MAX_HIDDEN" \
+    --max-output "$DROSOPHILA_MAX_OUTPUT" \
+    --min-syn-count "$DROSOPHILA_MIN_SYN_COUNT" \
+    --weight-transform "$DROSOPHILA_WEIGHT_TRANSFORM"
+fi
+
+python3 "$ROOT_DIR/scripts/build_webots_drosophila_assets.py" \
   --network "$NETWORK_FILE" \
   --config "$CONFIG_FILE" \
   --world "$WORLD_FILE"
