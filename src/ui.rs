@@ -687,10 +687,18 @@ pub fn launch_ui(
     aer_cfg: Option<AerIoConfig>,
     runtime_handle: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
+    let ui_hidden = std::env::var("NM_UI_HIDDEN")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"))
+        .unwrap_or(false);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(format!("Neuromorphic Network - {}", brain_id))
+        .with_inner_size(vec2(1100.0, 700.0));
+    if ui_hidden {
+        viewport = viewport.with_visible(false);
+    }
     let mut native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(format!("Neuromorphic Network - {}", brain_id))
-            .with_inner_size(vec2(1100.0, 700.0)),
+        viewport,
         ..Default::default()
     };
     #[cfg(target_arch = "aarch64")]

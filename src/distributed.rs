@@ -956,6 +956,20 @@ impl DistributedNode {
             0.0
         };
         capacity += mem_ratio * 10.0;
+        // Bias node capacity by parallelism so stronger hosts naturally receive
+        // more layer assignments during orchestrator rebalancing.
+        let cpu_cores = std::thread::available_parallelism()
+            .map(|n| n.get() as f32)
+            .unwrap_or(1.0)
+            .max(1.0);
+        capacity += (cpu_cores / 4.0).min(8.0);
+        if let Ok(mult_raw) = std::env::var("NM_CAPACITY_MULTIPLIER") {
+            if let Ok(mult) = mult_raw.parse::<f32>() {
+                if mult.is_finite() && mult > 0.0 {
+                    capacity *= mult;
+                }
+            }
+        }
 
         let temperature_c = {
             #[cfg(feature = "sysinfo")]

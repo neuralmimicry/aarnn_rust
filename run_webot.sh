@@ -5,6 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 PIDS=()
+REMOTE_PROC_HOSTS=()
+REMOTE_PROC_PIDS=()
+REMOTE_PROC_TAGS=()
+REMOTE_SSH_ARGV=()
+REMOTE_SSH_READY=0
 CLEANED_UP=0
 
 cleanup() {
@@ -12,37 +17,52 @@ cleanup() {
         return
     fi
     CLEANED_UP=1
-    if [ "${#PIDS[@]}" -eq 0 ]; then
-        return
-    fi
-    echo "Shutting down Webots runtime..."
-    for pid in "${PIDS[@]}"; do
-        if [ -n "${pid:-}" ]; then
-            kill -TERM "$pid" 2>/dev/null || true
-        fi
-    done
-
-    # Bound shutdown latency: wait briefly for graceful exit, then force-kill.
-    local deadline=$((SECONDS + 3))
-    local remaining=()
-    while [ "$SECONDS" -lt "$deadline" ]; do
-        remaining=()
+    if [ "${#PIDS[@]}" -gt 0 ]; then
+        echo "Shutting down local Webots runtime..."
         for pid in "${PIDS[@]}"; do
-            if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-                remaining+=("$pid")
+            if [ -n "${pid:-}" ]; then
+                kill -TERM "$pid" 2>/dev/null || true
             fi
         done
-        if [ "${#remaining[@]}" -eq 0 ]; then
-            break
-        fi
-        sleep 0.1
-    done
 
-    for pid in "${remaining[@]}"; do
-        kill -KILL "$pid" 2>/dev/null || true
-    done
+        # Bound shutdown latency: wait briefly for graceful exit, then force-kill.
+        local deadline=$((SECONDS + 3))
+        local remaining=()
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            remaining=()
+            for pid in "${PIDS[@]}"; do
+                if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+                    remaining+=("$pid")
+                fi
+            done
+            if [ "${#remaining[@]}" -eq 0 ]; then
+                break
+            fi
+            sleep 0.1
+        done
 
-    wait "${PIDS[@]}" 2>/dev/null || true
+        for pid in "${remaining[@]}"; do
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+
+        wait "${PIDS[@]}" 2>/dev/null || true
+    fi
+
+    if [ "${#REMOTE_PROC_PIDS[@]}" -gt 0 ] && [ "$REMOTE_SSH_READY" -eq 1 ]; then
+        echo "Shutting down remote cluster processes..."
+        local i
+        for i in "${!REMOTE_PROC_PIDS[@]}"; do
+            local host="${REMOTE_PROC_HOSTS[$i]}"
+            local pid="${REMOTE_PROC_PIDS[$i]}"
+            local tag="${REMOTE_PROC_TAGS[$i]}"
+            if [ -z "${host:-}" ] || [ -z "${pid:-}" ]; then
+                continue
+            fi
+            "${REMOTE_SSH_ARGV[@]}" "$host" "kill -TERM $pid" >/dev/null 2>&1 || true
+            "${REMOTE_SSH_ARGV[@]}" "$host" "sleep 0.2; kill -KILL $pid" >/dev/null 2>&1 || true
+            echo "  remote $tag on $host (pid $pid) stopped"
+        done
+    fi
 }
 
 trap 'exit 0' SIGINT SIGTERM
@@ -63,8 +83,27 @@ Options:
   --sensory <n>            Fallback sensory neuron count before handshake (default: 25).
   --output <n>             Fallback output neuron count before handshake (default: 11).
   --threshold <f>          Spike threshold for IPC/UDS servers (default: 0.5).
+  --config <path>          NetworkConfig JSON to load in backend nodes/servers.
+  --network <path>         Snapshot JSON to import in backend nodes/servers.
+  --orchestrator-port <n>  Fixed orchestrator gRPC port (default: auto-allocate).
   --no-orchestrator-ui     In cluster runtime, start orchestrator without UI window.
   --no-node-ui             In cluster runtime, start nodes without UI (breaks IPC server bind).
+  --node-ui-hidden         Keep node UI processes hidden (IPC still binds; orchestrator UI visible).
+  --single-orchestrator-ui In cluster runtime, run only one orchestrator process with --ui --ipc.
+                           Requires exactly one brain (e.g., --brains default).
+  --remote-compute         Run cluster compute on remote hosts over SSH, while Webots stays local.
+  --remote-hosts <csv>     Remote compute hosts (default: 192.168.1.60,192.168.1.72).
+  --remote-host-weights    Optional host weights csv, e.g. 192.168.1.60=1.4,192.168.1.72=1.0.
+  --remote-user <user>     SSH user for remote hosts (default: current user).
+  --remote-root <path>     Project root on remote hosts (default: local repo root path).
+  --remote-orchestrator-host <host|auto>
+                           Host for orchestrator process (default: auto, highest weighted reachable host).
+  --remote-web-ui-host <host|auto|off>
+                           Host for web_ui process in remote mode (default: auto; picks strongest host).
+  --remote-web-ui-port <n> Remote web_ui listen port (default: 8080).
+  --remote-webots-host <host>
+                           Informational local Webots host label (default: 192.168.1.70).
+  --remote-ssh-opts <str>  Extra SSH options appended to remote launch commands.
   --no-webots              Do not launch Webots; run NN backend only.
   --webots-bin <path>      Webots executable path (default: auto-detect).
   --webots-mode <mode>     Webots mode: pause|realtime|fast (default: realtime).
@@ -77,7 +116,10 @@ Environment overrides:
   RUNTIME, NM_BRAINS, NM_INTERCONNECT, NM_AER_S_BASE, NM_AER_O_BASE,
   NM_IPC_THRESHOLD, NM_DEFAULT_SENSORY, NM_DEFAULT_OUTPUT, WORLD_FILE, LOG_DIR,
   START_WEBOTS, WEBOTS_BIN, WEBOTS_MODE, WEBOTS_HEADLESS, WEBOTS_CONNECT_TIMEOUT,
-  SKIP_CONTROLLER_BUILD.
+  SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_ORCHESTRATOR_PORT,
+  NM_NODE_UI_HIDDEN, NM_REMOTE_COMPUTE, NM_REMOTE_HOSTS, NM_REMOTE_HOST_WEIGHTS,
+  NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
+  NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR.
 USAGE
 }
 
@@ -101,6 +143,22 @@ WEBOTS_MODE="${WEBOTS_MODE:-realtime}"
 WEBOTS_HEADLESS="${WEBOTS_HEADLESS:-0}"
 WEBOTS_CONNECT_TIMEOUT="${WEBOTS_CONNECT_TIMEOUT:-60}"
 SKIP_CONTROLLER_BUILD="${SKIP_CONTROLLER_BUILD:-0}"
+CONFIG_FILE="${NM_CONFIG_FILE:-}"
+NETWORK_FILE="${NM_NETWORK_FILE:-}"
+ORCHESTRATOR_PORT="${NM_ORCHESTRATOR_PORT:-}"
+NODE_UI_HIDDEN="${NM_NODE_UI_HIDDEN:-0}"
+SINGLE_ORCHESTRATOR_UI="${NM_SINGLE_ORCHESTRATOR_UI:-0}"
+REMOTE_COMPUTE="${NM_REMOTE_COMPUTE:-0}"
+REMOTE_HOSTS="${NM_REMOTE_HOSTS:-192.168.1.60,192.168.1.72}"
+REMOTE_HOST_WEIGHTS="${NM_REMOTE_HOST_WEIGHTS:-}"
+REMOTE_USER="${NM_REMOTE_USER:-${USER:-}}"
+REMOTE_ROOT_DIR="${NM_REMOTE_ROOT:-$ROOT_DIR}"
+REMOTE_LOG_DIR="${NM_REMOTE_LOG_DIR:-$REMOTE_ROOT_DIR/logs}"
+REMOTE_ORCHESTRATOR_HOST="${NM_REMOTE_ORCHESTRATOR_HOST:-auto}"
+REMOTE_WEB_UI_HOST="${NM_REMOTE_WEB_UI_HOST:-auto}"
+REMOTE_WEB_UI_PORT="${NM_REMOTE_WEB_UI_PORT:-8080}"
+REMOTE_WEBOTS_HOST="${NM_REMOTE_WEBOTS_HOST:-192.168.1.70}"
+REMOTE_SSH_OPTS="${NM_REMOTE_SSH_OPTS:-}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -149,11 +207,68 @@ while [ "$#" -gt 0 ]; do
             shift
             THRESHOLD="${1:-$THRESHOLD}"
             ;;
+        --config)
+            shift
+            CONFIG_FILE="${1:-}"
+            ;;
+        --network)
+            shift
+            NETWORK_FILE="${1:-}"
+            ;;
+        --orchestrator-port)
+            shift
+            ORCHESTRATOR_PORT="${1:-}"
+            ;;
         --no-orchestrator-ui)
             ORCHESTRATOR_UI=0
             ;;
         --no-node-ui)
             NODE_UI=0
+            ;;
+        --node-ui-hidden)
+            NODE_UI_HIDDEN=1
+            ;;
+        --single-orchestrator-ui)
+            SINGLE_ORCHESTRATOR_UI=1
+            ;;
+        --remote-compute)
+            REMOTE_COMPUTE=1
+            ;;
+        --remote-hosts)
+            shift
+            REMOTE_HOSTS="${1:-$REMOTE_HOSTS}"
+            ;;
+        --remote-host-weights)
+            shift
+            REMOTE_HOST_WEIGHTS="${1:-$REMOTE_HOST_WEIGHTS}"
+            ;;
+        --remote-user)
+            shift
+            REMOTE_USER="${1:-$REMOTE_USER}"
+            ;;
+        --remote-root)
+            shift
+            REMOTE_ROOT_DIR="${1:-$REMOTE_ROOT_DIR}"
+            ;;
+        --remote-orchestrator-host)
+            shift
+            REMOTE_ORCHESTRATOR_HOST="${1:-$REMOTE_ORCHESTRATOR_HOST}"
+            ;;
+        --remote-web-ui-host)
+            shift
+            REMOTE_WEB_UI_HOST="${1:-$REMOTE_WEB_UI_HOST}"
+            ;;
+        --remote-web-ui-port)
+            shift
+            REMOTE_WEB_UI_PORT="${1:-$REMOTE_WEB_UI_PORT}"
+            ;;
+        --remote-webots-host)
+            shift
+            REMOTE_WEBOTS_HOST="${1:-$REMOTE_WEBOTS_HOST}"
+            ;;
+        --remote-ssh-opts)
+            shift
+            REMOTE_SSH_OPTS="${1:-$REMOTE_SSH_OPTS}"
             ;;
         --no-webots)
             START_WEBOTS=0
@@ -197,6 +312,9 @@ fi
 START_WEBOTS="$(normalize_bool START_WEBOTS "$START_WEBOTS")" || exit 1
 WEBOTS_HEADLESS="$(normalize_bool WEBOTS_HEADLESS "$WEBOTS_HEADLESS")" || exit 1
 SKIP_CONTROLLER_BUILD="$(normalize_bool SKIP_CONTROLLER_BUILD "$SKIP_CONTROLLER_BUILD")" || exit 1
+NODE_UI_HIDDEN="$(normalize_bool NODE_UI_HIDDEN "$NODE_UI_HIDDEN")" || exit 1
+SINGLE_ORCHESTRATOR_UI="$(normalize_bool SINGLE_ORCHESTRATOR_UI "$SINGLE_ORCHESTRATOR_UI")" || exit 1
+REMOTE_COMPUTE="$(normalize_bool REMOTE_COMPUTE "$REMOTE_COMPUTE")" || exit 1
 
 if [ "$WEBOTS_MODE" != "pause" ] && [ "$WEBOTS_MODE" != "realtime" ] && [ "$WEBOTS_MODE" != "fast" ]; then
     echo "Invalid --webots-mode '$WEBOTS_MODE' (must be pause, realtime, or fast)."
@@ -205,6 +323,26 @@ fi
 
 if ! [[ "$WEBOTS_CONNECT_TIMEOUT" =~ ^[0-9]+$ ]]; then
     echo "Invalid --connect-timeout '$WEBOTS_CONNECT_TIMEOUT' (must be a non-negative integer)."
+    exit 1
+fi
+
+if [ -n "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE" ]; then
+    echo "Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+if [ -n "$NETWORK_FILE" ] && [ ! -f "$NETWORK_FILE" ]; then
+    echo "Network snapshot not found: $NETWORK_FILE"
+    exit 1
+fi
+
+if [ -n "$ORCHESTRATOR_PORT" ] && ! [[ "$ORCHESTRATOR_PORT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid --orchestrator-port '$ORCHESTRATOR_PORT' (must be an integer)."
+    exit 1
+fi
+
+if ! [[ "$REMOTE_WEB_UI_PORT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid --remote-web-ui-port '$REMOTE_WEB_UI_PORT' (must be an integer)."
     exit 1
 fi
 
@@ -238,6 +376,238 @@ find_free_port() {
             return 0
         fi
         p=$((p + 1))
+    done
+    return 1
+}
+
+declare -a REMOTE_HOST_LIST=()
+declare -A REMOTE_HOST_WEIGHT_MAP=()
+
+cmd_to_string() {
+    local out=""
+    local arg
+    for arg in "$@"; do
+        printf -v out '%s%q ' "$out" "$arg"
+    done
+    printf "%s" "${out% }"
+}
+
+abs_path_from_root() {
+    local p="$1"
+    if [[ "$p" = /* ]]; then
+        printf "%s" "$p"
+    else
+        printf "%s/%s" "$ROOT_DIR" "$p"
+    fi
+}
+
+remote_path_for_local() {
+    local local_path
+    local_path="$(abs_path_from_root "$1")"
+    if [[ "$local_path" = "$ROOT_DIR/"* ]]; then
+        printf "%s/%s" "$REMOTE_ROOT_DIR" "${local_path#$ROOT_DIR/}"
+    else
+        printf "%s" "$local_path"
+    fi
+}
+
+parse_remote_hosts() {
+    REMOTE_HOST_LIST=()
+    local IFS=','
+    read -r -a _hosts <<< "$REMOTE_HOSTS"
+    local host
+    for host in "${_hosts[@]}"; do
+        host="$(echo "$host" | xargs)"
+        [ -z "$host" ] && continue
+        REMOTE_HOST_LIST+=("$host")
+    done
+}
+
+parse_remote_weights() {
+    REMOTE_HOST_WEIGHT_MAP=()
+    [ -z "$REMOTE_HOST_WEIGHTS" ] && return
+    local IFS=','
+    read -r -a _pairs <<< "$REMOTE_HOST_WEIGHTS"
+    local pair
+    for pair in "${_pairs[@]}"; do
+        pair="$(echo "$pair" | xargs)"
+        [ -z "$pair" ] && continue
+        if [[ "$pair" != *=* ]]; then
+            continue
+        fi
+        local host="${pair%%=*}"
+        local weight="${pair#*=}"
+        host="$(echo "$host" | xargs)"
+        weight="$(echo "$weight" | xargs)"
+        [ -z "$host" ] && continue
+        [ -z "$weight" ] && continue
+        REMOTE_HOST_WEIGHT_MAP["$host"]="$weight"
+    done
+}
+
+remote_weight_for_host() {
+    local host="$1"
+    printf "%s" "${REMOTE_HOST_WEIGHT_MAP[$host]:-1.0}"
+}
+
+float_gt() {
+    local a="$1"
+    local b="$2"
+    awk -v a="$a" -v b="$b" 'BEGIN { exit !(a > b) }'
+}
+
+copies_for_weight() {
+    local w="$1"
+    awk -v w="$w" 'BEGIN { c = int(w + 0.5); if (c < 1) c = 1; print c }'
+}
+
+init_remote_ssh() {
+    if [ -z "$REMOTE_USER" ]; then
+        echo "Missing --remote-user (and USER is empty)."
+        exit 1
+    fi
+    REMOTE_SSH_ARGV=(ssh -o BatchMode=yes -o ConnectTimeout=8)
+    if [ -n "$REMOTE_SSH_OPTS" ]; then
+        local extra=()
+        read -r -a extra <<< "$REMOTE_SSH_OPTS"
+        if [ "${#extra[@]}" -gt 0 ]; then
+            REMOTE_SSH_ARGV+=("${extra[@]}")
+        fi
+    fi
+    REMOTE_SSH_READY=1
+}
+
+remote_reachable() {
+    local host="$1"
+    "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "echo ok" >/dev/null 2>&1
+}
+
+choose_best_remote_host() {
+    local best=""
+    local best_weight="0"
+    local host
+    for host in "${REMOTE_HOST_LIST[@]}"; do
+        if ! remote_reachable "$host"; then
+            continue
+        fi
+        local w
+        w="$(remote_weight_for_host "$host")"
+        if [ -z "$best" ] || float_gt "$w" "$best_weight"; then
+            best="$host"
+            best_weight="$w"
+        fi
+    done
+    printf "%s" "$best"
+}
+
+remote_exec_script() {
+    local host="$1"
+    shift
+    "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "$@"
+}
+
+register_remote_proc() {
+    local host="$1"
+    local pid="$2"
+    local tag="$3"
+    REMOTE_PROC_HOSTS+=("$host")
+    REMOTE_PROC_PIDS+=("$pid")
+    REMOTE_PROC_TAGS+=("$tag")
+}
+
+remote_start_bg() {
+    local host="$1"
+    local tag="$2"
+    local cmd_str="$3"
+    local remote_log_dir="${4:-$REMOTE_ROOT_DIR/logs}"
+    local output
+    output="$(remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" "$remote_log_dir" "$tag" "$cmd_str" <<'EOS'
+set -euo pipefail
+ROOT="$1"
+LOG_DIR="$2"
+TAG="$3"
+CMD="$4"
+mkdir -p "$LOG_DIR"
+cd "$ROOT"
+nohup bash -lc "$CMD" >"$LOG_DIR/$TAG.log" 2>&1 &
+echo $!
+EOS
+)"
+    local pid
+    pid="$(echo "$output" | tr -d '\r\n[:space:]')"
+    if [ -z "$pid" ] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        echo "Failed to start remote process '$tag' on $host (output: $output)"
+        return 1
+    fi
+    register_remote_proc "$host" "$pid" "$tag"
+    echo "$pid"
+}
+
+wait_for_remote_port() {
+    local host="$1"
+    local port="$2"
+    local timeout_s="${3:-30}"
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if timeout 1 bash -lc "cat < /dev/null > /dev/tcp/$host/$port" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.3
+    done
+    return 1
+}
+
+wait_for_http_ready() {
+    local url="$1"
+    local timeout_s="${2:-30}"
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if python3 - "$url" <<'PY' >/dev/null 2>&1
+import sys, urllib.request
+url = sys.argv[1]
+with urllib.request.urlopen(url, timeout=1.0) as resp:
+    sys.exit(0 if resp.status < 500 else 1)
+PY
+        then
+            return 0
+        fi
+        sleep 0.4
+    done
+    return 1
+}
+
+wait_for_cluster_distribution() {
+    local web_ui_url="$1"
+    local orchestrator_addr="$2"
+    local network_id="$3"
+    local timeout_s="${4:-35}"
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if python3 - "$web_ui_url" "$orchestrator_addr" "$network_id" <<'PY' >/dev/null 2>&1
+import json
+import sys
+import urllib.parse
+import urllib.request
+
+web_ui_url = sys.argv[1].rstrip("/")
+addr = sys.argv[2]
+network_id = sys.argv[3]
+query = urllib.parse.urlencode({"addr": addr})
+url = f"{web_ui_url}/api/status?{query}"
+with urllib.request.urlopen(url, timeout=1.2) as resp:
+    payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+for net in payload.get("networks", []):
+    if str(net.get("network_id", "")) != network_id:
+        continue
+    dist = net.get("distribution", [])
+    if isinstance(dist, list) and len(dist) > 0:
+        sys.exit(0)
+sys.exit(1)
+PY
+        then
+            return 0
+        fi
+        sleep 0.5
     done
     return 1
 }
@@ -516,11 +886,63 @@ start_cluster_runtime() {
     fi
 
     local orch_port
-    orch_port="$(find_free_port 50051)" || {
-        echo "Failed to allocate orchestrator gRPC port"
-        exit 1
-    }
+    if [ -n "$ORCHESTRATOR_PORT" ]; then
+        orch_port="$ORCHESTRATOR_PORT"
+        if ! is_port_free "$orch_port"; then
+            echo "Requested orchestrator port is already in use: $orch_port"
+            exit 1
+        fi
+    else
+        orch_port="$(find_free_port 50051)" || {
+            echo "Failed to allocate orchestrator gRPC port"
+            exit 1
+        }
+    fi
     reserve_port "$orch_port"
+
+    if [ "$SINGLE_ORCHESTRATOR_UI" -eq 1 ]; then
+        if [ "${#BRAINS[@]}" -ne 1 ]; then
+            echo "--single-orchestrator-ui requires exactly one brain (current: $BRAIN_CSV)"
+            exit 1
+        fi
+        local brain="${BRAINS[0]}"
+        local socket_path
+        socket_path="$(socket_for_brain "$brain")"
+        SOCKET_PATHS["$brain"]="$socket_path"
+        rm -f "$socket_path"
+
+        local orch_log="$LOG_DIR/webots_orchestrator.log"
+        local orch_cmd=(
+            "$bin"
+            --orchestrator
+            --brain-id "$brain"
+            --grpc-addr "0.0.0.0:$orch_port"
+            --ipc
+            --ui
+        )
+        if [ -n "$CONFIG_FILE" ]; then
+            orch_cmd+=(--config "$CONFIG_FILE")
+        fi
+        if [ -n "$NETWORK_FILE" ]; then
+            orch_cmd+=(--network "$NETWORK_FILE")
+        fi
+        "${orch_cmd[@]}" >"$orch_log" 2>&1 &
+        PIDS+=("$!")
+
+        if ! wait_for_socket "$socket_path"; then
+            echo "Failed to bind IPC socket for brain '$brain': $socket_path"
+            echo "See log: $orch_log"
+            tail -n 40 "$orch_log" || true
+            exit 1
+        fi
+
+        echo "Single-process orchestrator runtime ready:"
+        echo "  brain: $brain"
+        echo "  socket: $socket_path"
+        echo "  gRPC: $orch_port"
+        echo "  log: $orch_log"
+        return 0
+    fi
 
     local orch_log="$LOG_DIR/webots_orchestrator.log"
     local orch_cmd=(
@@ -529,6 +951,12 @@ start_cluster_runtime() {
         --brain-id cluster_master
         --grpc-addr "0.0.0.0:$orch_port"
     )
+    if [ -n "$CONFIG_FILE" ]; then
+        orch_cmd+=(--config "$CONFIG_FILE")
+    fi
+    if [ -n "$NETWORK_FILE" ]; then
+        orch_cmd+=(--network "$NETWORK_FILE")
+    fi
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
         orch_cmd+=(--ui)
     fi
@@ -562,11 +990,21 @@ start_cluster_runtime() {
             --orchestrator-addr "http://127.0.0.1:$orch_port"
             --ipc
         )
+        if [ -n "$CONFIG_FILE" ]; then
+            node_cmd+=(--config "$CONFIG_FILE")
+        fi
+        if [ -n "$NETWORK_FILE" ]; then
+            node_cmd+=(--network "$NETWORK_FILE")
+        fi
         if [ "$NODE_UI" -eq 1 ]; then
             node_cmd+=(--ui)
         fi
 
-        "${node_cmd[@]}" >"$log_file" 2>&1 &
+        if [ "$NODE_UI" -eq 1 ] && [ "$NODE_UI_HIDDEN" -eq 1 ]; then
+            NM_UI_HIDDEN=1 "${node_cmd[@]}" >"$log_file" 2>&1 &
+        else
+            "${node_cmd[@]}" >"$log_file" 2>&1 &
+        fi
         PIDS+=("$!")
 
         if ! wait_for_socket "$socket_path"; then
@@ -600,6 +1038,221 @@ start_cluster_runtime() {
     fi
 }
 
+build_remote_compute_binaries() {
+    if [ "${#REMOTE_HOST_LIST[@]}" -eq 0 ]; then
+        echo "No remote hosts configured for remote compute build."
+        exit 1
+    fi
+    local host
+    for host in "${REMOTE_HOST_LIST[@]}"; do
+        if ! remote_reachable "$host"; then
+            echo "Skipping remote build on $host (SSH unreachable)."
+            continue
+        fi
+        echo "Building remote binaries on $host ..."
+        if ! remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" <<'EOS'
+set -euo pipefail
+ROOT="$1"
+cd "$ROOT"
+cargo build --release --bin aarnn_rust --all-features
+cargo build --release --bin web_ui
+EOS
+        then
+            echo "Remote build failed on $host"
+            exit 1
+        fi
+    done
+}
+
+start_remote_cluster_runtime() {
+    if [ "$RUNTIME" != "cluster" ]; then
+        echo "--remote-compute currently supports --runtime cluster only."
+        exit 1
+    fi
+    if [ "${#BRAINS[@]}" -ne 1 ]; then
+        echo "--remote-compute currently requires exactly one brain. Current: $BRAIN_CSV"
+        exit 1
+    fi
+    local bridge_tool="$ROOT_DIR/tools/uds_webui_bridge.py"
+    if [ ! -f "$bridge_tool" ]; then
+        echo "Missing bridge tool: $bridge_tool"
+        exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "python3 is required for remote UDS/web_ui bridge mode."
+        exit 1
+    fi
+
+    parse_remote_hosts
+    parse_remote_weights
+    init_remote_ssh
+
+    if [ "${#REMOTE_HOST_LIST[@]}" -eq 0 ]; then
+        echo "No remote hosts configured. Use --remote-hosts."
+        exit 1
+    fi
+
+    local reachable_count=0
+    local host
+    for host in "${REMOTE_HOST_LIST[@]}"; do
+        if remote_reachable "$host"; then
+            reachable_count=$((reachable_count + 1))
+        fi
+    done
+    if [ "$reachable_count" -eq 0 ]; then
+        echo "None of the remote hosts are reachable over SSH as $REMOTE_USER."
+        exit 1
+    fi
+
+    if [ "$BUILD" -eq 1 ]; then
+        build_remote_compute_binaries
+    fi
+
+    local orchestrator_host="$REMOTE_ORCHESTRATOR_HOST"
+    if [ "$orchestrator_host" = "auto" ]; then
+        orchestrator_host="$(choose_best_remote_host)"
+    fi
+    if [ -z "$orchestrator_host" ]; then
+        echo "Failed to pick a reachable orchestrator host."
+        exit 1
+    fi
+    if ! remote_reachable "$orchestrator_host"; then
+        echo "Configured orchestrator host is unreachable: $orchestrator_host"
+        exit 1
+    fi
+
+    local web_ui_host="$REMOTE_WEB_UI_HOST"
+    if [ "$web_ui_host" = "off" ]; then
+        echo "--remote-web-ui-host=off is unsupported with Webots bridge mode."
+        exit 1
+    fi
+    if [ "$web_ui_host" = "auto" ]; then
+        web_ui_host="$(choose_best_remote_host)"
+    fi
+    if [ -z "$web_ui_host" ]; then
+        echo "Failed to pick a reachable web_ui host."
+        exit 1
+    fi
+    if ! remote_reachable "$web_ui_host"; then
+        echo "Configured web_ui host is unreachable: $web_ui_host"
+        exit 1
+    fi
+
+    local brain="${BRAINS[0]}"
+    local orch_port="${ORCHESTRATOR_PORT:-50051}"
+    ORCHESTRATOR_PORT="$orch_port"
+
+    local remote_network=""
+    local remote_config=""
+    if [ -n "$NETWORK_FILE" ]; then
+        remote_network="$(remote_path_for_local "$NETWORK_FILE")"
+    fi
+    if [ -n "$CONFIG_FILE" ]; then
+        remote_config="$(remote_path_for_local "$CONFIG_FILE")"
+    fi
+
+    local orch_cmd=(target/release/aarnn_rust --orchestrator --brain-id "$brain" --grpc-addr "0.0.0.0:$orch_port" --quiet)
+    if [ -n "$remote_config" ]; then
+        orch_cmd+=(--config "$remote_config")
+    fi
+    if [ -n "$remote_network" ]; then
+        orch_cmd+=(--network "$remote_network")
+    fi
+    local orch_cmd_str
+    orch_cmd_str="$(cmd_to_string "${orch_cmd[@]}")"
+    remote_start_bg "$orchestrator_host" "remote_orchestrator_${brain}" "$orch_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+
+    if ! wait_for_remote_port "$orchestrator_host" "$orch_port" 40; then
+        echo "Remote orchestrator did not open $orchestrator_host:$orch_port in time."
+        exit 1
+    fi
+
+    local node_port_start=50070
+    for host in "${REMOTE_HOST_LIST[@]}"; do
+        if ! remote_reachable "$host"; then
+            echo "Skipping remote node on $host (SSH unreachable)."
+            continue
+        fi
+        local node_port="$node_port_start"
+        node_port_start=$((node_port_start + 7))
+        local node_weight
+        node_weight="$(remote_weight_for_host "$host")"
+        local node_cmd=(
+            env "NM_CAPACITY_MULTIPLIER=$node_weight"
+            target/release/aarnn_rust
+            --node
+            --brain-id "$brain"
+            --grpc-addr "0.0.0.0:$node_port"
+            --orchestrator-addr "http://$orchestrator_host:$orch_port"
+            --quiet
+        )
+        if [ -n "$remote_config" ]; then
+            node_cmd+=(--config "$remote_config")
+        fi
+        if [ -n "$remote_network" ]; then
+            node_cmd+=(--network "$remote_network")
+        fi
+        local node_cmd_str
+        node_cmd_str="$(cmd_to_string "${node_cmd[@]}")"
+        remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+        NODE_PORTS["$host"]="$node_port"
+    done
+
+    local web_ui_cmd=(
+        target/release/web_ui
+        --listen "0.0.0.0:$REMOTE_WEB_UI_PORT"
+        --orchestrator "http://$orchestrator_host:$orch_port"
+        --auth-mode none
+    )
+    local web_ui_cmd_str
+    web_ui_cmd_str="$(cmd_to_string "${web_ui_cmd[@]}")"
+    remote_start_bg "$web_ui_host" "remote_web_ui_${brain}" "$web_ui_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+
+    local web_ui_url="http://$web_ui_host:$REMOTE_WEB_UI_PORT"
+    if ! wait_for_http_ready "$web_ui_url/api/config" 40; then
+        echo "Remote web_ui did not become ready at $web_ui_url"
+        exit 1
+    fi
+    if ! wait_for_cluster_distribution "$web_ui_url" "http://$orchestrator_host:$orch_port" "$brain" 45; then
+        echo "Cluster distribution for network '$brain' was not ready in time."
+        exit 1
+    fi
+
+    local socket_path
+    socket_path="$(socket_for_brain "$brain")"
+    SOCKET_PATHS["$brain"]="$socket_path"
+    rm -f "$socket_path"
+
+    local bridge_log="$LOG_DIR/webots_bridge_${brain}.log"
+    local bridge_cmd=(
+        python3 "$bridge_tool"
+        --socket "$socket_path"
+        --web-ui-url "$web_ui_url"
+        --orchestrator "http://$orchestrator_host:$orch_port"
+        --network-id "$brain"
+        --threshold "$THRESHOLD"
+        --default-s "$DEFAULT_S"
+        --default-o "$DEFAULT_O"
+    )
+    "${bridge_cmd[@]}" >"$bridge_log" 2>&1 &
+    PIDS+=("$!")
+    if ! wait_for_socket "$socket_path"; then
+        echo "Failed to bind local bridge socket for brain '$brain': $socket_path"
+        echo "See log: $bridge_log"
+        tail -n 60 "$bridge_log" || true
+        exit 1
+    fi
+
+    echo "Remote compute runtime ready:"
+    echo "  webots host (local): $REMOTE_WEBOTS_HOST"
+    echo "  orchestrator host: $orchestrator_host:$orch_port"
+    echo "  web_ui host: $web_ui_url"
+    echo "  remote root: $REMOTE_ROOT_DIR"
+    echo "  remote logs: $REMOTE_LOG_DIR"
+    echo "  local bridge socket: $socket_path"
+    echo "  local bridge log: $bridge_log"
+}
+
 start_uds_runtime() {
     local bin="$ROOT_DIR/target/release/examples/nn_uds_server"
     if [ ! -x "$bin" ]; then
@@ -622,13 +1275,22 @@ start_uds_runtime() {
         local actuator_regex="${ACTUATOR_REGEX[$brain]:-.*}"
         local log_file="$LOG_DIR/webots_${brain}.log"
 
-        "$bin" \
-            --socket "$socket_path" \
-            --sensory "$DEFAULT_S" \
-            --output "$DEFAULT_O" \
-            --threshold "$THRESHOLD" \
-            --aer-sensory-base "$AER_S_BASE" \
-            --aer-output-base "$AER_O_BASE" >"$log_file" 2>&1 &
+        local uds_cmd=(
+            "$bin"
+            --socket "$socket_path"
+            --sensory "$DEFAULT_S"
+            --output "$DEFAULT_O"
+            --threshold "$THRESHOLD"
+            --aer-sensory-base "$AER_S_BASE"
+            --aer-output-base "$AER_O_BASE"
+        )
+        if [ -n "$CONFIG_FILE" ]; then
+            uds_cmd+=(--config "$CONFIG_FILE")
+        fi
+        if [ -n "$NETWORK_FILE" ]; then
+            uds_cmd+=(--network "$NETWORK_FILE")
+        fi
+        "${uds_cmd[@]}" >"$log_file" 2>&1 &
         PIDS+=("$!")
 
         if ! wait_for_socket "$socket_path"; then
@@ -657,7 +1319,12 @@ if [ "${#BRAINS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-if [ "$RUNTIME" = "cluster" ] && [ "$NODE_UI" -eq 1 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+if [ "$REMOTE_COMPUTE" -eq 1 ] && [ "$RUNTIME" != "cluster" ]; then
+    echo "--remote-compute requires --runtime cluster."
+    exit 1
+fi
+
+if [ "$RUNTIME" = "cluster" ] && [ "$REMOTE_COMPUTE" -eq 0 ] && [ "$NODE_UI" -eq 1 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     echo "No display detected (DISPLAY/WAYLAND_DISPLAY unset)."
     echo "Falling back to --runtime uds for headless compatibility."
     RUNTIME="uds"
@@ -677,6 +1344,22 @@ echo "  brains: $BRAIN_CSV"
 echo "  interconnect: ${INTERCONNECT:-none}"
 echo "  fallback S/O: $DEFAULT_S/$DEFAULT_O"
 echo "  AER base S/O: $AER_S_BASE/$AER_O_BASE"
+echo "  config file: ${CONFIG_FILE:-none}"
+echo "  network file: ${NETWORK_FILE:-none}"
+echo "  orchestrator port: ${ORCHESTRATOR_PORT:-auto}"
+echo "  node ui hidden: $NODE_UI_HIDDEN"
+echo "  single orchestrator ui: $SINGLE_ORCHESTRATOR_UI"
+echo "  remote compute: $REMOTE_COMPUTE"
+if [ "$REMOTE_COMPUTE" -eq 1 ]; then
+    echo "  remote hosts: $REMOTE_HOSTS"
+    echo "  remote host weights: ${REMOTE_HOST_WEIGHTS:-auto(resource-based)}"
+    echo "  remote user: $REMOTE_USER"
+    echo "  remote root: $REMOTE_ROOT_DIR"
+    echo "  remote orchestrator host: $REMOTE_ORCHESTRATOR_HOST"
+    echo "  remote web_ui host: $REMOTE_WEB_UI_HOST"
+    echo "  remote web_ui port: $REMOTE_WEB_UI_PORT"
+    echo "  local webots host label: $REMOTE_WEBOTS_HOST"
+fi
 echo "  start webots: $START_WEBOTS"
 if [ "$START_WEBOTS" -eq 1 ]; then
     echo "  webots mode: $WEBOTS_MODE"
@@ -687,7 +1370,9 @@ fi
 echo
 
 if [ "$BUILD" -eq 1 ]; then
-    if [ "$RUNTIME" = "cluster" ]; then
+    if [ "$REMOTE_COMPUTE" -eq 1 ]; then
+        echo "Remote compute mode selected: building on remote hosts during remote startup."
+    elif [ "$RUNTIME" = "cluster" ]; then
         echo "Building aarnn_rust binary..."
         cargo build --release --bin aarnn_rust --all-features
     else
@@ -696,7 +1381,9 @@ if [ "$BUILD" -eq 1 ]; then
     fi
 fi
 
-if [ "$RUNTIME" = "cluster" ]; then
+if [ "$REMOTE_COMPUTE" -eq 1 ]; then
+    start_remote_cluster_runtime
+elif [ "$RUNTIME" = "cluster" ]; then
     start_cluster_runtime
 else
     start_uds_runtime
@@ -732,7 +1419,10 @@ if [ "$START_WEBOTS" -eq 1 ]; then
 fi
 
 echo
-if [ "$RUNTIME" = "cluster" ]; then
+if [ "$REMOTE_COMPUTE" -eq 1 ]; then
+    echo "Webots remote cluster runtime is running (remote orchestrator + remote nodes + local bridge)."
+    echo "web_ui is running on the selected remote host for cluster visibility/control."
+elif [ "$RUNTIME" = "cluster" ]; then
     echo "Webots cluster runtime is running (orchestrator + IPC nodes)."
     echo "Use orchestrator UI for cluster controls; each brain node hosts IPC on its socket."
 else

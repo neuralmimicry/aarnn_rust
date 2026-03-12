@@ -88,6 +88,40 @@ lowest-latency healthy transport, with automatic fallback on errors.
 If MPI reports only `Single`/`Funneled` threading support, MPI transport is
 auto-disabled for safety and gRPC transports remain active.
 
+## Webots C. elegans Runtime
+
+This repo now includes generated Webots assets driven by `network_celegans.json`:
+
+- `webots_world/protos/CelegansRobot.proto`
+- `webots_world/worlds/celegans_neuroworld.wbt`
+- `webots_world/configs/config_celegans_webots.json`
+
+Regenerate assets at any time:
+
+```bash
+python3 scripts/build_webots_celegans_assets.py
+```
+
+Run end-to-end (backend import + Webots auto-connect) by interface:
+
+```bash
+# CLI backend mode (UDS server runtime)
+scripts/run_celegans_cli_webots.sh
+
+# Native Rust UI mode
+scripts/run_celegans_rust_ui_webots.sh
+
+# Web UI mode (starts backend + web_ui server)
+scripts/run_celegans_web_ui_webots.sh
+```
+
+Useful env overrides:
+- `NETWORK_FILE=/abs/path/network_celegans.json`
+- `CONFIG_FILE=/abs/path/config_celegans_webots.json`
+- `WORLD_FILE=/abs/path/celegans_neuroworld.wbt`
+- `ORCHESTRATOR_PORT=50051` (used by Rust UI/Web UI wrappers)
+- `WEB_UI_LISTEN=0.0.0.0:8080` (web UI wrapper only)
+
 ## Repository map
 
 - `scripts/` operational entrypoints
