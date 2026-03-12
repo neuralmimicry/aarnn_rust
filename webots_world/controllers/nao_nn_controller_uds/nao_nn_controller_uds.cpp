@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -216,7 +217,9 @@ int main(int argc, char** argv) {
 
     KeyboardMapper kb_mapper;
     kb_mapper.autodetect(robot);
-    load_motions();
+    if (kb_mapper.is_enabled()) {
+        load_motions();
+    }
 
     auto all_s_names = mapper.get_sensor_names();
     auto all_o_names = mapper.get_actuator_names();
@@ -384,6 +387,16 @@ int main(int argc, char** argv) {
                 }
             } else {
                 bool should_log = (now - b.last_error_time >= 5.0);
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Treat receive timeout as transient; keep last actuator outputs and
+                    // maintain the connected state to avoid flapping under load.
+                    if (should_log) {
+                        std::cerr << "[nao_nn_controller_uds] Brain '" << b.id
+                                  << "': Transfer timeout (errno=" << errno << ")" << std::endl;
+                        b.last_error_time = now;
+                    }
+                    continue;
+                }
                 if (b.connected) {
                     std::cerr << "[nao_nn_controller_uds] Brain '" << b.id << "': Connection lost." << std::endl;
                     should_log = true;
