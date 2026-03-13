@@ -105,8 +105,15 @@ const SPIKE_BURST_CONNECT_TIMEOUT: Duration = Duration::from_millis(80);
 const SPIKE_LATENCY_EWMA_ALPHA: f64 = 0.2;
 /// Consecutive failures before preferring the alternate transport method.
 const SPIKE_FAILOVER_STREAK: u32 = 3;
-/// Allow large network snapshot transfers (e.g., C. elegans) over gRPC.
-const NM_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+fn grpc_max_message_bytes() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    const MIN: usize = 4 * 1024 * 1024;
+    std::env::var("NM_GRPC_MAX_MESSAGE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= MIN)
+        .unwrap_or(DEFAULT)
+}
 
 use proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
 use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
@@ -366,9 +373,12 @@ async fn connect_peer_with_timeout(
     )
     .await
     {
-        Ok(Ok(client)) => Ok(client
-            .max_decoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)),
+        Ok(Ok(client)) => {
+            let grpc_max_msg_bytes = grpc_max_message_bytes();
+            Ok(client
+                .max_decoding_message_size(grpc_max_msg_bytes)
+                .max_encoding_message_size(grpc_max_msg_bytes))
+        }
         Ok(Err(e)) => Err(format!("connect failed for {}: {}", target, e)),
         Err(_) => Err(format!("connect timeout for {}", target)),
     }

@@ -132,6 +132,12 @@ Options:
   --no-remote-pre-clean Do not stop previous remote aarnn_rust/web_ui processes before launch.
   --remote-webots-host <host>
                            Informational local Webots host label (default: 192.168.1.70).
+  --remote-sync-data <auto|always|never>
+                           Remote dataset sync policy (default: auto).
+                           auto: sync data/ once per host, then skip unless forced.
+  --remote-rsync-compress <auto|on|off>
+                           Rsync compression policy (default: auto).
+                           auto disables compression for RFC1918 LAN hosts.
   --remote-ssh-opts <str>  Extra SSH options appended to remote launch commands.
   --no-webots              Do not launch Webots; run NN backend only.
   --webots-bin <path>      Webots executable path (default: auto-detect).
@@ -150,7 +156,7 @@ Environment overrides:
   NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
   NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEB_UI_API_PORT, NM_REMOTE_UI_MODE,
   NM_LOCAL_RUST_UI, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR,
-  NM_REMOTE_PRE_CLEAN.
+  NM_REMOTE_PRE_CLEAN, NM_REMOTE_SYNC_DATA, NM_REMOTE_RSYNC_COMPRESS.
 USAGE
 }
 
@@ -195,6 +201,8 @@ REMOTE_WEBOTS_HOST="${NM_REMOTE_WEBOTS_HOST:-192.168.1.70}"
 REMOTE_SSH_OPTS="${NM_REMOTE_SSH_OPTS:-}"
 REMOTE_QUIET="${NM_REMOTE_QUIET:-1}"
 REMOTE_PRE_CLEAN="${NM_REMOTE_PRE_CLEAN:-1}"
+REMOTE_SYNC_DATA="${NM_REMOTE_SYNC_DATA:-auto}"
+REMOTE_RSYNC_COMPRESS="${NM_REMOTE_RSYNC_COMPRESS:-auto}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -209,6 +217,11 @@ normalize_bool() {
             return 1
             ;;
     esac
+}
+
+rsync_supports_option() {
+    local option="$1"
+    rsync --help 2>/dev/null | grep -q -- "$option"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -316,6 +329,14 @@ while [ "$#" -gt 0 ]; do
             shift
             REMOTE_WEBOTS_HOST="${1:-$REMOTE_WEBOTS_HOST}"
             ;;
+        --remote-sync-data)
+            shift
+            REMOTE_SYNC_DATA="${1:-$REMOTE_SYNC_DATA}"
+            ;;
+        --remote-rsync-compress)
+            shift
+            REMOTE_RSYNC_COMPRESS="${1:-$REMOTE_RSYNC_COMPRESS}"
+            ;;
         --no-remote-pre-clean)
             REMOTE_PRE_CLEAN=0
             ;;
@@ -413,6 +434,16 @@ if [ "$REMOTE_UI_MODE" = "rust" ]; then
 fi
 if [ "$REMOTE_UI_MODE" != "web" ]; then
     echo "Invalid --remote-ui-mode '$REMOTE_UI_MODE' (must be web)."
+    exit 1
+fi
+
+if [ "$REMOTE_SYNC_DATA" != "auto" ] && [ "$REMOTE_SYNC_DATA" != "always" ] && [ "$REMOTE_SYNC_DATA" != "never" ]; then
+    echo "Invalid --remote-sync-data '$REMOTE_SYNC_DATA' (must be auto, always, or never)."
+    exit 1
+fi
+
+if [ "$REMOTE_RSYNC_COMPRESS" != "auto" ] && [ "$REMOTE_RSYNC_COMPRESS" != "on" ] && [ "$REMOTE_RSYNC_COMPRESS" != "off" ]; then
+    echo "Invalid --remote-rsync-compress '$REMOTE_RSYNC_COMPRESS' (must be auto, on, or off)."
     exit 1
 fi
 
@@ -558,20 +589,84 @@ sync_remote_source_tree() {
         return 1
     fi
     remote_exec_script "$host" "mkdir -p \"$REMOTE_ROOT_DIR\"" >/dev/null 2>&1 || return 1
-    rsync -az \
-        --delete \
-        --exclude '.git/' \
-        --exclude '.idea/' \
-        --exclude '.venv/' \
-        --exclude 'target/' \
-        --exclude 'logs/' \
-        --exclude '__pycache__/' \
-        --exclude '*.pyc' \
-        --exclude 'node_modules/' \
-        --exclude '.cache/' \
+
+    local use_compress="$REMOTE_RSYNC_COMPRESS"
+    if [ "$use_compress" = "auto" ]; then
+        case "$host" in
+            10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+                use_compress="off"
+                ;;
+            *)
+                use_compress="on"
+                ;;
+        esac
+    fi
+    echo "  rsync options for $host: compression=$use_compress"
+
+    local -a rsync_common=(
+        rsync
+        -a
+        --delete
+        --partial
+        --inplace
+        --human-readable
+        --exclude '.git/'
+        --exclude '.idea/'
+        --exclude '.venv/'
+        --exclude 'target/'
+        --exclude 'logs/'
+        --exclude '__pycache__/'
+        --exclude '*.pyc'
+        --exclude 'node_modules/'
+        --exclude '.cache/'
+    )
+    if rsync_supports_option '--delete-delay'; then
+        rsync_common+=(--delete-delay)
+    fi
+    if [ "$use_compress" = "on" ]; then
+        rsync_common+=(-z)
+        if rsync_supports_option '--compress-choice'; then
+            rsync_common+=(--compress-choice=zstd)
+        fi
+        if rsync_supports_option '--compress-level'; then
+            rsync_common+=(--compress-level=1)
+        fi
+    else
+        rsync_common+=(--whole-file)
+    fi
+
+    # Fast code/runtime mirror each run; dataset handled separately by policy.
+    "${rsync_common[@]}" \
+        --exclude 'data/' \
         -e "${REMOTE_SSH_ARGV[*]}" \
         "$ROOT_DIR/" \
-        "${REMOTE_USER}@${host}:$REMOTE_ROOT_DIR/"
+        "${REMOTE_USER}@${host}:$REMOTE_ROOT_DIR/" || return 1
+
+    local data_mode="$REMOTE_SYNC_DATA"
+    if [ "$data_mode" = "auto" ]; then
+        if remote_exec_script "$host" "[ -f \"$REMOTE_ROOT_DIR/.nm_data_synced\" ]" >/dev/null 2>&1; then
+            data_mode="never"
+        elif remote_exec_script "$host" \
+            "[ -d \"$REMOTE_ROOT_DIR/data\" ] && [ \"\$(ls -A \"$REMOTE_ROOT_DIR/data\" 2>/dev/null)\" != \"\" ]" \
+            >/dev/null 2>&1; then
+            data_mode="never"
+            remote_exec_script "$host" \
+                "date -u +%FT%TZ > \"$REMOTE_ROOT_DIR/.nm_data_synced\"" >/dev/null 2>&1 || true
+        else
+            data_mode="always"
+        fi
+    fi
+    echo "  data sync mode for $host: $data_mode"
+
+    if [ "$data_mode" = "always" ] && [ -d "$ROOT_DIR/data" ]; then
+        echo "Syncing large data/ tree to $host (initial sync or forced mode)..."
+        "${rsync_common[@]}" \
+            -e "${REMOTE_SSH_ARGV[*]}" \
+            "$ROOT_DIR/data/" \
+            "${REMOTE_USER}@${host}:$REMOTE_ROOT_DIR/data/" || return 1
+        remote_exec_script "$host" \
+            "date -u +%FT%TZ > \"$REMOTE_ROOT_DIR/.nm_data_synced\"" >/dev/null 2>&1 || true
+    fi
 }
 
 remote_reachable() {
@@ -1923,6 +2018,8 @@ if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote web_ui host: $REMOTE_WEB_UI_HOST"
     echo "  remote ui mode: $REMOTE_UI_MODE"
     echo "  remote web_ui port: $REMOTE_WEB_UI_PORT"
+    echo "  remote sync data: $REMOTE_SYNC_DATA"
+    echo "  remote rsync compression: $REMOTE_RSYNC_COMPRESS"
     if [ -n "$REMOTE_WEB_UI_API_PORT" ]; then
         echo "  remote web_ui api port: ${REMOTE_WEB_UI_API_PORT} (ignored in web mode)"
     fi
