@@ -51,15 +51,24 @@ type OidcClient = CoreClient<
     EndpointMaybeSet,
 >;
 
-const WEB_UI_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+fn grpc_max_message_bytes() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    const MIN: usize = 4 * 1024 * 1024;
+    std::env::var("NM_GRPC_MAX_MESSAGE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= MIN)
+        .unwrap_or(DEFAULT)
+}
 
 async fn connect_cluster_client(
     addr: String,
 ) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, tonic::transport::Error> {
+    let grpc_max_msg_bytes = grpc_max_message_bytes();
     let client = DistributedNeuromorphicClient::connect(addr).await?;
     Ok(client
-        .max_decoding_message_size(WEB_UI_GRPC_MAX_MESSAGE_BYTES)
-        .max_encoding_message_size(WEB_UI_GRPC_MAX_MESSAGE_BYTES))
+        .max_decoding_message_size(grpc_max_msg_bytes)
+        .max_encoding_message_size(grpc_max_msg_bytes))
 }
 
 #[derive(Parser, Debug)]
@@ -533,7 +542,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/aer/stream", post(aer_stream))
         .route("/update_network", post(update_network))
         .route("/control_network", post(control_network))
-        .layer(DefaultBodyLimit::max(WEB_UI_GRPC_MAX_MESSAGE_BYTES))
+        .layer(DefaultBodyLimit::max(grpc_max_message_bytes()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,

@@ -3584,10 +3584,8 @@ impl Runner {
         self.net.num_output_neurons = self.w_out.nrows();
         // Resize state vectors based on new shapes
         let l_count = self.w_hh_fwd.len() + 1;
-        // Keep global num_hidden_layers if we know it, otherwise use local count
-        if self.net.num_hidden_layers < l_count {
-            self.net.num_hidden_layers = l_count;
-        }
+        // Trust matrix topology from snapshot payload so multi-layer imports stay consistent.
+        self.net.num_hidden_layers = l_count.max(1);
         // Determine per-layer sizes directly from matrices to avoid stale self.v_h
         let layer_size_from_weights =
             |l: usize, _w_in: &Array2<f64>, w_fwd: &Vec<Array2<f64>>| -> usize {

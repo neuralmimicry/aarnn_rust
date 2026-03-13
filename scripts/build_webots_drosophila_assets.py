@@ -40,17 +40,17 @@ def sanitize_def(name: str) -> str:
 
 
 def build_motor_block(index: int, motor_name: str, total: int) -> str:
-    # Arrange effectors in concentric rings around the thorax so large output
-    # vectors remain physically represented without making an ultra-long body.
-    rings = max(1, min(4, (total + 15) // 16))
-    per_ring = max(1, math.ceil(total / rings))
-    ring_idx = min(rings - 1, index // per_ring)
-    in_ring_idx = index % per_ring
-    theta = (2.0 * math.pi * in_ring_idx) / float(per_ring)
-    radius = 0.013 + 0.0035 * ring_idx
-    x = radius * math.cos(theta)
+    # Keep high-dimensional motor channels physically present but tucked inside
+    # the thorax so the visual profile stays recognizably fruit-fly shaped.
+    layers = max(1, min(5, math.ceil(total / 20)))
+    per_layer = max(1, math.ceil(total / layers))
+    layer_idx = min(layers - 1, index // per_layer)
+    in_layer_idx = index % per_layer
+    theta = (2.0 * math.pi * in_layer_idx) / float(per_layer)
+    radius = 0.0023 + 0.0010 * (layer_idx % 2)
+    x = -0.003 + (0.0022 * layer_idx)
     z = radius * math.sin(theta)
-    y = -0.0015 + 0.0012 * ((index % 3) - 1)
+    y = 0.0002 + radius * math.cos(theta)
 
     def_name = sanitize_def(f"joint_{index}_{motor_name}")
     end_name = sanitize_def(f"segment_{index}_{motor_name}")
@@ -73,23 +73,22 @@ def build_motor_block(index: int, motor_name: str, total: int) -> str:
         children [
           Shape {{
             appearance PBRAppearance {{
-              baseColor 0.28 0.22 0.18
+              baseColor 0.2 0.2 0.2
               roughness 0.55
               metalness 0
+              transparency 1
             }}
-            geometry Capsule {{
-              radius 0.0015
-              height 0.008
+            geometry Sphere {{
+              radius 0.00035
             }}
           }}
         ]
-        boundingObject Capsule {{
-          radius 0.0016
-          height 0.008
+        boundingObject Sphere {{
+          radius 0.0004
         }}
         physics Physics {{
           density -1
-          mass 0.00002
+          mass 0.000001
         }}
       }}
     }}
@@ -100,17 +99,17 @@ def build_sensor_block() -> str:
     distance_blocks = []
     for i in range(DISTANCE_SENSOR_COUNT):
         yaw = (2.0 * math.pi * i) / float(DISTANCE_SENSOR_COUNT)
-        tx = 0.0205 * math.cos(yaw)
-        tz = 0.0205 * math.sin(yaw)
+        tx = -0.004 + 0.0120 * math.cos(yaw)
+        tz = 0.0095 * math.sin(yaw)
         distance_blocks.append(
             f"""      DistanceSensor {{
         name "fly_prox_{i:02d}"
         type "infra-red"
-        translation {tx:.5f} 0.0015 {tz:.5f}
+        translation {tx:.5f} 0.0034 {tz:.5f}
         rotation 0 1 0 {yaw:.5f}
         lookupTable [
           0 1000 0
-          0.28 0 0
+          0.18 0 0
         ]
       }}"""
         )
@@ -126,25 +125,323 @@ def build_sensor_block() -> str:
       TouchSensor {{
         name "fly_touch_front"
         type "bumper"
-        translation 0.028 0.0 0.0
+        translation 0.010 0.0015 0.0
       }}
       TouchSensor {{
         name "fly_touch_rear"
         type "bumper"
-        translation -0.028 0.0 0.0
+        translation -0.024 0.0009 0.0
       }}
       TouchSensor {{
         name "fly_touch_left"
         type "bumper"
-        translation 0.0 0.0 0.020
+        translation -0.004 0.0015 0.010
       }}
       TouchSensor {{
         name "fly_touch_right"
         type "bumper"
-        translation 0.0 0.0 -0.020
+        translation -0.004 0.0015 -0.010
       }}
       # Directional proximity ring for odor/obstacle gradient response.
 {chr(10).join(distance_blocks)}
+"""
+
+
+def build_visual_body_block() -> str:
+    # More drosophila-like shape: compact thorax, tapered abdomen, big red eyes, long legs.
+    return """      # Head-thorax-abdomen body axis
+      Transform {
+        translation 0.0062 0.0029 0
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.78 0.59 0.34
+              roughness 0.38
+              metalness 0
+            }
+            geometry Sphere {
+              radius 0.0026
+            }
+          }
+        ]
+      }
+      Transform {
+        translation 0.0002 0.0027 0
+        rotation 0 0 1 1.5708
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.52 0.37 0.22
+              roughness 0.40
+              metalness 0
+            }
+            geometry Capsule {
+              radius 0.0033
+              height 0.0078
+            }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0064 0.0026 0
+        rotation 0 0 1 1.5708
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.67 0.49 0.29
+              roughness 0.46
+              metalness 0
+            }
+            geometry Capsule {
+              radius 0.0030
+              height 0.0102
+            }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0122 0.0023 0
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.55 0.38 0.22
+              roughness 0.52
+            }
+            geometry Sphere {
+              radius 0.0019
+            }
+          }
+        ]
+      }
+      # Abdomen striping
+      Transform {
+        translation -0.0093 0.0028 0
+        children [ Shape { appearance PBRAppearance { baseColor 0.22 0.17 0.13 roughness 0.62 } geometry Box { size 0.0007 0.0058 0.0062 } } ]
+      }
+      Transform {
+        translation -0.0071 0.0028 0
+        children [ Shape { appearance PBRAppearance { baseColor 0.22 0.17 0.13 roughness 0.62 } geometry Box { size 0.0007 0.0062 0.0065 } } ]
+      }
+      Transform {
+        translation -0.0049 0.0028 0
+        children [ Shape { appearance PBRAppearance { baseColor 0.22 0.17 0.13 roughness 0.62 } geometry Box { size 0.0007 0.0064 0.0068 } } ]
+      }
+      # Compound eyes
+      Transform {
+        translation 0.0072 0.0031 0.0022
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.86 0.10 0.08
+              roughness 0.20
+              metalness 0
+            }
+            geometry Sphere {
+              radius 0.0019
+            }
+          }
+        ]
+      }
+      Transform {
+        translation 0.0072 0.0031 -0.0022
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.86 0.10 0.08
+              roughness 0.20
+              metalness 0
+            }
+            geometry Sphere {
+              radius 0.0019
+            }
+          }
+        ]
+      }
+      # Ocelli
+      Transform {
+        translation 0.0068 0.0048 0
+        children [ Shape { appearance PBRAppearance { baseColor 0.10 0.07 0.05 roughness 0.35 } geometry Sphere { radius 0.00024 } } ]
+      }
+      Transform {
+        translation 0.0065 0.0046 0.00045
+        children [ Shape { appearance PBRAppearance { baseColor 0.10 0.07 0.05 roughness 0.35 } geometry Sphere { radius 0.00020 } } ]
+      }
+      Transform {
+        translation 0.0065 0.0046 -0.00045
+        children [ Shape { appearance PBRAppearance { baseColor 0.10 0.07 0.05 roughness 0.35 } geometry Sphere { radius 0.00020 } } ]
+      }
+      # Antennae and proboscis
+      Transform {
+        translation 0.0081 0.0033 0.00095
+        rotation 0 0 1 0.56
+        children [ Shape { appearance PBRAppearance { baseColor 0.66 0.53 0.38 roughness 0.74 } geometry Capsule { radius 0.00014 height 0.0030 } } ]
+      }
+      Transform {
+        translation 0.0081 0.0033 -0.00095
+        rotation 0 0 1 -0.56
+        children [ Shape { appearance PBRAppearance { baseColor 0.66 0.53 0.38 roughness 0.74 } geometry Capsule { radius 0.00014 height 0.0030 } } ]
+      }
+      Transform {
+        translation 0.0078 0.0012 0
+        rotation 0 0 1 0.12
+        children [ Shape { appearance PBRAppearance { baseColor 0.70 0.56 0.40 roughness 0.77 } geometry Capsule { radius 0.00022 height 0.0028 } } ]
+      }
+      # Wings
+      Transform {
+        translation -0.0012 0.0050 0.0029
+        rotation 0 1 0 0.14
+        scale 0.0108 0.00008 0.0030
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.94 0.95 0.91
+              roughness 0.10
+              metalness 0
+              transparency 0.48
+            }
+            geometry Sphere {
+              radius 1
+            }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0012 0.0050 -0.0029
+        rotation 0 1 0 -0.14
+        scale 0.0108 0.00008 0.0030
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.94 0.95 0.91
+              roughness 0.10
+              metalness 0
+              transparency 0.48
+            }
+            geometry Sphere {
+              radius 1
+            }
+          }
+        ]
+      }
+      # Wing veins
+      Transform {
+        translation -0.0001 0.0052 0.0032
+        rotation 0 0 1 1.30
+        children [ Shape { appearance PBRAppearance { baseColor 0.58 0.51 0.39 roughness 0.74 transparency 0.34 } geometry Capsule { radius 0.00005 height 0.0070 } } ]
+      }
+      Transform {
+        translation -0.0029 0.0053 0.0028
+        rotation 0 0 1 1.74
+        children [ Shape { appearance PBRAppearance { baseColor 0.58 0.51 0.39 roughness 0.74 transparency 0.36 } geometry Capsule { radius 0.000045 height 0.0044 } } ]
+      }
+      Transform {
+        translation -0.0001 0.0052 -0.0032
+        rotation 0 0 1 -1.30
+        children [ Shape { appearance PBRAppearance { baseColor 0.58 0.51 0.39 roughness 0.74 transparency 0.34 } geometry Capsule { radius 0.00005 height 0.0070 } } ]
+      }
+      Transform {
+        translation -0.0029 0.0053 -0.0028
+        rotation 0 0 1 -1.74
+        children [ Shape { appearance PBRAppearance { baseColor 0.58 0.51 0.39 roughness 0.74 transparency 0.36 } geometry Capsule { radius 0.000045 height 0.0044 } } ]
+      }
+      # Halteres
+      Transform {
+        translation -0.0035 0.0039 0.0018
+        rotation 0 0 1 0.66
+        children [ Shape { appearance PBRAppearance { baseColor 0.79 0.70 0.52 roughness 0.63 } geometry Capsule { radius 0.00016 height 0.0018 } } ]
+      }
+      Transform {
+        translation -0.0035 0.0039 -0.0018
+        rotation 0 0 1 -0.66
+        children [ Shape { appearance PBRAppearance { baseColor 0.79 0.70 0.52 roughness 0.63 } geometry Capsule { radius 0.00016 height 0.0018 } } ]
+      }
+      # Front legs
+      Transform {
+        translation 0.0034 0.0011 0.0024
+        rotation 0 0 1 1.03
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0048 } } ]
+      }
+      Transform {
+        translation 0.0058 -0.0019 0.0037
+        rotation 0 0 1 0.34
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0052 } } ]
+      }
+      Transform {
+        translation 0.0075 -0.0048 0.0045
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
+      Transform {
+        translation 0.0034 0.0011 -0.0024
+        rotation 0 0 1 -1.03
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0048 } } ]
+      }
+      Transform {
+        translation 0.0058 -0.0019 -0.0037
+        rotation 0 0 1 -0.34
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0052 } } ]
+      }
+      Transform {
+        translation 0.0075 -0.0048 -0.0045
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
+      # Middle legs
+      Transform {
+        translation -0.0003 0.0010 0.0029
+        rotation 0 0 1 0.88
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0052 } } ]
+      }
+      Transform {
+        translation 0.0020 -0.0022 0.0044
+        rotation 0 0 1 0.24
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0054 } } ]
+      }
+      Transform {
+        translation 0.0036 -0.0052 0.0053
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
+      Transform {
+        translation -0.0003 0.0010 -0.0029
+        rotation 0 0 1 -0.88
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0052 } } ]
+      }
+      Transform {
+        translation 0.0020 -0.0022 -0.0044
+        rotation 0 0 1 -0.24
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0054 } } ]
+      }
+      Transform {
+        translation 0.0036 -0.0052 -0.0053
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
+      # Rear legs
+      Transform {
+        translation -0.0040 0.0010 0.0027
+        rotation 0 0 1 0.71
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0057 } } ]
+      }
+      Transform {
+        translation -0.0020 -0.0027 0.0042
+        rotation 0 0 1 0.10
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0058 } } ]
+      }
+      Transform {
+        translation -0.0007 -0.0058 0.0051
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
+      Transform {
+        translation -0.0040 0.0010 -0.0027
+        rotation 0 0 1 -0.71
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.76 } geometry Capsule { radius 0.00017 height 0.0057 } } ]
+      }
+      Transform {
+        translation -0.0020 -0.0027 -0.0042
+        rotation 0 0 1 -0.10
+        children [ Shape { appearance PBRAppearance { baseColor 0.83 0.69 0.48 roughness 0.78 } geometry Capsule { radius 0.00013 height 0.0058 } } ]
+      }
+      Transform {
+        translation -0.0007 -0.0058 -0.0051
+        children [ Shape { appearance PBRAppearance { baseColor 0.12 0.10 0.08 roughness 0.57 } geometry Sphere { radius 0.00016 } } ]
+      }
 """
 
 
@@ -158,10 +455,11 @@ def generate_proto(
         build_motor_block(i, name, len(output_nodes)) for i, name in enumerate(output_nodes)
     )
     sensor_block = build_sensor_block()
+    visual_body_block = build_visual_body_block()
     proto = f"""#VRML_SIM R2025a utf8
 
 PROTO DrosophilaRobot [
-  field SFVec3f     translation 0 0.016 0
+  field SFVec3f     translation 0 0.008 0
   field SFRotation  rotation 0 1 0 0
   field SFString    name "drosophila_robot"
   field SFString    controller "nao_nn_controller_uds"
@@ -179,55 +477,7 @@ PROTO DrosophilaRobot [
     controllerArgs IS controllerArgs
     customData "{{\\"network\\":\\"{default_network_file}\\",\\"config\\":\\"{default_config_file}\\"}}"
     children [
-      # Body plan: head + thorax + abdomen
-      Shape {{
-        appearance PBRAppearance {{
-          baseColor 0.35 0.24 0.12
-          roughness 0.5
-          metalness 0
-        }}
-        geometry Sphere {{
-          radius 0.009
-        }}
-      }}
-      Solid {{
-        name "thorax_segment"
-        translation -0.010 0 0
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.42 0.28 0.14
-              roughness 0.45
-            }}
-            geometry Sphere {{
-              radius 0.012
-            }}
-          }}
-        ]
-        boundingObject Sphere {{
-          radius 0.012
-        }}
-      }}
-      Solid {{
-        name "abdomen_segment"
-        translation -0.024 0 0
-        children [
-          Shape {{
-            appearance PBRAppearance {{
-              baseColor 0.53 0.36 0.18
-              roughness 0.48
-            }}
-            geometry Capsule {{
-              radius 0.007
-              height 0.018
-            }}
-          }}
-        ]
-        boundingObject Capsule {{
-          radius 0.007
-          height 0.018
-        }}
-      }}
+{visual_body_block}
 {sensor_block}
 {motor_blocks}
       Group {{
@@ -236,15 +486,39 @@ PROTO DrosophilaRobot [
     ]
     boundingObject Group {{
       children [
-        Sphere {{
-          radius 0.0125
-        }}
         Transform {{
-          translation -0.020 0 0
+          translation 0.0002 0.0027 0
+          rotation 0 0 1 1.5708
           children [
             Capsule {{
-              radius 0.008
-              height 0.022
+              radius 0.0033
+              height 0.0078
+            }}
+          ]
+        }}
+        Transform {{
+          translation 0.0062 0.0029 0
+          children [
+            Sphere {{
+              radius 0.0026
+            }}
+          ]
+        }}
+        Transform {{
+          translation -0.0064 0.0026 0
+          rotation 0 0 1 1.5708
+          children [
+            Capsule {{
+              radius 0.0030
+              height 0.0102
+            }}
+          ]
+        }}
+        Transform {{
+          translation -0.0122 0.0023 0
+          children [
+            Sphere {{
+              radius 0.0019
             }}
           ]
         }}
@@ -252,7 +526,7 @@ PROTO DrosophilaRobot [
     }}
     physics Physics {{
       density -1
-      mass 0.008
+      mass 0.0008
     }}
   }}
 }}
@@ -265,318 +539,434 @@ def generate_world(world_path: Path) -> None:
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 EXTERNPROTO "../protos/DrosophilaRobot.proto"
 
 WorldInfo {
+  basicTimeStep 16
 }
 Viewpoint {
-  orientation 0.2413571298348519 -0.9568337613679344 0.16245018235004453 4.147536566868645
-  position 0.05587760533114102 0.6488540704626902 1.0361880242305197
+  orientation 1 0 0 -0.48
+  position 0 1.10 2.05
 }
 TexturedBackground {
 }
 TexturedBackgroundLight {
 }
-RectangleArena {
-  floorSize 1.8 1.8
-  wallHeight 0.08
-}
-# Fruit-scale terrain and clutter for rich sensory gradients.
+# Ground and floor detail.
 Solid {
-  translation 0 0.028 0
-  name "fermenting_fruit_core"
+  translation 0 0.005 0
+  name "ground_base"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.91 0.62 0.24
-        roughness 0.43
+        baseColor 0.34 0.31 0.25
+        roughness 0.95
+      }
+      geometry Box {
+        size 40 0.01 40
+      }
+    }
+  ]
+  boundingObject Box {
+    size 40 0.01 40
+  }
+}
+Solid {
+  translation 0 0.011 0
+  name "grass_layer"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.29 0.40 0.25
+        roughness 0.90
+      }
+      geometry Box {
+        size 3.2 0.002 3.2
+      }
+    }
+  ]
+  boundingObject Box {
+    size 3.2 0.002 3.2
+  }
+}
+Solid {
+  translation 0.03 0.0035 0.02
+  rotation 0 1 0 0.14
+  name "orchard_soil_patch"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.39 0.31 0.20
+        roughness 0.87
+      }
+      geometry Box {
+        size 1.46 0.003 1.08
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1.46 0.003 1.08
+  }
+}
+# Central platform so the fly starts on a stable object, not in mid-air.
+Solid {
+  translation 0 0.020 0
+  name "spawn_platform"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.50 0.38 0.23
+        roughness 0.62
       }
       geometry Cylinder {
-        radius 0.12
-        height 0.056
+        radius 0.18
+        height 0.040
       }
     }
   ]
   boundingObject Cylinder {
-    radius 0.12
-    height 0.056
+    radius 0.18
+    height 0.040
+  }
+}
+# Spawn cradle: three low rails around platform to prevent instant fall-off.
+Solid {
+  translation -0.10 0.050 0
+  name "spawn_rail_west"
+  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.020 0.060 0.32 } } ]
+  boundingObject Box { size 0.020 0.060 0.32 }
+}
+Solid {
+  translation 0 0.050 -0.15
+  name "spawn_rail_north"
+  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.24 0.060 0.020 } } ]
+  boundingObject Box { size 0.24 0.060 0.020 }
+}
+Solid {
+  translation 0 0.050 0.15
+  name "spawn_rail_south"
+  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.24 0.060 0.020 } } ]
+  boundingObject Box { size 0.24 0.060 0.020 }
+}
+# Low earth berm around the active area.
+Solid {
+  translation 0 0.065 -0.96
+  name "berm_north"
+  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 2.10 0.13 0.10 } } ]
+  boundingObject Box { size 2.10 0.13 0.10 }
+}
+Solid {
+  translation 0 0.065 0.96
+  name "berm_south"
+  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 2.10 0.13 0.10 } } ]
+  boundingObject Box { size 2.10 0.13 0.10 }
+}
+Solid {
+  translation -0.96 0.065 0
+  name "berm_west"
+  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 0.10 0.13 2.10 } } ]
+  boundingObject Box { size 0.10 0.13 2.10 }
+}
+Solid {
+  translation 0.96 0.065 0
+  name "berm_east"
+  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 0.10 0.13 2.10 } } ]
+  boundingObject Box { size 0.10 0.13 2.10 }
+}
+# Trees (explicitly vertical trunks).
+Solid {
+  translation -0.62 0  -0.46
+  name "tree_a"
+  children [
+    Transform {
+      translation 0 0.21 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.36 0.24 0.15 roughness 0.72 } geometry Cylinder { radius 0.035 height 0.42 } } ]
+    }
+    Transform {
+      translation 0 0.50 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.21 0.44 0.17 roughness 0.56 } geometry Sphere { radius 0.18 } } ]
+    }
+    Transform {
+      translation 0.10 0.46 -0.04
+      children [ Shape { appearance PBRAppearance { baseColor 0.22 0.49 0.20 roughness 0.56 } geometry Sphere { radius 0.12 } } ]
+    }
+    Transform {
+      translation 0.07 0.40 0.01
+      children [ Shape { appearance PBRAppearance { baseColor 0.80 0.16 0.10 roughness 0.36 } geometry Sphere { radius 0.020 } } ]
+    }
+    Transform {
+      translation -0.08 0.38 -0.03
+      children [ Shape { appearance PBRAppearance { baseColor 0.83 0.19 0.12 roughness 0.36 } geometry Sphere { radius 0.018 } } ]
+    }
+  ]
+  boundingObject Group {
+    children [
+      Transform {
+        translation 0 0.21 0
+        children [ Cylinder { radius 0.045 height 0.42 } ]
+      }
+    ]
   }
 }
 Solid {
-  translation 0.24 0.019 0.20
-  name "fruit_chunk_a"
+  translation 0.66 0 -0.34
+  name "tree_b"
+  children [
+    Transform {
+      translation 0 0.22 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.37 0.25 0.16 roughness 0.72 } geometry Cylinder { radius 0.037 height 0.44 } } ]
+    }
+    Transform {
+      translation 0 0.52 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.22 0.45 0.18 roughness 0.56 } geometry Sphere { radius 0.19 } } ]
+    }
+    Transform {
+      translation -0.11 0.47 0.05
+      children [ Shape { appearance PBRAppearance { baseColor 0.22 0.50 0.20 roughness 0.56 } geometry Sphere { radius 0.12 } } ]
+    }
+    Transform {
+      translation 0.08 0.42 -0.05
+      children [ Shape { appearance PBRAppearance { baseColor 0.80 0.17 0.10 roughness 0.36 } geometry Sphere { radius 0.020 } } ]
+    }
+    Transform {
+      translation -0.03 0.39 0.08
+      children [ Shape { appearance PBRAppearance { baseColor 0.83 0.20 0.12 roughness 0.36 } geometry Sphere { radius 0.018 } } ]
+    }
+  ]
+  boundingObject Group {
+    children [
+      Transform {
+        translation 0 0.22 0
+        children [ Cylinder { radius 0.047 height 0.44 } ]
+      }
+    ]
+  }
+}
+Solid {
+  translation 0.02 0 0.72
+  name "tree_c"
+  children [
+    Transform {
+      translation 0 0.23 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.35 0.24 0.15 roughness 0.72 } geometry Cylinder { radius 0.039 height 0.46 } } ]
+    }
+    Transform {
+      translation 0 0.54 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.21 0.44 0.17 roughness 0.56 } geometry Sphere { radius 0.20 } } ]
+    }
+    Transform {
+      translation 0.12 0.49 -0.01
+      children [ Shape { appearance PBRAppearance { baseColor 0.23 0.50 0.21 roughness 0.56 } geometry Sphere { radius 0.13 } } ]
+    }
+    Transform {
+      translation -0.08 0.43 0.05
+      children [ Shape { appearance PBRAppearance { baseColor 0.81 0.17 0.11 roughness 0.36 } geometry Sphere { radius 0.021 } } ]
+    }
+  ]
+  boundingObject Group {
+    children [
+      Transform {
+        translation 0 0.23 0
+        children [ Cylinder { radius 0.050 height 0.46 } ]
+      }
+    ]
+  }
+}
+# Fruit and fermenting attractants.
+Solid {
+  translation 0.22 0.022 0.10
+  name "ferment_core_a"
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.84 0.52 0.21 roughness 0.44 }
+      geometry Cylinder { radius 0.08 height 0.044 }
+    }
+    Transform {
+      translation 0.05 0.021 0.02
+      children [ Shape { appearance PBRAppearance { baseColor 0.80 0.16 0.10 roughness 0.36 } geometry Sphere { radius 0.027 } } ]
+    }
+    Transform {
+      translation -0.04 0.018 -0.03
+      children [ Shape { appearance PBRAppearance { baseColor 0.88 0.68 0.25 roughness 0.40 } geometry Sphere { radius 0.024 } } ]
+    }
+  ]
+  boundingObject Cylinder { radius 0.08 height 0.044 }
+}
+Solid {
+  translation -0.23 0.021 -0.20
+  name "ferment_core_b"
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.76 0.46 0.20 roughness 0.46 }
+      geometry Cylinder { radius 0.075 height 0.042 }
+    }
+    Transform {
+      translation 0.03 0.019 -0.03
+      children [ Shape { appearance PBRAppearance { baseColor 0.73 0.16 0.09 roughness 0.38 } geometry Sphere { radius 0.022 } } ]
+    }
+    Transform {
+      translation -0.04 0.018 0.02
+      children [ Shape { appearance PBRAppearance { baseColor 0.87 0.71 0.26 roughness 0.40 } geometry Sphere { radius 0.021 } } ]
+    }
+  ]
+  boundingObject Cylinder { radius 0.075 height 0.042 }
+}
+Solid {
+  translation 0.43 0.027 -0.18
+  name "fallen_apple_a"
+  children [ Shape { appearance PBRAppearance { baseColor 0.79 0.17 0.11 roughness 0.36 } geometry Sphere { radius 0.027 } } ]
+  boundingObject Sphere { radius 0.027 }
+}
+Solid {
+  translation -0.39 0.025 0.26
+  name "fallen_apple_b"
+  children [ Shape { appearance PBRAppearance { baseColor 0.76 0.16 0.10 roughness 0.37 } geometry Sphere { radius 0.025 } } ]
+  boundingObject Sphere { radius 0.025 }
+}
+Solid {
+  translation 0.05 0.023 0.21
+  rotation 0 0 1 1.5708
+  name "banana_piece"
+  children [ Shape { appearance PBRAppearance { baseColor 0.89 0.77 0.30 roughness 0.36 } geometry Capsule { radius 0.008 height 0.030 } } ]
+  boundingObject Capsule { radius 0.008 height 0.030 }
+}
+# Flowers and odor markers.
+Solid {
+  translation -0.12 0.046 0.36
+  name "flower_cluster_a"
+  children [
+    Shape { appearance PBRAppearance { baseColor 0.27 0.59 0.25 roughness 0.58 } geometry Cylinder { radius 0.012 height 0.092 } }
+    Transform {
+      translation 0 0.060 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.90 0.82 0.20 roughness 0.33 } geometry Sphere { radius 0.023 } } ]
+    }
+  ]
+  boundingObject Cylinder { radius 0.016 height 0.092 }
+}
+Solid {
+  translation 0.17 0.048 -0.41
+  name "flower_cluster_b"
+  children [
+    Shape { appearance PBRAppearance { baseColor 0.25 0.56 0.27 roughness 0.58 } geometry Cylinder { radius 0.012 height 0.096 } }
+    Transform {
+      translation 0 0.062 0
+      children [ Shape { appearance PBRAppearance { baseColor 0.92 0.74 0.22 roughness 0.33 } geometry Sphere { radius 0.022 } } ]
+    }
+  ]
+  boundingObject Cylinder { radius 0.016 height 0.096 }
+}
+Solid {
+  translation 0.26 0.003 0.24
+  name "attractant_pad_a"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.87 0.33 0.18
-        roughness 0.38
+        baseColor 0.30 0.66 0.40
+        emissiveColor 0.08 0.21 0.14
+        roughness 0.34
       }
-      geometry Sphere {
+      geometry Cylinder {
+        radius 0.038
+        height 0.006
+      }
+    }
+  ]
+  boundingObject Cylinder { radius 0.038 height 0.006 }
+}
+Solid {
+  translation -0.28 0.003 -0.28
+  name "attractant_pad_b"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.28 0.56 0.65
+        emissiveColor 0.08 0.17 0.22
+        roughness 0.35
+      }
+      geometry Cylinder {
         radius 0.036
+        height 0.006
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.036
-  }
+  boundingObject Cylinder { radius 0.036 height 0.006 }
 }
-Solid {
-  translation -0.30 0.018 -0.16
-  name "fruit_chunk_b"
+Transform {
+  translation 0.26 0.064 0.24
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.79 0.20 0.17
-        roughness 0.36
-      }
-      geometry Sphere {
-        radius 0.032
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.032
-  }
-}
-Solid {
-  translation -0.10 0.030 0.37
-  name "flower_stem_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.31 0.63 0.26
-        roughness 0.58
+        baseColor 0.52 0.88 0.66
+        emissiveColor 0.16 0.29 0.23
+        roughness 0.18
+        transparency 0.75
       }
       geometry Cylinder {
-        radius 0.012
-        height 0.06
+        radius 0.016
+        height 0.125
       }
     }
   ]
-  boundingObject Cylinder {
-    radius 0.012
-    height 0.06
-  }
 }
-Solid {
-  translation 0.11 0.030 -0.34
-  name "flower_stem_b"
+Transform {
+  translation -0.28 0.064 -0.28
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.28 0.56 0.30
-        roughness 0.58
+        baseColor 0.58 0.80 0.93
+        emissiveColor 0.15 0.23 0.30
+        roughness 0.18
+        transparency 0.75
       }
       geometry Cylinder {
-        radius 0.011
-        height 0.06
+        radius 0.015
+        height 0.125
       }
     }
   ]
-  boundingObject Cylinder {
-    radius 0.011
-    height 0.06
-  }
 }
-# Narrow channels and corners for directional exploration.
+# Twigs and stones.
 Solid {
-  translation 0.45 0.024 0.02
-  rotation 0 1 0 0.45
-  name "twig_wall_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.49 0.31 0.17
-        roughness 0.66
-      }
-      geometry Box {
-        size 0.44 0.048 0.03
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.44 0.048 0.03
-  }
+  translation 0.40 0.014 -0.03
+  rotation 0 1 0 0.40
+  name "twig_a"
+  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.30 0.19 roughness 0.69 } geometry Box { size 0.34 0.028 0.032 } } ]
+  boundingObject Box { size 0.34 0.028 0.032 }
 }
 Solid {
-  translation -0.43 0.024 0.07
-  rotation 0 1 0 -0.68
-  name "twig_wall_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.43 0.28 0.14
-        roughness 0.66
-      }
-      geometry Box {
-        size 0.40 0.048 0.03
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.40 0.048 0.03
-  }
+  translation -0.16 0.014 0.35
+  rotation 0 1 0 0.72
+  name "twig_b"
+  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.28 0.17 roughness 0.70 } geometry Box { size 0.30 0.028 0.032 } } ]
+  boundingObject Box { size 0.30 0.028 0.032 }
 }
 Solid {
-  translation 0.02 0.024 -0.48
-  rotation 0 1 0 1.12
-  name "twig_wall_c"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.46 0.32 0.19
-        roughness 0.66
-      }
-      geometry Box {
-        size 0.34 0.048 0.03
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.34 0.048 0.03
-  }
-}
-# Uneven patches create changing inertial/contact stimuli.
-Solid {
-  translation -0.52 0.028 -0.35
-  rotation 0 0 1 -0.35
-  name "leaf_ramp_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.29 0.52 0.22
-        roughness 0.49
-      }
-      geometry Box {
-        size 0.22 0.06 0.14
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.22 0.06 0.14
-  }
+  translation 0.08 0.013 -0.43
+  rotation 0 1 0 -0.66
+  name "twig_c"
+  children [ Shape { appearance PBRAppearance { baseColor 0.45 0.31 0.19 roughness 0.69 } geometry Box { size 0.28 0.026 0.030 } } ]
+  boundingObject Box { size 0.28 0.026 0.030 }
 }
 Solid {
-  translation 0.56 0.029 0.34
-  rotation 0 0 1 0.32
-  name "leaf_ramp_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.25 0.49 0.24
-        roughness 0.49
-      }
-      geometry Box {
-        size 0.22 0.06 0.14
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.22 0.06 0.14
-  }
-}
-# Dynamic particles and bars keep gradients non-static.
-Solid {
-  translation 0.18 0.016 -0.19
-  linearVelocity -0.38 0 0.27
-  angularVelocity 0 6.4 0
-  name "pollen_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.96 0.88 0.21
-        roughness 0.28
-      }
-      geometry Sphere {
-        radius 0.012
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.012
-  }
-  physics Physics {
-    density -1
-    mass 0.003
-  }
+  translation 0.08 0.020 0.41
+  name "stone_a"
+  children [ Shape { appearance PBRAppearance { baseColor 0.46 0.46 0.48 roughness 0.78 } geometry Sphere { radius 0.020 } } ]
+  boundingObject Sphere { radius 0.020 }
 }
 Solid {
-  translation -0.24 0.016 0.22
-  linearVelocity 0.42 0 -0.24
-  angularVelocity 0 5.9 0
-  name "pollen_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.93 0.72 0.16
-        roughness 0.28
-      }
-      geometry Sphere {
-        radius 0.011
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.011
-  }
-  physics Physics {
-    density -1
-    mass 0.0025
-  }
+  translation -0.53 0.017 -0.10
+  name "stone_b"
+  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.44 0.46 roughness 0.78 } geometry Sphere { radius 0.017 } } ]
+  boundingObject Sphere { radius 0.017 }
 }
 Solid {
-  translation 0.38 0.018 0.41
-  rotation 0 1 0 0.78
-  linearVelocity -0.19 0 -0.34
-  angularVelocity 0 4.8 0
-  name "odor_bar_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.34 0.79 0.55
-        roughness 0.35
-      }
-      geometry Box {
-        size 0.16 0.036 0.02
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.16 0.036 0.02
-  }
-  physics Physics {
-    density -1
-    mass 0.004
-  }
-}
-Solid {
-  translation -0.37 0.018 -0.40
-  rotation 0 1 0 -0.62
-  linearVelocity 0.21 0 0.32
-  angularVelocity 0 5.2 0
-  name "odor_bar_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.37 0.64 0.82
-        roughness 0.35
-      }
-      geometry Box {
-        size 0.15 0.036 0.02
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.15 0.036 0.02
-  }
-  physics Physics {
-    density -1
-    mass 0.004
-  }
+  translation 0.53 0.022 -0.15
+  name "stone_c"
+  children [ Shape { appearance PBRAppearance { baseColor 0.48 0.48 0.50 roughness 0.77 } geometry Sphere { radius 0.022 } } ]
+  boundingObject Sphere { radius 0.022 }
 }
 DrosophilaRobot {
-  translation -0.62 0.016 -0.58
+  translation 0 0.044 0
   name "Drosophila"
   controller "nao_nn_controller_uds"
   controllerArgs [
@@ -659,6 +1049,10 @@ def main() -> None:
 
     generate_proto(output_nodes, proto_path, default_network, default_config)
     generate_world(world_path)
+    # Reset cached Webots view/layout state so updated Viewpoint is applied.
+    wbproj_path = world_path.with_name(f".{world_path.stem}.wbproj")
+    if wbproj_path.exists():
+        wbproj_path.unlink()
     build_webots_config(snapshot, config_path)
 
     print(

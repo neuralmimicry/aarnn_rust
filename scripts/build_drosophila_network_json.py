@@ -6,7 +6,7 @@ The raw BANC graph is very large (~100k+ neurons), while the current snapshot sc
 expects dense matrices. To keep imports practical, this script builds a structured
 projection with configurable caps:
   - sensory nodes (input layer)
-  - hidden nodes (single recurrent hidden layer)
+  - hidden nodes (multi-layer recurrent core, configurable layer width)
   - motor nodes (output layer)
 
 Input files expected (default paths):
@@ -182,6 +182,16 @@ def select_top(
     return cand_list[:limit]
 
 
+def remap_index(index: int, src_size: int, dst_size: int) -> int:
+    if dst_size <= 1:
+        return 0
+    if src_size <= 1:
+        return 0
+    ratio = float(index) / float(src_size - 1)
+    mapped = int(round(ratio * float(dst_size - 1)))
+    return max(0, min(dst_size - 1, mapped))
+
+
 def build_fruitfly_regions() -> List[dict]:
     # Mirrors the fruit fly clumping intent in config, with explicit named regions
     # so topology-aware tooling has stable anatomical anchors.
@@ -244,6 +254,8 @@ def build_projection_snapshot(
     max_output: int,
     min_syn_count: int,
     weight_transform: str,
+    hidden_layer_width: int,
+    long_range_policy: str,
 ) -> dict:
     metadata = load_neuron_metadata(neurons_path)
 
@@ -318,7 +330,6 @@ def build_projection_snapshot(
     }
     hidden_secondary = {n: float(out_edges[n] + in_edges[n]) for n in hidden_candidates}
     hidden_nodes = select_top(hidden_candidates, max_hidden, hidden_primary, hidden_secondary)
-    hidden_set = set(hidden_nodes)
 
     if not hidden_nodes:
         raise SystemExit("Hidden projection selection failed (0 nodes selected).")
@@ -327,21 +338,62 @@ def build_projection_snapshot(
     if not output_nodes:
         raise SystemExit("Output projection selection failed (0 nodes selected).")
 
+    hidden_layer_width = max(1, int(hidden_layer_width))
+
+    # Order selected hidden neurons by sensory->output "depth" so splitting into layers
+    # keeps more edges within same/adjacent layers.
+    def depth_score(node: str) -> float:
+        sensory_drive = float(support_from_sensory[node])
+        motor_drive = float(support_to_output[node])
+        denom = sensory_drive + motor_drive
+        if denom <= 0.0:
+            return 0.5
+        return sensory_drive / denom
+
+    hidden_nodes.sort(
+        key=lambda node: (
+            -depth_score(node),
+            -float(hidden_primary.get(node, 0.0)),
+            -float(hidden_secondary.get(node, 0.0)),
+            node,
+        )
+    )
+
+    hidden_layers: List[List[str]] = []
+    for start in range(0, len(hidden_nodes), hidden_layer_width):
+        hidden_layers.append(hidden_nodes[start : start + hidden_layer_width])
+    layer_sizes = [len(layer) for layer in hidden_layers]
+    layer_count = len(layer_sizes)
+    if layer_count == 0:
+        raise SystemExit("Hidden projection layering failed (0 layers).")
+
+    hidden_pos: Dict[str, tuple[int, int]] = {}
+    for li, layer in enumerate(hidden_layers):
+        for idx, node in enumerate(layer):
+            hidden_pos[node] = (li, idx)
+
     sensory_idx = {node: i for i, node in enumerate(sensory_nodes)}
-    hidden_idx = {node: i for i, node in enumerate(hidden_nodes)}
     output_idx = {node: i for i, node in enumerate(output_nodes)}
 
     s_count = len(sensory_nodes)
     h_count = len(hidden_nodes)
     o_count = len(output_nodes)
 
-    # Dense matrices (flat row-major) for Runner snapshot.
-    w_in = [0.0] * (h_count * s_count)
-    p_in = [0] * (h_count * s_count)
-    w_rec = [0.0] * (h_count * h_count)
-    p_rec = [0] * (h_count * h_count)
-    w_out = [0.0] * (o_count * h_count)
-    p_out = [0] * (o_count * h_count)
+    # Dense matrices (flat row-major) for Runner snapshot, split across hidden layers.
+    in_rows = layer_sizes[0]
+    out_cols = layer_sizes[-1]
+    w_in = [0.0] * (in_rows * s_count)
+    p_in = [0] * (in_rows * s_count)
+    w_fwd = [
+        [0.0] * (layer_sizes[l + 1] * layer_sizes[l]) for l in range(layer_count - 1)
+    ]
+    p_fwd = [[0] * (layer_sizes[l + 1] * layer_sizes[l]) for l in range(layer_count - 1)]
+    w_bwd = [[0.0] * (layer_sizes[l] * layer_sizes[l + 1]) for l in range(layer_count - 1)]
+    p_bwd = [[0] * (layer_sizes[l] * layer_sizes[l + 1]) for l in range(layer_count - 1)]
+    w_rec = [[0.0] * (n * n) for n in layer_sizes]
+    p_rec = [[0] * (n * n) for n in layer_sizes]
+    w_out = [0.0] * (o_count * out_cols)
+    p_out = [0] * (o_count * out_cols)
 
     def transform_weight(syn: int) -> float:
         if weight_transform == "raw":
@@ -355,52 +407,136 @@ def build_projection_snapshot(
     retained_edges = 0
     retained_syn = 0
     w_in_edges = 0
+    w_fwd_edges = 0
+    w_bwd_edges = 0
     w_rec_edges = 0
     w_out_edges = 0
+    folded_sensory_edges = 0
+    folded_forward_edges = 0
+    folded_backward_edges = 0
+    folded_output_edges = 0
+    dropped_long_range_edges = 0
 
     print("Pass 3/3: building projected dense matrices...")
     for pre, post, syn in connection_rows(connections_path):
         if syn < min_syn_count:
             continue
-        if pre in sensory_idx and post in hidden_idx:
-            row = hidden_idx[post]
-            col = sensory_idx[pre]
-            flat = row * s_count + col
-            w_in[flat] += transform_weight(syn)
+        weight = transform_weight(syn)
+
+        if pre in sensory_idx and post in hidden_pos:
+            sensory_col = sensory_idx[pre]
+            post_layer, post_row = hidden_pos[post]
+            if post_layer != 0:
+                if long_range_policy == "fold":
+                    post_row = remap_index(post_row, layer_sizes[post_layer], layer_sizes[0])
+                    folded_sensory_edges += 1
+                else:
+                    dropped_long_range_edges += 1
+                    continue
+            flat = post_row * s_count + sensory_col
+            w_in[flat] += weight
             p_in[flat] += syn
             retained_edges += 1
             retained_syn += syn
             w_in_edges += 1
-        elif pre in hidden_idx and post in hidden_idx:
-            row = hidden_idx[post]
-            col = hidden_idx[pre]
-            flat = row * h_count + col
-            w_rec[flat] += transform_weight(syn)
-            p_rec[flat] += syn
-            retained_edges += 1
-            retained_syn += syn
-            w_rec_edges += 1
-        elif pre in hidden_idx and post in output_idx:
-            row = output_idx[post]
-            col = hidden_idx[pre]
-            flat = row * h_count + col
-            w_out[flat] += transform_weight(syn)
+            continue
+
+        if pre in hidden_pos and post in hidden_pos:
+            pre_layer, pre_idx = hidden_pos[pre]
+            post_layer, post_idx = hidden_pos[post]
+
+            if post_layer == pre_layer:
+                n = layer_sizes[pre_layer]
+                flat = post_idx * n + pre_idx
+                w_rec[pre_layer][flat] += weight
+                p_rec[pre_layer][flat] += syn
+                retained_edges += 1
+                retained_syn += syn
+                w_rec_edges += 1
+                continue
+
+            if post_layer == pre_layer + 1:
+                cols = layer_sizes[pre_layer]
+                flat = post_idx * cols + pre_idx
+                w_fwd[pre_layer][flat] += weight
+                p_fwd[pre_layer][flat] += syn
+                retained_edges += 1
+                retained_syn += syn
+                w_fwd_edges += 1
+                continue
+
+            if pre_layer == post_layer + 1:
+                cols = layer_sizes[pre_layer]
+                flat = post_idx * cols + pre_idx
+                w_bwd[post_layer][flat] += weight
+                p_bwd[post_layer][flat] += syn
+                retained_edges += 1
+                retained_syn += syn
+                w_bwd_edges += 1
+                continue
+
+            if long_range_policy != "fold":
+                dropped_long_range_edges += 1
+                continue
+
+            if post_layer > pre_layer:
+                # Fold distant forward edge into nearest forward hop.
+                hop = pre_layer
+                mapped_post = remap_index(post_idx, layer_sizes[post_layer], layer_sizes[hop + 1])
+                cols = layer_sizes[hop]
+                flat = mapped_post * cols + pre_idx
+                w_fwd[hop][flat] += weight
+                p_fwd[hop][flat] += syn
+                folded_forward_edges += 1
+                retained_edges += 1
+                retained_syn += syn
+                w_fwd_edges += 1
+            else:
+                # Fold distant backward edge into nearest backward hop.
+                hop = post_layer
+                mapped_pre = remap_index(pre_idx, layer_sizes[pre_layer], layer_sizes[hop + 1])
+                cols = layer_sizes[hop + 1]
+                flat = post_idx * cols + mapped_pre
+                w_bwd[hop][flat] += weight
+                p_bwd[hop][flat] += syn
+                folded_backward_edges += 1
+                retained_edges += 1
+                retained_syn += syn
+                w_bwd_edges += 1
+            continue
+
+        if pre in hidden_pos and post in output_idx:
+            pre_layer, pre_idx = hidden_pos[pre]
+            out_row = output_idx[post]
+            if pre_layer != (layer_count - 1):
+                if long_range_policy == "fold":
+                    pre_idx = remap_index(pre_idx, layer_sizes[pre_layer], layer_sizes[-1])
+                    folded_output_edges += 1
+                else:
+                    dropped_long_range_edges += 1
+                    continue
+            flat = out_row * out_cols + pre_idx
+            w_out[flat] += weight
             p_out[flat] += syn
             retained_edges += 1
             retained_syn += syn
             w_out_edges += 1
+            continue
 
     template = json.loads(template_path.read_text(encoding="utf-8"))
     net = dict(template.get("net", {}))
 
     net["num_sensory_neurons"] = s_count
-    net["num_hidden_layers"] = 1
-    net["num_hidden_per_layer_initial"] = h_count
+    net["num_hidden_layers"] = layer_count
+    net["num_hidden_per_layer_initial"] = layer_sizes[0]
     net["num_output_neurons"] = o_count
     net["sensory_target_layer"] = 0
-    net["output_source_layer"] = 0
+    net["output_source_layer"] = layer_count - 1
     net["clumping_design"] = "FruitFly"
-    net["max_total_neurons"] = max(h_count + o_count + s_count, int(net.get("max_total_neurons", 0) or 0))
+    net["max_layers"] = max(layer_count, int(net.get("max_layers", 0) or 0))
+    net["max_total_neurons"] = max(
+        h_count + o_count + s_count, int(net.get("max_total_neurons", 0) or 0)
+    )
     net["growth_enabled"] = False
     net["morpho_growth_enabled"] = False
     net["sleep_enabled"] = False
@@ -412,18 +548,41 @@ def build_projection_snapshot(
         {"name": "Neuromodulatory", "bio_params": {"izh_preset": "RS", "synaptic_gain": 1.1}},
     ]
 
+    total_dense_params = len(w_in) + len(w_out)
+    total_dense_params += sum(len(m) for m in w_fwd)
+    total_dense_params += sum(len(m) for m in w_bwd)
+    total_dense_params += sum(len(m) for m in w_rec)
+
     snapshot = {
         "net": net,
-        "w_in": {"rows": h_count, "cols": s_count, "data": w_in},
-        "w_hh_fwd": [],
-        "w_hh_bwd": [],
-        "w_hh_rec": [{"rows": h_count, "cols": h_count, "data": w_rec}],
-        "w_out": {"rows": o_count, "cols": h_count, "data": w_out},
-        "p_in": {"rows": h_count, "cols": s_count, "data": p_in},
-        "p_fwd": [],
-        "p_bwd": [],
-        "p_rec": [{"rows": h_count, "cols": h_count, "data": p_rec}],
-        "p_out": {"rows": o_count, "cols": h_count, "data": p_out},
+        "w_in": {"rows": in_rows, "cols": s_count, "data": w_in},
+        "w_hh_fwd": [
+            {"rows": layer_sizes[l + 1], "cols": layer_sizes[l], "data": m}
+            for l, m in enumerate(w_fwd)
+        ],
+        "w_hh_bwd": [
+            {"rows": layer_sizes[l], "cols": layer_sizes[l + 1], "data": m}
+            for l, m in enumerate(w_bwd)
+        ],
+        "w_hh_rec": [
+            {"rows": layer_sizes[l], "cols": layer_sizes[l], "data": m}
+            for l, m in enumerate(w_rec)
+        ],
+        "w_out": {"rows": o_count, "cols": out_cols, "data": w_out},
+        "p_in": {"rows": in_rows, "cols": s_count, "data": p_in},
+        "p_fwd": [
+            {"rows": layer_sizes[l + 1], "cols": layer_sizes[l], "data": m}
+            for l, m in enumerate(p_fwd)
+        ],
+        "p_bwd": [
+            {"rows": layer_sizes[l], "cols": layer_sizes[l + 1], "data": m}
+            for l, m in enumerate(p_bwd)
+        ],
+        "p_rec": [
+            {"rows": layer_sizes[l], "cols": layer_sizes[l], "data": m}
+            for l, m in enumerate(p_rec)
+        ],
+        "p_out": {"rows": o_count, "cols": out_cols, "data": p_out},
         "layer_range": None,
         "connectome_labels": {
             "species": "drosophila_melanogaster",
@@ -435,10 +594,13 @@ def build_projection_snapshot(
                 "max_output": max_output,
                 "min_syn_count": min_syn_count,
                 "weight_transform": weight_transform,
+                "hidden_layer_width": hidden_layer_width,
+                "long_range_policy": long_range_policy,
             },
             "sensory_nodes": sensory_nodes,
             "hidden_nodes": hidden_nodes,
             "output_nodes": output_nodes,
+            "hidden_layer_sizes": layer_sizes,
             "global_stats": {
                 "rows": rows,
                 "syn_total": syn_total,
@@ -451,11 +613,20 @@ def build_projection_snapshot(
                 "retained_edges": retained_edges,
                 "retained_syn": retained_syn,
                 "w_in_edges": w_in_edges,
-                "w_rec_edges": w_rec_edges,
+                "w_hh_fwd_edges": w_fwd_edges,
+                "w_hh_bwd_edges": w_bwd_edges,
+                "w_hh_rec_edges": w_rec_edges,
                 "w_out_edges": w_out_edges,
+                "folded_sensory_edges": folded_sensory_edges,
+                "folded_forward_edges": folded_forward_edges,
+                "folded_backward_edges": folded_backward_edges,
+                "folded_output_edges": folded_output_edges,
+                "dropped_long_range_edges": dropped_long_range_edges,
                 "sensory_count": s_count,
                 "hidden_count": h_count,
+                "hidden_layer_count": layer_count,
                 "output_count": o_count,
+                "dense_param_count": total_dense_params,
             },
         },
     }
@@ -495,8 +666,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-hidden",
         type=int,
-        default=2048,
-        help="Maximum hidden nodes to keep in the recurrent layer",
+        default=20000,
+        help="Maximum hidden nodes to keep across all hidden layers",
     )
     parser.add_argument(
         "--max-output",
@@ -515,6 +686,18 @@ def parse_args() -> argparse.Namespace:
         choices=("raw", "sqrt", "log1p"),
         default="sqrt",
         help="Transform applied to syn_count for weight matrices",
+    )
+    parser.add_argument(
+        "--hidden-layer-width",
+        type=int,
+        default=512,
+        help="Maximum neurons per hidden layer chunk (controls multilayer scaling)",
+    )
+    parser.add_argument(
+        "--long-range-policy",
+        choices=("fold", "drop"),
+        default="fold",
+        help="How to handle non-adjacent hidden edges in multilayer projection",
     )
     parser.add_argument(
         "--pretty",
@@ -541,6 +724,8 @@ def main() -> None:
         raise SystemExit("max-sensory/max-hidden/max-output must all be > 0")
     if args.min_syn_count <= 0:
         raise SystemExit("min-syn-count must be > 0")
+    if args.hidden_layer_width <= 0:
+        raise SystemExit("hidden-layer-width must be > 0")
 
     snapshot = build_projection_snapshot(
         neurons_path=neurons_path,
@@ -551,6 +736,8 @@ def main() -> None:
         max_output=args.max_output,
         min_syn_count=args.min_syn_count,
         weight_transform=args.weight_transform,
+        hidden_layer_width=args.hidden_layer_width,
+        long_range_policy=args.long_range_policy,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -561,10 +748,13 @@ def main() -> None:
     output_path.write_text(encoded, encoding="utf-8")
 
     labels = snapshot["connectome_labels"]["projection_stats"]
+    layer_sizes = snapshot["connectome_labels"].get("hidden_layer_sizes", [])
     print(
         f"Wrote {output_path} | S={labels['sensory_count']} "
-        f"H={labels['hidden_count']} O={labels['output_count']} "
-        f"edges={labels['retained_edges']} syn={labels['retained_syn']}"
+        f"H={labels['hidden_count']} ({labels['hidden_layer_count']} layers) "
+        f"O={labels['output_count']} "
+        f"edges={labels['retained_edges']} syn={labels['retained_syn']} "
+        f"layer_sizes={layer_sizes}"
     )
 
 

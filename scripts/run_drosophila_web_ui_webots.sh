@@ -15,17 +15,48 @@ DROSOPHILA_NEURONS_FILE="${DROSOPHILA_NEURONS_FILE:-$ROOT_DIR/data/drosophila/BA
 DROSOPHILA_CONNECTIONS_FILE="${DROSOPHILA_CONNECTIONS_FILE:-$ROOT_DIR/data/drosophila/BANC v626/connections_princeton.csv.gz}"
 DROSOPHILA_TEMPLATE_FILE="${DROSOPHILA_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
 DROSOPHILA_MAX_SENSORY="${DROSOPHILA_MAX_SENSORY:-34}"
-DROSOPHILA_MAX_HIDDEN="${DROSOPHILA_MAX_HIDDEN:-2048}"
+DROSOPHILA_MAX_HIDDEN="${DROSOPHILA_MAX_HIDDEN:-20000}"
 DROSOPHILA_MAX_OUTPUT="${DROSOPHILA_MAX_OUTPUT:-48}"
 DROSOPHILA_MIN_SYN_COUNT="${DROSOPHILA_MIN_SYN_COUNT:-1}"
 DROSOPHILA_WEIGHT_TRANSFORM="${DROSOPHILA_WEIGHT_TRANSFORM:-sqrt}"
+DROSOPHILA_HIDDEN_LAYER_WIDTH="${DROSOPHILA_HIDDEN_LAYER_WIDTH:-512}"
+DROSOPHILA_LONG_RANGE_POLICY="${DROSOPHILA_LONG_RANGE_POLICY:-fold}"
 DROSOPHILA_REBUILD_NETWORK="${DROSOPHILA_REBUILD_NETWORK:-0}"
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exec "$ROOT_DIR/run_webot.sh" --help
 fi
 
-if [ "$DROSOPHILA_REBUILD_NETWORK" = "1" ] || [ ! -f "$NETWORK_FILE" ]; then
+NEED_REBUILD="$DROSOPHILA_REBUILD_NETWORK"
+if [ "$NEED_REBUILD" != "1" ] && [ -f "$NETWORK_FILE" ]; then
+  if ! python3 - "$NETWORK_FILE" "$DROSOPHILA_MAX_HIDDEN" "$DROSOPHILA_HIDDEN_LAYER_WIDTH" "$DROSOPHILA_LONG_RANGE_POLICY" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+net_path = Path(sys.argv[1])
+want_hidden = int(sys.argv[2])
+want_width = int(sys.argv[3])
+want_policy = sys.argv[4].strip().lower()
+try:
+    data = json.loads(net_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+sel = ((data.get("connectome_labels") or {}).get("selection") or {})
+if int(sel.get("max_hidden", -1)) != want_hidden:
+    raise SystemExit(1)
+if int(sel.get("hidden_layer_width", -1)) != want_width:
+    raise SystemExit(1)
+if str(sel.get("long_range_policy", "")).strip().lower() != want_policy:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+  then
+    NEED_REBUILD=1
+  fi
+fi
+
+if [ "$NEED_REBUILD" = "1" ] || [ ! -f "$NETWORK_FILE" ]; then
   python3 "$ROOT_DIR/scripts/build_drosophila_network_json.py" \
     --neurons "$DROSOPHILA_NEURONS_FILE" \
     --connections "$DROSOPHILA_CONNECTIONS_FILE" \
@@ -35,7 +66,9 @@ if [ "$DROSOPHILA_REBUILD_NETWORK" = "1" ] || [ ! -f "$NETWORK_FILE" ]; then
     --max-hidden "$DROSOPHILA_MAX_HIDDEN" \
     --max-output "$DROSOPHILA_MAX_OUTPUT" \
     --min-syn-count "$DROSOPHILA_MIN_SYN_COUNT" \
-    --weight-transform "$DROSOPHILA_WEIGHT_TRANSFORM"
+    --weight-transform "$DROSOPHILA_WEIGHT_TRANSFORM" \
+    --hidden-layer-width "$DROSOPHILA_HIDDEN_LAYER_WIDTH" \
+    --long-range-policy "$DROSOPHILA_LONG_RANGE_POLICY"
 fi
 
 python3 "$ROOT_DIR/scripts/build_webots_drosophila_assets.py" \

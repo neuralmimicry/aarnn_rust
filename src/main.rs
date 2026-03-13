@@ -53,7 +53,15 @@ use crate::runner::Runner;
 use crate::stimuli::{AerIoConfig, AerLink};
 use std::sync::atomic::AtomicBool;
 
-const NM_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+fn grpc_max_message_bytes() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    const MIN: usize = 4 * 1024 * 1024;
+    std::env::var("NM_GRPC_MAX_MESSAGE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= MIN)
+        .unwrap_or(DEFAULT)
+}
 
 /// Supported neuron models for simulation.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -1158,12 +1166,13 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         grpc_addr: &str,
         node: &DistributedNode,
     ) -> Result<DistributedNeuromorphicClient<Channel>, String> {
+        let grpc_max_msg_bytes = grpc_max_message_bytes();
         let mut client = DistributedNeuromorphicClient::connect(orchestrator_addr.to_string())
             .await
             .map_err(|e| format!("connect: {e}"))?;
         client = client
-            .max_decoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)
-            .max_encoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES);
+            .max_decoding_message_size(grpc_max_msg_bytes)
+            .max_encoding_message_size(grpc_max_msg_bytes);
         let resources = node.get_resources().await;
         let network_resources = node.get_network_resources().await;
         let join_req = JoinRequest {
@@ -1210,6 +1219,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let node_clone = node.clone();
     let mut shutdown_rx_server = shutdown_rx.clone();
     tokio::spawn(async move {
+        let grpc_max_msg_bytes = grpc_max_message_bytes();
         let shutdown = async move {
             while !*shutdown_rx_server.borrow() {
                 if shutdown_rx_server.changed().await.is_err() {
@@ -1220,8 +1230,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         if let Err(e) = Server::builder()
             .add_service(
                 DistributedNeuromorphicServer::new(node_clone)
-                    .max_decoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES)
-                    .max_encoding_message_size(NM_GRPC_MAX_MESSAGE_BYTES),
+                    .max_decoding_message_size(grpc_max_msg_bytes)
+                    .max_encoding_message_size(grpc_max_msg_bytes),
             )
             .serve_with_shutdown(addr, shutdown)
             .await
