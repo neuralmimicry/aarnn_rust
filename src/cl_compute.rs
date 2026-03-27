@@ -147,10 +147,16 @@ fn probe_nvidia_cuda_gpu_count() -> usize {
             .map(str::trim)
             .filter(|line| {
                 !line.is_empty()
-                    && (!starts_with_gpu_prefix || line.starts_with("GPU ") || line.starts_with("GPU"))
+                    && (!starts_with_gpu_prefix
+                        || line.starts_with("GPU ")
+                        || line.starts_with("GPU"))
             })
             .count();
-        if count > 0 { Some(count) } else { None }
+        if count > 0 {
+            Some(count)
+        } else {
+            None
+        }
     };
 
     if let Some(count) = query_count(&["--query-gpu=name", "--format=csv,noheader"], false) {
@@ -224,12 +230,7 @@ pub struct CLBuffers {
 }
 
 impl CLBuffers {
-    pub fn create(
-        context: &Context,
-        size: usize,
-        has_u: bool,
-        has_refr: bool,
-    ) -> ClResult<Self> {
+    pub fn create(context: &Context, size: usize, has_u: bool, has_refr: bool) -> ClResult<Self> {
         let f64_size = size * std::mem::size_of::<f64>();
         let i32_size = size * std::mem::size_of::<i32>();
         let i8_size = size * std::mem::size_of::<i8>();
@@ -1084,15 +1085,16 @@ impl OpenCLManager {
                 cpu_err
             )
         })?;
-        let device_id = select_device_id(&cpu_devices, index, OpenCLExecutionTarget::Cpu)
-            .map_err(|cpu_select_err| {
+        let device_id = select_device_id(&cpu_devices, index, OpenCLExecutionTarget::Cpu).map_err(
+            |cpu_select_err| {
                 anyhow::anyhow!(
                     "{}. {}. OpenCL CPU selection failed: {}",
                     opencl_gpu_err,
                     cuda_err,
                     cpu_select_err
                 )
-            })?;
+            },
+        )?;
         Self::new_with_device_id(device_id).map_err(|cpu_init_err| {
             anyhow::anyhow!(
                 "{}. {}. OpenCL CPU initialization failed: {}",

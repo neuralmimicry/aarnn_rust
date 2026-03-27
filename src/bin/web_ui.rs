@@ -2926,13 +2926,17 @@ async fn resolve_network_addrs(
             .collect::<Vec<_>>();
 
         ranked.sort_by(|a, b| {
-            b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)).then_with(|| a.2.cmp(&b.2))
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
         });
 
         for (_, _, nid) in ranked {
-            if let Some(node) = status.nodes.iter().find(|n| {
-                n.node_id == nid && n.active_networks.iter().any(|id| id == network_id)
-            }) {
+            if let Some(node) = status
+                .nodes
+                .iter()
+                .find(|n| n.node_id == nid && n.active_networks.iter().any(|id| id == network_id))
+            {
                 push_candidate(node.address.clone());
             }
         }
@@ -2947,12 +2951,24 @@ async fn resolve_network_addrs(
     active_nodes.sort_by(|a, b| {
         let a_neurons = a.resources.as_ref().map(|r| r.num_neurons).unwrap_or(0);
         let b_neurons = b.resources.as_ref().map(|r| r.num_neurons).unwrap_or(0);
-        let a_capacity = a.resources.as_ref().map(|r| r.capacity_score).unwrap_or(0.0);
-        let b_capacity = b.resources.as_ref().map(|r| r.capacity_score).unwrap_or(0.0);
+        let a_capacity = a
+            .resources
+            .as_ref()
+            .map(|r| r.capacity_score)
+            .unwrap_or(0.0);
+        let b_capacity = b
+            .resources
+            .as_ref()
+            .map(|r| r.capacity_score)
+            .unwrap_or(0.0);
 
         b_neurons
             .cmp(&a_neurons)
-            .then_with(|| b_capacity.partial_cmp(&a_capacity).unwrap_or(Ordering::Equal))
+            .then_with(|| {
+                b_capacity
+                    .partial_cmp(&a_capacity)
+                    .unwrap_or(Ordering::Equal)
+            })
             .then_with(|| a.node_id.cmp(&b.node_id))
     });
     for node in active_nodes {

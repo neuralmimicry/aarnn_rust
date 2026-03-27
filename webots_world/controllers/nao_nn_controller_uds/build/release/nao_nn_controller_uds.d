@@ -10,6 +10,9 @@ build/release/nao_nn_controller_uds.o: nao_nn_controller_uds.cpp \
  /usr/local/webots/include/controller/c/webots/utils/motion.h \
  /usr/local/webots/include/controller/c/webots/utils/../types.h \
  ../../../include/device_mapper.hpp \
+ /usr/local/webots/include/controller/cpp/webots/Camera.hpp \
+ /usr/local/webots/include/controller/cpp/webots/../../c/webots/camera_recognition_object.h \
+ /usr/local/webots/include/controller/cpp/webots/LightSensor.hpp \
  /usr/local/webots/include/controller/cpp/webots/TouchSensor.hpp \
  /usr/local/webots/include/controller/cpp/webots/PositionSensor.hpp \
  /usr/local/webots/include/controller/cpp/webots/Node.hpp \

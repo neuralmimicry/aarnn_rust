@@ -61,8 +61,8 @@ cleanup() {
             if [ -z "${host:-}" ] || [ -z "${pid:-}" ]; then
                 continue
             fi
-            "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "kill -TERM $pid" >/dev/null 2>&1 || true
-            "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "sleep 0.2; kill -KILL $pid" >/dev/null 2>&1 || true
+            LC_ALL=C LANG=C "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "kill -TERM $pid" >/dev/null 2>&1 || true
+            LC_ALL=C LANG=C "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "sleep 0.2; kill -KILL $pid" >/dev/null 2>&1 || true
             echo "  remote $tag on $host (pid $pid) stopped"
         done
     fi
@@ -106,6 +106,8 @@ Options:
   --threshold <f>          Spike threshold for IPC/UDS servers (default: 0.5).
   --config <path>          NetworkConfig JSON to load in backend nodes/servers.
   --network <path>         Snapshot JSON to import in backend nodes/servers.
+  --config-map <csv>       Per-brain NetworkConfig mapping, e.g. banc=/a.json,fafb=/b.json.
+  --network-map <csv>      Per-brain snapshot mapping, e.g. banc=/a.json,fafb=/b.json.
   --orchestrator-port <n>  Fixed orchestrator gRPC port (default: auto-allocate).
   --no-orchestrator-ui     In cluster runtime, start orchestrator without UI window.
   --no-node-ui             In cluster runtime, start nodes without UI (breaks IPC server bind).
@@ -136,7 +138,7 @@ Options:
                            Remote dataset sync policy (default: auto).
                            auto: sync data/ once per host, then skip unless forced.
   --remote-rsync-compress <auto|on|off>
-                           Rsync compression policy (default: auto).
+                           Compression policy for rsync fallback (default: auto).
                            auto disables compression for RFC1918 LAN hosts.
   --remote-ssh-opts <str>  Extra SSH options appended to remote launch commands.
   --no-webots              Do not launch Webots; run NN backend only.
@@ -145,18 +147,27 @@ Options:
   --webots-headless        Launch Webots with --no-rendering --minimize.
   --skip-controller-build  Skip preflight build/check of nao_nn_controller_uds.
   --connect-timeout <sec>  Timeout waiting for controller brain connections (default: 60).
+  --cluster-distribution-timeout <sec>
+                           Timeout waiting for remote cluster distribution per network (default: 300).
   --help                   Show this help.
 
 Environment overrides:
   RUNTIME, NM_BRAINS, NM_INTERCONNECT, NM_AER_S_BASE, NM_AER_O_BASE,
   NM_IPC_THRESHOLD, NM_DEFAULT_SENSORY, NM_DEFAULT_OUTPUT, WORLD_FILE, LOG_DIR,
   START_WEBOTS, WEBOTS_BIN, WEBOTS_MODE, WEBOTS_HEADLESS, WEBOTS_CONNECT_TIMEOUT,
-  SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_ORCHESTRATOR_PORT,
+  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT,
+  SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_CONFIG_MAP, NM_NETWORK_MAP, NM_ORCHESTRATOR_PORT,
   NM_NODE_UI_HIDDEN, NM_REMOTE_COMPUTE, NM_REMOTE_HOSTS, NM_REMOTE_HOST_WEIGHTS,
   NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
   NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEB_UI_API_PORT, NM_REMOTE_UI_MODE,
   NM_LOCAL_RUST_UI, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR,
-  NM_REMOTE_PRE_CLEAN, NM_REMOTE_SYNC_DATA, NM_REMOTE_RSYNC_COMPRESS.
+  NM_REMOTE_PRE_CLEAN, NM_REMOTE_SYNC_DATA, NM_REMOTE_RSYNC_COMPRESS,
+  NM_DISTRIBUTE_STARTUP_SNAPSHOT, NM_DISTRIBUTED_AUTOSTART, NM_PRELOAD_NODE_NETWORK,
+  NM_REMOTE_RUNTIME_FEATURES, NM_REALTIME_POLICY, NM_REALTIME_IPC, NM_REALTIME_DISABLE_GROWTH,
+  NM_REALTIME_DISABLE_MORPHO, NM_REALTIME_DISABLE_METABOLIC,
+  NM_REALTIME_DISABLE_PRUNING, NM_REALTIME_MORPHO_INTERVAL_MS,
+  NM_REALTIME_METABOLIC_INTERVAL_MS, NM_REALTIME_MORPHO_MAX_SYNAPSES,
+  NM_MORPHO_ASYNC.
 USAGE
 }
 
@@ -179,12 +190,18 @@ WEBOTS_BIN="${WEBOTS_BIN:-}"
 WEBOTS_MODE="${WEBOTS_MODE:-realtime}"
 WEBOTS_HEADLESS="${WEBOTS_HEADLESS:-0}"
 WEBOTS_CONNECT_TIMEOUT="${WEBOTS_CONNECT_TIMEOUT:-60}"
+WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT="${WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT:-300}"
 SKIP_CONTROLLER_BUILD="${SKIP_CONTROLLER_BUILD:-0}"
 CONFIG_FILE="${NM_CONFIG_FILE:-}"
 NETWORK_FILE="${NM_NETWORK_FILE:-}"
+CONFIG_MAP_CSV="${NM_CONFIG_MAP:-}"
+NETWORK_MAP_CSV="${NM_NETWORK_MAP:-}"
 ORCHESTRATOR_PORT="${NM_ORCHESTRATOR_PORT:-}"
 NODE_UI_HIDDEN="${NM_NODE_UI_HIDDEN:-0}"
 SINGLE_ORCHESTRATOR_UI="${NM_SINGLE_ORCHESTRATOR_UI:-0}"
+DISTRIBUTE_STARTUP_SNAPSHOT="${NM_DISTRIBUTE_STARTUP_SNAPSHOT:-1}"
+DISTRIBUTED_AUTOSTART="${NM_DISTRIBUTED_AUTOSTART:-1}"
+PRELOAD_NODE_NETWORK="${NM_PRELOAD_NODE_NETWORK:-1}"
 REMOTE_COMPUTE="${NM_REMOTE_COMPUTE:-0}"
 REMOTE_HOSTS="${NM_REMOTE_HOSTS:-192.168.1.60,192.168.1.72}"
 REMOTE_HOST_WEIGHTS="${NM_REMOTE_HOST_WEIGHTS:-}"
@@ -203,6 +220,16 @@ REMOTE_QUIET="${NM_REMOTE_QUIET:-1}"
 REMOTE_PRE_CLEAN="${NM_REMOTE_PRE_CLEAN:-1}"
 REMOTE_SYNC_DATA="${NM_REMOTE_SYNC_DATA:-auto}"
 REMOTE_RSYNC_COMPRESS="${NM_REMOTE_RSYNC_COMPRESS:-auto}"
+REALTIME_POLICY="${NM_REALTIME_POLICY:-biomimicry}"
+REALTIME_IPC="${NM_REALTIME_IPC:-auto}"
+REALTIME_DISABLE_GROWTH="${NM_REALTIME_DISABLE_GROWTH:-auto}"
+REALTIME_DISABLE_MORPHO="${NM_REALTIME_DISABLE_MORPHO:-auto}"
+REALTIME_DISABLE_METABOLIC="${NM_REALTIME_DISABLE_METABOLIC:-auto}"
+REALTIME_DISABLE_PRUNING="${NM_REALTIME_DISABLE_PRUNING:-auto}"
+REALTIME_MORPHO_INTERVAL_MS="${NM_REALTIME_MORPHO_INTERVAL_MS:-}"
+REALTIME_METABOLIC_INTERVAL_MS="${NM_REALTIME_METABOLIC_INTERVAL_MS:-}"
+REALTIME_MORPHO_MAX_SYNAPSES="${NM_REALTIME_MORPHO_MAX_SYNAPSES:-}"
+MORPHO_ASYNC="${NM_MORPHO_ASYNC:-auto}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -222,6 +249,36 @@ normalize_bool() {
 rsync_supports_option() {
     local option="$1"
     rsync --help 2>/dev/null | grep -q -- "$option"
+}
+
+host_is_private_lan() {
+    local host="$1"
+    case "$host" in
+        10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+resolve_sync_compress_mode() {
+    local host="$1"
+    local mode="$REMOTE_RSYNC_COMPRESS"
+    if [ "$mode" = "auto" ]; then
+        if host_is_private_lan "$host"; then
+            mode="off"
+        else
+            mode="on"
+        fi
+    fi
+    printf "%s" "$mode"
+}
+
+rclone_supports_flag() {
+    local flag="$1"
+    rclone help flags 2>/dev/null | grep -q -- "$flag"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -263,6 +320,14 @@ while [ "$#" -gt 0 ]; do
         --network)
             shift
             NETWORK_FILE="${1:-}"
+            ;;
+        --config-map)
+            shift
+            CONFIG_MAP_CSV="${1:-}"
+            ;;
+        --network-map)
+            shift
+            NETWORK_MAP_CSV="${1:-}"
             ;;
         --orchestrator-port)
             shift
@@ -365,6 +430,10 @@ while [ "$#" -gt 0 ]; do
             shift
             WEBOTS_CONNECT_TIMEOUT="${1:-$WEBOTS_CONNECT_TIMEOUT}"
             ;;
+        --cluster-distribution-timeout)
+            shift
+            WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT="${1:-$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT}"
+            ;;
         --help|-h)
             usage
             exit 0
@@ -388,10 +457,103 @@ WEBOTS_HEADLESS="$(normalize_bool WEBOTS_HEADLESS "$WEBOTS_HEADLESS")" || exit 1
 SKIP_CONTROLLER_BUILD="$(normalize_bool SKIP_CONTROLLER_BUILD "$SKIP_CONTROLLER_BUILD")" || exit 1
 NODE_UI_HIDDEN="$(normalize_bool NODE_UI_HIDDEN "$NODE_UI_HIDDEN")" || exit 1
 SINGLE_ORCHESTRATOR_UI="$(normalize_bool SINGLE_ORCHESTRATOR_UI "$SINGLE_ORCHESTRATOR_UI")" || exit 1
+DISTRIBUTE_STARTUP_SNAPSHOT="$(normalize_bool NM_DISTRIBUTE_STARTUP_SNAPSHOT "$DISTRIBUTE_STARTUP_SNAPSHOT")" || exit 1
+DISTRIBUTED_AUTOSTART="$(normalize_bool NM_DISTRIBUTED_AUTOSTART "$DISTRIBUTED_AUTOSTART")" || exit 1
 REMOTE_COMPUTE="$(normalize_bool REMOTE_COMPUTE "$REMOTE_COMPUTE")" || exit 1
 REMOTE_QUIET="$(normalize_bool REMOTE_QUIET "$REMOTE_QUIET")" || exit 1
 REMOTE_PRE_CLEAN="$(normalize_bool REMOTE_PRE_CLEAN "$REMOTE_PRE_CLEAN")" || exit 1
 LOCAL_RUST_UI="$(normalize_bool LOCAL_RUST_UI "$LOCAL_RUST_UI")" || exit 1
+
+case "${REALTIME_POLICY,,}" in
+    conservative|safe|legacy)
+        REALTIME_POLICY="conservative"
+        ;;
+    biomimicry|bio|balanced)
+        REALTIME_POLICY="biomimicry"
+        ;;
+    *)
+        echo "Invalid NM_REALTIME_POLICY='$REALTIME_POLICY' (use conservative|biomimicry)."
+        exit 1
+        ;;
+esac
+
+if [ "$REALTIME_IPC" = "auto" ]; then
+    if [ "$START_WEBOTS" -eq 1 ]; then
+        REALTIME_IPC="1"
+    else
+        REALTIME_IPC="0"
+    fi
+fi
+REALTIME_IPC="$(normalize_bool NM_REALTIME_IPC "$REALTIME_IPC")" || exit 1
+
+if [ "$REALTIME_DISABLE_GROWTH" = "auto" ]; then
+    if [ "$REALTIME_POLICY" = "biomimicry" ]; then
+        REALTIME_DISABLE_GROWTH="0"
+    else
+        REALTIME_DISABLE_GROWTH="$REALTIME_IPC"
+    fi
+fi
+REALTIME_DISABLE_GROWTH="$(normalize_bool NM_REALTIME_DISABLE_GROWTH "$REALTIME_DISABLE_GROWTH")" || exit 1
+
+if [ "$REALTIME_DISABLE_MORPHO" = "auto" ]; then
+    if [ "$REALTIME_POLICY" = "biomimicry" ]; then
+        REALTIME_DISABLE_MORPHO="0"
+    else
+        REALTIME_DISABLE_MORPHO="$REALTIME_IPC"
+    fi
+fi
+REALTIME_DISABLE_MORPHO="$(normalize_bool NM_REALTIME_DISABLE_MORPHO "$REALTIME_DISABLE_MORPHO")" || exit 1
+
+if [ "$REALTIME_DISABLE_METABOLIC" = "auto" ]; then
+    if [ "$REALTIME_POLICY" = "biomimicry" ]; then
+        REALTIME_DISABLE_METABOLIC="0"
+    else
+        REALTIME_DISABLE_METABOLIC="$REALTIME_IPC"
+    fi
+fi
+REALTIME_DISABLE_METABOLIC="$(normalize_bool NM_REALTIME_DISABLE_METABOLIC "$REALTIME_DISABLE_METABOLIC")" || exit 1
+
+if [ "$REALTIME_DISABLE_PRUNING" = "auto" ]; then
+    if [ "$REALTIME_POLICY" = "biomimicry" ]; then
+        REALTIME_DISABLE_PRUNING="0"
+    else
+        REALTIME_DISABLE_PRUNING="$REALTIME_IPC"
+    fi
+fi
+REALTIME_DISABLE_PRUNING="$(normalize_bool NM_REALTIME_DISABLE_PRUNING "$REALTIME_DISABLE_PRUNING")" || exit 1
+
+if [ "$REALTIME_POLICY" = "biomimicry" ]; then
+    if [ -z "$REALTIME_MORPHO_INTERVAL_MS" ]; then
+        REALTIME_MORPHO_INTERVAL_MS="80"
+    fi
+    if [ -z "$REALTIME_METABOLIC_INTERVAL_MS" ]; then
+        REALTIME_METABOLIC_INTERVAL_MS="120"
+    fi
+    if [ -z "$REALTIME_MORPHO_MAX_SYNAPSES" ]; then
+        REALTIME_MORPHO_MAX_SYNAPSES="350000"
+    fi
+fi
+
+export NM_REALTIME_POLICY="$REALTIME_POLICY"
+export NM_REALTIME_IPC="$REALTIME_IPC"
+export NM_REALTIME_DISABLE_GROWTH="$REALTIME_DISABLE_GROWTH"
+export NM_REALTIME_DISABLE_MORPHO="$REALTIME_DISABLE_MORPHO"
+export NM_REALTIME_DISABLE_METABOLIC="$REALTIME_DISABLE_METABOLIC"
+export NM_REALTIME_DISABLE_PRUNING="$REALTIME_DISABLE_PRUNING"
+if [ -n "$REALTIME_MORPHO_INTERVAL_MS" ]; then
+    export NM_REALTIME_MORPHO_INTERVAL_MS="$REALTIME_MORPHO_INTERVAL_MS"
+fi
+if [ -n "$REALTIME_METABOLIC_INTERVAL_MS" ]; then
+    export NM_REALTIME_METABOLIC_INTERVAL_MS="$REALTIME_METABOLIC_INTERVAL_MS"
+fi
+if [ -n "$REALTIME_MORPHO_MAX_SYNAPSES" ]; then
+    export NM_REALTIME_MORPHO_MAX_SYNAPSES="$REALTIME_MORPHO_MAX_SYNAPSES"
+fi
+if [ "$MORPHO_ASYNC" = "auto" ]; then
+    MORPHO_ASYNC="$REALTIME_IPC"
+fi
+MORPHO_ASYNC="$(normalize_bool NM_MORPHO_ASYNC "$MORPHO_ASYNC")" || exit 1
+export NM_MORPHO_ASYNC="$MORPHO_ASYNC"
 
 if [ "$WEBOTS_MODE" != "pause" ] && [ "$WEBOTS_MODE" != "realtime" ] && [ "$WEBOTS_MODE" != "fast" ]; then
     echo "Invalid --webots-mode '$WEBOTS_MODE' (must be pause, realtime, or fast)."
@@ -400,6 +562,11 @@ fi
 
 if ! [[ "$WEBOTS_CONNECT_TIMEOUT" =~ ^[0-9]+$ ]]; then
     echo "Invalid --connect-timeout '$WEBOTS_CONNECT_TIMEOUT' (must be a non-negative integer)."
+    exit 1
+fi
+
+if ! [[ "$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid --cluster-distribution-timeout '$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT' (must be a non-negative integer)."
     exit 1
 fi
 
@@ -452,6 +619,8 @@ declare -A ACTUATOR_REGEX=()
 declare -A SOCKET_PATHS=()
 declare -A NODE_PORTS=()
 declare -A USED_PORTS=()
+declare -A CONFIG_FILE_MAP=()
+declare -A NETWORK_FILE_MAP=()
 
 reserve_port() { USED_PORTS["$1"]=1; }
 
@@ -510,6 +679,149 @@ remote_path_for_local() {
     else
         printf "%s" "$local_path"
     fi
+}
+
+trim_ws() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf "%s" "$value"
+}
+
+parse_brain_file_map() {
+    local raw="$1"
+    local map_name="$2"
+    local label="$3"
+    local -n map_ref="$map_name"
+    map_ref=()
+    [ -z "$raw" ] && return
+
+    local IFS=','
+    read -r -a pairs <<< "$raw"
+    local pair
+    for pair in "${pairs[@]}"; do
+        pair="$(trim_ws "$pair")"
+        [ -z "$pair" ] && continue
+        if [[ "$pair" != *=* ]]; then
+            echo "Invalid $label map entry '$pair' (expected brain=/path)."
+            exit 1
+        fi
+        local brain="${pair%%=*}"
+        local path="${pair#*=}"
+        brain="$(trim_ws "$brain")"
+        path="$(trim_ws "$path")"
+        if [ -z "$brain" ] || [ -z "$path" ]; then
+            echo "Invalid $label map entry '$pair' (brain and path are required)."
+            exit 1
+        fi
+        map_ref["$brain"]="$path"
+    done
+}
+
+canonicalize_and_validate_map_paths() {
+    local map_name="$1"
+    local label="$2"
+    local -n map_ref="$map_name"
+    local brain
+    for brain in "${!map_ref[@]}"; do
+        local raw_path="${map_ref[$brain]}"
+        local abs_path
+        abs_path="$(abs_path_from_root "$raw_path")"
+        if [ ! -f "$abs_path" ]; then
+            echo "$label file not found for brain '$brain': $raw_path"
+            exit 1
+        fi
+        map_ref["$brain"]="$abs_path"
+    done
+}
+
+map_to_csv() {
+    local map_name="$1"
+    local -n map_ref="$map_name"
+    local out=""
+    local brain
+    for brain in "${!map_ref[@]}"; do
+        out+="${out:+,}${brain}=${map_ref[$brain]}"
+    done
+    printf "%s" "$out"
+}
+
+config_for_brain() {
+    local brain="$1"
+    if [ -n "${CONFIG_FILE_MAP[$brain]+x}" ]; then
+        printf "%s" "${CONFIG_FILE_MAP[$brain]}"
+    else
+        printf "%s" "${CONFIG_FILE:-}"
+    fi
+}
+
+network_for_brain() {
+    local brain="$1"
+    if [ -n "${NETWORK_FILE_MAP[$brain]+x}" ]; then
+        printf "%s" "${NETWORK_FILE_MAP[$brain]}"
+    else
+        printf "%s" "${NETWORK_FILE:-}"
+    fi
+}
+
+remote_config_for_brain() {
+    local brain="$1"
+    local local_path
+    local_path="$(config_for_brain "$brain")"
+    if [ -n "$local_path" ]; then
+        remote_path_for_local "$local_path"
+    fi
+}
+
+remote_network_for_brain() {
+    local brain="$1"
+    local local_path
+    local_path="$(network_for_brain "$brain")"
+    if [ -n "$local_path" ]; then
+        remote_path_for_local "$local_path"
+    fi
+}
+
+build_orchestrator_network_specs_json() {
+    local mode="${1:-local}"
+    local -a triples=()
+    local brain
+    for brain in "${BRAINS[@]}"; do
+        local cfg=""
+        local net=""
+        if [ "$mode" = "remote" ]; then
+            cfg="$(remote_config_for_brain "$brain")"
+            net="$(remote_network_for_brain "$brain")"
+        else
+            cfg="$(config_for_brain "$brain")"
+            net="$(network_for_brain "$brain")"
+        fi
+        triples+=("$brain" "$cfg" "$net")
+    done
+
+    python3 - "${triples[@]}" <<'PY'
+import json
+import sys
+
+args = sys.argv[1:]
+if len(args) % 3 != 0:
+    raise SystemExit(2)
+
+specs = []
+for i in range(0, len(args), 3):
+    network_id, config_path, network_path = args[i:i + 3]
+    network_id = network_id.strip()
+    if not network_id:
+        continue
+    spec = {"network_id": network_id}
+    if config_path:
+        spec["config_path"] = config_path
+    if network_path:
+        spec["network_path"] = network_path
+    specs.append(spec)
+
+print(json.dumps(specs, separators=(",", ":")))
+PY
 }
 
 parse_remote_hosts() {
@@ -578,30 +890,16 @@ init_remote_ssh() {
     REMOTE_SSH_READY=1
 }
 
-sync_remote_source_tree() {
+sync_remote_source_tree_with_rsync() {
     local host="$1"
     if ! command -v rsync >/dev/null 2>&1; then
-        echo "rsync not found locally; skipping source sync to $host."
-        return 0
+        echo "rsync not found locally."
+        return 127
     fi
-    if [ -z "$REMOTE_USER" ]; then
-        echo "Missing remote user for source sync."
-        return 1
-    fi
-    remote_exec_script "$host" "mkdir -p \"$REMOTE_ROOT_DIR\"" >/dev/null 2>&1 || return 1
 
-    local use_compress="$REMOTE_RSYNC_COMPRESS"
-    if [ "$use_compress" = "auto" ]; then
-        case "$host" in
-            10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
-                use_compress="off"
-                ;;
-            *)
-                use_compress="on"
-                ;;
-        esac
-    fi
-    echo "  rsync options for $host: compression=$use_compress"
+    local use_compress
+    use_compress="$(resolve_sync_compress_mode "$host")"
+    echo "  sync backend for $host: rsync (compression=$use_compress)"
 
     local -a rsync_common=(
         rsync
@@ -636,7 +934,7 @@ sync_remote_source_tree() {
     fi
 
     # Fast code/runtime mirror each run; dataset handled separately by policy.
-    "${rsync_common[@]}" \
+    LC_ALL=C LANG=C "${rsync_common[@]}" \
         --exclude 'data/' \
         -e "${REMOTE_SSH_ARGV[*]}" \
         "$ROOT_DIR/" \
@@ -660,18 +958,119 @@ sync_remote_source_tree() {
 
     if [ "$data_mode" = "always" ] && [ -d "$ROOT_DIR/data" ]; then
         echo "Syncing large data/ tree to $host (initial sync or forced mode)..."
-        "${rsync_common[@]}" \
+        LC_ALL=C LANG=C "${rsync_common[@]}" \
             -e "${REMOTE_SSH_ARGV[*]}" \
             "$ROOT_DIR/data/" \
             "${REMOTE_USER}@${host}:$REMOTE_ROOT_DIR/data/" || return 1
         remote_exec_script "$host" \
             "date -u +%FT%TZ > \"$REMOTE_ROOT_DIR/.nm_data_synced\"" >/dev/null 2>&1 || true
     fi
+
+    return 0
+}
+
+sync_remote_source_tree_with_rclone() {
+    local host="$1"
+    if ! command -v rclone >/dev/null 2>&1; then
+        echo "rclone not found locally."
+        return 127
+    fi
+
+    local remote_root="${REMOTE_ROOT_DIR%/}/"
+    local remote_data="${REMOTE_ROOT_DIR%/}/data/"
+
+    local -a rclone_common=(
+        rclone
+        sync
+        --config /dev/null
+        --sftp-host "$host"
+        --sftp-user "$REMOTE_USER"
+        --sftp-shell-type unix
+        --sftp-md5sum-command md5sum
+        --sftp-sha1sum-command sha1sum
+        --checkers 16
+        --transfers 16
+        --retries 3
+        --low-level-retries 10
+        --stats 10s
+    )
+    if rclone_supports_flag '--fast-list'; then
+        rclone_common+=(--fast-list)
+    fi
+    echo "  sync backend for $host: rclone (sftp)"
+
+    # Fast code/runtime mirror each run; dataset handled separately by policy.
+    "${rclone_common[@]}" \
+        --exclude '.git/**' \
+        --exclude '.idea/**' \
+        --exclude '.venv/**' \
+        --exclude 'target/**' \
+        --exclude 'logs/**' \
+        --exclude '__pycache__/**' \
+        --exclude '*.pyc' \
+        --exclude 'node_modules/**' \
+        --exclude '.cache/**' \
+        --exclude 'data/**' \
+        "$ROOT_DIR/" \
+        ":sftp:$remote_root" || return 1
+
+    local data_mode="$REMOTE_SYNC_DATA"
+    if [ "$data_mode" = "auto" ]; then
+        if remote_exec_script "$host" "[ -f \"$REMOTE_ROOT_DIR/.nm_data_synced\" ]" >/dev/null 2>&1; then
+            data_mode="never"
+        elif remote_exec_script "$host" \
+            "[ -d \"$REMOTE_ROOT_DIR/data\" ] && [ \"\$(ls -A \"$REMOTE_ROOT_DIR/data\" 2>/dev/null)\" != \"\" ]" \
+            >/dev/null 2>&1; then
+            data_mode="never"
+            remote_exec_script "$host" \
+                "date -u +%FT%TZ > \"$REMOTE_ROOT_DIR/.nm_data_synced\"" >/dev/null 2>&1 || true
+        else
+            data_mode="always"
+        fi
+    fi
+    echo "  data sync mode for $host: $data_mode"
+
+    if [ "$data_mode" = "always" ] && [ -d "$ROOT_DIR/data" ]; then
+        echo "Syncing large data/ tree to $host (initial sync or forced mode)..."
+        "${rclone_common[@]}" \
+            "$ROOT_DIR/data/" \
+            ":sftp:$remote_data" || return 1
+        remote_exec_script "$host" \
+            "date -u +%FT%TZ > \"$REMOTE_ROOT_DIR/.nm_data_synced\"" >/dev/null 2>&1 || true
+    fi
+
+    return 0
+}
+
+sync_remote_source_tree() {
+    local host="$1"
+    if [ -z "$REMOTE_USER" ]; then
+        echo "Missing remote user for source sync."
+        return 1
+    fi
+    remote_exec_script "$host" "mkdir -p \"$REMOTE_ROOT_DIR\"" >/dev/null 2>&1 || return 1
+
+    if command -v rclone >/dev/null 2>&1; then
+        if sync_remote_source_tree_with_rclone "$host"; then
+            return 0
+        fi
+        echo "  rclone sync failed on $host; falling back to rsync."
+    fi
+
+    if command -v rsync >/dev/null 2>&1; then
+        if sync_remote_source_tree_with_rsync "$host"; then
+            return 0
+        fi
+        return 1
+    fi
+
+    echo "Neither rclone nor rsync is available locally; cannot sync to $host."
+    return 1
 }
 
 remote_reachable() {
     local host="$1"
-    "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "echo ok" >/dev/null 2>&1
+    remote_exec_script "$host" "echo ok" >/dev/null 2>&1
 }
 
 choose_best_remote_host() {
@@ -695,7 +1094,13 @@ choose_best_remote_host() {
 remote_exec_script() {
     local host="$1"
     shift
-    "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "$@"
+    local remote_cmd=""
+    if [ "$#" -eq 1 ]; then
+        remote_cmd="LC_ALL=C LANG=C $1"
+    else
+        remote_cmd="LC_ALL=C LANG=C $(cmd_to_string "$@")"
+    fi
+    LC_ALL=C LANG=C "${REMOTE_SSH_ARGV[@]}" "${REMOTE_USER}@${host}" "$remote_cmd"
 }
 
 remote_preclean_host() {
@@ -973,12 +1378,22 @@ wait_for_cluster_distribution() {
     local web_ui_url="$1"
     local orchestrator_addr="$2"
     local network_id="$3"
-    local timeout_s="${4:-35}"
+    local timeout_s="${4:-$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT}"
+    local poll_out=""
+    local poll_status=""
+    local poll_dist_count="0"
+    local poll_net_count="0"
+    local poll_node_count="0"
+    local poll_msg=""
+    local last_poll_out=""
+    local progress_every_s=10
+    local next_progress=$((SECONDS + progress_every_s))
     local deadline=$((SECONDS + timeout_s))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        if python3 - "$web_ui_url" "$orchestrator_addr" "$network_id" <<'PY' >/dev/null 2>&1
+        poll_out="$(python3 - "$web_ui_url" "$orchestrator_addr" "$network_id" <<'PY' 2>/dev/null
 import json
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -987,22 +1402,136 @@ addr = sys.argv[2]
 network_id = sys.argv[3]
 query = urllib.parse.urlencode({"addr": addr})
 url = f"{web_ui_url}/api/status?{query}"
-with urllib.request.urlopen(url, timeout=1.2) as resp:
-    payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
-for net in payload.get("networks", []):
-    if str(net.get("network_id", "")) != network_id:
-        continue
-    dist = net.get("distribution", [])
-    if isinstance(dist, list) and len(dist) > 0:
-        sys.exit(0)
-sys.exit(1)
+try:
+    with urllib.request.urlopen(url, timeout=1.5) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+except urllib.error.HTTPError as e:
+    body = ""
+    try:
+        body = (e.read() or b"").decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    body = body.strip().replace("\n", " ")
+    if len(body) > 220:
+        body = body[:220] + "..."
+    detail = f"{e}; body={body}" if body else str(e)
+    print(f"error|0|0|0|{detail}")
+    raise SystemExit(2)
+except Exception as e:
+    detail = str(e).strip().replace("\n", " ")
+    if len(detail) > 220:
+        detail = detail[:220] + "..."
+    print(f"error|0|0|0|{detail}")
+    raise SystemExit(2)
+
+nodes = payload.get("nodes", [])
+networks = payload.get("networks", [])
+node_count = len(nodes) if isinstance(nodes, list) else 0
+net_count = len(networks) if isinstance(networks, list) else 0
+
+found = None
+if isinstance(networks, list):
+    for net in networks:
+        if str(net.get("network_id", "")) == network_id:
+            found = net
+            break
+
+if found is None:
+    print(f"missing|0|{net_count}|{node_count}|network_missing")
+    raise SystemExit(1)
+
+dist = found.get("distribution", [])
+dist_count = len(dist) if isinstance(dist, list) else 0
+if dist_count > 0:
+    print(f"ready|{dist_count}|{net_count}|{node_count}|ok")
+    raise SystemExit(0)
+
+print(f"pending|{dist_count}|{net_count}|{node_count}|distribution_empty")
+raise SystemExit(1)
 PY
-        then
+)" || true
+        last_poll_out="$poll_out"
+        IFS='|' read -r poll_status poll_dist_count poll_net_count poll_node_count poll_msg <<<"$poll_out"
+        if [ "${poll_status:-}" = "ready" ]; then
             return 0
+        fi
+        if [ "$SECONDS" -ge "$next_progress" ]; then
+            echo "  waiting for distribution '$network_id': status=${poll_status:-unknown} dist=${poll_dist_count:-0} nets=${poll_net_count:-0} nodes=${poll_node_count:-0} (${SECONDS}s elapsed)"
+            next_progress=$((SECONDS + progress_every_s))
         fi
         sleep 0.5
     done
+    if [ -n "$last_poll_out" ]; then
+        echo "  final distribution wait state for '$network_id': $last_poll_out"
+    fi
     return 1
+}
+
+print_cluster_status_debug() {
+    local web_ui_url="$1"
+    local orchestrator_addr="$2"
+    local focus_network="${3:-}"
+    python3 - "$web_ui_url" "$orchestrator_addr" "$focus_network" <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+web_ui_url = sys.argv[1].rstrip("/")
+addr = sys.argv[2]
+focus = sys.argv[3].strip()
+query = urllib.parse.urlencode({"addr": addr})
+url = f"{web_ui_url}/api/status?{query}"
+
+try:
+    with urllib.request.urlopen(url, timeout=2.5) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+except urllib.error.HTTPError as e:
+    body = ""
+    try:
+        body = (e.read() or b"").decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    body = body.strip().replace("\n", " ")
+    if len(body) > 400:
+        body = body[:400] + "..."
+    if body:
+        print(f"Cluster status debug failed: {e}; body={body}")
+    else:
+        print(f"Cluster status debug failed: {e}")
+    raise SystemExit(1)
+except Exception as e:
+    detail = str(e).strip().replace("\n", " ")
+    if len(detail) > 400:
+        detail = detail[:400] + "..."
+    print(f"Cluster status debug failed: {detail}")
+    raise SystemExit(1)
+
+nodes = payload.get("nodes", [])
+networks = payload.get("networks", [])
+if not isinstance(nodes, list):
+    nodes = []
+if not isinstance(networks, list):
+    networks = []
+
+print(f"Cluster status snapshot: nodes={len(nodes)} networks={len(networks)}")
+for n in nodes:
+    node_id = n.get("node_id", "")
+    active = n.get("active_networks", [])
+    if not isinstance(active, list):
+        active = []
+    print(f"  node={node_id} active_networks={len(active)}")
+
+for net in networks:
+    nid = str(net.get("network_id", ""))
+    dist = net.get("distribution", [])
+    dist_count = len(dist) if isinstance(dist, list) else 0
+    total = net.get("total_neurons", 0)
+    playing = net.get("playing", False)
+    mark = "*" if focus and nid == focus else " "
+    print(f" {mark}network={nid} dist={dist_count} total_neurons={total} playing={playing}")
+PY
 }
 
 start_local_rust_ui_client() {
@@ -1027,11 +1556,15 @@ start_local_rust_ui_client() {
         --brain-id "$brain"
         --orchestrator-addr "$orchestrator_addr"
     )
-    if [ -n "$CONFIG_FILE" ]; then
-        rust_ui_cmd+=(--config "$CONFIG_FILE")
+    local brain_config
+    brain_config="$(config_for_brain "$brain")"
+    if [ -n "$brain_config" ]; then
+        rust_ui_cmd+=(--config "$brain_config")
     fi
-    if [ -n "$NETWORK_FILE" ]; then
-        rust_ui_cmd+=(--network "$NETWORK_FILE")
+    local brain_network
+    brain_network="$(network_for_brain "$brain")"
+    if [ -n "$brain_network" ]; then
+        rust_ui_cmd+=(--network "$brain_network")
     fi
 
     NM_UI_REMOTE_ORCHESTRATORS="$orchestrator_addr" \
@@ -1109,7 +1642,12 @@ interconnect_counts_for_brain() {
 
 wait_for_socket() {
     local path="$1"
-    for _ in $(seq 1 120); do
+    local timeout_s="${2:-$WEBOTS_CONNECT_TIMEOUT}"
+    if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
+        timeout_s=60
+    fi
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
         if [ -S "$path" ]; then
             return 0
         fi
@@ -1149,6 +1687,19 @@ run_diag_for_brain() {
             echo "[diag:$brain] $detected"
         else
             echo "[diag:$brain] UDS round-trip succeeded."
+        fi
+        return 0
+    fi
+
+    if [ "$RUNTIME" = "cluster" ] && grep -Eq 'Auto-detected S=[0-9]+, O=[0-9]+' "$diag_log"; then
+        # In cluster runtime, pre-Webots diagnostics can receive size hints before
+        # the full controller data loop is active. Treat this as IPC-ready.
+        local detected
+        detected="$(grep -Eo 'Auto-detected S=[0-9]+, O=[0-9]+' "$diag_log" | tail -n 1 || true)"
+        if [ -n "$detected" ]; then
+            echo "[diag:$brain] $detected (IPC hint received; full round-trip deferred until controller connects)"
+        else
+            echo "[diag:$brain] IPC hint received; full round-trip deferred until controller connects"
         fi
         return 0
     fi
@@ -1343,6 +1894,13 @@ start_cluster_runtime() {
 
         local orch_log="$LOG_DIR/webots_orchestrator.log"
         local orch_cmd=(
+            env
+            "NM_REALTIME_IPC=$REALTIME_IPC"
+            "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+            "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+            "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+            "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+            "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
             "$bin"
             --orchestrator
             --brain-id "$brain"
@@ -1350,17 +1908,21 @@ start_cluster_runtime() {
             --ipc
             --ui
         )
-        if [ -n "$CONFIG_FILE" ]; then
-            orch_cmd+=(--config "$CONFIG_FILE")
+        local brain_config
+        brain_config="$(config_for_brain "$brain")"
+        if [ -n "$brain_config" ]; then
+            orch_cmd+=(--config "$brain_config")
         fi
-        if [ -n "$NETWORK_FILE" ]; then
-            orch_cmd+=(--network "$NETWORK_FILE")
+        local brain_network
+        brain_network="$(network_for_brain "$brain")"
+        if [ -n "$brain_network" ]; then
+            orch_cmd+=(--network "$brain_network")
         fi
         "${orch_cmd[@]}" >"$orch_log" 2>&1 &
         PIDS+=("$!")
 
         if ! wait_for_socket "$socket_path"; then
-            echo "Failed to bind IPC socket for brain '$brain': $socket_path"
+            echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $orch_log"
             tail -n 40 "$orch_log" || true
             exit 1
@@ -1375,18 +1937,27 @@ start_cluster_runtime() {
     fi
 
     local orch_log="$LOG_DIR/webots_orchestrator.log"
+    local orch_specs_json=""
+    orch_specs_json="$(build_orchestrator_network_specs_json local)" || {
+        echo "Failed to build orchestrator startup network map."
+        exit 1
+    }
     local orch_cmd=(
+        env
+        "NM_ORCHESTRATOR_NETWORK_SPECS=$orch_specs_json"
+        "NM_DISTRIBUTE_STARTUP_SNAPSHOT=$DISTRIBUTE_STARTUP_SNAPSHOT"
+        "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
+        "NM_REALTIME_IPC=$REALTIME_IPC"
+        "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+        "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+        "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+        "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+        "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
         "$bin"
         --orchestrator
-        --brain-id cluster_master
+        --brain-id orchestrator
         --grpc-addr "0.0.0.0:$orch_port"
     )
-    if [ -n "$CONFIG_FILE" ]; then
-        orch_cmd+=(--config "$CONFIG_FILE")
-    fi
-    if [ -n "$NETWORK_FILE" ]; then
-        orch_cmd+=(--network "$NETWORK_FILE")
-    fi
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
         orch_cmd+=(--ui)
     fi
@@ -1413,6 +1984,14 @@ start_cluster_runtime() {
 
         local log_file="$LOG_DIR/webots_${brain}.log"
         local node_cmd=(
+            env
+            "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK"
+            "NM_REALTIME_IPC=$REALTIME_IPC"
+            "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+            "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+            "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+            "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+            "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
             "$bin"
             --node
             --brain-id "$brain"
@@ -1420,11 +1999,15 @@ start_cluster_runtime() {
             --orchestrator-addr "http://127.0.0.1:$orch_port"
             --ipc
         )
-        if [ -n "$CONFIG_FILE" ]; then
-            node_cmd+=(--config "$CONFIG_FILE")
+        local brain_config
+        brain_config="$(config_for_brain "$brain")"
+        if [ -n "$brain_config" ]; then
+            node_cmd+=(--config "$brain_config")
         fi
-        if [ -n "$NETWORK_FILE" ]; then
-            node_cmd+=(--network "$NETWORK_FILE")
+        local brain_network
+        brain_network="$(network_for_brain "$brain")"
+        if [ -n "$brain_network" ]; then
+            node_cmd+=(--network "$brain_network")
         fi
         if [ "$NODE_UI" -eq 1 ]; then
             node_cmd+=(--ui)
@@ -1438,7 +2021,7 @@ start_cluster_runtime() {
         PIDS+=("$!")
 
         if ! wait_for_socket "$socket_path"; then
-            echo "Failed to bind IPC socket for brain '$brain': $socket_path"
+            echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $log_file"
             tail -n 40 "$log_file" || true
             exit 1
@@ -1657,8 +2240,14 @@ if have_cmd mpicxx; then
 fi
 
 cd "$ROOT"
-cargo build --release --bin aarnn_rust
-cargo build --release --bin web_ui
+REMOTE_FEATURES="${NM_REMOTE_RUNTIME_FEATURES:-growth3d,morpho}"
+if [ -n "$REMOTE_FEATURES" ]; then
+    cargo build --release --bin aarnn_rust --features "$REMOTE_FEATURES"
+    cargo build --release --bin web_ui --features "$REMOTE_FEATURES"
+else
+    cargo build --release --bin aarnn_rust
+    cargo build --release --bin web_ui
+fi
 EOS
         then
             echo "Remote build failed on $host"
@@ -1670,10 +2259,6 @@ EOS
 start_remote_cluster_runtime() {
     if [ "$RUNTIME" != "cluster" ]; then
         echo "--remote-compute currently supports --runtime cluster only."
-        exit 1
-    fi
-    if [ "${#BRAINS[@]}" -ne 1 ]; then
-        echo "--remote-compute currently requires exactly one brain. Current: $BRAIN_CSV"
         exit 1
     fi
     local bridge_tool="$ROOT_DIR/tools/uds_webui_bridge.py"
@@ -1728,7 +2313,6 @@ start_remote_cluster_runtime() {
         exit 1
     fi
 
-    local brain="${BRAINS[0]}"
     local web_ui_host="$REMOTE_WEB_UI_HOST"
     if [ "$web_ui_host" = "off" ]; then
         echo "--remote-web-ui-host=off is unsupported with Webots bridge mode."
@@ -1760,15 +2344,7 @@ start_remote_cluster_runtime() {
         }
     fi
     ORCHESTRATOR_PORT="$orch_port"
-
-    local remote_network=""
-    local remote_config=""
-    if [ -n "$NETWORK_FILE" ]; then
-        remote_network="$(remote_path_for_local "$NETWORK_FILE")"
-    fi
-    if [ -n "$CONFIG_FILE" ]; then
-        remote_config="$(remote_path_for_local "$CONFIG_FILE")"
-    fi
+    local orchestrator_addr_public="http://$orchestrator_host:$orch_port"
 
     local web_ui_api_port="$REMOTE_WEB_UI_PORT"
     local web_ui_api_url=""
@@ -1782,25 +2358,37 @@ start_remote_cluster_runtime() {
         exit 1
     fi
 
+    local orch_specs_json=""
+    orch_specs_json="$(build_orchestrator_network_specs_json remote)" || {
+        echo "Failed to build remote orchestrator startup network map."
+        exit 1
+    }
+
     local orch_cmd=(
-        env "NM_DISTRIBUTE_STARTUP_SNAPSHOT=0"
+        env
+        "NM_DISTRIBUTE_STARTUP_SNAPSHOT=$DISTRIBUTE_STARTUP_SNAPSHOT"
+        "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
+        "NM_ORCHESTRATOR_NETWORK_SPECS=$orch_specs_json"
+        "NM_REALTIME_IPC=$REALTIME_IPC"
+        "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+        "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+        "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+        "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+        "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
+        "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS"
+        "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS"
+        "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES"
         target/release/aarnn_rust
         --orchestrator
-        --brain-id "$brain"
+        --brain-id orchestrator
         --grpc-addr "0.0.0.0:$orch_port"
     )
     if [ "$REMOTE_QUIET" -eq 1 ]; then
         orch_cmd+=(--quiet)
     fi
-    if [ -n "$remote_config" ]; then
-        orch_cmd+=(--config "$remote_config")
-    fi
-    if [ -n "$remote_network" ]; then
-        orch_cmd+=(--network "$remote_network")
-    fi
     local orch_cmd_str
     orch_cmd_str="$(cmd_to_string "${orch_cmd[@]}")"
-    remote_start_bg "$orchestrator_host" "remote_orchestrator_${brain}" "$orch_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+    remote_start_bg "$orchestrator_host" "remote_orchestrator" "$orch_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
 
     if ! wait_for_remote_port "$orchestrator_host" "$orch_port" 40; then
         echo "Remote orchestrator did not open $orchestrator_host:$orch_port in time."
@@ -1808,94 +2396,128 @@ start_remote_cluster_runtime() {
     fi
 
     local node_port_start=50070
-    for host in "${REMOTE_HOST_LIST[@]}"; do
-        if ! remote_reachable "$host"; then
-            echo "Skipping remote node on $host (SSH unreachable)."
-            continue
-        fi
-        local node_port
-        node_port="$(find_remote_free_port "$host" "$node_port_start")" || {
-            echo "Failed to allocate remote node port on $host"
-            exit 1
-        }
-        node_port_start=$((node_port_start + 7))
-        local node_weight
-        node_weight="$(remote_weight_for_host "$host")"
-        local node_cmd=(
-            env "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=1"
-            target/release/aarnn_rust
-            --node
-            --brain-id "$brain"
-            --grpc-addr "0.0.0.0:$node_port"
-            --orchestrator-addr "http://$orchestrator_host:$orch_port"
-        )
-        if [ "$REMOTE_QUIET" -eq 1 ]; then
-            node_cmd+=(--quiet)
-        fi
-        if [ -n "$remote_config" ]; then
-            node_cmd+=(--config "$remote_config")
-        fi
-        if [ -n "$remote_network" ]; then
-            node_cmd+=(--network "$remote_network")
-        fi
-        local node_cmd_str
-        node_cmd_str="$(cmd_to_string "${node_cmd[@]}")"
-        remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
-        NODE_PORTS["$host"]="$node_port"
+    local launched_nodes=0
+    local brain
+    for brain in "${BRAINS[@]}"; do
+        local remote_network
+        remote_network="$(remote_network_for_brain "$brain")"
+        local remote_config
+        remote_config="$(remote_config_for_brain "$brain")"
+        for host in "${REMOTE_HOST_LIST[@]}"; do
+            if ! remote_reachable "$host"; then
+                echo "Skipping remote node on $host (SSH unreachable)."
+                continue
+            fi
+            local node_port
+            node_port="$(find_remote_free_port "$host" "$node_port_start")" || {
+                echo "Failed to allocate remote node port on $host for brain '$brain'"
+                exit 1
+            }
+            node_port_start=$((node_port + 7))
+            local node_weight
+            node_weight="$(remote_weight_for_host "$host")"
+            local node_cmd=(
+                env "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
+                    "NM_REALTIME_IPC=$REALTIME_IPC" \
+                    "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
+                    "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
+                    "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
+                    "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
+                    "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
+                    "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
+                    "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
+                    "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES"
+                target/release/aarnn_rust
+                --node
+                --brain-id "$brain"
+                --grpc-addr "0.0.0.0:$node_port"
+                --orchestrator-addr "$orchestrator_addr_public"
+            )
+            if [ "$REMOTE_QUIET" -eq 1 ]; then
+                node_cmd+=(--quiet)
+            fi
+            if [ -n "$remote_config" ]; then
+                node_cmd+=(--config "$remote_config")
+            fi
+            if [ -n "$remote_network" ]; then
+                node_cmd+=(--network "$remote_network")
+            fi
+            local node_cmd_str
+            node_cmd_str="$(cmd_to_string "${node_cmd[@]}")"
+            remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+            NODE_PORTS["${brain}@${host}"]="$node_port"
+            launched_nodes=$((launched_nodes + 1))
+        done
     done
+    if [ "$launched_nodes" -eq 0 ]; then
+        echo "No remote nodes were started."
+        exit 1
+    fi
 
+    local web_ui_orchestrator_addr="$orchestrator_addr_public"
     local web_ui_cmd=(
         target/release/web_ui
         --listen "0.0.0.0:$web_ui_api_port"
-        --orchestrator "http://$orchestrator_host:$orch_port"
+        --orchestrator "$web_ui_orchestrator_addr"
         --auth-mode none
     )
     local web_ui_cmd_str
     web_ui_cmd_str="$(cmd_to_string "${web_ui_cmd[@]}")"
-    remote_start_bg "$web_ui_host" "remote_web_ui_${brain}" "$web_ui_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+    remote_start_bg "$web_ui_host" "remote_web_ui_cluster" "$web_ui_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
 
     web_ui_api_url="http://$web_ui_host:$web_ui_api_port"
     if ! wait_for_http_ready "$web_ui_api_url/api/config" 40; then
         echo "Remote web_ui API did not become ready at $web_ui_api_url"
         exit 1
     fi
-    if ! wait_for_cluster_distribution "$web_ui_api_url" "http://$orchestrator_host:$orch_port" "$brain" 45; then
-        echo "Cluster distribution for network '$brain' was not ready in time."
-        exit 1
-    fi
+    for brain in "${BRAINS[@]}"; do
+        if ! wait_for_cluster_distribution "$web_ui_api_url" "$web_ui_orchestrator_addr" "$brain" "$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT"; then
+            echo "Cluster distribution for network '$brain' was not ready within ${WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT}s."
+            print_cluster_status_debug "$web_ui_api_url" "$web_ui_orchestrator_addr" "$brain" || true
+            echo "Hint: rerun with NM_REMOTE_QUIET=0 for verbose remote process output."
+            exit 1
+        fi
+    done
+
     if [ "$LOCAL_RUST_UI" -eq 1 ]; then
-        if ! start_local_rust_ui_client "http://$orchestrator_host:$orch_port" "$brain"; then
+        local first_brain="${BRAINS[0]}"
+        if ! start_local_rust_ui_client "$orchestrator_addr_public" "$first_brain"; then
             echo "Failed to launch local native rust_ui client."
             exit 1
         fi
     fi
 
-    local socket_path
-    socket_path="$(socket_for_brain "$brain")"
-    SOCKET_PATHS["$brain"]="$socket_path"
-    rm -f "$socket_path"
+    local -A bridge_logs=()
+    for brain in "${BRAINS[@]}"; do
+        local socket_path
+        socket_path="$(socket_for_brain "$brain")"
+        SOCKET_PATHS["$brain"]="$socket_path"
+        rm -f "$socket_path"
 
-    local bridge_log="$LOG_DIR/webots_bridge_${brain}.log"
-    local bridge_cmd=(
-        python3 "$bridge_tool"
-        --socket "$socket_path"
-        --web-ui-url "$web_ui_api_url"
-        --orchestrator "http://$orchestrator_host:$orch_port"
-        --network-id "$brain"
-        --threshold "$THRESHOLD"
-        --default-s "$DEFAULT_S"
-        --default-o "$DEFAULT_O"
-    )
-    "${bridge_cmd[@]}" >"$bridge_log" 2>&1 &
-    PIDS+=("$!")
-    if ! wait_for_socket "$socket_path"; then
-        echo "Failed to bind local bridge socket for brain '$brain': $socket_path"
-        echo "See log: $bridge_log"
-        tail -n 60 "$bridge_log" || true
-        exit 1
-    fi
+        local bridge_log="$LOG_DIR/webots_bridge_${brain}.log"
+        local bridge_cmd=(
+            python3 "$bridge_tool"
+            --socket "$socket_path"
+            --web-ui-url "$web_ui_api_url"
+            --orchestrator "$orchestrator_addr_public"
+            --network-id "$brain"
+            --threshold "$THRESHOLD"
+            --default-s "$DEFAULT_S"
+            --default-o "$DEFAULT_O"
+        )
+        "${bridge_cmd[@]}" >"$bridge_log" 2>&1 &
+        PIDS+=("$!")
+        if ! wait_for_socket "$socket_path"; then
+            echo "Failed to bind local bridge socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
+            echo "See log: $bridge_log"
+            tail -n 60 "$bridge_log" || true
+            exit 1
+        fi
+        bridge_logs["$brain"]="$bridge_log"
+    done
 
     echo "Remote compute runtime ready:"
+    echo "  brains: $BRAIN_CSV"
     echo "  webots host (local): $REMOTE_WEBOTS_HOST"
     echo "  orchestrator host: $orchestrator_host:$orch_port"
     echo "  browser ui: $browser_ui_url"
@@ -1908,8 +2530,12 @@ start_remote_cluster_runtime() {
     fi
     echo "  remote root: $REMOTE_ROOT_DIR"
     echo "  remote logs: $REMOTE_LOG_DIR"
-    echo "  local bridge socket: $socket_path"
-    echo "  local bridge log: $bridge_log"
+    for brain in "${BRAINS[@]}"; do
+        echo "  local bridge socket [$brain]: ${SOCKET_PATHS[$brain]}"
+    done
+    for brain in "${BRAINS[@]}"; do
+        echo "  local bridge log [$brain]: ${bridge_logs[$brain]}"
+    done
 }
 
 start_uds_runtime() {
@@ -1935,6 +2561,16 @@ start_uds_runtime() {
         local log_file="$LOG_DIR/webots_${brain}.log"
 
         local uds_cmd=(
+            env
+            "NM_REALTIME_IPC=$REALTIME_IPC"
+            "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+            "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+            "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+            "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+            "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
+            "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS"
+            "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS"
+            "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES"
             "$bin"
             --socket "$socket_path"
             --sensory "$DEFAULT_S"
@@ -1943,17 +2579,21 @@ start_uds_runtime() {
             --aer-sensory-base "$AER_S_BASE"
             --aer-output-base "$AER_O_BASE"
         )
-        if [ -n "$CONFIG_FILE" ]; then
-            uds_cmd+=(--config "$CONFIG_FILE")
+        local brain_config
+        brain_config="$(config_for_brain "$brain")"
+        if [ -n "$brain_config" ]; then
+            uds_cmd+=(--config "$brain_config")
         fi
-        if [ -n "$NETWORK_FILE" ]; then
-            uds_cmd+=(--network "$NETWORK_FILE")
+        local brain_network
+        brain_network="$(network_for_brain "$brain")"
+        if [ -n "$brain_network" ]; then
+            uds_cmd+=(--network "$brain_network")
         fi
         "${uds_cmd[@]}" >"$log_file" 2>&1 &
         PIDS+=("$!")
 
         if ! wait_for_socket "$socket_path"; then
-            echo "Failed to bind socket for brain '$brain': $socket_path"
+            echo "Failed to bind socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $log_file"
             exit 1
         fi
@@ -1976,6 +2616,60 @@ IFS=',' read -r -a BRAINS <<< "$BRAIN_CSV"
 if [ "${#BRAINS[@]}" -eq 0 ]; then
     echo "No brains configured; set --brains or NM_BRAINS."
     exit 1
+fi
+
+if [ -n "$CONFIG_FILE" ]; then
+    CONFIG_FILE="$(abs_path_from_root "$CONFIG_FILE")"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "Config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+fi
+if [ -n "$NETWORK_FILE" ]; then
+    NETWORK_FILE="$(abs_path_from_root "$NETWORK_FILE")"
+    if [ ! -f "$NETWORK_FILE" ]; then
+        echo "Network snapshot not found: $NETWORK_FILE"
+        exit 1
+    fi
+fi
+
+parse_brain_file_map "$CONFIG_MAP_CSV" CONFIG_FILE_MAP "config"
+parse_brain_file_map "$NETWORK_MAP_CSV" NETWORK_FILE_MAP "network"
+canonicalize_and_validate_map_paths CONFIG_FILE_MAP "Config"
+canonicalize_and_validate_map_paths NETWORK_FILE_MAP "Network snapshot"
+
+declare -A _BRAIN_SET=()
+for brain in "${BRAINS[@]}"; do
+    _BRAIN_SET["$brain"]=1
+done
+
+for brain in "${!CONFIG_FILE_MAP[@]}"; do
+    if [ -z "${_BRAIN_SET[$brain]+x}" ]; then
+        echo "Warning: config map contains '$brain' but it is not in --brains ($BRAIN_CSV)."
+    fi
+done
+for brain in "${!NETWORK_FILE_MAP[@]}"; do
+    if [ -z "${_BRAIN_SET[$brain]+x}" ]; then
+        echo "Warning: network map contains '$brain' but it is not in --brains ($BRAIN_CSV)."
+    fi
+done
+unset _BRAIN_SET
+
+if [ -n "$CONFIG_FILE" ] || [ "${#CONFIG_FILE_MAP[@]}" -gt 0 ]; then
+    for brain in "${BRAINS[@]}"; do
+        if [ -z "$(config_for_brain "$brain")" ]; then
+            echo "No config file resolved for brain '$brain' (set --config or --config-map)."
+            exit 1
+        fi
+    done
+fi
+if [ -n "$NETWORK_FILE" ] || [ "${#NETWORK_FILE_MAP[@]}" -gt 0 ]; then
+    for brain in "${BRAINS[@]}"; do
+        if [ -z "$(network_for_brain "$brain")" ]; then
+            echo "No network file resolved for brain '$brain' (set --network or --network-map)."
+            exit 1
+        fi
+    done
 fi
 
 if [ "$REMOTE_COMPUTE" -eq 1 ] && [ "$RUNTIME" != "cluster" ]; then
@@ -2005,10 +2699,30 @@ echo "  fallback S/O: $DEFAULT_S/$DEFAULT_O"
 echo "  AER base S/O: $AER_S_BASE/$AER_O_BASE"
 echo "  config file: ${CONFIG_FILE:-none}"
 echo "  network file: ${NETWORK_FILE:-none}"
+if [ "${#CONFIG_FILE_MAP[@]}" -gt 0 ]; then
+    echo "  config map: $(map_to_csv CONFIG_FILE_MAP)"
+fi
+if [ "${#NETWORK_FILE_MAP[@]}" -gt 0 ]; then
+    echo "  network map: $(map_to_csv NETWORK_FILE_MAP)"
+fi
 echo "  orchestrator port: ${ORCHESTRATOR_PORT:-auto}"
 echo "  node ui hidden: $NODE_UI_HIDDEN"
-echo "  single orchestrator ui: $SINGLE_ORCHESTRATOR_UI"
-echo "  remote compute: $REMOTE_COMPUTE"
+echo "  realtime policy: $REALTIME_POLICY"
+echo "  realtime ipc policy: $REALTIME_IPC (growth=$REALTIME_DISABLE_GROWTH morpho=$REALTIME_DISABLE_MORPHO metabolic=$REALTIME_DISABLE_METABOLIC pruning=$REALTIME_DISABLE_PRUNING)"
+echo "  morpho async worker: $MORPHO_ASYNC"
+if [ -n "$REALTIME_MORPHO_INTERVAL_MS" ]; then
+    echo "  realtime morpho interval override (ms): $REALTIME_MORPHO_INTERVAL_MS"
+fi
+if [ -n "$REALTIME_METABOLIC_INTERVAL_MS" ]; then
+    echo "  realtime metabolic interval override (ms): $REALTIME_METABOLIC_INTERVAL_MS"
+fi
+if [ -n "$REALTIME_MORPHO_MAX_SYNAPSES" ]; then
+    echo "  realtime morpho safe max synapses: $REALTIME_MORPHO_MAX_SYNAPSES"
+fi
+    echo "  single orchestrator ui: $SINGLE_ORCHESTRATOR_UI"
+    echo "  distribute startup snapshot: $DISTRIBUTE_STARTUP_SNAPSHOT"
+    echo "  distributed autostart: $DISTRIBUTED_AUTOSTART"
+    echo "  remote compute: $REMOTE_COMPUTE"
 if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote hosts: $REMOTE_HOSTS"
     echo "  remote host weights: ${REMOTE_HOST_WEIGHTS:-auto(resource-based)}"
@@ -2018,8 +2732,14 @@ if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote web_ui host: $REMOTE_WEB_UI_HOST"
     echo "  remote ui mode: $REMOTE_UI_MODE"
     echo "  remote web_ui port: $REMOTE_WEB_UI_PORT"
+    if command -v rclone >/dev/null 2>&1; then
+        echo "  remote sync backend: rclone (rsync fallback)"
+    else
+        echo "  remote sync backend: rsync"
+    fi
     echo "  remote sync data: $REMOTE_SYNC_DATA"
     echo "  remote rsync compression: $REMOTE_RSYNC_COMPRESS"
+    echo "  remote runtime features: ${NM_REMOTE_RUNTIME_FEATURES:-growth3d,morpho}"
     if [ -n "$REMOTE_WEB_UI_API_PORT" ]; then
         echo "  remote web_ui api port: ${REMOTE_WEB_UI_API_PORT} (ignored in web mode)"
     fi
@@ -2027,6 +2747,7 @@ if [ "$REMOTE_COMPUTE" -eq 1 ]; then
     echo "  remote quiet mode: $REMOTE_QUIET"
     echo "  remote pre-clean: $REMOTE_PRE_CLEAN"
     echo "  local webots host label: $REMOTE_WEBOTS_HOST"
+    echo "  cluster distribution timeout (s): $WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT"
 fi
 echo "  start webots: $START_WEBOTS"
 if [ "$START_WEBOTS" -eq 1 ]; then
@@ -2071,8 +2792,13 @@ if [ "$RUN_DIAG" -eq 1 ]; then
         fi
     done
     if [ "$diag_failures" -gt 0 ]; then
-        echo "Diagnostics failed for $diag_failures brain(s)."
-        exit 1
+        if [ "$RUNTIME" = "cluster" ] && [ "$START_WEBOTS" -eq 1 ]; then
+            echo "Diagnostics failed for $diag_failures brain(s) before Webots start."
+            echo "Continuing because cluster sockets are up; controller connectivity check is authoritative."
+        else
+            echo "Diagnostics failed for $diag_failures brain(s)."
+            exit 1
+        fi
     fi
 fi
 

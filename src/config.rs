@@ -14,6 +14,59 @@
 //! - Batch/CLI mode ignores morphology data and uses the classic matrix path.
 // (Removed unused clap::ValueEnum import to silence warning)
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Species/organism biomimicry profile used to seed AARNN defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AarnnBiomimicryProfile {
+    Human,
+    Celegans,
+    Drosophila,
+}
+
+impl AarnnBiomimicryProfile {
+    /// Best-effort parser from metadata hints (dataset names, species tags, file paths).
+    pub fn from_hint(raw: &str) -> Option<Self> {
+        let lower = raw.trim().to_ascii_lowercase();
+        if lower.is_empty() {
+            return None;
+        }
+        let normalized: String = lower
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+            .collect();
+        let squashed: String = normalized
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+
+        if squashed.contains("celegans")
+            || squashed.contains("nematode")
+            || squashed.contains("roundworm")
+            || squashed.contains("cworm")
+        {
+            return Some(Self::Celegans);
+        }
+
+        if squashed.contains("drosophila")
+            || squashed.contains("fruitfly")
+            || squashed.contains("melanogaster")
+            || squashed.contains("fafb")
+            || squashed.contains("banc")
+        {
+            return Some(Self::Drosophila);
+        }
+
+        if squashed.contains("human")
+            || squashed.contains("homosapiens")
+            || squashed.contains("nao")
+        {
+            return Some(Self::Human);
+        }
+
+        None
+    }
+}
 
 /// Parameters for a Leaky Integrate-and-Fire (LIF) neuron model.
 ///
@@ -338,6 +391,44 @@ impl ClumpingDesign {
             Self::NematodeWorm => "Nematode Worm",
         }
     }
+}
+
+/// Default hidden layer count for laminar AARNN organization by clumping style.
+///
+/// `None` means "leave existing hidden-layer count unchanged".
+pub fn default_hidden_layers_for_clumping(design: ClumpingDesign) -> Option<usize> {
+    match design {
+        ClumpingDesign::None => None,
+        ClumpingDesign::HumanBrain => Some(6),
+        ClumpingDesign::FruitFly => Some(10),
+        ClumpingDesign::FruitFlyLarva => Some(10),
+        ClumpingDesign::ZebraFish => Some(6),
+        ClumpingDesign::NematodeWorm => Some(1),
+    }
+}
+
+fn clamp_laminar_io_layers(cfg: &mut NetworkConfig) {
+    if cfg.num_hidden_layers == 0 {
+        cfg.num_hidden_layers = 1;
+    }
+    let max_layer = cfg.num_hidden_layers - 1;
+    if let Some(l) = cfg.sensory_target_layer {
+        cfg.sensory_target_layer = Some(l.min(max_layer));
+    }
+    if let Some(l) = cfg.output_source_layer {
+        cfg.output_source_layer = Some(l.min(max_layer));
+    }
+}
+
+/// Apply hidden-layer defaults implied by the current clumping style.
+///
+/// This updates only laminar sizing/IO-layer bounds and leaves brain regions intact.
+pub fn apply_clumping_layer_defaults(cfg: &mut NetworkConfig) {
+    if let Some(layers) = default_hidden_layers_for_clumping(cfg.clumping_design) {
+        cfg.num_hidden_layers = layers.max(1);
+        cfg.max_layers = cfg.max_layers.max(cfg.num_hidden_layers);
+    }
+    clamp_laminar_io_layers(cfg);
 }
 
 fn apply_human_brain_design(cfg: &mut NetworkConfig) {
@@ -938,6 +1029,7 @@ pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
         ClumpingDesign::NematodeWorm => apply_nematode_worm_design(cfg),
     }
     cfg.clumping_design = design;
+    apply_clumping_layer_defaults(cfg);
 }
 
 /// Compute a scale factor for region coordinates so they can be compared against
@@ -1062,6 +1154,16 @@ pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.aarnn_triplet_ltd_gain = 0.15;
     cfg.aarnn_synaptic_scaling_strength = 0.02;
     cfg.aarnn_synaptic_scaling_target = 1.0;
+    cfg.aarnn_apical_trunk_scale = 1.35;
+    cfg.aarnn_basal_trunk_scale = 0.75;
+    cfg.aarnn_apical_forward_gain = 0.85;
+    cfg.aarnn_basal_forward_gain = 1.10;
+    cfg.aarnn_apical_bap_gain = 1.25;
+    cfg.aarnn_basal_bap_gain = 0.95;
+    cfg.aarnn_apical_hebbian_mix = 0.35;
+    cfg.aarnn_basal_hebbian_mix = 0.70;
+    cfg.aarnn_bouton_hebbian_gain = 1.0;
+    cfg.aarnn_bouton_non_hebbian_gain = 1.0;
     cfg.aarnn_distance_attenuation_per_unit = 0.15;
     cfg.aarnn_release_prob_heterogeneity = 0.1;
     cfg.aarnn_myelination_enabled = true;
@@ -1071,8 +1173,251 @@ pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.aarnn_myelin_min_conduction_gain = 0.8;
     cfg.aarnn_myelin_max_conduction_gain = 2.2;
     cfg.aarnn_myelin_initial = 0.35;
+    cfg.aarnn_import_topology_rewire_enabled = false;
+    cfg.aarnn_import_topology_rewire_keep_fraction = 1.0;
+    cfg.aarnn_import_topology_rewire_region_bias = 0.0;
 
     apply_clumping_design(cfg, ClumpingDesign::HumanBrain);
+}
+
+/// Apply one of the species/organism biomimicry presets to a full config.
+pub fn apply_aarnn_biomimicry_profile_defaults(
+    cfg: &mut NetworkConfig,
+    profile: AarnnBiomimicryProfile,
+) {
+    match profile {
+        AarnnBiomimicryProfile::Human => apply_aarnn_human_biomimicry_defaults(cfg),
+        AarnnBiomimicryProfile::Celegans => apply_aarnn_celegans_biomimicry_defaults(cfg),
+        AarnnBiomimicryProfile::Drosophila => apply_aarnn_drosophila_biomimicry_defaults(cfg),
+    }
+}
+
+/// Backfill profile-specific values only for fields absent from an imported `net` JSON object.
+///
+/// This keeps explicitly serialized values authoritative while making older/incomplete
+/// snapshots resilient when new biomimicry fields are introduced.
+pub fn backfill_aarnn_biomimicry_profile_missing_fields(
+    cfg: &mut NetworkConfig,
+    profile: AarnnBiomimicryProfile,
+    present_net_fields: &HashSet<String>,
+) {
+    let mut template = NetworkConfig::default();
+    apply_aarnn_biomimicry_profile_defaults(&mut template, profile);
+
+    macro_rules! backfill {
+        ($field:ident) => {
+            if !present_net_fields.contains(stringify!($field)) {
+                cfg.$field = template.$field.clone();
+            }
+        };
+    }
+
+    backfill!(clumping_design);
+    backfill!(brain_regions);
+    backfill!(growth_enabled);
+    backfill!(use_morphology);
+    backfill!(morpho_growth_enabled);
+    backfill!(max_layers);
+    backfill!(layer_split_threshold);
+    backfill!(spawn_radius);
+    backfill!(new_edge_prob);
+    backfill!(proximity_degree_cap);
+
+    backfill!(aarnn_layer_depth);
+    backfill!(use_aarnn_delays);
+    backfill!(aarnn_velocity);
+    backfill!(axon_velocity);
+    backfill!(dend_velocity);
+    backfill!(p_release_default);
+    backfill!(bouton_latency_ms);
+    backfill!(bouton_jitter_ms);
+
+    backfill!(aarnn_dale_strictness);
+    backfill!(aarnn_inhibitory_fraction);
+    backfill!(aarnn_gap_junction_strength);
+    backfill!(aarnn_gap_junction_radius);
+    backfill!(aarnn_gap_junction_inhibitory_only);
+    backfill!(aarnn_nmda_voltage_sensitivity);
+    backfill!(aarnn_distance_attenuation_per_unit);
+    backfill!(aarnn_release_prob_heterogeneity);
+
+    backfill!(volume_transmission_enabled);
+    backfill!(volume_transmission_radius);
+    backfill!(volume_transmission_strength);
+    backfill!(aarnn_triplet_ltp_gain);
+    backfill!(aarnn_triplet_ltd_gain);
+    backfill!(aarnn_synaptic_scaling_strength);
+    backfill!(aarnn_synaptic_scaling_target);
+    backfill!(aarnn_apical_trunk_scale);
+    backfill!(aarnn_basal_trunk_scale);
+    backfill!(aarnn_apical_forward_gain);
+    backfill!(aarnn_basal_forward_gain);
+    backfill!(aarnn_apical_bap_gain);
+    backfill!(aarnn_basal_bap_gain);
+    backfill!(aarnn_apical_hebbian_mix);
+    backfill!(aarnn_basal_hebbian_mix);
+    backfill!(aarnn_bouton_hebbian_gain);
+    backfill!(aarnn_bouton_non_hebbian_gain);
+
+    backfill!(aarnn_myelination_enabled);
+    backfill!(aarnn_myelination_rate);
+    backfill!(aarnn_demyelination_rate);
+    backfill!(aarnn_myelination_activity_target);
+    backfill!(aarnn_myelin_min_conduction_gain);
+    backfill!(aarnn_myelin_max_conduction_gain);
+    backfill!(aarnn_myelin_initial);
+
+    backfill!(perceptual_loop_enabled);
+    backfill!(world_model_enabled);
+    backfill!(sleep_enabled);
+    backfill!(sleep_cycle_ms);
+    backfill!(sleep_duration_ms);
+    backfill!(theta_rhythm_enabled);
+    backfill!(theta_rhythm_hz);
+    backfill!(theta_rhythm_duty);
+    backfill!(theta_rhythm_phase_jitter);
+    backfill!(thalamic_gating_enabled);
+
+    backfill!(aarnn_import_topology_rewire_enabled);
+    backfill!(aarnn_import_topology_rewire_keep_fraction);
+    backfill!(aarnn_import_topology_rewire_region_bias);
+
+    if !present_net_fields.contains("num_hidden_layers") {
+        apply_clumping_layer_defaults(cfg);
+    } else {
+        clamp_laminar_io_layers(cfg);
+    }
+
+    if !present_net_fields.contains("brain_regions") && cfg.clumping_design != ClumpingDesign::None
+    {
+        apply_clumping_design(cfg, cfg.clumping_design);
+    }
+}
+
+/// Apply a C. elegans profile tuned for compact, unmyelinated circuitry with strong
+/// local coupling and restrained structural development.
+pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
+    apply_aarnn_human_biomimicry_defaults(cfg);
+
+    cfg.growth_enabled = true;
+    cfg.use_morphology = true;
+    cfg.morpho_growth_enabled = true;
+    cfg.max_layers = 1;
+    cfg.layer_split_threshold = 4096;
+    cfg.spawn_radius = 0.045;
+    cfg.new_edge_prob = 0.025;
+    cfg.proximity_degree_cap = 3;
+
+    cfg.aarnn_layer_depth = 3;
+    cfg.use_aarnn_delays = true;
+    cfg.aarnn_velocity = 5.5;
+    cfg.axon_velocity = 6.8;
+    cfg.dend_velocity = 3.6;
+    cfg.p_release_default = 0.72;
+    cfg.bouton_latency_ms = 0.4;
+    cfg.bouton_jitter_ms = 0.05;
+
+    cfg.aarnn_dale_strictness = 0.90;
+    cfg.aarnn_inhibitory_fraction = 0.36;
+    cfg.aarnn_gap_junction_strength = 0.06;
+    cfg.aarnn_gap_junction_radius = 0.28;
+    cfg.aarnn_gap_junction_inhibitory_only = false;
+    cfg.aarnn_nmda_voltage_sensitivity = 0.02;
+    cfg.aarnn_distance_attenuation_per_unit = 0.26;
+    cfg.aarnn_release_prob_heterogeneity = 0.12;
+
+    cfg.volume_transmission_enabled = true;
+    cfg.volume_transmission_radius = 0.18;
+    cfg.volume_transmission_strength = 0.08;
+    cfg.aarnn_triplet_ltp_gain = 0.12;
+    cfg.aarnn_triplet_ltd_gain = 0.08;
+    cfg.aarnn_synaptic_scaling_strength = 0.03;
+    cfg.aarnn_synaptic_scaling_target = 0.85;
+
+    cfg.aarnn_myelination_enabled = false;
+    cfg.aarnn_myelination_rate = 0.0;
+    cfg.aarnn_demyelination_rate = 0.0;
+    cfg.aarnn_myelin_min_conduction_gain = 1.0;
+    cfg.aarnn_myelin_max_conduction_gain = 1.0;
+    cfg.aarnn_myelin_initial = 0.0;
+
+    cfg.perceptual_loop_enabled = true;
+    cfg.world_model_enabled = false;
+    cfg.sleep_enabled = true;
+    cfg.sleep_cycle_ms = 180_000.0;
+    cfg.sleep_duration_ms = 1200.0;
+    cfg.theta_rhythm_enabled = false;
+    cfg.thalamic_gating_enabled = false;
+
+    cfg.aarnn_import_topology_rewire_enabled = true;
+    cfg.aarnn_import_topology_rewire_keep_fraction = 0.74;
+    cfg.aarnn_import_topology_rewire_region_bias = 0.30;
+
+    apply_clumping_design(cfg, ClumpingDesign::NematodeWorm);
+}
+
+/// Apply an adult Drosophila profile with strong compartmental regional structure,
+/// active plasticity, and restrained developmental growth.
+pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
+    apply_aarnn_human_biomimicry_defaults(cfg);
+
+    cfg.growth_enabled = true;
+    cfg.use_morphology = true;
+    cfg.morpho_growth_enabled = true;
+    cfg.max_layers = cfg.max_layers.max(8);
+    cfg.spawn_radius = 0.065;
+    cfg.new_edge_prob = 0.04;
+    cfg.proximity_degree_cap = 5;
+
+    cfg.aarnn_layer_depth = 4;
+    cfg.use_aarnn_delays = true;
+    cfg.aarnn_velocity = 8.5;
+    cfg.axon_velocity = 12.0;
+    cfg.dend_velocity = 4.6;
+    cfg.p_release_default = 0.68;
+    cfg.bouton_latency_ms = 0.45;
+    cfg.bouton_jitter_ms = 0.08;
+
+    cfg.aarnn_dale_strictness = 0.82;
+    cfg.aarnn_inhibitory_fraction = 0.30;
+    cfg.aarnn_gap_junction_strength = 0.03;
+    cfg.aarnn_gap_junction_radius = 0.22;
+    cfg.aarnn_gap_junction_inhibitory_only = false;
+    cfg.aarnn_nmda_voltage_sensitivity = 0.03;
+    cfg.aarnn_distance_attenuation_per_unit = 0.20;
+    cfg.aarnn_release_prob_heterogeneity = 0.10;
+
+    cfg.volume_transmission_enabled = true;
+    cfg.volume_transmission_radius = 0.28;
+    cfg.volume_transmission_strength = 0.09;
+    cfg.aarnn_triplet_ltp_gain = 0.18;
+    cfg.aarnn_triplet_ltd_gain = 0.11;
+    cfg.aarnn_synaptic_scaling_strength = 0.025;
+    cfg.aarnn_synaptic_scaling_target = 1.0;
+
+    cfg.aarnn_myelination_enabled = false;
+    cfg.aarnn_myelination_rate = 0.0;
+    cfg.aarnn_demyelination_rate = 0.0;
+    cfg.aarnn_myelin_min_conduction_gain = 1.0;
+    cfg.aarnn_myelin_max_conduction_gain = 1.0;
+    cfg.aarnn_myelin_initial = 0.0;
+
+    cfg.perceptual_loop_enabled = true;
+    cfg.world_model_enabled = true;
+    cfg.sleep_enabled = true;
+    cfg.sleep_cycle_ms = 120_000.0;
+    cfg.sleep_duration_ms = 900.0;
+    cfg.theta_rhythm_enabled = true;
+    cfg.theta_rhythm_hz = 8.0;
+    cfg.theta_rhythm_duty = 0.24;
+    cfg.theta_rhythm_phase_jitter = 0.04;
+    cfg.thalamic_gating_enabled = false;
+
+    cfg.aarnn_import_topology_rewire_enabled = true;
+    cfg.aarnn_import_topology_rewire_keep_fraction = 0.78;
+    cfg.aarnn_import_topology_rewire_region_bias = 0.24;
+
+    apply_clumping_design(cfg, ClumpingDesign::FruitFly);
 }
 
 fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
@@ -1570,6 +1915,26 @@ pub struct NetworkConfig {
     pub aarnn_synaptic_scaling_strength: f32,
     /// Target summed absolute incoming synaptic strength used by synaptic scaling.
     pub aarnn_synaptic_scaling_target: f32,
+    /// Relative scale for apical trunk length (from soma) when building dendritic arbors.
+    pub aarnn_apical_trunk_scale: f32,
+    /// Relative scale for basal trunk length (from soma) when building dendritic arbors.
+    pub aarnn_basal_trunk_scale: f32,
+    /// Gain applied to forward propagation through apical dendritic boutons.
+    pub aarnn_apical_forward_gain: f32,
+    /// Gain applied to forward propagation through basal dendritic boutons.
+    pub aarnn_basal_forward_gain: f32,
+    /// Gain applied to backpropagating AP (bAP) coupling on apical dendritic boutons.
+    pub aarnn_apical_bap_gain: f32,
+    /// Gain applied to backpropagating AP (bAP) coupling on basal dendritic boutons.
+    pub aarnn_basal_bap_gain: f32,
+    /// Hebbian mixing factor (0..1) for apical dendritic boutons (spines).
+    pub aarnn_apical_hebbian_mix: f32,
+    /// Hebbian mixing factor (0..1) for basal dendritic boutons (spines).
+    pub aarnn_basal_hebbian_mix: f32,
+    /// Global gain for the Hebbian component in dendritic bouton plasticity.
+    pub aarnn_bouton_hebbian_gain: f32,
+    /// Global gain for the non-Hebbian component in dendritic bouton plasticity.
+    pub aarnn_bouton_non_hebbian_gain: f32,
     /// Per-unit-length attenuation factor for morphology-aware transmission.
     pub aarnn_distance_attenuation_per_unit: f32,
     /// Per-synapse release-probability heterogeneity around `p_release_default` (0..1).
@@ -1588,6 +1953,12 @@ pub struct NetworkConfig {
     pub aarnn_myelin_max_conduction_gain: f32,
     /// Initial per-synapse myelin factor in [0,1].
     pub aarnn_myelin_initial: f32,
+    /// Enable deterministic topology-aware sparse rewiring when importing snapshots.
+    pub aarnn_import_topology_rewire_enabled: bool,
+    /// Fraction of compatibility-scored synapses retained during import rewiring (0,1].
+    pub aarnn_import_topology_rewire_keep_fraction: f32,
+    /// Strength of region/type compatibility bias during import rewiring.
+    pub aarnn_import_topology_rewire_region_bias: f32,
     /// Factor by which local activity stabilizes and strengthens a synapse.
     pub synaptic_stabilization_strength: f32,
     /// Maximum distance between a dendrite bouton and an axon for synapse formation.
@@ -1758,6 +2129,16 @@ impl Default for NetworkConfig {
             aarnn_triplet_ltd_gain: 0.0,
             aarnn_synaptic_scaling_strength: 0.0,
             aarnn_synaptic_scaling_target: 1.0,
+            aarnn_apical_trunk_scale: 1.35,
+            aarnn_basal_trunk_scale: 0.75,
+            aarnn_apical_forward_gain: 0.85,
+            aarnn_basal_forward_gain: 1.10,
+            aarnn_apical_bap_gain: 1.25,
+            aarnn_basal_bap_gain: 0.95,
+            aarnn_apical_hebbian_mix: 0.35,
+            aarnn_basal_hebbian_mix: 0.70,
+            aarnn_bouton_hebbian_gain: 1.0,
+            aarnn_bouton_non_hebbian_gain: 1.0,
             aarnn_distance_attenuation_per_unit: 0.0,
             aarnn_release_prob_heterogeneity: 0.0,
             aarnn_myelination_enabled: false,
@@ -1767,6 +2148,9 @@ impl Default for NetworkConfig {
             aarnn_myelin_min_conduction_gain: 1.0,
             aarnn_myelin_max_conduction_gain: 1.0,
             aarnn_myelin_initial: 0.0,
+            aarnn_import_topology_rewire_enabled: false,
+            aarnn_import_topology_rewire_keep_fraction: 1.0,
+            aarnn_import_topology_rewire_region_bias: 0.0,
             synaptic_stabilization_strength: 0.05,
             axon_contact_dist: 0.03,
             component_decay_rate: 0.99,
@@ -1882,5 +2266,124 @@ mod tests {
         assert!(cfg.aarnn_myelination_rate > 0.0);
         assert!(cfg.aarnn_demyelination_rate > 0.0);
         assert!(cfg.aarnn_myelin_max_conduction_gain > cfg.aarnn_myelin_min_conduction_gain);
+        assert_eq!(cfg.num_hidden_layers, 6);
+    }
+
+    #[test]
+    fn test_default_hidden_layers_for_clumping_mapping() {
+        assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::HumanBrain),
+            Some(6)
+        );
+        assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::FruitFly),
+            Some(10)
+        );
+        assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::FruitFlyLarva),
+            Some(10)
+        );
+        assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::NematodeWorm),
+            Some(1)
+        );
+        assert_eq!(default_hidden_layers_for_clumping(ClumpingDesign::None), None);
+    }
+
+    #[test]
+    fn test_apply_clumping_design_sets_layers_and_clamps_io_overrides() {
+        let mut cfg = NetworkConfig::default();
+        cfg.sensory_target_layer = Some(15);
+        cfg.output_source_layer = Some(22);
+        cfg.max_layers = 4;
+
+        apply_clumping_design(&mut cfg, ClumpingDesign::FruitFly);
+        assert_eq!(cfg.num_hidden_layers, 10);
+        assert_eq!(cfg.max_layers, 10);
+        assert_eq!(cfg.sensory_target_layer, Some(9));
+        assert_eq!(cfg.output_source_layer, Some(9));
+
+        apply_clumping_design(&mut cfg, ClumpingDesign::HumanBrain);
+        assert_eq!(cfg.num_hidden_layers, 6);
+        assert_eq!(cfg.max_layers, 10);
+        assert_eq!(cfg.sensory_target_layer, Some(5));
+        assert_eq!(cfg.output_source_layer, Some(5));
+    }
+
+    #[test]
+    fn test_celegans_biomimicry_profile() {
+        let mut cfg = NetworkConfig::default();
+        apply_aarnn_celegans_biomimicry_defaults(&mut cfg);
+        assert_eq!(cfg.clumping_design, ClumpingDesign::NematodeWorm);
+        assert_eq!(cfg.num_hidden_layers, 1);
+        assert!(cfg.growth_enabled);
+        assert!(cfg.use_morphology);
+        assert!(cfg.morpho_growth_enabled);
+        assert_eq!(cfg.aarnn_layer_depth, 3);
+        assert!(!cfg.aarnn_myelination_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
+        assert!(!cfg.brain_regions.is_empty());
+    }
+
+    #[test]
+    fn test_drosophila_biomimicry_profile() {
+        let mut cfg = NetworkConfig::default();
+        apply_aarnn_drosophila_biomimicry_defaults(&mut cfg);
+        assert_eq!(cfg.clumping_design, ClumpingDesign::FruitFly);
+        assert_eq!(cfg.num_hidden_layers, 10);
+        assert!(cfg.growth_enabled);
+        assert!(cfg.use_morphology);
+        assert!(cfg.morpho_growth_enabled);
+        assert_eq!(cfg.aarnn_layer_depth, 4);
+        assert!(!cfg.aarnn_myelination_enabled);
+        assert!(cfg.sleep_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
+        assert!(!cfg.brain_regions.is_empty());
+    }
+
+    #[test]
+    fn test_profile_hint_parsing() {
+        assert_eq!(
+            AarnnBiomimicryProfile::from_hint("C. elegans connectome"),
+            Some(AarnnBiomimicryProfile::Celegans)
+        );
+        assert_eq!(
+            AarnnBiomimicryProfile::from_hint("FAFB v783"),
+            Some(AarnnBiomimicryProfile::Drosophila)
+        );
+        assert_eq!(
+            AarnnBiomimicryProfile::from_hint("NAO reverse engineered"),
+            Some(AarnnBiomimicryProfile::Human)
+        );
+        assert_eq!(AarnnBiomimicryProfile::from_hint(""), None);
+    }
+
+    #[test]
+    fn test_backfill_profile_preserves_present_fields() {
+        let mut cfg = NetworkConfig::default();
+        cfg.growth_enabled = false;
+        cfg.aarnn_import_topology_rewire_enabled = false;
+        cfg.aarnn_import_topology_rewire_keep_fraction = 1.0;
+        cfg.aarnn_import_topology_rewire_region_bias = 0.0;
+
+        let present = HashSet::from([
+            "growth_enabled".to_string(),
+            "aarnn_import_topology_rewire_enabled".to_string(),
+        ]);
+        backfill_aarnn_biomimicry_profile_missing_fields(
+            &mut cfg,
+            AarnnBiomimicryProfile::Drosophila,
+            &present,
+        );
+
+        // Explicitly-present fields remain authoritative.
+        assert!(!cfg.growth_enabled);
+        assert!(!cfg.aarnn_import_topology_rewire_enabled);
+
+        // Missing fields are filled from profile defaults.
+        assert!((cfg.aarnn_import_topology_rewire_keep_fraction - 0.78).abs() < 1.0e-6);
+        assert!((cfg.aarnn_import_topology_rewire_region_bias - 0.24).abs() < 1.0e-6);
     }
 }

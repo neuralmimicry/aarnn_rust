@@ -24,14 +24,17 @@ use ndarray::{s, Array1, Array2};
 
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
-    Buffer, CLBuffers, ExecuteKernel, OpenCLManager, CL_MEM_READ_ONLY,
-    CL_MEM_READ_WRITE, CL_TRUE,
+    Buffer, CLBuffers, ExecuteKernel, OpenCLManager, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
 };
 #[cfg(feature = "growth3d")]
 use crate::config::AarnnBioParams;
+use crate::config::{
+    apply_clumping_layer_defaults, backfill_aarnn_biomimicry_profile_missing_fields,
+    AarnnBiomimicryProfile,
+};
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-use crate::morphology::Morphology;
+use crate::morphology::{EvolutionResult, Morphology};
 use crate::network::{build_network, BuiltNetwork};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
@@ -39,12 +42,14 @@ use crate::topology::{Node3D, Topology3D};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "opencl")]
 use std::ptr;
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 #[cfg(feature = "opencl")]
 use std::sync::Arc;
-#[cfg(feature = "parallel")]
+#[cfg(any(feature = "parallel", all(feature = "morpho", feature = "growth3d")))]
 use std::sync::OnceLock;
 
 // -------------------- Save / Load helper types --------------------
@@ -154,6 +159,115 @@ impl Default for Snapshot {
             layer_range: None,
         }
     }
+}
+
+fn snapshot_net_field_names(raw: &serde_json::Value) -> HashSet<String> {
+    raw.get("net")
+        .and_then(serde_json::Value::as_object)
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn infer_snapshot_biomimicry_profile(raw: &serde_json::Value) -> Option<AarnnBiomimicryProfile> {
+    let mut hints: Vec<String> = Vec::new();
+
+    let push_hint = |hints: &mut Vec<String>, value: Option<&str>| {
+        if let Some(v) = value {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                hints.push(trimmed.to_string());
+            }
+        }
+    };
+
+    if let Some(labels) = raw
+        .get("connectome_labels")
+        .and_then(serde_json::Value::as_object)
+    {
+        for key in ["species", "dataset", "source_file"] {
+            push_hint(
+                &mut hints,
+                labels.get(key).and_then(serde_json::Value::as_str),
+            );
+        }
+
+        if let Some(source_files) = labels
+            .get("source_files")
+            .and_then(serde_json::Value::as_object)
+        {
+            for key in [
+                "neurons",
+                "connections",
+                "metadata_fallback",
+                "metadata_fallback_neurons",
+            ] {
+                push_hint(
+                    &mut hints,
+                    source_files.get(key).and_then(serde_json::Value::as_str),
+                );
+            }
+        }
+
+        if let Some(bio_profile) = labels.get("bio_profile") {
+            if let Some(v) = bio_profile.as_str() {
+                push_hint(&mut hints, Some(v));
+            }
+            if let Some(obj) = bio_profile.as_object() {
+                for key in ["species", "dataset", "profile", "name"] {
+                    push_hint(&mut hints, obj.get(key).and_then(serde_json::Value::as_str));
+                }
+            }
+        }
+    }
+
+    // Fallback: infer from serialized clumping design only when richer metadata is absent.
+    if let Some(net_obj) = raw.get("net").and_then(serde_json::Value::as_object) {
+        push_hint(
+            &mut hints,
+            net_obj
+                .get("clumping_design")
+                .and_then(serde_json::Value::as_str),
+        );
+    }
+
+    hints
+        .into_iter()
+        .find_map(|hint| AarnnBiomimicryProfile::from_hint(&hint))
+}
+
+pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot> {
+    let raw: serde_json::Value = serde_json::from_str(s)?;
+    let present_net_fields = snapshot_net_field_names(&raw);
+    let profile_hint = infer_snapshot_biomimicry_profile(&raw);
+    let mut snap: Snapshot = serde_json::from_value(raw)?;
+    if let Some(profile) = profile_hint {
+        backfill_aarnn_biomimicry_profile_missing_fields(
+            &mut snap.net,
+            profile,
+            &present_net_fields,
+        );
+    }
+    Ok(snap)
+}
+
+#[cfg(feature = "growth3d")]
+#[derive(Clone, Debug)]
+struct ImportTopoNodeMeta {
+    x: f32,
+    y: f32,
+    z: f32,
+    region_exact: Option<String>,
+    region_group: Option<String>,
+    type_key: Option<String>,
+}
+
+#[cfg(feature = "growth3d")]
+#[derive(Clone, Copy, Debug)]
+struct ImportEdgeCandidate {
+    row: usize,
+    col: usize,
+    score: f64,
+    adjusted_weight: f64,
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -299,6 +413,8 @@ pub struct Runner {
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub syn_den_len: Vec<f32>, // per-synapse dendritic path length (exact)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    syn_path_len_scale: f32, // characteristic axon+dendrite path length for attenuation normalization
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub syn_myelin: Vec<f32>, // per-synapse myelin state [0,1]
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub recv_in: Vec<Vec<(usize, usize)>>, // [H0] -> Vec<(i, syn_idx)>
@@ -373,6 +489,12 @@ pub struct Runner {
     pub morpho_accumulated_dt: f32,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub metabolic_accumulated_dt: f32,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    morpho_async_enabled: bool,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    morpho_async_rx: Option<std::sync::Arc<std::sync::Mutex<Receiver<MorphoAsyncResult>>>>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    morpho_async_seq: u64,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     // Per-step list of released synapses for simple visualization (capped in size)
     /// Per‑frame list of released synapses (capped) for UI flashes.
@@ -565,6 +687,74 @@ fn parse_env_f32(name: &str) -> Option<f32> {
     std::env::var(name).ok()?.trim().parse::<f32>().ok()
 }
 
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+#[derive(Clone, Copy, Debug)]
+struct RealtimeIpcPolicy {
+    enabled: bool,
+    disable_growth: bool,
+    disable_morpho: bool,
+    disable_metabolic: bool,
+    disable_pruning: bool,
+    morpho_interval_override_ms: Option<f32>,
+    metabolic_interval_override_ms: Option<f32>,
+    morpho_safe_max_synapses: usize,
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+struct MorphoAsyncResult {
+    seq: u64,
+    morph: Morphology,
+    res: EvolutionResult,
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn parse_rt_env_bool(name: &str) -> Option<bool> {
+    match std::env::var(name)
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn parse_rt_env_usize(name: &str) -> Option<usize> {
+    std::env::var(name).ok()?.trim().parse::<usize>().ok()
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn parse_rt_env_f32(name: &str) -> Option<f32> {
+    std::env::var(name).ok()?.trim().parse::<f32>().ok()
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn realtime_ipc_policy() -> &'static RealtimeIpcPolicy {
+    static POLICY: OnceLock<RealtimeIpcPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        let enabled = parse_rt_env_bool("NM_REALTIME_IPC").unwrap_or(false);
+        let morpho_override = parse_rt_env_f32("NM_REALTIME_MORPHO_INTERVAL_MS")
+            .filter(|v| v.is_finite() && *v > 0.0);
+        let metabolic_override = parse_rt_env_f32("NM_REALTIME_METABOLIC_INTERVAL_MS")
+            .filter(|v| v.is_finite() && *v > 0.0);
+        RealtimeIpcPolicy {
+            enabled,
+            disable_growth: parse_rt_env_bool("NM_REALTIME_DISABLE_GROWTH").unwrap_or(enabled),
+            disable_morpho: parse_rt_env_bool("NM_REALTIME_DISABLE_MORPHO").unwrap_or(enabled),
+            disable_metabolic: parse_rt_env_bool("NM_REALTIME_DISABLE_METABOLIC")
+                .unwrap_or(enabled),
+            disable_pruning: parse_rt_env_bool("NM_REALTIME_DISABLE_PRUNING").unwrap_or(enabled),
+            morpho_interval_override_ms: morpho_override,
+            metabolic_interval_override_ms: metabolic_override,
+            morpho_safe_max_synapses: parse_rt_env_usize("NM_REALTIME_MORPHO_MAX_SYNAPSES")
+                .unwrap_or(200_000),
+        }
+    })
+}
+
 #[cfg(feature = "parallel")]
 fn sim_parallel_env() -> &'static SimParallelEnv {
     static ENV: OnceLock<SimParallelEnv> = OnceLock::new();
@@ -680,6 +870,51 @@ impl Runner {
 
     fn is_izh_like(&self) -> bool {
         matches!(self.neuron_model, NeuronModel::Izh(_) | NeuronModel::Aarnn)
+    }
+
+    #[inline]
+    fn sanitize_current_value(i: f64) -> f64 {
+        const I_ABS_LIMIT: f64 = 250.0;
+        if !i.is_finite() {
+            0.0
+        } else {
+            i.clamp(-I_ABS_LIMIT, I_ABS_LIMIT)
+        }
+    }
+
+    #[inline]
+    fn sanitize_current_array(curr: &mut Array1<f64>) {
+        for v in curr.iter_mut() {
+            *v = Self::sanitize_current_value(*v);
+        }
+    }
+
+    #[inline]
+    fn sanitize_izh_state(v: f64, u: f64, p: IzhikevichParams) -> (f64, f64, bool) {
+        let rest_v = if p.membrane_reset_potential_c.is_finite() {
+            p.membrane_reset_potential_c
+        } else {
+            -65.0
+        };
+        let rest_u = p.recovery_sensitivity_b * rest_v;
+        if !v.is_finite() || !u.is_finite() {
+            return (rest_v, rest_u, true);
+        }
+        let v_min = (rest_v - 120.0).min(-150.0);
+        let v_max = (p.v_th + 80.0).max(40.0);
+        let u_min = (rest_u - 400.0).min(-600.0);
+        let u_max = (rest_u + 400.0).max(600.0);
+        (v.clamp(v_min, v_max), u.clamp(u_min, u_max), false)
+    }
+
+    #[inline]
+    fn integrate_izh_step(v: f64, u: f64, i: f64, p: IzhikevichParams) -> (f64, f64, bool) {
+        let (v0, u0, reset0) = Self::sanitize_izh_state(v, u, p);
+        let i0 = Self::sanitize_current_value(i);
+        let nv = v0 + p.dt * (0.04 * v0 * v0 + 5.0 * v0 + 140.0 - u0 + i0);
+        let nu = u0 + p.dt * (p.recovery_time_constant_a * (p.recovery_sensitivity_b * nv - u0));
+        let (nv2, nu2, reset1) = Self::sanitize_izh_state(nv, nu, p);
+        (nv2, nu2, reset0 || reset1)
     }
 
     pub fn sim_parallel_status(&self) -> SimParallelStatus {
@@ -827,7 +1062,35 @@ impl Runner {
                 if let Some(dend) = self.morph.dendrites.get(layer).and_then(|v| v.get(neuron)) {
                     let stim = dend.stimuli.max(0.0) as f64;
                     let branches = dend.tree.branches.len() as f64;
-                    let branch_factor = (1.0 + branches).ln().clamp(1.0, 2.5);
+                    let mut branch_factor = (1.0 + branches).ln().clamp(1.0, 2.5);
+                    let mut apical_trunks = 0usize;
+                    let mut basal_trunks = 0usize;
+                    let mut trunk_len_sum = 0.0f64;
+                    let mut trunk_len_n = 0usize;
+                    for seg in &dend.tree.branches {
+                        if seg.is_trunk {
+                            trunk_len_sum += seg.trunk_len_from_soma.max(0.0) as f64;
+                            trunk_len_n += 1;
+                            match seg.dendrite_type {
+                                crate::morphology::DendriteType::Apical => apical_trunks += 1,
+                                crate::morphology::DendriteType::Basal => basal_trunks += 1,
+                                crate::morphology::DendriteType::Generic => {}
+                            }
+                        }
+                    }
+                    if apical_trunks > 0 && basal_trunks > 0 {
+                        branch_factor *= 1.08;
+                    }
+                    if trunk_len_n > 0 {
+                        let mean_trunk = trunk_len_sum / trunk_len_n as f64;
+                        let norm = if self.syn_path_len_scale > 1.0e-6 {
+                            (mean_trunk / self.syn_path_len_scale as f64).clamp(0.0, 3.0)
+                        } else {
+                            0.0
+                        };
+                        branch_factor *= 1.0 + 0.08 * norm;
+                    }
+                    branch_factor = branch_factor.clamp(1.0, 3.0);
                     return (stim, branch_factor);
                 }
             }
@@ -2975,13 +3238,19 @@ impl Runner {
     ) -> Self {
         let mut net_actual = net.clone();
         if net_actual.clumping_design != crate::config::ClumpingDesign::None
+            && net_actual.num_hidden_layers <= 1
+        {
+            apply_clumping_layer_defaults(&mut net_actual);
+        }
+        if net_actual.clumping_design != crate::config::ClumpingDesign::None
             && net_actual.brain_regions.is_empty()
         {
             let design = net_actual.clumping_design;
             crate::config::apply_clumping_design(&mut net_actual, design);
         }
-        if matches!(neuron_model, NeuronModel::Aarnn) {
-            // AARNN starts from a minimal bootstrap state so growth can form IO.
+        if matches!(neuron_model, NeuronModel::Aarnn) && net_actual.growth_enabled {
+            // AARNN growth bootstrap: start minimal only when growth is enabled.
+            // For fixed imported networks (growth disabled), preserve configured IO sizes.
             net_actual.num_sensory_neurons = 0;
             net_actual.num_output_neurons = 0;
             net_actual.num_hidden_layers = 1;
@@ -3186,6 +3455,8 @@ impl Runner {
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             syn_den_len: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_path_len_scale: 1.0,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
             syn_myelin: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             recv_in: Vec::new(),
@@ -3237,6 +3508,13 @@ impl Runner {
             morpho_accumulated_dt: 0.0,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             metabolic_accumulated_dt: 0.0,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morpho_async_enabled: parse_rt_env_bool("NM_MORPHO_ASYNC")
+                .unwrap_or_else(|| parse_rt_env_bool("NM_REALTIME_IPC").unwrap_or(false)),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morpho_async_rx: None,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morpho_async_seq: 0,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             released_events: Vec::with_capacity(256),
             #[cfg(any(feature = "ui", feature = "growth3d"))]
@@ -3426,7 +3704,12 @@ impl Runner {
         }
 
         #[cfg(feature = "growth3d")]
-        this.rebuild_default_topology();
+        {
+            this.rebuild_default_topology();
+            if matches!(this.neuron_model, NeuronModel::Aarnn) && !this.net.use_morphology {
+                this.ensure_sparse_io_connectivity_floor();
+            }
+        }
 
         this
     }
@@ -3552,9 +3835,362 @@ impl Runner {
         }
     }
 
+    #[cfg(feature = "growth3d")]
+    fn normalize_optional_token(raw: Option<&str>) -> Option<String> {
+        let s = raw?.trim().to_ascii_lowercase();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn normalize_region_group(raw: Option<&str>) -> Option<String> {
+        let exact = Self::normalize_optional_token(raw)?;
+        for suffix in ["_left", "_right", "_midline", "_lhs", "_rhs", "_l", "_r"] {
+            if exact.ends_with(suffix) {
+                let stem = exact
+                    .trim_end_matches(suffix)
+                    .trim_end_matches('_')
+                    .to_string();
+                if !stem.is_empty() {
+                    return Some(stem);
+                }
+            }
+        }
+        Some(exact)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn build_import_node_meta(nodes: &[Node3D]) -> Vec<ImportTopoNodeMeta> {
+        nodes
+            .iter()
+            .map(|node| ImportTopoNodeMeta {
+                x: node.x,
+                y: node.y,
+                z: node.z,
+                region_exact: Self::normalize_optional_token(node.region_name.as_deref()),
+                region_group: Self::normalize_region_group(node.region_name.as_deref()),
+                type_key: Self::normalize_optional_token(node.type_name.as_deref()),
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn import_edge_gain(
+        pre: &ImportTopoNodeMeta,
+        post: &ImportTopoNodeMeta,
+        distance_k: f64,
+        region_bias: f64,
+    ) -> f64 {
+        let dx = (pre.x - post.x) as f64;
+        let dy = (pre.y - post.y) as f64;
+        let dz = (pre.z - post.z) as f64;
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        let dist_gain = if distance_k > 0.0 {
+            (-distance_k * dist).exp()
+        } else {
+            1.0
+        };
+
+        let mut compat = 1.0f64;
+        if region_bias > 0.0 {
+            if let (Some(pre_region), Some(post_region)) = (&pre.region_exact, &post.region_exact) {
+                if pre_region == post_region {
+                    compat += region_bias;
+                } else if pre.region_group.is_some() && pre.region_group == post.region_group {
+                    compat += region_bias * 0.5;
+                } else {
+                    compat -= region_bias * 0.45;
+                }
+            }
+            if let (Some(pre_type), Some(post_type)) = (&pre.type_key, &post.type_key) {
+                if pre_type == post_type {
+                    compat += region_bias * 0.25;
+                }
+            }
+        }
+
+        (dist_gain * compat.max(0.1)).max(0.0)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn apply_import_topology_sparse_rewiring_matrix(
+        mat: &mut Array2<f64>,
+        mut presence: Option<&mut Array2<u32>>,
+        post_nodes: &[Node3D],
+        pre_nodes: &[Node3D],
+        keep_fraction: f32,
+        distance_k: f64,
+        region_bias: f64,
+    ) -> (usize, usize) {
+        let row_limit = mat.nrows().min(post_nodes.len());
+        let col_limit = mat.ncols().min(pre_nodes.len());
+        if row_limit == 0 || col_limit == 0 {
+            return (0, 0);
+        }
+
+        let post_meta = Self::build_import_node_meta(post_nodes);
+        let pre_meta = Self::build_import_node_meta(pre_nodes);
+
+        #[cfg(feature = "parallel")]
+        let mut edges: Vec<ImportEdgeCandidate> = (0..row_limit)
+            .into_par_iter()
+            .map(|row| {
+                let mut local = Vec::<ImportEdgeCandidate>::new();
+                for col in 0..col_limit {
+                    let w = mat[(row, col)];
+                    if w.abs() <= f64::EPSILON {
+                        continue;
+                    }
+                    let gain = Self::import_edge_gain(
+                        &pre_meta[col],
+                        &post_meta[row],
+                        distance_k,
+                        region_bias,
+                    );
+                    local.push(ImportEdgeCandidate {
+                        row,
+                        col,
+                        score: (w * gain).abs(),
+                        adjusted_weight: w * gain,
+                    });
+                }
+                local
+            })
+            .reduce(Vec::new, |mut a, mut b| {
+                a.append(&mut b);
+                a
+            });
+
+        #[cfg(not(feature = "parallel"))]
+        let mut edges: Vec<ImportEdgeCandidate> = {
+            let mut out = Vec::<ImportEdgeCandidate>::new();
+            for row in 0..row_limit {
+                for col in 0..col_limit {
+                    let w = mat[(row, col)];
+                    if w.abs() <= f64::EPSILON {
+                        continue;
+                    }
+                    let gain = Self::import_edge_gain(
+                        &pre_meta[col],
+                        &post_meta[row],
+                        distance_k,
+                        region_bias,
+                    );
+                    out.push(ImportEdgeCandidate {
+                        row,
+                        col,
+                        score: (w * gain).abs(),
+                        adjusted_weight: w * gain,
+                    });
+                }
+            }
+            out
+        };
+
+        if edges.is_empty() {
+            return (0, 0);
+        }
+
+        edges.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.row.cmp(&b.row))
+                .then_with(|| a.col.cmp(&b.col))
+        });
+
+        let keep_fraction = keep_fraction.clamp(0.01, 1.0);
+        let mut keep_target = ((edges.len() as f32) * keep_fraction).round() as usize;
+        keep_target = keep_target.clamp(1, edges.len());
+
+        let mut keep_mask = vec![false; edges.len()];
+        for i in 0..keep_target {
+            keep_mask[i] = true;
+        }
+
+        // Preserve at least one incoming and one outgoing edge per active row/col.
+        let mut best_edge_per_row = vec![None::<usize>; row_limit];
+        let mut best_edge_per_col = vec![None::<usize>; col_limit];
+        for (idx, edge) in edges.iter().enumerate() {
+            if best_edge_per_row[edge.row].is_none() {
+                best_edge_per_row[edge.row] = Some(idx);
+            }
+            if best_edge_per_col[edge.col].is_none() {
+                best_edge_per_col[edge.col] = Some(idx);
+            }
+        }
+        for idx in best_edge_per_row.into_iter().flatten() {
+            keep_mask[idx] = true;
+        }
+        for idx in best_edge_per_col.into_iter().flatten() {
+            keep_mask[idx] = true;
+        }
+
+        let mut kept = 0usize;
+        if let Some(ref mut p) = presence {
+            for (idx, edge) in edges.iter().enumerate() {
+                if keep_mask[idx] {
+                    mat[(edge.row, edge.col)] = edge.adjusted_weight;
+                    if edge.row < p.nrows() && edge.col < p.ncols() && p[(edge.row, edge.col)] == 0
+                    {
+                        p[(edge.row, edge.col)] = 1;
+                    }
+                    kept += 1;
+                } else {
+                    mat[(edge.row, edge.col)] = 0.0;
+                    if edge.row < p.nrows() && edge.col < p.ncols() {
+                        p[(edge.row, edge.col)] = 0;
+                    }
+                }
+            }
+        } else {
+            for (idx, edge) in edges.iter().enumerate() {
+                if keep_mask[idx] {
+                    mat[(edge.row, edge.col)] = edge.adjusted_weight;
+                    kept += 1;
+                } else {
+                    mat[(edge.row, edge.col)] = 0.0;
+                }
+            }
+        }
+
+        (kept, edges.len())
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn apply_import_topology_sparse_rewiring(&mut self) {
+        if !self.net.aarnn_import_topology_rewire_enabled {
+            return;
+        }
+
+        let keep_fraction = self
+            .net
+            .aarnn_import_topology_rewire_keep_fraction
+            .clamp(0.01, 1.0);
+        let distance_k = self.net.aarnn_distance_attenuation_per_unit.max(0.0) as f64;
+        let region_bias = self
+            .net
+            .aarnn_import_topology_rewire_region_bias
+            .clamp(0.0, 1.0) as f64;
+
+        if keep_fraction >= 0.999 && distance_k <= f64::EPSILON && region_bias <= f64::EPSILON {
+            return;
+        }
+
+        let (in_l, out_l) = self.get_io_layers();
+        let mut total_edges = 0usize;
+        let mut kept_edges = 0usize;
+
+        let sensory_nodes = self.topo.sensory_nodes.clone();
+        let output_nodes = self.topo.output_nodes.clone();
+        let hidden_layers = self.topo.layers.clone();
+
+        if let Some(in_layer_nodes) = hidden_layers.get(in_l) {
+            let (kept, total) = Self::apply_import_topology_sparse_rewiring_matrix(
+                &mut self.w_in,
+                Some(&mut self.conn_presence_in),
+                in_layer_nodes,
+                &sensory_nodes,
+                keep_fraction,
+                distance_k,
+                region_bias,
+            );
+            kept_edges += kept;
+            total_edges += total;
+        }
+
+        for l in 0..self.w_hh_fwd.len() {
+            let (Some(pre_nodes), Some(post_nodes)) =
+                (hidden_layers.get(l), hidden_layers.get(l + 1))
+            else {
+                continue;
+            };
+            let presence = self.conn_presence_fwd.get_mut(l);
+            let (kept, total) = Self::apply_import_topology_sparse_rewiring_matrix(
+                &mut self.w_hh_fwd[l],
+                presence,
+                post_nodes,
+                pre_nodes,
+                keep_fraction,
+                distance_k,
+                region_bias,
+            );
+            kept_edges += kept;
+            total_edges += total;
+        }
+
+        for l in 0..self.w_hh_bwd.len() {
+            let (Some(post_nodes), Some(pre_nodes)) =
+                (hidden_layers.get(l), hidden_layers.get(l + 1))
+            else {
+                continue;
+            };
+            let presence = self.conn_presence_bwd.get_mut(l);
+            let (kept, total) = Self::apply_import_topology_sparse_rewiring_matrix(
+                &mut self.w_hh_bwd[l],
+                presence,
+                post_nodes,
+                pre_nodes,
+                keep_fraction,
+                distance_k,
+                region_bias,
+            );
+            kept_edges += kept;
+            total_edges += total;
+        }
+
+        for l in 0..self.w_hh_rec.len() {
+            let Some(layer_nodes) = hidden_layers.get(l) else {
+                continue;
+            };
+            let presence = self.conn_presence_rec.get_mut(l);
+            let (kept, total) = Self::apply_import_topology_sparse_rewiring_matrix(
+                &mut self.w_hh_rec[l],
+                presence,
+                layer_nodes,
+                layer_nodes,
+                keep_fraction,
+                distance_k,
+                region_bias,
+            );
+            kept_edges += kept;
+            total_edges += total;
+        }
+
+        if let Some(out_layer_nodes) = hidden_layers.get(out_l) {
+            let (kept, total) = Self::apply_import_topology_sparse_rewiring_matrix(
+                &mut self.w_out,
+                Some(&mut self.conn_presence_out),
+                &output_nodes,
+                out_layer_nodes,
+                keep_fraction,
+                distance_k,
+                region_bias,
+            );
+            kept_edges += kept;
+            total_edges += total;
+        }
+
+        if total_edges > 0 {
+            self.sync_presence_sizes();
+            #[cfg(feature = "opencl")]
+            self.mark_all_weights_dirty();
+            nm_log!(
+                "[import-rewire] kept {}/{} synapses (keep_fraction={} dist_k={:.3} region_bias={:.3})",
+                kept_edges,
+                total_edges,
+                keep_fraction,
+                distance_k,
+                region_bias
+            );
+        }
+    }
+
     #[allow(dead_code)]
     pub fn import_network_json(&mut self, s: &str) -> anyhow::Result<()> {
-        let snap: Snapshot = serde_json::from_str(s)?;
+        let snap = decode_snapshot_with_profile_backfill(s)?;
         // Update config first to ensure dimensions agree
         self.net = snap.net;
         self.layer_range = snap.layer_range.map(|(s, e)| s..e);
@@ -3702,6 +4338,7 @@ impl Runner {
             // Ensure growth vectors match new topology
             self.ensure_growth_vectors();
             self.sync_bio_from_topo();
+            self.apply_import_topology_sparse_rewiring();
         }
         #[cfg(feature = "opencl")]
         {
@@ -3862,7 +4499,21 @@ impl Runner {
                 self.since_growth_ms[l].fill(0.0);
                 self.since_last_bouton_ms[l].fill(0.0);
             }
-            self.rebuild_default_topology();
+            // Preserve imported/assigned topology when dimensions still match.
+            // Rebuild only when topology is missing or stale after structural edits.
+            let topo_matches_state = self.topo.layers.len() == num_hidden_layers
+                && self.topo.sensory_nodes.len() == self.net.num_sensory_neurons
+                && self.topo.output_nodes.len() == self.net.num_output_neurons
+                && (0..num_hidden_layers).all(|l| {
+                    self.topo
+                        .layers
+                        .get(l)
+                        .map(|nodes| nodes.len() == self.v_h[l].len())
+                        .unwrap_or(false)
+                });
+            if !topo_matches_state {
+                self.rebuild_default_topology();
+            }
             // reset spike histories to one zero frame with current sizes
             self.spk_hist_h.clear();
             for l in 0..num_hidden_layers {
@@ -3882,6 +4533,7 @@ impl Runner {
             // Rebuild morphology after any structural changes
             self.morpho_accumulated_dt = 0.0;
             self.metabolic_accumulated_dt = 0.0;
+            self.morpho_async_rx = None;
             self.rebuild_morphology();
             self.released_events.clear();
         }
@@ -3988,15 +4640,90 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    fn aarnn_hidden_layer_x(&self, layer: usize) -> f32 {
+        let total = self.net.num_hidden_layers.max(1);
+        if total <= 1 {
+            return 0.0;
+        }
+        let t = (layer.min(total - 1) as f32) / ((total - 1) as f32);
+        (-0.55 + 1.10 * t).clamp(-0.95, 0.95)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn aarnn_io_port_x(&self, hidden_layer: usize, is_sensory: bool) -> f32 {
+        let offset = if is_sensory { -0.10 } else { 0.10 };
+        (self.aarnn_hidden_layer_x(hidden_layer) + offset).clamp(-1.0, 1.0)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn aarnn_column_spacing_for_count(&self, count: usize) -> f32 {
+        let desired = self.net.columnar_spacing.max(0.05);
+        let side = (count.max(1) as f32).sqrt().ceil().max(1.0);
+        // Keep the lattice within bounds as layers grow.
+        let max_spacing = if side <= 1.0 { 0.8 } else { 1.6 / (side - 1.0) };
+        desired.min(max_spacing).clamp(0.05, 0.8)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn aarnn_column_coords_for_index(&self, idx: usize, count: usize) -> (f32, f32) {
+        if count <= 1 {
+            return (0.0, 0.0);
+        }
+        let side = (count as f32).sqrt().ceil().max(1.0) as usize;
+        let row = idx / side;
+        let col = idx % side;
+        let center = (side.saturating_sub(1)) as f32 * 0.5;
+        let spacing = self.aarnn_column_spacing_for_count(count);
+        let y = ((row as f32) - center) * spacing;
+        let z = ((col as f32) - center) * spacing;
+        (y.clamp(-0.95, 0.95), z.clamp(-0.95, 0.95))
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn aarnn_column_anchor_near(&self, layer: usize, base: (f32, f32, f32)) -> (f32, f32) {
+        let local_count = self.layer_size(layer).saturating_add(1).max(1);
+        let spacing = self.aarnn_column_spacing_for_count(local_count);
+        if let Some(layer_nodes) = self.topo.layers.get(layer) {
+            if !layer_nodes.is_empty() {
+                let mut best = (layer_nodes[0].y, layer_nodes[0].z);
+                let mut best_d2 = f32::INFINITY;
+                for n in layer_nodes {
+                    let dy = n.y - base.1;
+                    let dz = n.z - base.2;
+                    let d2 = dy * dy + dz * dz;
+                    if d2 < best_d2 {
+                        best_d2 = d2;
+                        best = (n.y, n.z);
+                    }
+                }
+                // If an existing column is nearby, preserve that column identity.
+                if best_d2 <= (spacing * spacing * 4.0) {
+                    return best;
+                }
+            }
+        }
+        let qy = (base.1 / spacing).round() * spacing;
+        let qz = (base.2 / spacing).round() * spacing;
+        (qy.clamp(-0.95, 0.95), qz.clamp(-0.95, 0.95))
+    }
+
+    #[cfg(feature = "growth3d")]
     pub fn rebuild_default_topology(&mut self) {
         use crate::topology::{Node3D, Topology3D};
         let mut topo = Topology3D::new();
         let l_count = self.net.num_hidden_layers; // Global hidden count
+        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
 
         // Determine global layer indices for local layers
         let start_layer = self.layer_range.as_ref().map(|r| r.start).unwrap_or(0);
 
-        let (sens_x, out_x) = if self.net.growth_enabled {
+        let (sens_x, out_x) = if is_aarnn {
+            let (in_l, out_l) = self.get_io_layers();
+            (
+                self.aarnn_io_port_x(in_l, true),
+                self.aarnn_io_port_x(out_l, false),
+            )
+        } else if self.net.growth_enabled {
             (-0.1, 0.1)
         } else {
             let start_x = -0.6;
@@ -4007,7 +4734,9 @@ impl Runner {
         // Sensory nodes
         let s_count = self.net.num_sensory_neurons;
         for i in 0..s_count {
-            let (y, z) = if s_count > 1 {
+            let (y, z) = if is_aarnn {
+                self.aarnn_column_coords_for_index(i, s_count)
+            } else if s_count > 1 {
                 let angle = (i as f32) * 2.0 * std::f32::consts::PI / (s_count as f32);
                 let radius = if self.net.growth_enabled { 0.1 } else { 0.65 };
                 (radius * angle.cos(), radius * angle.sin())
@@ -4026,7 +4755,9 @@ impl Runner {
         // Output nodes
         let o_count = self.net.num_output_neurons;
         for k in 0..o_count {
-            let (y, z) = if o_count > 1 {
+            let (y, z) = if is_aarnn {
+                self.aarnn_column_coords_for_index(k, o_count)
+            } else if o_count > 1 {
                 let angle = (k as f32) * 2.0 * std::f32::consts::PI / (o_count as f32);
                 let radius = if self.net.growth_enabled { 0.1 } else { 0.65 };
                 (radius * angle.cos(), radius * angle.sin())
@@ -4051,19 +4782,25 @@ impl Runner {
                 continue;
             }
             for j in 0..h_size {
-                let x = -0.6 + (l_global as f32) * 0.3;
-                let y = if h_size > 1 {
-                    (j as f32) / ((h_size - 1) as f32) * 1.2 - 0.6
+                let x = if is_aarnn {
+                    self.aarnn_hidden_layer_x(l_global)
                 } else {
-                    0.0
+                    -0.6 + (l_global as f32) * 0.3
                 };
-                let (region_name, type_name) = self.allocate_region_and_type(x, y, 0.0, l_global);
+                let (y, z) = if is_aarnn {
+                    self.aarnn_column_coords_for_index(j, h_size)
+                } else if h_size > 1 {
+                    ((j as f32) / ((h_size - 1) as f32) * 1.2 - 0.6, 0.0)
+                } else {
+                    (0.0, 0.0)
+                };
+                let (region_name, type_name) = self.allocate_region_and_type(x, y, z, l_global);
                 topo.add_neuron(
                     l_global,
                     Node3D {
                         x,
                         y,
-                        z: 0.0,
+                        z,
                         layer: l_global,
                         region_name,
                         type_name,
@@ -4189,10 +4926,18 @@ impl Runner {
             self.extend_sensory_history(n_s_new);
             // Update topology nodes
             let s_count = n_s_new;
-            let sens_x = self.topo.sensory_nodes.first().map(|n| n.x).unwrap_or(-0.7);
+            let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+            let sens_x = if is_aarnn {
+                let (in_l, _) = self.get_io_layers();
+                self.aarnn_io_port_x(in_l, true)
+            } else {
+                self.topo.sensory_nodes.first().map(|n| n.x).unwrap_or(-0.7)
+            };
             self.topo.sensory_nodes.clear();
             for i in 0..s_count {
-                let (y, z) = if s_count > 1 {
+                let (y, z) = if is_aarnn {
+                    self.aarnn_column_coords_for_index(i, s_count)
+                } else if s_count > 1 {
                     let angle = (i as f32) * 2.0 * std::f32::consts::PI / (s_count as f32);
                     let radius = if self.net.growth_enabled { 0.1 } else { 0.65 };
                     (radius * angle.cos(), radius * angle.sin())
@@ -4325,10 +5070,18 @@ impl Runner {
         #[cfg(feature = "growth3d")]
         {
             let o_count = n_o_new;
-            let out_x = self.topo.output_nodes.first().map(|n| n.x).unwrap_or(0.1);
+            let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+            let out_x = if is_aarnn {
+                let (_, out_l) = self.get_io_layers();
+                self.aarnn_io_port_x(out_l, false)
+            } else {
+                self.topo.output_nodes.first().map(|n| n.x).unwrap_or(0.1)
+            };
             self.topo.output_nodes.clear();
             for k in 0..o_count {
-                let (y, z) = if o_count > 1 {
+                let (y, z) = if is_aarnn {
+                    self.aarnn_column_coords_for_index(k, o_count)
+                } else if o_count > 1 {
                     let angle = (k as f32) * 2.0 * std::f32::consts::PI / (o_count as f32);
                     let radius = if self.net.growth_enabled { 0.1 } else { 0.65 };
                     (radius * angle.cos(), radius * angle.sin())
@@ -4551,7 +5304,7 @@ impl Runner {
         }
 
         // Sleep/dream: replace sensory inputs with replay/prediction
-        if sleep_active && num_sensory_neurons > 0 {
+        if sleep_active && s_t_external.is_none() && num_sensory_neurons > 0 {
             let mut dream = vec![0i8; num_sensory_neurons];
             let replay_p = self.net.sleep_dream_replay_prob.clamp(0.0, 1.0);
             let use_replay = !self.spk_hist_s.is_empty() && fastrand::f32() < replay_p;
@@ -4967,6 +5720,45 @@ impl Runner {
                 .collect();
             active_h_indices.push(active);
         }
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let has_sparse_recv_in = self.recv_in.iter().enumerate().any(|(j, syns)| {
+            syns.iter().any(|(i, _)| {
+                self.w_in
+                    .get((j, *i))
+                    .map(|w| w.abs() > 1.0e-9)
+                    .unwrap_or(false)
+            })
+        });
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let _has_sparse_recv_in = false;
+
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let has_sparse_hidden_maps = self
+            .recv_fwd
+            .iter()
+            .any(|rows| rows.iter().any(|v| !v.is_empty()))
+            || self
+                .recv_bwd
+                .iter()
+                .any(|rows| rows.iter().any(|v| !v.is_empty()))
+            || self
+                .recv_rec
+                .iter()
+                .any(|rows| rows.iter().any(|v| !v.is_empty()));
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let _has_sparse_hidden_maps = false;
+
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let has_sparse_recv_out = self.recv_out.iter().enumerate().any(|(k, syns)| {
+            syns.iter().any(|(j, _)| {
+                self.w_out
+                    .get((k, *j))
+                    .map(|w| w.abs() > 1.0e-9)
+                    .unwrap_or(false)
+            })
+        });
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let _has_sparse_recv_out = false;
 
         // Update neuromodulator and resonance state (AARNN only)
         if is_aarnn {
@@ -5201,7 +5993,8 @@ impl Runner {
                     }
                 }
             }
-        } else if self.is_layer_assigned(0) {
+        }
+        if self.is_layer_assigned(0) {
             observe_time!("Runner::step/i_h0");
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -5213,7 +6006,10 @@ impl Runner {
                 let cl_mgr = self.cl.clone();
                 if let Some(ref cl) = cl_mgr {
                     let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                    if !use_aarnn || !self.net.use_morphology {
+                    if use_aarnn {
+                        // Keep AARNN sensory accumulation on CPU for correctness in realtime IPC workloads.
+                        gpu_success = false;
+                    } else if !use_aarnn || !self.net.use_morphology || !has_sparse_recv_in {
                         // Dense path acceleration
                         self.sync_cl_w_in_to_gpu();
                         // Need sensory spikes on GPU
@@ -5590,18 +6386,23 @@ impl Runner {
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                                 let mut events: Vec<ReleasedEvent> = Vec::new();
                                 let in_l = in_l; // already captured at top of step
-                                if use_aarnn && self.net.use_morphology {
+                                if use_aarnn && self.net.use_morphology && has_sparse_recv_in {
+                                    let mut has_sparse_sensory_route = false;
                                     if in_l == 0 {
                                         for &(i, syn_idx) in self.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[]) {
+                                            let w_val = self.w_in.get((j, i)).copied().unwrap_or_else(|| {
+                                                nm_log!("[warn] w_in event acc out of bounds: ({}, {})", j, i);
+                                                0.0
+                                            });
+                                            if w_val.abs() <= 1.0e-12 {
+                                                continue;
+                                            }
+                                            has_sparse_sensory_route = true;
                                             let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                             let s = self.hist_s_at(steps, i);
                                             if s != 0 {
                                                 let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
                                                 if fastrand::f32() <= self.release_probability(Some(syn_idx)) {
-                                                    let w_val = self.w_in.get((j, i)).copied().unwrap_or_else(|| {
-                                                        nm_log!("[warn] w_in event acc out of bounds: ({}, {})", j, i);
-                                                        0.0
-                                                    });
                                                     acc += w_val * atten * stp_scale;
                                                     if events.len() < released_cap {
                                                         events.push(ReleasedEvent{
@@ -5614,6 +6415,12 @@ impl Runner {
                                                         });
                                                     }
                                                 }
+                                            }
+                                        }
+                                        if !has_sparse_sensory_route {
+                                            for &i in &active_s_indices {
+                                                let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
+                                                acc += self.w_in.get((j, i)).copied().unwrap_or(0.0) * stp_scale;
                                             }
                                         }
                                     }
@@ -5808,11 +6615,17 @@ impl Runner {
                         if use_aarnn {
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             if self.net.use_morphology {
+                                let mut has_sparse_sensory_route = false;
                                 if in_l == 0 {
                                     for &(i, syn_idx) in
                                         self.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[])
                                     {
-                                        let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                        let w_val = self.w_in.get((j, i)).copied().unwrap_or(0.0);
+                                        if w_val.abs() <= 1.0e-12 {
+                                            continue;
+                                        }
+                                        has_sparse_sensory_route = true;
+                                        let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                         let s = self.hist_s_at(steps, i);
                                         if s != 0 {
                                             let stp_scale = if use_stp {
@@ -5823,7 +6636,7 @@ impl Runner {
                                             if fastrand::f32()
                                                 <= self.release_probability(Some(syn_idx))
                                             {
-                                                acc += self.w_in[(j, i)] * stp_scale;
+                                                acc += w_val * atten * stp_scale;
                                                 if self.released_events.len() < 256 {
                                                     self.released_events.push(ReleasedEvent {
                                                         kind: ReleasedKind::In,
@@ -5835,6 +6648,17 @@ impl Runner {
                                                     });
                                                 }
                                             }
+                                        }
+                                    }
+                                    if !has_sparse_sensory_route {
+                                        for &i in &active_s_indices {
+                                            let stp_scale = if use_stp {
+                                                stp_release_s.get(i).copied().unwrap_or(0.0)
+                                            } else {
+                                                1.0
+                                            };
+                                            acc += self.w_in.get((j, i)).copied().unwrap_or(0.0)
+                                                * stp_scale;
                                         }
                                     }
                                 }
@@ -6090,6 +6914,7 @@ impl Runner {
             if is_aarnn {
                 self.apply_active_dendritic_compartments_layer(0, &mut i_h0);
             }
+            Self::sanitize_current_array(&mut i_h0);
 
             // Update hidden layer 0 (parallel-friendly via temporary buffers)
             let spk_h0 = {
@@ -6270,13 +7095,9 @@ impl Runner {
                                 let res: Vec<(f64, f64, i8)> = (0..num_hidden_0_neurons)
                                     .into_par_iter()
                                     .map(|j| {
-                                        let v = old_v[j];
-                                        let u = old_u[j];
-                                        let nv = v + p.dt
-                                            * (0.04 * v * v + 5.0 * v + 140.0 - u + i_h0[j]);
-                                        let nu = u + p.dt
-                                            * (p.recovery_time_constant_a
-                                                * (p.recovery_sensitivity_b * nv - u));
+                                        let (nv, nu, unstable) = Self::integrate_izh_step(
+                                            old_v[j], old_u[j], i_h0[j], p,
+                                        );
                                         let mut did_fire = nv >= p.v_th;
                                         if use_adaptive_threshold {
                                             let thr_offset = self.thr_offset_h[0][j].clamp(
@@ -6286,6 +7107,9 @@ impl Runner {
                                             did_fire = nv >= (p.v_th + thr_offset);
                                         }
                                         if use_izh_refractory && old_refr[j] > 0 {
+                                            did_fire = false;
+                                        }
+                                        if unstable {
                                             did_fire = false;
                                         }
                                         let (nv2, nu2) = if did_fire {
@@ -6333,13 +7157,8 @@ impl Runner {
                             } else {
                                 let mut fired = vec![0i8; num_hidden_0_neurons];
                                 for j in 0..num_hidden_0_neurons {
-                                    let v = old_v[j];
-                                    let u = old_u[j];
-                                    let nv =
-                                        v + p.dt * (0.04 * v * v + 5.0 * v + 140.0 - u + i_h0[j]);
-                                    let nu = u + p.dt
-                                        * (p.recovery_time_constant_a
-                                            * (p.recovery_sensitivity_b * nv - u));
+                                    let (nv, nu, unstable) =
+                                        Self::integrate_izh_step(old_v[j], old_u[j], i_h0[j], p);
                                     let mut did_fire = nv >= p.v_th;
                                     if use_adaptive_threshold {
                                         let thr_offset = self.thr_offset_h[0][j].clamp(
@@ -6354,6 +7173,9 @@ impl Runner {
                                                 did_fire = false;
                                             }
                                         }
+                                    }
+                                    if unstable {
+                                        did_fire = false;
                                     }
                                     let (nv2, nu2) = if did_fire {
                                         (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
@@ -6449,7 +7271,10 @@ impl Runner {
                     let cl_mgr = self.cl.clone();
                     #[cfg(feature = "opencl")]
                     if let Some(ref cl) = cl_mgr {
-                        if !use_aarnn {
+                        if use_aarnn {
+                            // Keep AARNN hidden-layer accumulation on CPU for correctness.
+                            gpu_success = false;
+                        } else if !use_aarnn {
                             self.sync_cl_w_hh_to_gpu(l - 1);
                             self.sync_cl_buffers(l - 1, false);
                             self.sync_cl_buffers(l, false);
@@ -6771,7 +7596,7 @@ impl Runner {
                                     }
                                 }
                             }
-                        } else if self.net.use_morphology {
+                        } else if self.net.use_morphology && has_sparse_hidden_maps {
                             // Sparse path acceleration
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             {
@@ -7155,7 +7980,10 @@ impl Runner {
                                     let mut acc_r = 0.0;
                                     let mut events = Vec::new();
                                     // Forward
-                                    if use_aarnn && self.net.use_morphology {
+                                    if use_aarnn
+                                        && self.net.use_morphology
+                                        && has_sparse_hidden_maps
+                                    {
                                         for &(i, syn_idx) in self
                                             .recv_fwd
                                             .get(l - 1)
@@ -7317,7 +8145,10 @@ impl Runner {
                                     }
                                     // Backward
                                     if l < num_hidden_layers - 1 {
-                                        if use_aarnn && self.net.use_morphology {
+                                        if use_aarnn
+                                            && self.net.use_morphology
+                                            && has_sparse_hidden_maps
+                                        {
                                             for &(next_j, syn_idx) in self
                                                 .recv_bwd
                                                 .get(l)
@@ -8015,6 +8846,8 @@ impl Runner {
                 if is_aarnn {
                     self.apply_active_dendritic_compartments_layer(l, &mut i_f);
                 }
+                Self::sanitize_current_array(&mut i_f);
+                Self::sanitize_current_array(&mut i_b);
 
                 #[cfg(any(feature = "ui", feature = "growth3d"))]
                 {
@@ -8216,15 +9049,12 @@ impl Runner {
                                                     (&self.net.aarnn_bio, p_default)
                                                 }
                                             };
-                                            let v = old_v[j];
-                                            let u = old_u[j];
-                                            let nv = v + p.dt
-                                                * (0.04 * v * v + 5.0 * v + 140.0 - u
-                                                    + i_f[j]
-                                                    + i_b[j]);
-                                            let nu = u + p.dt
-                                                * (p.recovery_time_constant_a
-                                                    * (p.recovery_sensitivity_b * nv - u));
+                                            let (nv, nu, unstable) = Self::integrate_izh_step(
+                                                old_v[j],
+                                                old_u[j],
+                                                i_f[j] + i_b[j],
+                                                p,
+                                            );
                                             let mut fired = nv >= p.v_th;
                                             if use_adaptive_threshold {
                                                 let thr_offset = self.thr_offset_h[l][j].clamp(
@@ -8234,6 +9064,9 @@ impl Runner {
                                                 fired = nv >= (p.v_th + thr_offset);
                                             }
                                             if use_izh_refractory && old_refr[j] > 0 {
+                                                fired = false;
+                                            }
+                                            if unstable {
                                                 fired = false;
                                             }
                                             let (nv2, nu2) = if fired {
@@ -8315,15 +9148,12 @@ impl Runner {
                                                 (&self.net.aarnn_bio, p_default)
                                             }
                                         };
-                                        let v = self.v_h[l][j];
-                                        let u = uh[l][j];
-                                        let nv = v + p.dt
-                                            * (0.04 * v * v + 5.0 * v + 140.0 - u
-                                                + i_f[j]
-                                                + i_b[j]);
-                                        let nu = u + p.dt
-                                            * (p.recovery_time_constant_a
-                                                * (p.recovery_sensitivity_b * nv - u));
+                                        let (nv, nu, unstable) = Self::integrate_izh_step(
+                                            self.v_h[l][j],
+                                            uh[l][j],
+                                            i_f[j] + i_b[j],
+                                            p,
+                                        );
                                         let mut fired = nv >= p.v_th;
                                         if use_adaptive_threshold {
                                             let thr_offset = self.thr_offset_h[l][j].clamp(
@@ -8338,6 +9168,9 @@ impl Runner {
                                                     fired = false;
                                                 }
                                             }
+                                        }
+                                        if unstable {
+                                            fired = false;
                                         }
                                         let (nv2, nu2) = if fired {
                                             (
@@ -8479,7 +9312,10 @@ impl Runner {
             #[cfg(feature = "opencl")]
             if let Some(ref cl) = cl_mgr {
                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                if !use_aarnn {
+                if use_aarnn {
+                    // Keep AARNN output accumulation on CPU for correctness.
+                    gpu_success = false;
+                } else if !use_aarnn {
                     if num_hidden_layers > 0 {
                         self.sync_cl_w_out_to_gpu();
                         self.sync_cl_buffers(out_conn_layer, false);
@@ -8648,7 +9484,7 @@ impl Runner {
                             }
                         }
                     }
-                } else if self.net.use_morphology {
+                } else if self.net.use_morphology && has_sparse_recv_out {
                     // Sparse path acceleration
                     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
                     if num_hidden_layers > 0 {
@@ -8848,10 +9684,16 @@ impl Runner {
                                 let mut acc = 0.0f64;
                                 let mut events = Vec::new();
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                                if use_aarnn && self.net.use_morphology {
+                                if use_aarnn && self.net.use_morphology && has_sparse_recv_out {
+                                    let mut has_sparse_output_route = false;
                                     for &(j, syn_idx) in
                                         self.recv_out.get(k).map(|v| v.as_slice()).unwrap_or(&[])
                                     {
+                                        let w_val = self.w_out.get((k, j)).copied().unwrap_or(0.0);
+                                        if w_val.abs() <= 1.0e-12 {
+                                            continue;
+                                        }
+                                        has_sparse_output_route = true;
                                         let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                         let s = self.hist_h_at(out_conn_layer, steps, j);
                                         if s != 0 {
@@ -8867,7 +9709,7 @@ impl Runner {
                                             if fastrand::f32()
                                                 <= self.release_probability(Some(syn_idx))
                                             {
-                                                acc += self.w_out[(k, j)] * atten * stp_scale;
+                                                acc += w_val * atten * stp_scale;
                                                 if events.len() < released_cap {
                                                     events.push(ReleasedEvent {
                                                         kind: ReleasedKind::Out,
@@ -8879,6 +9721,21 @@ impl Runner {
                                                     });
                                                 }
                                             }
+                                        }
+                                    }
+                                    if !has_sparse_output_route {
+                                        for &j in &active_h_indices[out_conn_layer] {
+                                            let stp_scale = if use_stp {
+                                                stp_release_h
+                                                    .get(out_conn_layer)
+                                                    .and_then(|v| v.get(j))
+                                                    .copied()
+                                                    .unwrap_or(0.0)
+                                            } else {
+                                                1.0
+                                            };
+                                            acc += self.w_out.get((k, j)).copied().unwrap_or(0.0)
+                                                * stp_scale;
                                         }
                                     }
                                 } else if use_aarnn {
@@ -9083,10 +9940,16 @@ impl Runner {
                         if use_aarnn {
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             if self.net.use_morphology {
+                                let mut has_sparse_output_route = false;
                                 for &(j, syn_idx) in
                                     self.recv_out.get(k).map(|v| v.as_slice()).unwrap_or(&[])
                                 {
-                                    let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                    let w_val = self.w_out.get((k, j)).copied().unwrap_or(0.0);
+                                    if w_val.abs() <= 1.0e-12 {
+                                        continue;
+                                    }
+                                    has_sparse_output_route = true;
+                                    let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                     let s = self.hist_h_at(out_conn_layer, steps, j);
                                     if s != 0 {
                                         if fastrand::f32()
@@ -9101,7 +9964,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_out[(k, j)] * stp_scale;
+                                            acc += w_val * atten * stp_scale;
                                             if self.released_events.len() < 256 {
                                                 self.released_events.push(ReleasedEvent {
                                                     kind: ReleasedKind::Out,
@@ -9113,6 +9976,21 @@ impl Runner {
                                                 });
                                             }
                                         }
+                                    }
+                                }
+                                if !has_sparse_output_route {
+                                    for &j in &active_h_indices[out_conn_layer] {
+                                        let stp_scale = if use_stp {
+                                            stp_release_h
+                                                .get(out_conn_layer)
+                                                .and_then(|v| v.get(j))
+                                                .copied()
+                                                .unwrap_or(0.0)
+                                        } else {
+                                            1.0
+                                        };
+                                        acc += self.w_out.get((k, j)).copied().unwrap_or(0.0)
+                                            * stp_scale;
                                     }
                                 }
                             } else {
@@ -9289,6 +10167,7 @@ impl Runner {
                 &default_decays,
             );
         }
+        Self::sanitize_current_array(&mut i_o);
         #[cfg(any(feature = "ui", feature = "growth3d"))]
         {
             self.last_i_o = Some(i_o.clone());
@@ -9469,13 +10348,8 @@ impl Runner {
                             let res: Vec<(f64, f64, i8)> = (0..num_output_neurons)
                                 .into_par_iter()
                                 .map(|k| {
-                                    let v = old_v[k];
-                                    let u = old_u[k];
-                                    let nv =
-                                        v + p.dt * (0.04 * v * v + 5.0 * v + 140.0 - u + i_o[k]);
-                                    let nu = u + p.dt
-                                        * (p.recovery_time_constant_a
-                                            * (p.recovery_sensitivity_b * nv - u));
+                                    let (nv, nu, unstable) =
+                                        Self::integrate_izh_step(old_v[k], old_u[k], i_o[k], p);
                                     let mut fired = nv >= p.v_th;
                                     if use_adaptive_threshold {
                                         let thr_offset = self.thr_offset_o[k].clamp(
@@ -9485,6 +10359,9 @@ impl Runner {
                                         fired = nv >= (p.v_th + thr_offset);
                                     }
                                     if use_izh_refractory && old_refr[k] > 0 {
+                                        fired = false;
+                                    }
+                                    if unstable {
                                         fired = false;
                                     }
                                     let (nv2, nu2) = if fired {
@@ -9527,12 +10404,8 @@ impl Runner {
                         } else {
                             let uo = self.u_o.as_mut().unwrap();
                             for k in 0..num_output_neurons {
-                                let v = self.v_o[k];
-                                let u = uo[k];
-                                let nv = v + p.dt * (0.04 * v * v + 5.0 * v + 140.0 - u + i_o[k]);
-                                let nu = u + p.dt
-                                    * (p.recovery_time_constant_a
-                                        * (p.recovery_sensitivity_b * nv - u));
+                                let (nv, nu, unstable) =
+                                    Self::integrate_izh_step(self.v_o[k], uo[k], i_o[k], p);
                                 let mut fired = nv >= p.v_th;
                                 if use_adaptive_threshold {
                                     let thr_offset = self.thr_offset_o[k].clamp(
@@ -9547,6 +10420,9 @@ impl Runner {
                                             fired = false;
                                         }
                                     }
+                                }
+                                if unstable {
+                                    fired = false;
                                 }
                                 let (nv2, nu2) = if fired {
                                     (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
@@ -10226,6 +11102,10 @@ impl Runner {
                         }
                     }
                 }
+                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                if is_aarnn && matches!(self.learning, Learning::Aarnn) {
+                    self.apply_dendritic_bouton_plasticity_overlay(eta, &s_t);
+                }
             }
         }
         if is_aarnn {
@@ -10233,12 +11113,28 @@ impl Runner {
             self.enforce_dale_constraints();
         }
 
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let rt_policy = realtime_ipc_policy();
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let rt_force_morpho_off =
+            rt_policy.enabled && self.morph.synapses.len() > rt_policy.morpho_safe_max_synapses;
+
         // Growth mechanics: collect and apply spawns
         #[cfg(feature = "growth3d")]
         let mut did_spawn = false;
         #[cfg(feature = "growth3d")]
         {
-            if self.net.growth_enabled {
+            let growth_allowed = {
+                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                {
+                    !(rt_policy.enabled && rt_policy.disable_growth)
+                }
+                #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+                {
+                    true
+                }
+            };
+            if self.net.growth_enabled && growth_allowed {
                 observe_time!("Runner::step/growth");
                 self.collect_growth_candidates();
                 did_spawn = self.apply_growth_queue();
@@ -10273,6 +11169,18 @@ impl Runner {
         {
             observe_time!("Runner::step/morpho");
             let num_layers = self.net.num_hidden_layers;
+            let morpho_allowed = self.net.morpho_growth_enabled
+                && !(rt_policy.enabled && (rt_policy.disable_morpho || rt_force_morpho_off));
+            let metabolic_allowed =
+                !(rt_policy.enabled && (rt_policy.disable_metabolic || rt_force_morpho_off));
+            let pruning_allowed =
+                !(rt_policy.enabled && (rt_policy.disable_pruning || rt_force_morpho_off));
+            if did_spawn && self.morpho_async_rx.is_some() {
+                // Topology changed locally; drop any stale async evolution result.
+                self.morpho_async_rx = None;
+            } else if self.morpho_async_enabled {
+                self.apply_ready_morpho_async_result();
+            }
             if did_spawn {
                 if matches!(self.neuron_model, NeuronModel::Aarnn) {
                     // Preserve existing morphology synapses for AARNN; only refresh maps/delay bounds.
@@ -10285,7 +11193,7 @@ impl Runner {
                 self.released_events.clear();
             }
 
-            if self.net.morpho_growth_enabled {
+            if morpho_allowed {
                 // Update stimuli for synapses that released a spike this frame (Activity-dependent stabilization)
                 let boost = self.net.synaptic_stabilization_strength;
                 for ev in &self.released_events {
@@ -10412,107 +11320,132 @@ impl Runner {
 
                 // Balance morphology evolution frequency based on algorithm depth and load
                 let depth = self.net.aarnn_layer_depth;
-                let morpho_interval = match depth {
+                let mut morpho_interval = match depth {
                     d if d >= 3 => 10.0,
                     2 => 50.0,
                     1 => 200.0,
                     _ => f32::MAX,
                 };
+                if let Some(override_ms) = rt_policy.morpho_interval_override_ms {
+                    morpho_interval = override_ms.max(self.lif.dt as f32);
+                }
                 self.morpho_accumulated_dt += self.lif.dt as f32;
                 if self.morpho_accumulated_dt >= morpho_interval {
-                    self.apply_morpho_evolution(self.morpho_accumulated_dt, sleep_active);
-                    self.morpho_accumulated_dt = 0.0;
+                    let evolve_dt = self.morpho_accumulated_dt;
+                    if self.morpho_async_enabled {
+                        if self.spawn_morpho_evolution_async(evolve_dt, sleep_active) {
+                            self.morpho_accumulated_dt = 0.0;
+                        }
+                    } else {
+                        self.apply_morpho_evolution(evolve_dt, sleep_active);
+                        self.morpho_accumulated_dt = 0.0;
+                    }
                 }
+            } else {
+                self.morpho_accumulated_dt = 0.0;
+                self.morpho_async_rx = None;
             }
 
             // Metabolic updates consume significant CPU; throttle based on depth
-            let metabolic_interval = match self.net.aarnn_layer_depth {
-                d if d >= 3 => 20.0, // every 20ms
-                2 => 100.0,          // every 100ms
+            let mut metabolic_interval = match self.net.aarnn_layer_depth {
+                d if d >= 3 => 20.0,
+                2 => 100.0,
                 _ => f32::MAX,
             };
-            self.metabolic_accumulated_dt += self.lif.dt as f32;
-            if self.metabolic_accumulated_dt >= metabolic_interval {
-                self.apply_metabolic_update(self.metabolic_accumulated_dt);
+            if let Some(override_ms) = rt_policy.metabolic_interval_override_ms {
+                metabolic_interval = override_ms.max(self.lif.dt as f32);
+            }
+            if metabolic_allowed {
+                self.metabolic_accumulated_dt += self.lif.dt as f32;
+                if self.metabolic_accumulated_dt >= metabolic_interval {
+                    self.apply_metabolic_update(self.metabolic_accumulated_dt);
+                    self.metabolic_accumulated_dt = 0.0;
+                }
+            } else {
                 self.metabolic_accumulated_dt = 0.0;
             }
 
-            // Neuron removal check: track time since each hidden neuron last had a bouton/synapse
-            let num_h_layers = self.net.num_hidden_layers;
-            let mut bouton_counts = (0..num_h_layers)
-                .map(|l| vec![0usize; self.layer_size(l)])
-                .collect::<Vec<_>>();
+            if pruning_allowed {
+                // Neuron removal check: track time since each hidden neuron last had a bouton/synapse
+                let num_h_layers = self.net.num_hidden_layers;
+                let mut bouton_counts = (0..num_h_layers)
+                    .map(|l| vec![0usize; self.layer_size(l)])
+                    .collect::<Vec<_>>();
 
-            // 1. Count synapses as functional boutons
-            for syn in &self.morph.synapses {
-                if syn.pre_layer >= 0 && (syn.pre_layer as usize) < num_h_layers {
-                    let pl = syn.pre_layer as usize;
-                    if syn.pre_id < bouton_counts[pl].len() {
-                        bouton_counts[pl][syn.pre_id] += 1;
+                // 1. Count synapses as functional boutons
+                for syn in &self.morph.synapses {
+                    if syn.pre_layer >= 0 && (syn.pre_layer as usize) < num_h_layers {
+                        let pl = syn.pre_layer as usize;
+                        if syn.pre_id < bouton_counts[pl].len() {
+                            bouton_counts[pl][syn.pre_id] += 1;
+                        }
+                    }
+                    if syn.post_layer >= 0 && (syn.post_layer as usize) < num_h_layers {
+                        let pl = syn.post_layer as usize;
+                        if syn.post_id < bouton_counts[pl].len() {
+                            bouton_counts[pl][syn.post_id] += 1;
+                        }
                     }
                 }
-                if syn.post_layer >= 0 && (syn.post_layer as usize) < num_h_layers {
-                    let pl = syn.post_layer as usize;
-                    if syn.post_id < bouton_counts[pl].len() {
-                        bouton_counts[pl][syn.post_id] += 1;
+
+                // 2. Count physical axon/dendrite segments as potential boutons (seeking connections)
+                for l in 0..num_h_layers {
+                    for j in 0..bouton_counts[l].len() {
+                        if l < self.morph.axons.len() && j < self.morph.axons[l].len() {
+                            bouton_counts[l][j] += self.morph.axons[l][j].segments.len();
+                        }
+                        if l < self.morph.dendrites.len() && j < self.morph.dendrites[l].len() {
+                            bouton_counts[l][j] += self.morph.dendrites[l][j].tree.branches.len();
+                        }
                     }
                 }
-            }
 
-            // 2. Count physical axon/dendrite segments as potential boutons (seeking connections)
-            for l in 0..num_h_layers {
-                for j in 0..bouton_counts[l].len() {
-                    if l < self.morph.axons.len() && j < self.morph.axons[l].len() {
-                        bouton_counts[l][j] += self.morph.axons[l][j].segments.len();
-                    }
-                    if l < self.morph.dendrites.len() && j < self.morph.dendrites[l].len() {
-                        bouton_counts[l][j] += self.morph.dendrites[l][j].tree.branches.len();
-                    }
-                }
-            }
-
-            let removal_delay = self.net.neuron_removal_delay_ms;
-            let mut to_remove: Option<(usize, usize)> = None;
-            for l in 0..num_h_layers {
-                for j in 0..bouton_counts[l].len() {
-                    if bouton_counts[l][j] > 0 {
-                        self.since_last_bouton_ms[l][j] = 0.0;
-                    } else {
-                        self.since_last_bouton_ms[l][j] += dt_ms;
-                        if self.since_last_bouton_ms[l][j] >= removal_delay && to_remove.is_none() {
-                            // Only remove if it's not the last hidden neuron
-                            let total_hidden: usize = self.v_h.iter().map(|a| a.len()).sum();
-                            if total_hidden > 1 {
-                                to_remove = Some((l, j));
+                let removal_delay = self.net.neuron_removal_delay_ms;
+                let mut to_remove: Option<(usize, usize)> = None;
+                for l in 0..num_h_layers {
+                    for j in 0..bouton_counts[l].len() {
+                        if bouton_counts[l][j] > 0 {
+                            self.since_last_bouton_ms[l][j] = 0.0;
+                        } else {
+                            self.since_last_bouton_ms[l][j] += dt_ms;
+                            if self.since_last_bouton_ms[l][j] >= removal_delay
+                                && to_remove.is_none()
+                            {
+                                // Only remove if it's not the last hidden neuron
+                                let total_hidden: usize = self.v_h.iter().map(|a| a.len()).sum();
+                                if total_hidden > 1 {
+                                    to_remove = Some((l, j));
+                                }
                             }
                         }
                     }
                 }
-            }
-            if let Some((rl, rj)) = to_remove {
-                self.remove_neuron_in_layer(rl, rj);
-                // Immediate post-structure resync to avoid stale indices in the remainder of this step
-                let (in_l_sync, out_l_sync) = self.get_io_layers();
-                let s_ch = self.ensure_state_dimensions();
-                let w_ch = self.ensure_weight_dimensions(in_l_sync, out_l_sync);
-                if s_ch || w_ch {
-                    self.sync_presence_sizes();
-                }
-                // Ensure spike history frame widths match current layer sizes after removal
-                for l in 0..self.net.num_hidden_layers {
-                    let want = self.layer_size(l);
-                    if let Some(dq) = self.spk_hist_h.get(l) {
-                        if dq.front().map(|a| a.len()).unwrap_or(0) != want {
-                            self.extend_history_frames(l, want);
+
+                if let Some((rl, rj)) = to_remove {
+                    self.remove_neuron_in_layer(rl, rj);
+                    // Immediate post-structure resync to avoid stale indices in the remainder of this step
+                    let (in_l_sync, out_l_sync) = self.get_io_layers();
+                    let s_ch = self.ensure_state_dimensions();
+                    let w_ch = self.ensure_weight_dimensions(in_l_sync, out_l_sync);
+                    if s_ch || w_ch {
+                        self.sync_presence_sizes();
+                    }
+                    // Ensure spike history frame widths match current layer sizes after removal
+                    for l in 0..self.net.num_hidden_layers {
+                        let want = self.layer_size(l);
+                        if let Some(dq) = self.spk_hist_h.get(l) {
+                            if dq.front().map(|a| a.len()).unwrap_or(0) != want {
+                                self.extend_history_frames(l, want);
+                            }
                         }
                     }
+                    if self.spk_hist_s.front().map(|a| a.len()).unwrap_or(0)
+                        != self.net.num_sensory_neurons
+                    {
+                        self.extend_sensory_history(self.net.num_sensory_neurons);
+                    }
+                    self.recalc_hist_len_and_resize();
                 }
-                if self.spk_hist_s.front().map(|a| a.len()).unwrap_or(0)
-                    != self.net.num_sensory_neurons
-                {
-                    self.extend_sensory_history(self.net.num_sensory_neurons);
-                }
-                self.recalc_hist_len_and_resize();
             }
         }
 
@@ -10823,6 +11756,7 @@ impl Runner {
         p: (f32, f32, f32),
         activity_sources: &[(f32, f32, f32, f32)],
         layer_band_x: f32,
+        column_anchor: (f32, f32),
     ) -> f32 {
         let mut energy = self.net.aarnn_ambient_energy_level.max(0.0);
         let kernel = self.net.energy_kernel_k.max(0.05);
@@ -10847,9 +11781,14 @@ impl Runner {
             );
             energy += e.max(0.0);
         }
-        // Very small laminar tie-break to avoid complete x-axis drift in flat-energy cases.
-        let laminar = 1.0 - ((p.0 - layer_band_x).abs() * 0.5).min(1.0);
+        // Small cortical-layer and column tie-breaks to keep AARNN growth aligned.
+        let laminar = 1.0 - ((p.0 - layer_band_x).abs() * 1.5).min(1.0);
+        let dy = p.1 - column_anchor.0;
+        let dz = p.2 - column_anchor.1;
+        let radial = (dy * dy + dz * dz).sqrt();
+        let columnar = 1.0 - (radial * 3.0).min(1.0);
         energy += 1.0e-3 * laminar.max(0.0);
+        energy += 1.0e-3 * columnar.max(0.0);
         (energy * self.spawn_energy_depletion_factor(p)).max(0.0)
     }
 
@@ -10863,7 +11802,9 @@ impl Runner {
         let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
 
         // Laminar placement bias: keep newly spawned neurons close to their cortical layer band.
-        let layer_band_x = if let Some(layer_nodes) = nodes {
+        let layer_band_x = if is_aarnn {
+            self.aarnn_hidden_layer_x(layer)
+        } else if let Some(layer_nodes) = nodes {
             if !layer_nodes.is_empty() {
                 layer_nodes.iter().map(|n| n.x).sum::<f32>() / layer_nodes.len() as f32
             } else {
@@ -10885,6 +11826,11 @@ impl Runner {
             }
         } else {
             base.0
+        };
+        let column_anchor = if is_aarnn {
+            self.aarnn_column_anchor_near(layer, base)
+        } else {
+            (base.1, base.2)
         };
 
         if is_aarnn {
@@ -10910,15 +11856,24 @@ impl Runner {
             } else {
                 2.0 / ((samples_per_axis - 1) as f32)
             };
+            let layer_band_half = self.net.spawn_radius.max(0.03).clamp(0.03, 0.18);
+            let column_radius = self
+                .aarnn_column_spacing_for_count(self.layer_size(layer).saturating_add(1).max(1))
+                .mul_add(0.45, 0.0)
+                .max(self.net.spawn_radius.max(0.02))
+                .clamp(0.04, 0.45);
             let mut best_pos: Option<(f32, f32, f32)> = None;
             let mut best_score = f32::NEG_INFINITY;
             let mut best_tie = f32::INFINITY;
             for ix in 0..samples_per_axis {
-                let nx = (-1.0 + step * ix as f32).clamp(-1.0, 1.0);
+                let ux = (-1.0 + step * ix as f32).clamp(-1.0, 1.0);
                 for iy in 0..samples_per_axis {
-                    let ny = (-1.0 + step * iy as f32).clamp(-1.0, 1.0);
+                    let uy = (-1.0 + step * iy as f32).clamp(-1.0, 1.0);
                     for iz in 0..samples_per_axis {
-                        let nz = (-1.0 + step * iz as f32).clamp(-1.0, 1.0);
+                        let uz = (-1.0 + step * iz as f32).clamp(-1.0, 1.0);
+                        let nx = (layer_band_x + ux * layer_band_half).clamp(-1.0, 1.0);
+                        let ny = (column_anchor.0 + uy * column_radius).clamp(-1.0, 1.0);
+                        let nz = (column_anchor.1 + uz * column_radius).clamp(-1.0, 1.0);
                         let cand = (nx, ny, nz);
                         if !self.point_inside_spawn_volume(nodes, cand) {
                             continue;
@@ -10926,8 +11881,14 @@ impl Runner {
                         if !self.is_aarnn_spawn_space_free(cand, min_sep) {
                             continue;
                         }
-                        let score = self.aarnn_spawn_energy(cand, &activity_sources, layer_band_x);
-                        let tie = Self::dist3(cand, base);
+                        let score = self.aarnn_spawn_energy(
+                            cand,
+                            &activity_sources,
+                            layer_band_x,
+                            column_anchor,
+                        );
+                        let tie =
+                            Self::dist3(cand, (layer_band_x, column_anchor.0, column_anchor.1));
                         if score > best_score + 1.0e-6
                             || ((score - best_score).abs() <= 1.0e-6 && tie < best_tie)
                         {
@@ -10972,14 +11933,22 @@ impl Runner {
         // Fallback deterministic jitter; if skull exists and we're outside, project inward
         #[cfg_attr(not(all(feature = "morpho", feature = "growth3d")), allow(unused_mut))]
         let mut jx = if is_aarnn {
-            (base.0 * 0.35 + layer_band_x * 0.65).clamp(-1.0, 1.0)
+            (layer_band_x + 0.2 * r).clamp(-1.0, 1.0)
         } else {
             (base.0 + 0.5 * r).clamp(-1.0, 1.0)
         };
         #[cfg_attr(not(all(feature = "morpho", feature = "growth3d")), allow(unused_mut))]
-        let mut jy = (base.1 - 0.3 * r).clamp(-1.0, 1.0);
+        let mut jy = if is_aarnn {
+            (column_anchor.0 - 0.15 * r).clamp(-1.0, 1.0)
+        } else {
+            (base.1 - 0.3 * r).clamp(-1.0, 1.0)
+        };
         #[cfg_attr(not(all(feature = "morpho", feature = "growth3d")), allow(unused_mut))]
-        let mut jz = (base.2 + 0.2 * r).clamp(-1.0, 1.0);
+        let mut jz = if is_aarnn {
+            (column_anchor.1 + 0.15 * r).clamp(-1.0, 1.0)
+        } else {
+            (base.2 + 0.2 * r).clamp(-1.0, 1.0)
+        };
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         if self.net.use_morphology {
             if let Some(skull) = self.morph.skull_membrane {
@@ -11096,9 +12065,8 @@ impl Runner {
 
         // Compute maximum distance across current topology for S→H0, H→H, and H_last→O
         let mut max_dist: f32 = 0.0;
-        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-        // Sensory → Hidden (H0 normally, H1 for AARNN)
-        let target_in_layer = if is_aarnn { 1 } else { 0 };
+        // Sensory → Hidden source/target layers follow model-specific IO mapping.
+        let (target_in_layer, target_out_layer) = self.get_io_layers();
         if let Some(layer) = self.topo.layers.get(target_in_layer) {
             for j in 0..layer.len() {
                 let hx = layer[j].x;
@@ -11132,8 +12100,7 @@ impl Runner {
                 }
             }
         }
-        // Hidden → Output (H_last normally, H4 for AARNN)
-        let (_, target_out_layer) = self.get_io_layers();
+        // Hidden → Output
         if let Some(layer) = self.topo.layers.get(target_out_layer) {
             for j in 0..layer.len() {
                 let hx = layer[j].x;
@@ -11483,7 +12450,21 @@ impl Runner {
                     .map(|s| s.pos);
                 let dend = self.morph.dendrites.get(l).and_then(|v| v.get(j));
                 if let (Some(soma), Some(dend)) = (soma, dend) {
-                    if let Some(hub) = find_hub(dend, soma) {
+                    if let Some(seg) = syn.dend_seg_idx.and_then(|dsi| dend.tree.branches.get(dsi))
+                    {
+                        let trunk = seg.trunk_len_from_soma.max(0.0);
+                        if seg.is_trunk {
+                            dist3(
+                                (syn.post_site.x, syn.post_site.y, syn.post_site.z),
+                                (soma.x, soma.y, soma.z),
+                            )
+                        } else {
+                            dist3(
+                                (syn.post_site.x, syn.post_site.y, syn.post_site.z),
+                                (seg.to.x, seg.to.y, seg.to.z),
+                            ) + trunk
+                        }
+                    } else if let Some(hub) = find_hub(dend, soma) {
                         // post_site -> hub + hub -> soma
                         dist3(
                             (syn.post_site.x, syn.post_site.y, syn.post_site.z),
@@ -11500,23 +12481,46 @@ impl Runner {
                     0.0
                 }
             } else if syn.post_layer == l_count_hidden as isize {
-                // output postsynaptic: straight post_site -> output soma from topology
+                // output postsynaptic: use output dendrite trunk metadata when available.
                 let k = syn.post_id as usize;
-                let (ox, oy, oz) = self
-                    .topo
-                    .output_nodes
+                let soma = self.morph.output_somas.get(k).map(|s| s.pos).unwrap_or(
+                    crate::morphology::Point3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                );
+                if let Some(seg) = self
+                    .morph
+                    .output_dendrites
                     .get(k)
-                    .map(|n| (n.x, n.y, n.z))
-                    .unwrap_or((1.0, 0.0, 0.0));
-                dist3(
-                    (syn.post_site.x, syn.post_site.y, syn.post_site.z),
-                    (ox, oy, oz),
-                )
+                    .and_then(|d| syn.dend_seg_idx.and_then(|dsi| d.tree.branches.get(dsi)))
+                {
+                    let trunk = seg.trunk_len_from_soma.max(0.0);
+                    if seg.is_trunk {
+                        dist3(
+                            (syn.post_site.x, syn.post_site.y, syn.post_site.z),
+                            (soma.x, soma.y, soma.z),
+                        )
+                    } else {
+                        dist3(
+                            (syn.post_site.x, syn.post_site.y, syn.post_site.z),
+                            (seg.to.x, seg.to.y, seg.to.z),
+                        ) + trunk
+                    }
+                } else {
+                    dist3(
+                        (syn.post_site.x, syn.post_site.y, syn.post_site.z),
+                        (soma.x, soma.y, soma.z),
+                    )
+                }
             } else {
                 0.0
             };
             self.syn_den_len[si] = den_len;
         }
+
+        self.refresh_syn_path_len_scale();
 
         // Recompute history length upper bound from max total delay
         #[cfg(feature = "growth3d")]
@@ -11609,11 +12613,26 @@ impl Runner {
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
-    fn apply_morpho_evolution(&mut self, dt: f32, sleep_active: bool) {
-        if !self.net.morpho_growth_enabled {
-            return;
+    #[inline]
+    fn refresh_syn_path_len_scale(&mut self) {
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+        for (&ax, &den) in self.syn_ax_len.iter().zip(self.syn_den_len.iter()) {
+            let total = (ax + den) as f64;
+            if total.is_finite() && total > 1.0e-6 {
+                sum += total;
+                count += 1;
+            }
         }
-        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+        self.syn_path_len_scale = if count > 0 {
+            (sum / count as f64).max(1.0e-3) as f32
+        } else {
+            1.0
+        };
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn build_morpho_net_view(&self, sleep_active: bool) -> NetworkConfig {
         let mut net_view = self.net.clone();
         if sleep_active && self.net.sleep_enabled {
             let gain = self.net.sleep_consolidation_gain.clamp(0.0, 1.0);
@@ -11622,14 +12641,11 @@ impl Runner {
                 net_view.synaptic_consolidation_factor = boosted;
             }
         }
-        let res = self.morph.evolve(
-            &net_view,
-            is_aarnn,
-            dt,
-            #[cfg(feature = "opencl")]
-            self.cl.as_ref(),
-        );
+        net_view
+    }
 
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn apply_morpho_evolution_result(&mut self, res: EvolutionResult) {
         let mut changed = false;
         let (in_l, out_l) = self.get_io_layers();
         // Handle new connections
@@ -11763,6 +12779,88 @@ impl Runner {
                 self.topo.output_nodes[k].z = soma.pos.z;
             }
         }
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn apply_ready_morpho_async_result(&mut self) {
+        let Some(rx) = self.morpho_async_rx.as_ref().cloned() else {
+            return;
+        };
+        let recv_res = match rx.lock() {
+            Ok(guard) => guard.try_recv(),
+            Err(_) => {
+                nm_log!("[warn] morphology async receiver lock poisoned");
+                self.morpho_async_rx = None;
+                return;
+            }
+        };
+        let done = match recv_res {
+            Ok(done) => Some(done),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                nm_log!("[warn] morphology async worker disconnected before delivering result");
+                self.morpho_async_rx = None;
+                None
+            }
+        };
+
+        if let Some(done) = done {
+            self.morpho_async_rx = None;
+            self.morph = done.morph;
+            self.apply_morpho_evolution_result(done.res);
+            self.morpho_async_seq = done.seq;
+        }
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn spawn_morpho_evolution_async(&mut self, dt: f32, sleep_active: bool) -> bool {
+        if !self.net.morpho_growth_enabled || self.morpho_async_rx.is_some() {
+            return false;
+        }
+        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+        let net_view = self.build_morpho_net_view(sleep_active);
+        let morph = self.morph.clone();
+        let seq = self.morpho_async_seq.wrapping_add(1);
+        self.morpho_async_seq = seq;
+        let (tx, rx) = mpsc::channel::<MorphoAsyncResult>();
+        self.morpho_async_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
+
+        std::thread::spawn(move || {
+            let mut morph_local = morph;
+            let res = {
+                #[cfg(feature = "opencl")]
+                {
+                    morph_local.evolve(&net_view, is_aarnn, dt, None)
+                }
+                #[cfg(not(feature = "opencl"))]
+                {
+                    morph_local.evolve(&net_view, is_aarnn, dt)
+                }
+            };
+            let _ = tx.send(MorphoAsyncResult {
+                seq,
+                morph: morph_local,
+                res,
+            });
+        });
+        true
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn apply_morpho_evolution(&mut self, dt: f32, sleep_active: bool) {
+        if !self.net.morpho_growth_enabled {
+            return;
+        }
+        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+        let net_view = self.build_morpho_net_view(sleep_active);
+        let res = self.morph.evolve(
+            &net_view,
+            is_aarnn,
+            dt,
+            #[cfg(feature = "opencl")]
+            self.cl.as_ref(),
+        );
+        self.apply_morpho_evolution_result(res);
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -11933,6 +13031,84 @@ impl Runner {
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     #[inline]
+    fn syn_post_dendrite_profile(
+        &self,
+        syn: &crate::morphology::Synapse,
+    ) -> (crate::morphology::DendriteType, f32) {
+        let mut dend_type = crate::morphology::DendriteType::Generic;
+        let mut trunk_len = 0.0f32;
+        let Some(dsi) = syn.dend_seg_idx else {
+            return (dend_type, trunk_len);
+        };
+
+        match syn.post_layer {
+            l if l >= 0 && (l as usize) < self.morph.dendrites.len() => {
+                if let Some(seg) = self
+                    .morph
+                    .dendrites
+                    .get(l as usize)
+                    .and_then(|layer| layer.get(syn.post_id))
+                    .and_then(|d| d.tree.branches.get(dsi))
+                {
+                    dend_type = seg.dendrite_type;
+                    trunk_len = seg.trunk_len_from_soma.max(0.0);
+                }
+            }
+            l if l == self.net.num_hidden_layers as isize => {
+                if let Some(seg) = self
+                    .morph
+                    .output_dendrites
+                    .get(syn.post_id)
+                    .and_then(|d| d.tree.branches.get(dsi))
+                {
+                    dend_type = seg.dendrite_type;
+                    trunk_len = seg.trunk_len_from_soma.max(0.0);
+                }
+            }
+            _ => {}
+        }
+
+        (dend_type, trunk_len)
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[inline]
+    fn dendrite_compartment_params(
+        &self,
+        dend_type: crate::morphology::DendriteType,
+    ) -> (f64, f64, f64) {
+        let (forward_gain, bap_gain, hebb_mix) = match dend_type {
+            crate::morphology::DendriteType::Apical => (
+                self.net.aarnn_apical_forward_gain as f64,
+                self.net.aarnn_apical_bap_gain as f64,
+                self.net.aarnn_apical_hebbian_mix as f64,
+            ),
+            crate::morphology::DendriteType::Basal => (
+                self.net.aarnn_basal_forward_gain as f64,
+                self.net.aarnn_basal_bap_gain as f64,
+                self.net.aarnn_basal_hebbian_mix as f64,
+            ),
+            crate::morphology::DendriteType::Generic => {
+                let forward = 0.5
+                    * ((self.net.aarnn_apical_forward_gain + self.net.aarnn_basal_forward_gain)
+                        as f64);
+                let bap =
+                    0.5 * ((self.net.aarnn_apical_bap_gain + self.net.aarnn_basal_bap_gain) as f64);
+                let mix = 0.5
+                    * ((self.net.aarnn_apical_hebbian_mix + self.net.aarnn_basal_hebbian_mix)
+                        as f64);
+                (forward, bap, mix)
+            }
+        };
+        (
+            forward_gain.max(0.05),
+            bap_gain.max(0.05),
+            hebb_mix.clamp(0.0, 1.0),
+        )
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[inline]
     pub fn syn_delay_and_atten(&self, syn_idx: usize) -> (usize, f64) {
         let depth = self.net.aarnn_layer_depth;
         let ax_steps = self.syn_ax_steps.get(syn_idx).copied().unwrap_or(0);
@@ -11949,7 +13125,26 @@ impl Runner {
             let ax_len = self.syn_ax_len.get(syn_idx).copied().unwrap_or(0.0) as f64;
             let den_len = self.syn_den_len.get(syn_idx).copied().unwrap_or(0.0) as f64;
             let dist = (ax_len + den_len).max(0.0);
-            atten = (-atten_k * dist).exp().clamp(1.0e-4, 1.0);
+            let dist_scale = self.syn_path_len_scale.max(1.0e-3) as f64;
+            let normalized_dist = if dist > 0.0 { dist / dist_scale } else { 0.0 };
+            atten = (-atten_k * normalized_dist).exp().clamp(1.0e-2, 1.0);
+        }
+        if let Some(syn) = self.morph.synapses.get(syn_idx) {
+            let (dend_type, trunk_len) = self.syn_post_dendrite_profile(syn);
+            let (forward_gain, bap_gain, _) = self.dendrite_compartment_params(dend_type);
+            let trunk_scale = self.syn_path_len_scale.max(1.0e-3);
+            let trunk_norm = (trunk_len / trunk_scale).max(0.0) as f64;
+            atten *= forward_gain.clamp(0.25, 3.0);
+            if matches!(syn.kind, crate::morphology::SynKind::HiddenBwd) {
+                atten *= bap_gain.clamp(0.25, 3.0);
+                steps = ((steps as f64) / bap_gain.max(1.0e-3)).round() as usize;
+            }
+            let trunk_delay = match dend_type {
+                crate::morphology::DendriteType::Apical => 1.0 + 0.45 * trunk_norm,
+                crate::morphology::DendriteType::Basal => 1.0 + 0.20 * trunk_norm,
+                crate::morphology::DendriteType::Generic => 1.0 + 0.30 * trunk_norm,
+            };
+            steps = ((steps as f64) * trunk_delay.max(0.1)).round() as usize;
         }
         if self.net.aarnn_myelination_enabled {
             let m = self
@@ -12036,6 +13231,235 @@ impl Runner {
         let jitter = (s * (max_j as f32)).round() as i32;
         let val = (steps as i32 + jitter).max(0);
         val as usize
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn apply_dendritic_bouton_plasticity_overlay(&mut self, eta: f64, s_t: &[i8]) {
+        if !self.net.use_morphology || !matches!(self.learning, Learning::Aarnn) {
+            return;
+        }
+        if eta == 0.0 || self.morph.synapses.is_empty() {
+            return;
+        }
+        let w_min = self.stdp.w_min;
+        let w_max = self.stdp.w_max;
+        let hebb_gain = self.net.aarnn_bouton_hebbian_gain.max(0.0) as f64;
+        let nonhebb_gain = self.net.aarnn_bouton_non_hebbian_gain.max(0.0) as f64;
+        if hebb_gain <= 0.0 && nonhebb_gain <= 0.0 {
+            return;
+        }
+        let dist_scale = self.syn_path_len_scale.max(1.0e-3) as f64;
+
+        for si in 0..self.morph.synapses.len() {
+            let syn = self.morph.synapses[si];
+            let (dend_type, trunk_len) = self.syn_post_dendrite_profile(&syn);
+            let (_, bap_gain, hebb_mix) = self.dendrite_compartment_params(dend_type);
+            let nonhebb_mix = 1.0 - hebb_mix;
+            let trunk_norm = (trunk_len as f64 / dist_scale).max(0.0);
+            let spine_mod = (1.0 / (1.0 + 0.35 * trunk_norm)).clamp(0.25, 1.5);
+            let bap_mod = if matches!(syn.kind, crate::morphology::SynKind::HiddenBwd) {
+                bap_gain.clamp(0.25, 3.0)
+            } else {
+                1.0
+            };
+
+            let apply_delta =
+                |w: &mut f64, pre_spk: i8, post_spk: i8, pre_trace: f64, post_trace: f64| {
+                    let pre = if pre_spk != 0 { 1.0 } else { 0.0 };
+                    let post = if post_spk != 0 { 1.0 } else { 0.0 };
+                    if pre == 0.0
+                        && post == 0.0
+                        && pre_trace.abs() < 1.0e-9
+                        && post_trace.abs() < 1.0e-9
+                    {
+                        return;
+                    }
+                    let hebb_term = post * pre;
+                    let stdp_term = (post * pre_trace) - (post_trace * pre);
+                    let oja_term = (post * pre) - (post * post) * *w;
+                    let nonhebb_term = 0.5 * stdp_term + 0.5 * oja_term;
+                    let delta = eta
+                        * spine_mod
+                        * bap_mod
+                        * ((hebb_mix * hebb_gain * hebb_term)
+                            + (nonhebb_mix * nonhebb_gain * nonhebb_term));
+                    *w = (*w + delta).clamp(w_min, w_max);
+                };
+
+            match syn.kind {
+                crate::morphology::SynKind::In => {
+                    if syn.post_layer < 0 {
+                        continue;
+                    }
+                    let l = syn.post_layer as usize;
+                    let j = syn.post_id;
+                    let i = syn.pre_id;
+                    if j < self.w_in.nrows() && i < self.w_in.ncols() {
+                        let pre_spk = s_t.get(i).copied().unwrap_or(0);
+                        let post_spk = self
+                            .last_spk_h
+                            .get(l)
+                            .and_then(|v| v.get(j))
+                            .copied()
+                            .unwrap_or(0);
+                        let pre_trace = self.x_pre_in.get(i).copied().unwrap_or(0.0);
+                        let post_trace = self
+                            .x_post_h
+                            .get(l)
+                            .and_then(|v| v.get(j))
+                            .copied()
+                            .unwrap_or(0.0);
+                        if let Some(w) = self.w_in.get_mut((j, i)) {
+                            apply_delta(w, pre_spk, post_spk, pre_trace, post_trace);
+                        }
+                    }
+                }
+                crate::morphology::SynKind::HiddenFwd => {
+                    if syn.pre_layer < 0 || syn.post_layer < 0 {
+                        continue;
+                    }
+                    let l = syn.pre_layer as usize;
+                    let i = syn.pre_id;
+                    let j = syn.post_id;
+                    if let Some(mat) = self.w_hh_fwd.get_mut(l) {
+                        if j < mat.nrows() && i < mat.ncols() {
+                            let pre_spk = self
+                                .last_spk_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0);
+                            let post_spk = self
+                                .last_spk_h
+                                .get(l + 1)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0);
+                            let pre_trace = self
+                                .x_pre_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0.0);
+                            let post_trace = self
+                                .x_post_h
+                                .get(l + 1)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0.0);
+                            if let Some(w) = mat.get_mut((j, i)) {
+                                apply_delta(w, pre_spk, post_spk, pre_trace, post_trace);
+                            }
+                        }
+                    }
+                }
+                crate::morphology::SynKind::HiddenBwd => {
+                    if syn.pre_layer < 0 || syn.post_layer < 0 {
+                        continue;
+                    }
+                    let l = syn.post_layer as usize;
+                    let i = syn.post_id;
+                    let j = syn.pre_id;
+                    if let Some(mat) = self.w_hh_bwd.get_mut(l) {
+                        if i < mat.nrows() && j < mat.ncols() {
+                            let pre_spk = self
+                                .last_spk_h
+                                .get(l + 1)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0);
+                            let post_spk = self
+                                .last_spk_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0);
+                            let pre_trace = self
+                                .x_pre_h
+                                .get(l + 1)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0.0);
+                            let post_trace = self
+                                .x_post_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0.0);
+                            if let Some(w) = mat.get_mut((i, j)) {
+                                apply_delta(w, pre_spk, post_spk, pre_trace, post_trace);
+                            }
+                        }
+                    }
+                }
+                crate::morphology::SynKind::HiddenRec => {
+                    if syn.pre_layer < 0 {
+                        continue;
+                    }
+                    let l = syn.pre_layer as usize;
+                    let i = syn.pre_id;
+                    let j = syn.post_id;
+                    if let Some(mat) = self.w_hh_rec.get_mut(l) {
+                        if j < mat.nrows() && i < mat.ncols() {
+                            let pre_spk = self
+                                .last_spk_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0);
+                            let post_spk = self
+                                .last_spk_h
+                                .get(l)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0);
+                            let pre_trace = self
+                                .x_pre_h
+                                .get(l)
+                                .and_then(|v| v.get(i))
+                                .copied()
+                                .unwrap_or(0.0);
+                            let post_trace = self
+                                .x_post_h
+                                .get(l)
+                                .and_then(|v| v.get(j))
+                                .copied()
+                                .unwrap_or(0.0);
+                            if let Some(w) = mat.get_mut((j, i)) {
+                                apply_delta(w, pre_spk, post_spk, pre_trace, post_trace);
+                            }
+                        }
+                    }
+                }
+                crate::morphology::SynKind::Out => {
+                    if syn.pre_layer < 0 {
+                        continue;
+                    }
+                    let l = syn.pre_layer as usize;
+                    let j = syn.pre_id;
+                    let k = syn.post_id;
+                    if k < self.w_out.nrows() && j < self.w_out.ncols() {
+                        let pre_spk = self
+                            .last_spk_h
+                            .get(l)
+                            .and_then(|v| v.get(j))
+                            .copied()
+                            .unwrap_or(0);
+                        let post_spk = self.last_spk_o.get(k).copied().unwrap_or(0);
+                        let pre_trace = self
+                            .x_pre_h
+                            .get(l)
+                            .and_then(|v| v.get(j))
+                            .copied()
+                            .unwrap_or(0.0);
+                        let post_trace = self.x_post_o.get(k).copied().unwrap_or(0.0);
+                        if let Some(w) = self.w_out.get_mut((k, j)) {
+                            apply_delta(w, pre_spk, post_spk, pre_trace, post_trace);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[inline]
@@ -13228,6 +14652,125 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    fn ensure_aarnn_l23_to_l4_projection_floor(&mut self) -> bool {
+        if !matches!(self.neuron_model, NeuronModel::Aarnn) {
+            return false;
+        }
+        // Canonical laminar mapping in this model is:
+        // H0 ~ L2/3, H1 ~ L4, H2 ~ L5 ...
+        // Sensory typically targets H1 (L4), and we ensure L4 can also receive
+        // axonal drive from H0 (L2/3), including both nearby and distant columns.
+        let (l4_layer, _) = self.get_io_layers();
+        if l4_layer == 0 {
+            return false;
+        }
+        let l23_layer = l4_layer - 1;
+        if l23_layer >= self.w_hh_fwd.len() || l23_layer >= self.w_hh_bwd.len() {
+            return false;
+        }
+
+        let pre_n = self
+            .layer_size(l23_layer)
+            .min(self.w_hh_fwd[l23_layer].ncols())
+            .min(self.w_hh_bwd[l23_layer].nrows());
+        let post_n = self
+            .layer_size(l4_layer)
+            .min(self.w_hh_fwd[l23_layer].nrows())
+            .min(self.w_hh_bwd[l23_layer].ncols());
+        if pre_n == 0 || post_n == 0 {
+            return false;
+        }
+
+        let spacing = self.aarnn_column_spacing_for_count(pre_n.max(post_n));
+        let local_threshold = (spacing * 1.1).max(0.08);
+        let distant_threshold = (spacing * 2.0).max(local_threshold + 0.05);
+        let pre_nodes = self.topo.layers.get(l23_layer);
+        let post_nodes = self.topo.layers.get(l4_layer);
+
+        let mut changed = false;
+        for post_j in 0..post_n {
+            let post_pos = post_nodes.and_then(|v| v.get(post_j)).map(|n| (n.y, n.z));
+            let mut candidates: Vec<(usize, f32)> = (0..pre_n)
+                .map(|pre_i| {
+                    let dist = match (
+                        pre_nodes.and_then(|v| v.get(pre_i)).map(|n| (n.y, n.z)),
+                        post_pos,
+                    ) {
+                        (Some((py, pz)), Some((qy, qz))) => {
+                            let dy = py - qy;
+                            let dz = pz - qz;
+                            (dy * dy + dz * dz).sqrt()
+                        }
+                        _ => (pre_i as f32 - post_j as f32).abs(),
+                    };
+                    (pre_i, dist)
+                })
+                .collect();
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let mut has_local = false;
+            let mut has_distant = false;
+            for (pre_i, dist) in &candidates {
+                if self.w_hh_fwd[l23_layer][(post_j, *pre_i)].abs() <= 1e-12 {
+                    continue;
+                }
+                if *dist <= local_threshold {
+                    has_local = true;
+                }
+                if *dist >= distant_threshold {
+                    has_distant = true;
+                }
+            }
+
+            if !has_local {
+                if let Some((pre_i, _)) = candidates
+                    .iter()
+                    .find(|(pre_i, dist)| {
+                        *dist <= local_threshold
+                            && self.w_hh_fwd[l23_layer][(post_j, *pre_i)].abs() <= 1e-12
+                    })
+                    .or_else(|| {
+                        candidates.iter().find(|(pre_i, _)| {
+                            self.w_hh_fwd[l23_layer][(post_j, *pre_i)].abs() <= 1e-12
+                        })
+                    })
+                    .copied()
+                {
+                    let w = (fastrand::f64() * 0.25 + 0.10).clamp(self.stdp.w_min, self.stdp.w_max);
+                    self.w_hh_fwd[l23_layer][(post_j, pre_i)] = w;
+                    self.w_hh_bwd[l23_layer][(pre_i, post_j)] = w;
+                    changed = true;
+                    has_local = true;
+                }
+            }
+
+            if pre_n > 1 && has_local && !has_distant {
+                if let Some((pre_i, _)) = candidates
+                    .iter()
+                    .rev()
+                    .find(|(pre_i, dist)| {
+                        *dist >= distant_threshold
+                            && self.w_hh_fwd[l23_layer][(post_j, *pre_i)].abs() <= 1e-12
+                    })
+                    .or_else(|| {
+                        candidates.iter().rev().find(|(pre_i, _)| {
+                            self.w_hh_fwd[l23_layer][(post_j, *pre_i)].abs() <= 1e-12
+                        })
+                    })
+                    .copied()
+                {
+                    let w = (fastrand::f64() * 0.20 + 0.08).clamp(self.stdp.w_min, self.stdp.w_max);
+                    self.w_hh_fwd[l23_layer][(post_j, pre_i)] = w;
+                    self.w_hh_bwd[l23_layer][(pre_i, post_j)] = w;
+                    changed = true;
+                }
+            }
+        }
+
+        changed
+    }
+
+    #[cfg(feature = "growth3d")]
     fn ensure_sparse_io_connectivity_floor(&mut self) {
         // Morphology-driven runs maintain canonical synapses in `morph.synapses`.
         // The morphology evolve path enforces the same floor there.
@@ -13241,7 +14784,7 @@ impl Runner {
             return;
         }
 
-        let mut changed = false;
+        let mut changed = self.ensure_aarnn_l23_to_l4_projection_floor();
         let sensory_min_required = 1usize;
         let output_min_required = 1usize;
         let sensory_cap = if self.net.max_sensory_connections == 0 {
@@ -15410,6 +16953,74 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "growth3d")]
+    fn import_network_json_preserves_snapshot_topology() {
+        let mut r = mk_runner();
+        let mut snap = r.snapshot();
+        let topo = snap
+            .topo
+            .as_mut()
+            .expect("snapshot should include topology when growth3d is enabled");
+        assert!(
+            !topo.layers.is_empty() && !topo.layers[0].is_empty(),
+            "default topology should have at least one hidden node"
+        );
+        topo.layers[0][0].x = 0.777;
+        topo.layers[0][0].y = -0.123;
+        topo.layers[0][0].z = 0.456;
+
+        let json = serde_json::to_string(&snap).expect("serialize snapshot");
+        r.import_network_json(&json).expect("import snapshot");
+
+        let node = &r.topo.layers[0][0];
+        assert!(
+            (node.x - 0.777).abs() < 1.0e-6
+                && (node.y + 0.123).abs() < 1.0e-6
+                && (node.z - 0.456).abs() < 1.0e-6,
+            "imported topology was overwritten during reset"
+        );
+    }
+
+    #[test]
+    fn import_network_json_backfills_species_profile_only_for_missing_fields() {
+        let mut r = mk_runner();
+        let mut snap = r.snapshot();
+        snap.net.growth_enabled = false;
+        snap.net.aarnn_import_topology_rewire_enabled = false;
+        snap.net.aarnn_import_topology_rewire_keep_fraction = 1.0;
+        snap.net.aarnn_import_topology_rewire_region_bias = 0.0;
+
+        let mut value = serde_json::to_value(&snap).expect("serialize test snapshot");
+        let root = value
+            .as_object_mut()
+            .expect("snapshot serde value should be object");
+        let net_obj = root
+            .get_mut("net")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("snapshot net should be object");
+
+        // Explicit field present in JSON must stay authoritative.
+        net_obj.insert("growth_enabled".to_string(), serde_json::json!(false));
+        // Missing fields should be backfilled from profile metadata.
+        net_obj.remove("aarnn_import_topology_rewire_enabled");
+        net_obj.remove("aarnn_import_topology_rewire_keep_fraction");
+        net_obj.remove("aarnn_import_topology_rewire_region_bias");
+        root.insert(
+            "connectome_labels".to_string(),
+            serde_json::json!({ "dataset": "BANC v626" }),
+        );
+
+        let json = serde_json::to_string(&value).expect("serialize profile-backed snapshot");
+        r.import_network_json(&json)
+            .expect("import snapshot with profile backfill");
+
+        assert!(!r.net.growth_enabled);
+        assert!(r.net.aarnn_import_topology_rewire_enabled);
+        assert!((r.net.aarnn_import_topology_rewire_keep_fraction - 0.78).abs() < 1.0e-6);
+        assert!((r.net.aarnn_import_topology_rewire_region_bias - 0.24).abs() < 1.0e-6);
+    }
+
+    #[test]
     fn same_layer_spawn_updates_shapes() {
         let mut r = mk_runner();
         assert_eq!(r.net.num_hidden_layers, 1);
@@ -15589,6 +17200,80 @@ mod tests {
                 k,
                 c,
                 r.net.max_output_connections.max(1)
+            );
+        }
+    }
+
+    #[test]
+    fn test_aarnn_l4_receives_l23_local_and_distant_column_input() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_layers = 2;
+        net.num_hidden_per_layer_initial = 4;
+        net.num_sensory_neurons = 2;
+        net.num_output_neurons = 1;
+        net.sensory_target_layer = Some(1); // L4
+        net.output_source_layer = Some(1); // L4 -> output for this compact test
+
+        let mut r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        assert_eq!(r.layer_size(0), 4);
+        assert_eq!(r.layer_size(1), 4);
+
+        // Spread columns so local and distant projections are unambiguous.
+        let l23_y = [-0.9f32, -0.3, 0.3, 0.9];
+        let l4_y = [-0.8f32, -0.2, 0.2, 0.8];
+        for i in 0..4 {
+            r.topo.layers[0][i].y = l23_y[i];
+            r.topo.layers[0][i].z = 0.0;
+            r.topo.layers[1][i].y = l4_y[i];
+            r.topo.layers[1][i].z = 0.0;
+        }
+
+        // Remove existing L2/3->L4 weights and let floor logic rebuild.
+        r.w_hh_fwd[0].fill(0.0);
+        r.w_hh_bwd[0].fill(0.0);
+        r.ensure_sparse_io_connectivity_floor();
+
+        let spacing = r.aarnn_column_spacing_for_count(4);
+        let local_threshold = (spacing * 1.1).max(0.08);
+        let distant_threshold = (spacing * 2.0).max(local_threshold + 0.05);
+        for post_j in 0..4 {
+            let mut local_found = false;
+            let mut distant_found = false;
+            let mut total = 0usize;
+            for pre_i in 0..4 {
+                let w = r.w_hh_fwd[0][(post_j, pre_i)];
+                if w.abs() <= 1e-12 {
+                    continue;
+                }
+                total += 1;
+                assert!(
+                    (w - r.w_hh_bwd[0][(pre_i, post_j)]).abs() <= 1e-12,
+                    "forward/backward mirror should stay consistent"
+                );
+                let dy = r.topo.layers[0][pre_i].y - r.topo.layers[1][post_j].y;
+                let dz = r.topo.layers[0][pre_i].z - r.topo.layers[1][post_j].z;
+                let dist = (dy * dy + dz * dz).sqrt();
+                if dist <= local_threshold {
+                    local_found = true;
+                }
+                if dist >= distant_threshold {
+                    distant_found = true;
+                }
+            }
+            assert!(total >= 1, "L4 neuron {} should receive L2/3 input", post_j);
+            assert!(
+                local_found,
+                "L4 neuron {} should include same-column/nearby L2/3 input",
+                post_j
+            );
+            assert!(
+                distant_found,
+                "L4 neuron {} should include distant-column L2/3 input",
+                post_j
             );
         }
     }
@@ -15909,6 +17594,80 @@ mod tests {
     }
 
     #[test]
+    fn test_non_aarnn_topology_remains_left_to_right() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = false;
+        net.num_hidden_layers = 3;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_sensory_neurons = 4;
+        net.num_output_neurons = 2;
+
+        let r = Runner::new(lif, stdp, net, NeuronModel::Lif, Learning::Stdp);
+        assert!(r.topo.layers.len() >= 3);
+        let x0 = r.topo.layers[0][0].x;
+        let x1 = r.topo.layers[1][0].x;
+        let x2 = r.topo.layers[2][0].x;
+        assert!(
+            x0 < x1 && x1 < x2,
+            "non-AARNN hidden layers should remain left-to-right"
+        );
+        for layer in &r.topo.layers {
+            for n in layer {
+                assert!(n.z.abs() <= 1.0e-6, "non-AARNN default z should stay flat");
+            }
+        }
+    }
+
+    #[test]
+    fn test_aarnn_topology_uses_laminar_columns() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_layers = 6;
+        net.num_hidden_per_layer_initial = 4;
+        net.num_sensory_neurons = 4;
+        net.num_output_neurons = 4;
+
+        let r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let (in_l, out_l) = r.get_io_layers();
+
+        assert!(
+            r.topo.layers[0][0].x < r.topo.layers[1][0].x,
+            "AARNN cortical depth should increase with layer index"
+        );
+        assert!(
+            r.topo.layers[1][0].x < r.topo.layers[2][0].x,
+            "AARNN cortical depth should increase with layer index"
+        );
+
+        let mut y_span = 0.0f32;
+        let mut z_span = 0.0f32;
+        for n in &r.topo.layers[0] {
+            y_span = y_span.max(n.y.abs());
+            z_span = z_span.max(n.z.abs());
+        }
+        assert!(y_span > 0.0, "AARNN columns should spread laterally on y");
+        assert!(z_span > 0.0, "AARNN columns should spread laterally on z");
+
+        let in_x = r.topo.layers[in_l][0].x;
+        let out_x = r.topo.layers[out_l][0].x;
+        let sens_x = r.topo.sensory_nodes[0].x;
+        let motor_x = r.topo.output_nodes[0].x;
+        assert!(
+            sens_x < in_x,
+            "sensory nodes should sit before the sensory-target cortical layer"
+        );
+        assert!(
+            motor_x > out_x,
+            "output nodes should sit after the motor/output cortical layer"
+        );
+    }
+
+    #[test]
     fn test_aarnn_spawn_energy_placement_and_halving() {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
@@ -15937,10 +17696,20 @@ mod tests {
         // Spawn from the low-energy parent; placement should move toward the energy-rich side.
         r.spawn_neuron_l0(0);
         let new_node = r.topo.layers[0][2].clone();
+        let parent = r.topo.layers[0][0].clone();
+        let hot = r.topo.layers[0][1].clone();
+        let d_parent_hot =
+            ((parent.x - hot.x).powi(2) + (parent.y - hot.y).powi(2) + (parent.z - hot.z).powi(2))
+                .sqrt();
+        let d_new_hot = ((new_node.x - hot.x).powi(2)
+            + (new_node.y - hot.y).powi(2)
+            + (new_node.z - hot.z).powi(2))
+        .sqrt();
         assert!(
-            new_node.x > 0.2,
-            "Expected spawn near energetic region (x>0.2), got x={}",
-            new_node.x
+            d_new_hot < d_parent_hot,
+            "Expected spawn to move closer to energetic region (d_new={}, d_parent={})",
+            d_new_hot,
+            d_parent_hot
         );
 
         // New spawn should consume local energy (halve at center).
@@ -16901,5 +18670,338 @@ mod tests {
         r.x_post_h[0][0] = 0.0;
         r.update_activity_dependent_myelination(50.0);
         assert!(r.syn_myelin[0] < after_growth);
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn test_apical_bap_gain_changes_delay_and_attenuation() {
+        use crate::morphology::{
+            DendSeg, Dendrite, DendriteType, DendriticTree, Point3, SynKind, Synapse,
+        };
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_apical_bap_gain = 2.0;
+        net.aarnn_basal_bap_gain = 0.5;
+        net.aarnn_apical_forward_gain = 1.0;
+        net.aarnn_basal_forward_gain = 1.0;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        if r.morph.dendrites.is_empty() {
+            r.morph.dendrites.push(Vec::new());
+        }
+        if r.morph.dendrites[0].is_empty() {
+            r.morph.dendrites[0].push(Dendrite {
+                neuron_layer: 0,
+                neuron_id: 0,
+                tree: DendriticTree {
+                    branches: Vec::new(),
+                },
+                stimuli: 0.0,
+                atp: 1.0,
+                organelles: Vec::new(),
+            });
+        }
+        r.morph.dendrites[0][0].tree.branches = vec![DendSeg {
+            from: Point3 {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+            },
+            to: Point3::default(),
+            length: 0.2,
+            dendrite_type: DendriteType::Apical,
+            trunk_len_from_soma: 0.2,
+            stimuli: 0.0,
+            parent_idx: None,
+            syn_index: None,
+            is_trunk: true,
+        }];
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::HiddenBwd,
+            pre_layer: 1,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3 {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+            },
+            axon_seg_idx: None,
+            dend_seg_idx: Some(0),
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_ax_steps = vec![12];
+        r.syn_den_steps = vec![6];
+        r.syn_ax_len = vec![0.0];
+        r.syn_den_len = vec![0.0];
+
+        let (apical_steps, apical_atten) = r.syn_delay_and_atten(0);
+        r.morph.dendrites[0][0].tree.branches[0].dendrite_type = DendriteType::Basal;
+        let (basal_steps, basal_atten) = r.syn_delay_and_atten(0);
+
+        assert!(
+            apical_steps < basal_steps,
+            "apical bAP gain should speed bAP delay"
+        );
+        assert!(
+            apical_atten > basal_atten,
+            "apical bAP gain should increase effective attenuation gain"
+        );
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn test_bouton_overlay_supports_non_hebbian_updates() {
+        use crate::morphology::{
+            DendSeg, Dendrite, DendriteType, DendriticTree, Point3, SynKind, Synapse,
+        };
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.use_morphology = true;
+        net.aarnn_layer_depth = 2;
+        net.num_sensory_neurons = 1;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_output_neurons = 0;
+        net.aarnn_bouton_hebbian_gain = 0.0;
+        net.aarnn_bouton_non_hebbian_gain = 1.0;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.w_in = Array2::from_shape_vec((1, 1), vec![0.2]).unwrap();
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::In,
+            pre_layer: -1,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: Some(0),
+            bend: None,
+            weight: 0.2,
+            p_release: 1.0,
+            delay_ms: 0.0,
+            stimuli: 1.0,
+        }];
+        r.morph.dendrites = vec![vec![Dendrite {
+            neuron_layer: 0,
+            neuron_id: 0,
+            tree: DendriticTree {
+                branches: vec![DendSeg {
+                    from: Point3::default(),
+                    to: Point3::default(),
+                    length: 0.1,
+                    dendrite_type: DendriteType::Apical,
+                    trunk_len_from_soma: 0.1,
+                    stimuli: 0.0,
+                    parent_idx: None,
+                    syn_index: Some(0),
+                    is_trunk: true,
+                }],
+            },
+            stimuli: 0.0,
+            atp: 1.0,
+            organelles: Vec::new(),
+        }]];
+
+        r.last_spk_h = vec![Array1::from_vec(vec![1])];
+        r.x_pre_in = Array1::from_vec(vec![1.0]);
+        r.x_post_h = vec![Array1::from_vec(vec![0.0])];
+
+        r.apply_dendritic_bouton_plasticity_overlay(0.1, &[0]);
+        let after_non_hebb = r.w_in[(0, 0)];
+        assert!(
+            after_non_hebb > 0.2,
+            "non-hebbian bouton term should potentiate from traces"
+        );
+
+        r.w_in[(0, 0)] = 0.2;
+        r.net.aarnn_bouton_hebbian_gain = 1.0;
+        r.net.aarnn_bouton_non_hebbian_gain = 0.0;
+        r.apply_dendritic_bouton_plasticity_overlay(0.1, &[0]);
+        let after_hebb_only = r.w_in[(0, 0)];
+        assert!(
+            (after_hebb_only - 0.2).abs() < 1.0e-12,
+            "hebbian-only bouton term should not change when pre spike is absent"
+        );
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[test]
+    fn test_import_rewiring_distance_attenuates_long_edges() {
+        let mut net = NetworkConfig::default();
+        net.num_sensory_neurons = 2;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_output_neurons = 1;
+        net.growth_enabled = true;
+        net.aarnn_import_topology_rewire_enabled = true;
+        net.aarnn_import_topology_rewire_keep_fraction = 1.0;
+        net.aarnn_import_topology_rewire_region_bias = 0.0;
+        net.aarnn_distance_attenuation_per_unit = 2.0;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.w_in = Array2::from_shape_vec((1, 2), vec![1.0, 1.0]).unwrap();
+        r.conn_presence_in = Array2::from_shape_vec((1, 2), vec![1, 1]).unwrap();
+        r.topo.layers = vec![vec![Node3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            region_name: Some("core".to_string()),
+            type_name: Some("Interneuron".to_string()),
+        }]];
+        r.topo.sensory_nodes = vec![
+            Node3D {
+                x: 0.05,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("core".to_string()),
+                type_name: Some("Sensory".to_string()),
+            },
+            Node3D {
+                x: 1.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("periphery".to_string()),
+                type_name: Some("Sensory".to_string()),
+            },
+        ];
+
+        r.apply_import_topology_sparse_rewiring();
+        assert!(
+            r.w_in[(0, 0)] > r.w_in[(0, 1)],
+            "near sensory edge should retain higher weight than distant edge"
+        );
+        assert!(r.conn_presence_in[(0, 0)] > 0);
+        assert!(r.conn_presence_in[(0, 1)] > 0);
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[test]
+    fn test_import_rewiring_is_deterministic_with_pruning() {
+        let mut net = NetworkConfig::default();
+        net.num_sensory_neurons = 3;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.num_output_neurons = 1;
+        net.growth_enabled = true;
+        net.aarnn_import_topology_rewire_enabled = true;
+        net.aarnn_import_topology_rewire_keep_fraction = 0.45;
+        net.aarnn_import_topology_rewire_region_bias = 0.3;
+        net.aarnn_distance_attenuation_per_unit = 1.1;
+
+        let mut a = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net.clone(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        let mut b = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        let w_in_values = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+        a.w_in = Array2::from_shape_vec((2, 3), w_in_values.clone()).unwrap();
+        b.w_in = Array2::from_shape_vec((2, 3), w_in_values).unwrap();
+        a.conn_presence_in = Array2::from_elem((2, 3), 1);
+        b.conn_presence_in = Array2::from_elem((2, 3), 1);
+
+        let hidden_nodes = vec![
+            Node3D {
+                x: -0.1,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("central_brain_left".to_string()),
+                type_name: Some("Interneuron".to_string()),
+            },
+            Node3D {
+                x: 0.1,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("central_brain_right".to_string()),
+                type_name: Some("Interneuron".to_string()),
+            },
+        ];
+        let sensory_nodes = vec![
+            Node3D {
+                x: -0.12,
+                y: 0.02,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("central_brain_left".to_string()),
+                type_name: Some("Sensory".to_string()),
+            },
+            Node3D {
+                x: 0.0,
+                y: 0.03,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("central_brain_midline".to_string()),
+                type_name: Some("Sensory".to_string()),
+            },
+            Node3D {
+                x: 0.12,
+                y: 0.02,
+                z: 0.0,
+                layer: 0,
+                region_name: Some("central_brain_right".to_string()),
+                type_name: Some("Sensory".to_string()),
+            },
+        ];
+
+        a.topo.layers = vec![hidden_nodes.clone()];
+        b.topo.layers = vec![hidden_nodes];
+        a.topo.sensory_nodes = sensory_nodes.clone();
+        b.topo.sensory_nodes = sensory_nodes;
+
+        a.apply_import_topology_sparse_rewiring();
+        b.apply_import_topology_sparse_rewiring();
+
+        assert_eq!(a.w_in, b.w_in);
+        assert_eq!(a.conn_presence_in, b.conn_presence_in);
+
+        let nonzero = a.w_in.iter().filter(|v| v.abs() > f64::EPSILON).count();
+        assert!(nonzero < 6, "pruning should reduce active edges");
     }
 }
