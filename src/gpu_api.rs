@@ -88,7 +88,9 @@ pub struct Device {
 enum DeviceBackend {
     OpenCl(ocl::device::Device),
     #[cfg(feature = "cuda")]
-    Cuda { ordinal: usize },
+    Cuda {
+        ordinal: usize,
+    },
 }
 
 impl Device {
@@ -235,10 +237,7 @@ impl CommandQueue {
     ) -> Result<Self> {
         if let Some(ctx) = context.opencl() {
             let q = ocl::command_queue::CommandQueue::create_with_properties(
-                ctx,
-                device_id,
-                properties,
-                queue_size,
+                ctx, device_id, properties, queue_size,
             )
             .map_err(ClError::from)?;
             return Ok(Self {
@@ -284,7 +283,9 @@ impl CommandQueue {
                     return Err(ClError(CL_INVALID_VALUE));
                 }
                 let mut guard = buf.data.lock().expect("cuda buffer lock poisoned");
-                stream.memcpy_htod(data, &mut *guard).map_err(ClError::from)?;
+                stream
+                    .memcpy_htod(data, &mut *guard)
+                    .map_err(ClError::from)?;
                 stream.synchronize().map_err(ClError::from)?;
                 Ok(())
             }
@@ -440,7 +441,11 @@ enum ProgramBackend {
 }
 
 impl Program {
-    pub fn create_and_build_from_source(context: &Context, source: &str, options: &str) -> Result<Self> {
+    pub fn create_and_build_from_source(
+        context: &Context,
+        source: &str,
+        options: &str,
+    ) -> Result<Self> {
         if let Some(ctx) = context.opencl() {
             let p = ocl::program::Program::create_and_build_from_source(ctx, source, options)
                 .map_err(ClError::from)?;
@@ -712,13 +717,19 @@ impl<'a> ExecuteKernel<'a> {
                 let v_buf = get!(0, BufF64);
                 let n_neurons = v_buf.len().min(i32::MAX as usize) as i32;
                 let mut v = v_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut refr = get!(1, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut i_total = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut refr = get!(1, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_total = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let decay_m = get!(3, F64);
                 let v_th = get!(4, F64);
                 let v_reset = get!(5, F64);
                 let refractory_steps = get!(6, I32);
-                let mut spk = get!(7, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut spk = get!(7, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 stream
                     .launch_builder(kernel)
                     .arg(&mut *v)
@@ -737,15 +748,21 @@ impl<'a> ExecuteKernel<'a> {
                 let v_buf = get!(0, BufF64);
                 let n_neurons = v_buf.len().min(i32::MAX as usize) as i32;
                 let mut v = v_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut u = get!(1, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut i_total = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut u = get!(1, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_total = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let dt = get!(3, F64);
                 let a = get!(4, F64);
                 let b = get!(5, F64);
                 let c = get!(6, F64);
                 let d = get!(7, F64);
                 let v_th = get!(8, F64);
-                let mut spk = get!(9, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut spk = get!(9, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 stream
                     .launch_builder(kernel)
                     .arg(&mut *v)
@@ -763,9 +780,15 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_dense" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut pre = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut pre = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_pre = get!(3, I32);
                 let n_post = get!(4, I32);
                 stream
@@ -779,9 +802,15 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_dense_stp" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut rel = get!(1, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rel = get!(1, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_pre = get!(3, I32);
                 let n_post = get!(4, I32);
                 stream
@@ -795,11 +824,21 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_sparse" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut pre = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut row_ptr = get!(2, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut col = get!(3, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(4, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut pre = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(2, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(3, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(4, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(5, I32);
                 let accumulate = get!(6, I32);
                 stream
@@ -815,12 +854,24 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_sparse_stp" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut pre = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut rel = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut row_ptr = get!(3, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut col = get!(4, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(5, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut pre = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rel = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(3, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(5, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(6, I32);
                 let accumulate = get!(7, I32);
                 stream
@@ -837,12 +888,24 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_sparse_delay" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut hist = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut row_ptr = get!(2, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut col = get!(3, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut delays = get!(4, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(5, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut hist = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(2, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(3, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut delays = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(5, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(6, I32);
                 let hist_len = get!(7, I32);
                 let neurons_per_frame = get!(8, I32);
@@ -863,13 +926,27 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "syn_acc_sparse_delay_stp" => {
-                let mut i_acc = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut hist = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut rel = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut row_ptr = get!(3, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut col = get!(4, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut delays = get!(5, BufI32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut w = get!(6, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut hist = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rel = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(3, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut delays = get!(5, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(6, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(7, I32);
                 let hist_len = get!(8, I32);
                 let neurons_per_frame = get!(9, I32);
@@ -894,9 +971,15 @@ impl<'a> ExecuteKernel<'a> {
                 let i_acc_buf = get!(0, BufF64);
                 let n_post = i_acc_buf.len().min(i32::MAX as usize) as i32;
                 let mut i_acc = i_acc_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut ampa = get!(1, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut nmda = get!(2, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut gaba = get!(3, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut ampa = get!(1, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut nmda = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut gaba = get!(3, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let decay_ampa = get!(4, F64);
                 let decay_nmda = get!(5, F64);
                 let decay_gaba = get!(6, F64);
@@ -918,9 +1001,15 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "stp_update" => {
-                let mut u = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut x = get!(1, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut pre = get!(2, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut u = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut x = get!(1, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut pre = get!(2, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let rel_buf = get!(3, BufF64);
                 let n_pre = rel_buf.len().min(i32::MAX as usize) as i32;
                 let mut rel = rel_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
@@ -941,18 +1030,33 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "plasticity_update" => {
-                let mut w = get!(0, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut pre = get!(1, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut post = get!(2, BufI8).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut x_pre = get!(3, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut x_post = get!(4, BufF64).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut pre = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut post = get!(2, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut x_pre = get!(3, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut x_post = get!(4, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let eta = get!(5, F64);
                 let w_min = get!(6, F64);
                 let w_max = get!(7, F64);
                 let n_pre = get!(8, I32);
                 let n_post = get!(9, I32);
                 let rule = get!(10, I32);
-                let gx = self.global_sizes.first().copied().unwrap_or(n_post as usize).max(1);
+                let gx = self
+                    .global_sizes
+                    .first()
+                    .copied()
+                    .unwrap_or(n_post as usize)
+                    .max(1);
                 let gy = self
                     .global_sizes
                     .get(1)
@@ -987,9 +1091,15 @@ impl<'a> ExecuteKernel<'a> {
                     .map_err(ClError::from)?;
             }
             "morpho_energy" => {
-                let mut points = get!(0, BufF32x4).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut syn_sites = get!(1, BufF32x4).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
-                let mut syn_stim = get!(2, BufF32).cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut points = get!(0, BufF32x4)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut syn_sites = get!(1, BufF32x4)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut syn_stim = get!(2, BufF32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
                 let energies_buf = get!(3, BufF32);
                 let n_points = energies_buf.len().min(i32::MAX as usize) as i32;
                 let mut energies = energies_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;

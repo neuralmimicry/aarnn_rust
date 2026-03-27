@@ -293,6 +293,20 @@ pub enum SynKind {
     Out,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DendriteType {
+    Generic,
+    Apical,
+    Basal,
+}
+
+impl Default for DendriteType {
+    fn default() -> Self {
+        Self::Generic
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrganelleKind {
     Mitochondria,
@@ -387,6 +401,10 @@ pub struct DendSeg {
     pub from: Point3,
     pub to: Point3,
     pub length: f32,
+    /// Branch compartment type (apical, basal, or generic).
+    pub dendrite_type: DendriteType,
+    /// Initial trunk distance from soma for this branch lineage.
+    pub trunk_len_from_soma: f32,
     pub stimuli: f32,
     pub parent_idx: Option<usize>,
     pub syn_index: Option<usize>,
@@ -407,6 +425,8 @@ impl Default for DendSeg {
                 z: 0.0,
             },
             length: 0.0,
+            dendrite_type: DendriteType::Generic,
+            trunk_len_from_soma: 0.0,
             stimuli: 0.0,
             parent_idx: None,
             syn_index: None,
@@ -1216,6 +1236,66 @@ fn morpho_energy_tuning() -> &'static Mutex<MorphoEnergyTuning> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DendriteLayout {
+    apical_trunks: usize,
+    basal_trunks: usize,
+}
+
+impl DendriteLayout {
+    #[inline]
+    fn total_trunks(&self) -> usize {
+        self.apical_trunks + self.basal_trunks
+    }
+
+    #[inline]
+    fn trunk_type(&self, idx: usize) -> DendriteType {
+        if idx < self.apical_trunks {
+            DendriteType::Apical
+        } else if idx < self.total_trunks() {
+            DendriteType::Basal
+        } else {
+            DendriteType::Generic
+        }
+    }
+}
+
+#[inline]
+fn is_apical_basal_cell_type(type_name: Option<&str>) -> bool {
+    let Some(name) = type_name else {
+        return false;
+    };
+    let n = name.to_ascii_lowercase();
+    n.contains("pyramidal")
+        || n.contains("corticothalamic")
+        || n.contains("purkinje")
+        || n.contains("projection_pn")
+}
+
+#[inline]
+fn dendrite_layout_for_type(type_name: Option<&str>) -> DendriteLayout {
+    if is_apical_basal_cell_type(type_name) {
+        DendriteLayout {
+            apical_trunks: 1,
+            basal_trunks: 2,
+        }
+    } else {
+        DendriteLayout {
+            apical_trunks: 0,
+            basal_trunks: 2,
+        }
+    }
+}
+
+#[inline]
+fn trunk_scale_for(dend_type: DendriteType, config: &crate::config::NetworkConfig) -> f32 {
+    match dend_type {
+        DendriteType::Apical => config.aarnn_apical_trunk_scale.max(0.05),
+        DendriteType::Basal => config.aarnn_basal_trunk_scale.max(0.05),
+        DendriteType::Generic => 1.0,
+    }
+}
+
 impl Morphology {
     pub fn new() -> Self {
         Self::default()
@@ -1238,6 +1318,7 @@ impl Morphology {
         }
 
         let seed = ((l as u64) << 32) ^ (j as u64) ^ 0x01020304;
+        let dend_layout = dendrite_layout_for_type(type_name.as_deref());
         let mut organelles = Vec::new();
         organelles.push(Organelle {
             kind: OrganelleKind::Nucleus,
@@ -1299,7 +1380,9 @@ impl Morphology {
         // Add Dendrite with initial trunks unless starting empty
         let mut dendrite_branches = Vec::new();
         if !start_empty {
-            for trunk_i in 0..2 {
+            let total_trunks = dend_layout.total_trunks().max(1);
+            for trunk_i in 0..total_trunks {
+                let dend_type = dend_layout.trunk_type(trunk_i);
                 let d_seed = (j as u64) ^ (0xD1D2D3D4 + trunk_i as u64);
                 let (jx, jy) = (
                     ((d_seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32
@@ -1310,16 +1393,43 @@ impl Morphology {
                         - 0.5,
                 );
                 let nz = ((d_seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                let mag_d = (synapse_offset * 0.6).max(0.0035);
+                let dir = match dend_type {
+                    DendriteType::Apical => Point3 {
+                        x: 0.85 + 0.15 * jx,
+                        y: 0.6 * jy,
+                        z: 0.6 * nz,
+                    }
+                    .normalize(),
+                    DendriteType::Basal => Point3 {
+                        x: -0.2 + 0.5 * jx,
+                        y: jy,
+                        z: nz,
+                    }
+                    .normalize(),
+                    DendriteType::Generic => Point3 {
+                        x: jx,
+                        y: jy,
+                        z: nz,
+                    }
+                    .normalize(),
+                };
+                let scale = match dend_type {
+                    DendriteType::Apical => 1.35,
+                    DendriteType::Basal => 0.75,
+                    DendriteType::Generic => 1.0,
+                };
+                let mag_d = (synapse_offset * 0.6 * scale).max(0.0035);
                 let from = Point3 {
-                    x: (pos.x + jx * mag_d).clamp(-1.0, 1.0),
-                    y: (pos.y + jy * mag_d).clamp(-1.0, 1.0),
-                    z: (pos.z + nz * mag_d).clamp(-1.0, 1.0),
+                    x: (pos.x + dir.x * mag_d).clamp(-1.0, 1.0),
+                    y: (pos.y + dir.y * mag_d).clamp(-1.0, 1.0),
+                    z: (pos.z + dir.z * mag_d).clamp(-1.0, 1.0),
                 };
                 dendrite_branches.push(DendSeg {
                     from,
                     to: pos,
                     length: mag_d,
+                    dendrite_type: dend_type,
+                    trunk_len_from_soma: mag_d,
                     stimuli: 1.0,
                     parent_idx: None,
                     syn_index: None,
@@ -1601,9 +1711,14 @@ impl Morphology {
                                 y: n.y,
                                 z: n.z,
                             };
+                            let layout = dendrite_layout_for_type(n.type_name.as_deref());
                             let mut branches = Vec::new();
-                            for trunk_i in 0..3 {
-                                let seed = ((l as u64) << 32) ^ (j as u64) ^ (0xB1B2B3B4 + trunk_i);
+                            let total_trunks = layout.total_trunks().max(1);
+                            for trunk_i in 0..total_trunks {
+                                let dend_type = layout.trunk_type(trunk_i);
+                                let seed = ((l as u64) << 32)
+                                    ^ (j as u64)
+                                    ^ (0xB1B2B3B4u64 + trunk_i as u64);
                                 let (jx, jy) = (
                                     ((seed.wrapping_mul(4101842887655102017).rotate_left(11))
                                         & 0xffff) as f32
@@ -1615,17 +1730,41 @@ impl Morphology {
                                         - 0.5,
                                 );
                                 let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                                let mag = (synapse_offset * 0.6).max(0.0035);
+                                let dir = match dend_type {
+                                    DendriteType::Apical => Point3 {
+                                        x: 0.85 + 0.15 * jx,
+                                        y: 0.6 * jy,
+                                        z: 0.6 * nz,
+                                    }
+                                    .normalize(),
+                                    DendriteType::Basal => Point3 {
+                                        x: -0.2 + 0.5 * jx,
+                                        y: jy,
+                                        z: nz,
+                                    }
+                                    .normalize(),
+                                    DendriteType::Generic => Point3 {
+                                        x: jx,
+                                        y: jy,
+                                        z: nz,
+                                    }
+                                    .normalize(),
+                                };
+                                let mag =
+                                    (synapse_offset * 0.6 * trunk_scale_for(dend_type, config))
+                                        .max(0.0035);
                                 let mut q = Point3 {
-                                    x: (p.x + jx * mag).clamp(-1.0, 1.0),
-                                    y: (p.y + jy * mag).clamp(-1.0, 1.0),
-                                    z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                                    x: (p.x + dir.x * mag).clamp(-1.0, 1.0),
+                                    y: (p.y + dir.y * mag).clamp(-1.0, 1.0),
+                                    z: (p.z + dir.z * mag).clamp(-1.0, 1.0),
                                 };
                                 q = ensure_unique_point(q, seed);
                                 branches.push(DendSeg {
                                     from: q,
                                     to: p,
                                     length: mag,
+                                    dendrite_type: dend_type,
+                                    trunk_len_from_soma: mag,
                                     stimuli: 1.0,
                                     parent_idx: None,
                                     syn_index: None,
@@ -1937,6 +2076,8 @@ impl Morphology {
                         from: q,
                         to: p,
                         length: mag,
+                        dendrite_type: DendriteType::Generic,
+                        trunk_len_from_soma: mag,
                         stimuli: 1.0,
                         parent_idx: None,
                         syn_index: None,
@@ -2023,6 +2164,8 @@ impl Morphology {
                         from: q,
                         to: p,
                         length: mag,
+                        dendrite_type: DendriteType::Generic,
+                        trunk_len_from_soma: mag,
                         stimuli: 1.0,
                         parent_idx: None,
                         syn_index: None,
@@ -2451,9 +2594,11 @@ impl Morphology {
                         let pts = &incoming[l][j];
                         let mut branches: Vec<DendSeg> = Vec::new();
                         if !pts.is_empty() {
-                            // Distribute incoming sites among multiple trunks (e.g. 2)
-                            let num_trunks = 2;
+                            // Distribute incoming sites among trunks based on neuron cell structure.
+                            let layout = dendrite_layout_for_type(nodes[j].type_name.as_deref());
+                            let num_trunks = layout.total_trunks().max(1);
                             for trunk_i in 0..num_trunks {
+                                let dend_type = layout.trunk_type(trunk_i);
                                 let group: Vec<_> = pts
                                     .iter()
                                     .enumerate()
@@ -2478,7 +2623,8 @@ impl Morphology {
                                 cz *= invn;
 
                                 // Hub between soma and centroid
-                                let alpha = 0.35f32;
+                                let alpha =
+                                    (0.35f32 * trunk_scale_for(dend_type, config)).clamp(0.1, 0.85);
                                 let mut hub = Point3 {
                                     x: soma.x * (1.0 - alpha) + cx * alpha,
                                     y: soma.y * (1.0 - alpha) + cy * alpha,
@@ -2498,6 +2644,8 @@ impl Morphology {
                                     from: hub,
                                     to: soma,
                                     length: len,
+                                    dendrite_type: dend_type,
+                                    trunk_len_from_soma: len,
                                     stimuli: 1.0,
                                     parent_idx: None,
                                     syn_index: None,
@@ -2516,11 +2664,14 @@ impl Morphology {
                                     let dy = hub.y - start.y;
                                     let dz = hub.z - start.z;
                                     let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    let trunk_len = branches[trunk_idx].trunk_len_from_soma;
                                     let dsi = branches.len();
                                     branches.push(DendSeg {
                                         from: start,
                                         to: hub,
                                         length: len,
+                                        dendrite_type: dend_type,
+                                        trunk_len_from_soma: trunk_len,
                                         stimuli: 1.0,
                                         parent_idx: Some(trunk_idx),
                                         syn_index: Some(si),
@@ -5505,6 +5656,38 @@ impl Morphology {
                                 len = step;
                             }
                             if len > 0.001 {
+                                let (dend_type, trunk_len_from_soma) = if is_trunk {
+                                    let layout =
+                                        dendrite_layout_for_type(soma.type_name.as_deref());
+                                    let dtype = if layout.apical_trunks > 0 {
+                                        if fastrand::f32() < 0.35 {
+                                            DendriteType::Apical
+                                        } else {
+                                            DendriteType::Basal
+                                        }
+                                    } else if layout.basal_trunks > 0 {
+                                        DendriteType::Basal
+                                    } else {
+                                        DendriteType::Generic
+                                    };
+                                    (dtype, len)
+                                } else if let Some(pi) = parent_idx {
+                                    let dtype = dend
+                                        .tree
+                                        .branches
+                                        .get(pi)
+                                        .map(|s| s.dendrite_type)
+                                        .unwrap_or(DendriteType::Generic);
+                                    let trunk_len = dend
+                                        .tree
+                                        .branches
+                                        .get(pi)
+                                        .map(|s| s.trunk_len_from_soma.max(1.0e-6))
+                                        .unwrap_or(len);
+                                    (dtype, trunk_len)
+                                } else {
+                                    (DendriteType::Generic, len)
+                                };
                                 stats.dendrite_sprout_successes += 1;
                                 if is_trace {
                                     let name = if is_sensory {
@@ -5525,6 +5708,8 @@ impl Morphology {
                                         from: best_p,
                                         to: base_pos,
                                         length: len,
+                                        dendrite_type: dend_type,
+                                        trunk_len_from_soma,
                                         stimuli: 0.5,
                                         parent_idx,
                                         syn_index: None,
@@ -7210,8 +7395,8 @@ impl Morphology {
             } else {
                 (0.0, 0.0, 0.0, 0.0)
             };
-            nm_log!("[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})", 
-                unsafe { CALL_COUNT }, total_axons, stats.axon_sprout_successes, stats.axon_sprout_attempts, 
+            nm_log!("[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})",
+                unsafe { CALL_COUNT }, total_axons, stats.axon_sprout_successes, stats.axon_sprout_attempts,
                 total_dendrites, stats.dendrite_sprout_successes, stats.dendrite_sprout_attempts, stats.dendrite_sprout_too_near, stats.dendrite_sprout_low_energy,
                 self.synapses.len(), stats.contact_checks, stats.contact_candidates, stats.contact_incompatible, stats.contact_too_far, stats.contact_successes, stats.contact_rejected_cap, stats.contact_rejected_close, stats.contact_self_skips, stats.contact_existing_skips, stats.contact_post_cap_skips, stats.contact_probe_checks, stats.contact_skipped_low_energy, stats.contact_tip_cap_hits, tip_avg, stats.contact_tip_energy_min, stats.contact_tip_energy_max, t_ema, t_dev, t_cap, t_skip, pair_cap);
 
@@ -7786,6 +7971,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dendrite_compartments_reflect_cell_structure_types() {
+        use crate::topology::Node3D;
+
+        let topo: Vec<Vec<Node3D>> = vec![
+            vec![Node3D {
+                x: -0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                type_name: Some("L5_Pyramidal".to_string()),
+                ..Default::default()
+            }],
+            vec![Node3D {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 1,
+                type_name: Some("Interneuron".to_string()),
+                ..Default::default()
+            }],
+        ];
+
+        let w_in = ndarray::Array2::<f64>::from_elem((1, 3), 0.25);
+        let w_hh_fwd = vec![ndarray::Array2::<f64>::from_elem((1, 1), 0.35)];
+        let w_hh_bwd = vec![ndarray::Array2::<f64>::zeros((1, 1))];
+        let w_out = ndarray::Array2::<f64>::from_elem((1, 1), 0.20);
+
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_sensory_neurons = 3;
+        config.num_output_neurons = 1;
+        config.synapse_offset = 0.05;
+        config.enforce_unique_geometry = false;
+
+        let m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &w_out,
+            &config,
+            false,
+        );
+
+        let pyr = &m.dendrites[0][0];
+        let pyr_trunks: Vec<_> = pyr.tree.branches.iter().filter(|s| s.is_trunk).collect();
+        assert!(
+            pyr_trunks
+                .iter()
+                .any(|s| s.dendrite_type == DendriteType::Apical),
+            "pyramidal neuron should include apical trunk"
+        );
+        assert!(
+            pyr_trunks
+                .iter()
+                .any(|s| s.dendrite_type == DendriteType::Basal),
+            "pyramidal neuron should include basal trunk"
+        );
+
+        let intn = &m.dendrites[1][0];
+        let intn_trunks: Vec<_> = intn.tree.branches.iter().filter(|s| s.is_trunk).collect();
+        assert!(
+            intn_trunks
+                .iter()
+                .all(|s| s.dendrite_type != DendriteType::Apical),
+            "interneuron should not force apical trunks"
+        );
+        assert!(
+            intn_trunks.iter().all(|s| s.trunk_len_from_soma > 0.0),
+            "initial trunk length from soma should be tracked"
+        );
     }
 
     #[test]

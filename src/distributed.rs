@@ -26,12 +26,13 @@
 //! - `ManagedNetwork`: Represents a partition of a neural network being simulated on the local node.
 #[cfg(not(feature = "sysinfo"))]
 use self::sysinfo_dummy::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+#[cfg(feature = "openmpi")]
+use prost::Message;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
-#[cfg(feature = "openmpi")]
-use prost::Message;
 use tokio::sync::{mpsc, RwLock};
 use tonic::{Request, Response, Status};
 
@@ -105,6 +106,10 @@ const SPIKE_BURST_CONNECT_TIMEOUT: Duration = Duration::from_millis(80);
 const SPIKE_LATENCY_EWMA_ALPHA: f64 = 0.2;
 /// Consecutive failures before preferring the alternate transport method.
 const SPIKE_FAILOVER_STREAK: u32 = 3;
+/// Cap queued control/config commands per node so heartbeat payloads remain bounded.
+const MAX_PENDING_COMMANDS_PER_NODE: usize = 64;
+/// Treat configs above this as "large" and avoid broadcasting to all nodes without affinity.
+const LARGE_NETWORK_CONFIG_BYTES: usize = 64 * 1024 * 1024;
 fn grpc_max_message_bytes() -> usize {
     const DEFAULT: usize = 512 * 1024 * 1024;
     const MIN: usize = 4 * 1024 * 1024;
@@ -144,6 +149,28 @@ fn command_type_from_action(
         Action::Repeat => CommandType::Repeat,
         Action::Reset => CommandType::Reset,
         Action::New => CommandType::LoadNetwork,
+    }
+}
+
+fn enqueue_pending_command(
+    pending_commands: &mut HashMap<String, Vec<NetworkCommand>>,
+    node_id: String,
+    cmd: NetworkCommand,
+) {
+    let queue = pending_commands.entry(node_id.clone()).or_default();
+    queue.retain(|existing| {
+        !(existing.network_id == cmd.network_id && existing.r#type == cmd.r#type)
+    });
+    queue.push(cmd);
+    if queue.len() > MAX_PENDING_COMMANDS_PER_NODE {
+        let overflow = queue.len() - MAX_PENDING_COMMANDS_PER_NODE;
+        queue.drain(0..overflow);
+        nm_err!(
+            "[warn] Pending command queue overflow for {} (max {}); dropped {} oldest commands",
+            node_id,
+            MAX_PENDING_COMMANDS_PER_NODE,
+            overflow
+        );
     }
 }
 
@@ -390,6 +417,19 @@ async fn connect_peer(
     connect_peer_with_timeout(addr, Duration::from_secs(3)).await
 }
 
+fn env_flag(name: &str) -> Option<bool> {
+    match std::env::var(name)
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 /// Represents a partial or whole neural network running on this node.
 pub struct ManagedNetwork {
     pub id: String,
@@ -413,6 +453,15 @@ pub struct ManagedNetwork {
     pub initial_learning: Learning,
     pub initial_lif: LIFParams,
     pub initial_stdp: STDPParams,
+    /// Fingerprint of the most recently applied distributed config/snapshot payload.
+    /// Used to avoid expensive no-op reimports on periodic rebalance heartbeats.
+    pub last_config_fingerprint: Option<u64>,
+}
+
+fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 struct SpikeStreamHandle {
@@ -843,7 +892,7 @@ impl DistributedNode {
                         String::new()
                     },
                 };
-                pending_commands.entry(node_id).or_default().push(cmd);
+                enqueue_pending_command(pending_commands, node_id, cmd);
             }
         }
 
@@ -1487,8 +1536,11 @@ impl DistributedNode {
                 } else {
                     None
                 };
-                let preferred =
-                    state.choose_spike_transport(&key, sender_opt.is_some(), mpi_rank_opt.is_some());
+                let preferred = state.choose_spike_transport(
+                    &key,
+                    sender_opt.is_some(),
+                    mpi_rank_opt.is_some(),
+                );
                 (sender_opt, preferred)
             };
 
@@ -1496,7 +1548,8 @@ impl DistributedNode {
             if mpi_rank_opt.is_some() && !methods.contains(&SpikeTransportMethod::Mpi) {
                 methods.push(SpikeTransportMethod::Mpi);
             }
-            if preferred_transport != SpikeTransportMethod::PersistentStream && sender_opt.is_some() {
+            if preferred_transport != SpikeTransportMethod::PersistentStream && sender_opt.is_some()
+            {
                 methods.push(SpikeTransportMethod::PersistentStream);
             }
             if !methods.contains(&SpikeTransportMethod::BurstStream) {
@@ -1641,18 +1694,45 @@ impl DistributedNode {
             return;
         }
 
-        // Calculate total capacity and collect node capacities
-        let mut total_capacity = 0.0;
+        // Collect per-node capacity estimates used for layer assignment.
+        // Capacity is dynamic: base resource score (CPU/RAM/cores/weight multiplier)
+        // scaled by measured step-latency so overloaded/slower nodes receive less work.
+        let rebalance_target_step_ms = std::env::var("NM_REBALANCE_TARGET_STEP_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(10.0);
         let mut node_capacities = Vec::new();
         for node_id in &node_ids {
             let cap = state
                 .nodes
                 .get(node_id)
                 .and_then(|n| n.resources.as_ref())
-                .map(|r| r.capacity_score)
+                .map(|r| {
+                    let mut effective = r.capacity_score.max(0.1);
+                    // Convert measured step latency into a bounded scale factor.
+                    // Faster-than-target nodes can absorb moderately more layers;
+                    // slower nodes are proportionally de-emphasized.
+                    let latency_ms = r.avg_step_time_ms.max(0.0);
+                    if latency_ms > 0.0 {
+                        let latency_scale =
+                            (rebalance_target_step_ms / latency_ms).clamp(0.25, 2.0);
+                        effective *= latency_scale;
+                    }
+                    effective.max(0.05)
+                })
                 .unwrap_or(1.0);
-            total_capacity += cap;
             node_capacities.push((node_id.clone(), cap));
+        }
+        let node_capacity_map: HashMap<String, f32> = node_capacities.iter().cloned().collect();
+        let mut network_affinity: HashMap<String, Vec<String>> = HashMap::new();
+        for (node_id, status) in &state.nodes {
+            for net_id in &status.active_networks {
+                network_affinity
+                    .entry(net_id.clone())
+                    .or_default()
+                    .push(node_id.clone());
+            }
         }
 
         // Calculate network neurons first to avoid double borrow
@@ -1675,12 +1755,12 @@ impl DistributedNode {
 
             if let Some(snap_json) = network_snapshots.get(net_id) {
                 config_payload = Some(snap_json.clone());
-                if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(snap_json) {
+                if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(snap_json) {
                     snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
                 }
             } else if !net_status.config_json.is_empty() {
                 if let Ok(snap) =
-                    serde_json::from_str::<crate::runner::Snapshot>(&net_status.config_json)
+                    crate::runner::decode_snapshot_with_profile_backfill(&net_status.config_json)
                 {
                     let snap_json = net_status.config_json.clone();
                     network_snapshots.insert(net_id.clone(), snap_json.clone());
@@ -1698,6 +1778,33 @@ impl DistributedNode {
                 7
             };
             let config_json = config_payload.unwrap_or_else(|| net_status.config_json.clone());
+            let mut target_node_capacities: Vec<(String, f32)> = network_affinity
+                .get(net_id)
+                .into_iter()
+                .flatten()
+                .filter_map(|node_id| {
+                    node_capacity_map
+                        .get(node_id)
+                        .copied()
+                        .map(|cap| (node_id.clone(), cap))
+                })
+                .collect();
+            if target_node_capacities.is_empty() {
+                if config_json.len() >= LARGE_NETWORK_CONFIG_BYTES {
+                    nm_log!(
+                        "[warn] Rebalance deferred for network {}: no eligible nodes advertise it yet (config={} bytes)",
+                        net_id,
+                        config_json.len()
+                    );
+                    continue;
+                }
+                target_node_capacities = node_capacities.clone();
+            }
+            let mut target_capacity_sum: f32 =
+                target_node_capacities.iter().map(|(_, cap)| *cap).sum();
+            if target_capacity_sum <= 0.0 {
+                target_capacity_sum = target_node_capacities.len() as f32;
+            }
 
             // Preserve existing layer neuron counts to avoid UI flicker during rebalance
             let mut old_counts = HashMap::new();
@@ -1711,10 +1818,10 @@ impl DistributedNode {
             let mut node_assignments = Vec::new();
 
             let mut current_cap_sum = 0.0;
-            for (node_id, cap) in &node_capacities {
-                let start_ratio = current_cap_sum / total_capacity;
+            for (node_id, cap) in &target_node_capacities {
+                let start_ratio = current_cap_sum / target_capacity_sum;
                 current_cap_sum += cap;
-                let end_ratio = current_cap_sum / total_capacity;
+                let end_ratio = current_cap_sum / target_capacity_sum;
 
                 let start = (start_ratio * total_layers as f32).round() as u32;
                 let end = (end_ratio * total_layers as f32).round() as u32;
@@ -1801,7 +1908,7 @@ impl DistributedNode {
         }
 
         for (node_id, cmd) in all_pending {
-            state.pending_commands.entry(node_id).or_default().push(cmd);
+            enqueue_pending_command(&mut state.pending_commands, node_id, cmd);
         }
     }
 
@@ -1814,11 +1921,49 @@ impl DistributedNode {
             CommandType::LoadNetwork => {
                 if let Some(net_arc) = state.networks.get(&cmd.network_id) {
                     let mut net = net_arc.write().await;
+                    let layers_changed = net.assigned_layers != cmd.layers
+                        || net.redundant_layers != cmd.redundant_layers;
+                    let depth_changed = net.desired_aarnn_depth != cmd.desired_aarnn_depth;
+                    let incoming_cfg_fp = (!cmd.config_json.is_empty())
+                        .then(|| config_payload_fingerprint(&cmd.config_json));
+                    let config_changed =
+                        incoming_cfg_fp.is_some() && incoming_cfg_fp != net.last_config_fingerprint;
+                    let requested_model = if !cmd.neuron_model.is_empty() {
+                        NeuronModel::from_str(&cmd.neuron_model)
+                    } else {
+                        None
+                    };
+                    let model_changed = requested_model
+                        .map(|m| net.runner.neuron_model != m)
+                        .unwrap_or(false);
+                    let requested_learning = if !cmd.learning_rule.is_empty() {
+                        Learning::from_str(&cmd.learning_rule)
+                    } else {
+                        None
+                    };
+                    let learning_changed = requested_learning
+                        .map(|l| net.runner.learning != l)
+                        .unwrap_or(false);
+
+                    if !layers_changed
+                        && !depth_changed
+                        && !config_changed
+                        && !model_changed
+                        && !learning_changed
+                    {
+                        return;
+                    }
+
                     nm_log!(
-                        "[info] Updating network {} layers to {:?} (redundant: {:?})",
+                        "[info] Updating network {} layers to {:?} (redundant: {:?}){}",
                         cmd.network_id,
                         cmd.layers,
-                        cmd.redundant_layers
+                        cmd.redundant_layers,
+                        if config_changed {
+                            " [config changed]"
+                        } else {
+                            ""
+                        }
                     );
                     net.assigned_layers = cmd.layers;
                     net.redundant_layers = cmd.redundant_layers;
@@ -1828,9 +1973,10 @@ impl DistributedNode {
                     net.remote_spike_steps_fwd.clear();
                     net.remote_spike_steps_bwd.clear();
 
-                    if !cmd.config_json.is_empty() {
+                    if config_changed {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
-                        if let Ok(_snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                        if let Ok(_snap) =
+                            crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
                         {
                             #[cfg(feature = "growth3d")]
                             let has_snapshot_topo = _snap.topo.is_some();
@@ -1841,6 +1987,7 @@ impl DistributedNode {
                                     e
                                 );
                             }
+                            net.last_config_fingerprint = incoming_cfg_fp;
                             if !net.assigned_layers.is_empty() {
                                 if let (Some(min), Some(max)) = (
                                     net.assigned_layers.iter().min(),
@@ -1857,6 +2004,15 @@ impl DistributedNode {
                         } else if let Ok(new_cfg) = serde_json::from_str::<NetworkConfig>(&cfg_str)
                         {
                             net.runner.apply_config(new_cfg);
+                            net.last_config_fingerprint = incoming_cfg_fp;
+                        }
+                    }
+                    if layers_changed && !net.assigned_layers.is_empty() {
+                        if let (Some(min), Some(max)) = (
+                            net.assigned_layers.iter().min(),
+                            net.assigned_layers.iter().max(),
+                        ) {
+                            net.runner.layer_range = Some(*min as usize..(*max as usize + 1));
                         }
                     }
                     if !cmd.neuron_model.is_empty() {
@@ -1883,7 +2039,8 @@ impl DistributedNode {
                     let mut snapshot_has_topo = false;
                     let mut net_cfg = if !cmd.config_json.is_empty() {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
-                        if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                        if let Ok(snap) =
+                            crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
                         {
                             #[cfg(feature = "growth3d")]
                             {
@@ -1973,6 +2130,8 @@ impl DistributedNode {
                             initial_learning: learning,
                             initial_lif: lif,
                             initial_stdp: stdp,
+                            last_config_fingerprint: (!cmd.config_json.is_empty())
+                                .then(|| config_payload_fingerprint(&cmd.config_json)),
                         })),
                     );
                 }
@@ -2104,20 +2263,34 @@ impl DistributedNode {
                     net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
                 }
 
-                // Auto-adjust AARNN depth down if lagging
-                let target_ms = 10.0;
-                if net.avg_step_time_ms > target_ms && net.runner.net.aarnn_layer_depth > 0 {
-                    net.runner.net.aarnn_layer_depth -= 1;
-                    nm_log!(
-                        "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
-                        node_id,
-                        net.runner.net.aarnn_layer_depth,
-                        net.id
-                    );
-                } else if net.avg_step_time_ms < target_ms * 0.5
-                    && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize
-                {
-                    net.runner.net.aarnn_layer_depth += 1;
+                // Auto-adjust AARNN depth down if lagging.
+                // Can be disabled to preserve configured bio depth exactly.
+                let realtime_ipc = env_flag("NM_REALTIME_IPC").unwrap_or(false);
+                let auto_adjust_depth = env_flag("NM_AUTO_AARNN_DEPTH").unwrap_or(!realtime_ipc);
+                let target_ms = std::env::var("NM_AARNN_DEPTH_TARGET_STEP_MS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite() && *v >= 0.5)
+                    .unwrap_or(10.0);
+                let warmup_steps = std::env::var("NM_AARNN_DEPTH_WARMUP_STEPS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(250);
+
+                if auto_adjust_depth && net.runner.t >= warmup_steps {
+                    if net.avg_step_time_ms > target_ms && net.runner.net.aarnn_layer_depth > 0 {
+                        net.runner.net.aarnn_layer_depth -= 1;
+                        nm_log!(
+                            "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
+                            node_id,
+                            net.runner.net.aarnn_layer_depth,
+                            net.id
+                        );
+                    } else if net.avg_step_time_ms < target_ms * 0.5
+                        && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize
+                    {
+                        net.runner.net.aarnn_layer_depth += 1;
+                    }
                 }
 
                 drop(net);
@@ -2375,7 +2548,7 @@ impl DistributedNeuromorphic for DistributedNode {
                                 let cfg_str = String::from_utf8_lossy(&c.config_json).to_string();
                                 net_status.config_json = cfg_str.clone();
                                 if let Ok(snap) =
-                                    serde_json::from_str::<crate::runner::Snapshot>(&cfg_str)
+                                    crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
                                 {
                                     network_snapshots.insert(network_id.clone(), cfg_str);
                                     net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
@@ -2489,7 +2662,7 @@ impl DistributedNeuromorphic for DistributedNode {
 
                 // Apply all pending commands
                 for (node_id, cmd) in commands_to_send {
-                    pending_commands.entry(node_id).or_default().push(cmd);
+                    enqueue_pending_command(pending_commands, node_id, cmd);
                 }
 
                 Ok(Response::new(NetworkUpdateResponse { success: true }))

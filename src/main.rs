@@ -20,11 +20,11 @@ mod affinity;
 mod bridge;
 #[cfg(feature = "opencl")]
 mod cl_compute;
-#[cfg(feature = "opencl")]
-mod gpu_api;
 mod config;
 mod distributed;
 mod ga;
+#[cfg(feature = "opencl")]
+mod gpu_api;
 mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
@@ -43,11 +43,15 @@ mod topology;
 mod ui;
 mod viz;
 
+use anyhow::Context;
 use clap::{Parser, ValueEnum};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use serde::Deserialize;
 
-use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
+use crate::config::{
+    apply_clumping_layer_defaults, IzhikevichParams, LIFParams, NetworkConfig, STDPParams,
+};
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
 use crate::stimuli::{AerIoConfig, AerLink};
@@ -278,6 +282,150 @@ fn configure_openmp_runtime_env() {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct OrchestratorNetworkSpec {
+    network_id: String,
+    #[serde(default)]
+    config_path: Option<String>,
+    #[serde(default)]
+    network_path: Option<String>,
+    #[serde(default)]
+    neuron_model: Option<String>,
+    #[serde(default)]
+    learning_rule: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OrchestratorStartupNetwork {
+    network_id: String,
+    num_layers: u32,
+    desired_aarnn_depth: u32,
+    config_json: String,
+    snapshot_json: Option<String>,
+    neuron_model: String,
+    learning_rule: String,
+}
+
+fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig, Option<String>)> {
+    let payload = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read startup network payload: {}", path))?;
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
+        Ok((snapshot.net, Some(payload)))
+    } else {
+        let mut cfg: NetworkConfig = serde_json::from_str(&payload)
+            .with_context(|| format!("Failed to parse network config JSON: {}", path))?;
+        if cfg.clumping_design != crate::config::ClumpingDesign::None && cfg.num_hidden_layers <= 1
+        {
+            apply_clumping_layer_defaults(&mut cfg);
+        }
+        Ok((cfg, None))
+    }
+}
+
+fn build_orchestrator_startup_networks(
+    args: &Cli,
+    fallback_cfg: &NetworkConfig,
+    fallback_config_json: Option<&str>,
+    fallback_snapshot_json: Option<&str>,
+) -> anyhow::Result<Vec<OrchestratorStartupNetwork>> {
+    let default_model = args.neuron_model.to_str().to_string();
+    let default_learning = args.learning.to_str().to_string();
+
+    let mut startup_networks = Vec::new();
+    if let Ok(raw_specs) = std::env::var("NM_ORCHESTRATOR_NETWORK_SPECS") {
+        let trimmed = raw_specs.trim();
+        if !trimmed.is_empty() {
+            let specs: Vec<OrchestratorNetworkSpec> = serde_json::from_str(trimmed)
+                .context("Failed to parse NM_ORCHESTRATOR_NETWORK_SPECS JSON payload")?;
+            let mut seen = std::collections::HashSet::new();
+            for spec in specs {
+                let network_id = spec.network_id.trim().to_string();
+                if network_id.is_empty() {
+                    continue;
+                }
+                if !seen.insert(network_id.clone()) {
+                    return Err(anyhow::anyhow!(
+                        "Duplicate network_id '{}' in NM_ORCHESTRATOR_NETWORK_SPECS",
+                        network_id
+                    ));
+                }
+
+                let mut loaded: Option<(NetworkConfig, Option<String>)> = None;
+                if let Some(path) = spec.network_path.as_deref().map(str::trim) {
+                    if !path.is_empty() {
+                        loaded =
+                            Some(load_network_config_or_snapshot(path).with_context(|| {
+                                format!(
+                                    "Failed loading network_path for startup network '{}': {}",
+                                    network_id, path
+                                )
+                            })?);
+                    }
+                }
+                if loaded.is_none() {
+                    if let Some(path) = spec.config_path.as_deref().map(str::trim) {
+                        if !path.is_empty() {
+                            loaded =
+                                Some(load_network_config_or_snapshot(path).with_context(|| {
+                                    format!(
+                                        "Failed loading config_path for startup network '{}': {}",
+                                        network_id, path
+                                    )
+                                })?);
+                        }
+                    }
+                }
+
+                let (cfg, snapshot_json) = if let Some((cfg, snapshot_json)) = loaded {
+                    (cfg, snapshot_json)
+                } else {
+                    (
+                        fallback_cfg.clone(),
+                        fallback_snapshot_json.map(ToOwned::to_owned),
+                    )
+                };
+
+                let cfg_json = serde_json::to_string(&cfg).unwrap_or_default();
+                startup_networks.push(OrchestratorStartupNetwork {
+                    network_id,
+                    num_layers: (cfg.num_hidden_layers + 1) as u32,
+                    desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
+                    config_json: cfg_json,
+                    snapshot_json,
+                    neuron_model: spec.neuron_model.unwrap_or_else(|| default_model.clone()),
+                    learning_rule: spec
+                        .learning_rule
+                        .unwrap_or_else(|| default_learning.clone()),
+                });
+            }
+        }
+    }
+
+    if startup_networks.is_empty() {
+        startup_networks.push(OrchestratorStartupNetwork {
+            network_id: args.brain_id.clone(),
+            num_layers: (fallback_cfg.num_hidden_layers + 1) as u32,
+            desired_aarnn_depth: fallback_cfg.aarnn_layer_depth as u32,
+            config_json: fallback_config_json
+                .map(ToOwned::to_owned)
+                .or_else(|| serde_json::to_string(fallback_cfg).ok())
+                .unwrap_or_default(),
+            snapshot_json: fallback_snapshot_json.map(ToOwned::to_owned),
+            neuron_model: default_model,
+            learning_rule: default_learning,
+        });
+    }
+
+    Ok(startup_networks)
+}
+
+fn distributed_autostart_enabled() -> bool {
+    std::env::var("NM_DISTRIBUTED_AUTOSTART")
+        .ok()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
+}
+
 #[cfg(feature = "openmpi")]
 fn maybe_apply_openmpi_bootstrap(args: &mut Cli) -> anyhow::Result<()> {
     let force_bootstrap = std::env::var("NM_MPI_FORCE_BOOTSTRAP")
@@ -396,7 +544,7 @@ fn main() -> anyhow::Result<()> {
         if Path::new(&args.config).exists() {
             let s = fs::read_to_string(&args.config)?;
             if args.network.is_none() {
-                if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
                     startup_snapshot_json = Some(s);
                     snap.net
                 } else {
@@ -421,7 +569,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(network_path) = args.network.as_deref() {
         let s = std::fs::read_to_string(network_path)?;
-        let snap: crate::runner::Snapshot = serde_json::from_str(&s)?;
+        let snap = crate::runner::decode_snapshot_with_profile_backfill(&s)?;
         startup_snapshot_json = Some(s);
         net_cfg = snap.net;
     }
@@ -433,8 +581,11 @@ fn main() -> anyhow::Result<()> {
         net_cfg.sleep_enabled = true;
     }
 
-    // AARNN-specific overrides. AARNN mode implicitly requires morphology and growth.
-    if matches!(args.neuron_model, NeuronModel::Aarnn) {
+    let loaded_from_snapshot = startup_snapshot_json.is_some();
+
+    // AARNN-specific bootstrap defaults are only forced when we are not loading
+    // an explicit snapshot payload. Snapshot/config values should remain authoritative.
+    if matches!(args.neuron_model, NeuronModel::Aarnn) && !loaded_from_snapshot {
         net_cfg.growth_enabled = true;
         net_cfg.use_morphology = true;
         net_cfg.aarnn_layer_depth = 5;
@@ -462,15 +613,13 @@ fn main() -> anyhow::Result<()> {
         distributed_node = Some(rt.block_on(async { start_distributed(&args).await })?);
         if args.orchestrator {
             if let Some(node) = distributed_node.clone() {
-                let net_cfg_clone = net_cfg.clone();
-                let config_json = startup_config_json
-                    .clone()
-                    .or_else(|| serde_json::to_string(&net_cfg_clone).ok())
-                    .unwrap_or_default();
-                let brain_id = args.brain_id.clone();
-                let snapshot_json = startup_snapshot_json.clone();
-                let neuron_model = args.neuron_model.to_str().to_string();
-                let learning_rule = args.learning.to_str().to_string();
+                let startup_networks = build_orchestrator_startup_networks(
+                    &args,
+                    &net_cfg,
+                    startup_config_json.as_deref(),
+                    startup_snapshot_json.as_deref(),
+                )?;
+                let default_playing = distributed_autostart_enabled();
                 let distribute_startup_snapshot = std::env::var("NM_DISTRIBUTE_STARTUP_SNAPSHOT")
                     .ok()
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -478,25 +627,30 @@ fn main() -> anyhow::Result<()> {
                 rt.block_on(async move {
                     {
                         let mut state = node.state.write().await;
-                        if let Some(net_status) = state.network_registry.get_mut(&brain_id) {
-                            net_status.num_layers = (net_cfg_clone.num_hidden_layers + 1) as u32;
-                            net_status.desired_aarnn_depth = net_cfg_clone.aarnn_layer_depth as u32;
-                            if !config_json.is_empty() {
-                                net_status.config_json = config_json;
+                        state.network_registry.clear();
+                        state.network_snapshots.clear();
+                        for startup in startup_networks {
+                            let network_id = startup.network_id.clone();
+                            state.network_registry.insert(
+                                network_id.clone(),
+                                crate::distributed::proto::NetworkStatus {
+                                    network_id: network_id.clone(),
+                                    distribution: std::collections::HashMap::new(),
+                                    current_dt: args.dt_ms,
+                                    total_neurons: 0,
+                                    num_layers: startup.num_layers,
+                                    desired_aarnn_depth: startup.desired_aarnn_depth,
+                                    config_json: startup.config_json,
+                                    neuron_model: startup.neuron_model,
+                                    learning_rule: startup.learning_rule,
+                                    playing: default_playing,
+                                },
+                            );
+                            if distribute_startup_snapshot {
+                                if let Some(snapshot_json) = startup.snapshot_json {
+                                    state.network_snapshots.insert(network_id, snapshot_json);
+                                }
                             }
-                            net_status.neuron_model = neuron_model;
-                            net_status.learning_rule = learning_rule;
-                        }
-                        if distribute_startup_snapshot {
-                            if let Some(snapshot_json) = snapshot_json {
-                                state
-                                    .network_snapshots
-                                    .insert(brain_id.clone(), snapshot_json);
-                            }
-                        } else {
-                            state
-                                .network_snapshots
-                                .remove(&brain_id);
                         }
                     }
                     node.rebalance_networks().await;
@@ -527,8 +681,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "ui")]
     if args.ui {
         let mut net_cfg = net_cfg; // Re-use or reload config for UI consistency
-        if matches!(args.neuron_model, NeuronModel::Aarnn)
-            || matches!(args.learning, LearningRule::Aarnn)
+        if (matches!(args.neuron_model, NeuronModel::Aarnn)
+            || matches!(args.learning, LearningRule::Aarnn))
+            && startup_snapshot_json.is_none()
         {
             net_cfg.growth_enabled = true;
             net_cfg.use_morphology = true;
@@ -1064,12 +1219,19 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
             .unwrap_or(true);
         if preload_enabled {
+            let config_fingerprint = |bytes: &[u8]| -> u64 {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                bytes.hash(&mut hasher);
+                hasher.finish()
+            };
             let mut preload_snapshot_json: Option<String> = None;
             let mut preload_cfg: Option<NetworkConfig> = None;
 
             if let Some(network_path) = args.network.as_deref() {
                 if let Ok(s) = std::fs::read_to_string(network_path) {
-                    if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                    if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
                         preload_snapshot_json = Some(s);
                         preload_cfg = Some(snap.net);
                     }
@@ -1080,7 +1242,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 let cfg_path = std::path::Path::new(&args.config);
                 if cfg_path.exists() {
                     if let Ok(s) = std::fs::read_to_string(cfg_path) {
-                        if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                        if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
                             preload_snapshot_json = Some(s);
                             preload_cfg = Some(snap.net);
                         } else if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&s) {
@@ -1091,8 +1253,17 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             }
 
             if let Some(mut cfg) = preload_cfg {
-                if matches!(args.neuron_model, NeuronModel::Aarnn)
-                    || matches!(args.learning, LearningRule::Aarnn)
+                let preload_config_fingerprint = preload_snapshot_json
+                    .as_ref()
+                    .map(|json| config_fingerprint(json.as_bytes()))
+                    .or_else(|| {
+                        serde_json::to_vec(&cfg)
+                            .ok()
+                            .map(|bytes| config_fingerprint(&bytes))
+                    });
+                if (matches!(args.neuron_model, NeuronModel::Aarnn)
+                    || matches!(args.learning, LearningRule::Aarnn))
+                    && preload_snapshot_json.is_none()
                 {
                     cfg.growth_enabled = true;
                     cfg.use_morphology = true;
@@ -1154,6 +1325,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         initial_learning: learning,
                         initial_lif: lif,
                         initial_stdp: stdp,
+                        last_config_fingerprint: preload_config_fingerprint,
                     })),
                 );
             }
@@ -1194,7 +1366,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .await?;
 
         // Register the brain network if we are an orchestrator
-        let default_playing = !args.ui;
+        let default_playing = distributed_autostart_enabled();
         let mut state = node.state.write().await;
         state.network_registry.insert(
             args.brain_id.clone(),

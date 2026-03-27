@@ -1,0 +1,3694 @@
+#VRML_SIM R2025a utf8
+
+PROTO DrosophilaBancRobot [
+  field SFVec3f     translation 0 0.008 0
+  field SFRotation  rotation 0 1 0 0
+  field SFString    name "drosophila_banc_robot"
+  field SFString    controller "nao_nn_controller_uds"
+  field MFString    controllerArgs [
+    "NM_BRAINS=default"
+    "NM_SENSORS_default=^dros_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_default=^dros_o_[0-9]{3}_.*$"
+  ]
+  field MFNode      extensionSlot [ ]
+]
+{
+  Robot {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+    controller IS controller
+    controllerArgs IS controllerArgs
+    customData "{\"network\": \"../../network_drosophila_banc.json\", \"config\": \"../configs/config_drosophila_banc_webots.json\"}"
+    children [
+      # Side-profile tuned: compact head, tall thorax and tapered abdomen.
+      Transform {
+        translation 0.0087 0.00335 0
+        scale 1.02 0.92 0.98
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.84 0.64 0.37
+              roughness 0.33
+              metalness 0
+            }
+            geometry Sphere {
+              radius 0.00205
+            }
+          }
+        ]
+      }
+      Transform {
+        translation 0.0097 0.00235 0
+        scale 0.86 0.78 0.82
+        children [ Shape { appearance PBRAppearance { baseColor 0.78 0.58 0.34 roughness 0.42 } geometry Sphere { radius 0.00092 } } ]
+      }
+      Transform {
+        translation 0.00010 0.00355 0
+        rotation 0 0 1 1.5708
+        scale 1.20 1.04 1.08
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.57 0.41 0.24
+              roughness 0.36
+              metalness 0
+            }
+            geometry Capsule {
+              radius 0.00325
+              height 0.0092
+            }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0011 0.00585 0
+        rotation 0 0 1 1.5708
+        scale 1.22 0.64 0.94
+        children [ Shape { appearance PBRAppearance { baseColor 0.45 0.31 0.19 roughness 0.48 } geometry Capsule { radius 0.0020 height 0.0049 } } ]
+      }
+      Transform {
+        translation -0.0034 0.00535 0
+        scale 1.12 0.68 0.82
+        children [ Shape { appearance PBRAppearance { baseColor 0.44 0.31 0.19 roughness 0.50 } geometry Sphere { radius 0.00148 } } ]
+      }
+      Transform {
+        translation -0.0077 0.00290 0
+        rotation 0 0 1 1.5708
+        scale 1.28 1.00 0.96
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.76 0.56 0.33
+              roughness 0.44
+            }
+            geometry Capsule {
+              radius 0.00245
+              height 0.0118
+            }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0135 0.00245 0
+        scale 1.32 0.90 0.78
+        children [
+          Shape {
+            appearance PBRAppearance { baseColor 0.49 0.34 0.20 roughness 0.50 }
+            geometry Sphere { radius 0.00180 }
+          }
+        ]
+      }
+      Transform {
+        translation -0.0153 0.00230 0
+        scale 1.06 0.86 0.68
+        children [ Shape { appearance PBRAppearance { baseColor 0.24 0.18 0.12 roughness 0.54 } geometry Sphere { radius 0.00105 } } ]
+      }
+
+      # Abdomen striping and ventral taper.
+      Transform { translation -0.0055 0.00300 0 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.13 0.09 roughness 0.64 } geometry Box { size 0.00066 0.0055 0.0059 } } ] }
+      Transform { translation -0.0084 0.00282 0 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.13 0.09 roughness 0.64 } geometry Box { size 0.00064 0.0052 0.0056 } } ] }
+      Transform { translation -0.0110 0.00260 0 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.13 0.09 roughness 0.64 } geometry Box { size 0.00060 0.0048 0.0052 } } ] }
+      Transform { translation -0.0082 0.00158 0 children [ Shape { appearance PBRAppearance { baseColor 0.62 0.46 0.29 roughness 0.56 } geometry Sphere { radius 0.00116 } } ] }
+
+      # Compound eyes
+      Transform {
+        translation 0.00895 0.00340 0.00225
+        scale 1.00 1.05 0.96
+        children [ Shape { appearance PBRAppearance { baseColor 0.86 0.12 0.10 roughness 0.14 } geometry Sphere { radius 0.00192 } } ]
+      }
+      Transform {
+        translation 0.00895 0.00340 -0.00225
+        scale 1.00 1.05 0.96
+        children [ Shape { appearance PBRAppearance { baseColor 0.86 0.12 0.10 roughness 0.14 } geometry Sphere { radius 0.00192 } } ]
+      }
+
+      # Ocelli
+      Transform { translation 0.00755 0.00492 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.08 0.06 roughness 0.30 } geometry Sphere { radius 0.00024 } } ] }
+      Transform { translation 0.00705 0.00470 0.00046 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.08 0.06 roughness 0.30 } geometry Sphere { radius 0.00020 } } ] }
+      Transform { translation 0.00705 0.00470 -0.00046 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.08 0.06 roughness 0.30 } geometry Sphere { radius 0.00020 } } ] }
+
+      # Antennae and aristae
+      Transform { translation 0.00935 0.00305 0.00092 rotation 0 0 1 0.72 children [ Shape { appearance PBRAppearance { baseColor 0.73 0.59 0.40 roughness 0.74 } geometry Capsule { radius 0.00012 height 0.0020 } } ] }
+      Transform { translation 0.00935 0.00305 -0.00092 rotation 0 0 1 -0.72 children [ Shape { appearance PBRAppearance { baseColor 0.73 0.59 0.40 roughness 0.74 } geometry Capsule { radius 0.00012 height 0.0020 } } ] }
+      Transform { translation 0.01030 0.00408 0.00135 rotation 0 0 1 0.40 children [ Shape { appearance PBRAppearance { baseColor 0.18 0.15 0.11 roughness 0.78 } geometry Capsule { radius 0.00004 height 0.0021 } } ] }
+      Transform { translation 0.01030 0.00408 -0.00135 rotation 0 0 1 -0.40 children [ Shape { appearance PBRAppearance { baseColor 0.18 0.15 0.11 roughness 0.78 } geometry Capsule { radius 0.00004 height 0.0021 } } ] }
+
+      # Proboscis
+      Transform { translation 0.00945 0.00170 0 rotation 0 0 1 0.10 children [ Shape { appearance PBRAppearance { baseColor 0.73 0.57 0.39 roughness 0.78 } geometry Capsule { radius 0.00016 height 0.0027 } } ] }
+
+      # Halteres behind wing bases
+      Transform { translation -0.0027 0.00480 0.00222 rotation 0 0 1 0.90 children [ Shape { appearance PBRAppearance { baseColor 0.80 0.72 0.53 roughness 0.62 } geometry Capsule { radius 0.00012 height 0.0020 } } ] }
+      Transform { translation -0.0027 0.00480 -0.00222 rotation 0 0 1 -0.90 children [ Shape { appearance PBRAppearance { baseColor 0.80 0.72 0.53 roughness 0.62 } geometry Capsule { radius 0.00012 height 0.0020 } } ] }
+      Transform { translation -0.00355 0.00570 0.00246 children [ Shape { appearance PBRAppearance { baseColor 0.84 0.73 0.50 roughness 0.52 } geometry Sphere { radius 0.00021 } } ] }
+      Transform { translation -0.00355 0.00570 -0.00246 children [ Shape { appearance PBRAppearance { baseColor 0.84 0.73 0.50 roughness 0.52 } geometry Sphere { radius 0.00021 } } ] }
+    
+      # Articulated wings
+      DEF WING_LEFT_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor -0.00170 0.00600 0.00245
+          axis 1 0 0
+        }
+        device [
+          RotationalMotor {
+            name "wing_left_flap"
+            minPosition -0.52
+            maxPosition 0.52
+            maxVelocity 40
+            maxTorque 0.02
+          }
+          PositionSensor {
+            name "wing_left_flap_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "wing_left_solid"
+          translation -0.00170 0.00600 0.00245
+          children [
+            Transform {
+              rotation 0 1 0 0.40000
+              children [
+                Transform {
+                  rotation 1 0 0 0.22000
+                  scale 1 1 1
+                  children [
+                    Shape {
+                      appearance PBRAppearance {
+                        baseColor 0.96 0.96 0.93
+                        roughness 0.06
+                        metalness 0
+                        transparency 0.55
+                      }
+                      geometry IndexedFaceSet {
+                  coord Coordinate {
+                    point [
+                      0.00000 0.00000 0.00000,
+                    -0.00180 0.00006 0.00070,
+                    -0.00560 0.00012 0.00220,
+                    -0.01080 0.00016 0.00320,
+                    -0.01620 0.00013 0.00290,
+                    -0.02040 0.00007 0.00160,
+                    -0.02220 0.00002 0.00020,
+                    -0.02100 -0.00006 -0.00120,
+                    -0.01620 -0.00012 -0.00290,
+                    -0.01090 -0.00015 -0.00360,
+                    -0.00500 -0.00011 -0.00250,
+                    -0.00160 -0.00005 -0.00110
+                    ]
+                  }
+                  coordIndex [
+                    0, 1, 2, -1, 0, 2, 3, -1, 0, 3, 4, -1, 0, 4, 5, -1, 0, 5, 6, -1, 0, 6, 7, -1, 0, 7, 8, -1, 0, 8, 9, -1, 0, 9, 10, -1, 0, 10, 11, -1
+                  ]
+                  creaseAngle 0.6
+                }
+                    }
+                    Transform {
+                      translation -0.0086 0.00010 0.00028
+                      rotation 0 0 1 -1.34
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.70 transparency 0.28 } geometry Capsule { radius 0.000045 height 0.0186 } } ]
+                    }
+                    Transform {
+                      translation -0.0120 0.00007 -0.00065
+                      rotation 0 0 1 -0.94
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.72 transparency 0.34 } geometry Capsule { radius 0.000036 height 0.0118 } } ]
+                    }
+                    Transform {
+                      translation -0.0135 0.00005 -0.00165
+                      rotation 0 0 1 -0.58
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.74 transparency 0.38 } geometry Capsule { radius 0.000030 height 0.0086 } } ]
+                    }
+                    Transform {
+                      translation -0.0060 0.00007 -0.00135
+                      rotation 0 0 1 -0.22
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.74 transparency 0.42 } geometry Capsule { radius 0.000026 height 0.0062 } } ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+          boundingObject Group {
+            children [
+              Transform {
+                translation -0.0098 0.00002 0
+                rotation 0 0 1 -1.33
+                children [ Box { size 0.00100 0.0190 0.0052 } ]
+              }
+              Transform {
+                translation -0.0142 -0.00002 -0.0012
+                rotation 0 0 1 -0.92
+                children [ Box { size 0.00085 0.0120 0.0039 } ]
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00007
+          }
+        }
+      }
+      DEF WING_RIGHT_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor -0.00170 0.00600 -0.00245
+          axis 1 0 0
+        }
+        device [
+          RotationalMotor {
+            name "wing_right_flap"
+            minPosition -0.52
+            maxPosition 0.52
+            maxVelocity 40
+            maxTorque 0.02
+          }
+          PositionSensor {
+            name "wing_right_flap_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "wing_right_solid"
+          translation -0.00170 0.00600 -0.00245
+          children [
+            Transform {
+              rotation 0 1 0 -0.40000
+              children [
+                Transform {
+                  rotation 1 0 0 0.22000
+                  scale 1 1 1
+                  children [
+                    Shape {
+                      appearance PBRAppearance {
+                        baseColor 0.96 0.96 0.93
+                        roughness 0.06
+                        metalness 0
+                        transparency 0.55
+                      }
+                      geometry IndexedFaceSet {
+                  coord Coordinate {
+                    point [
+                      0.00000 0.00000 0.00000,
+                    -0.00180 0.00006 0.00070,
+                    -0.00560 0.00012 0.00220,
+                    -0.01080 0.00016 0.00320,
+                    -0.01620 0.00013 0.00290,
+                    -0.02040 0.00007 0.00160,
+                    -0.02220 0.00002 0.00020,
+                    -0.02100 -0.00006 -0.00120,
+                    -0.01620 -0.00012 -0.00290,
+                    -0.01090 -0.00015 -0.00360,
+                    -0.00500 -0.00011 -0.00250,
+                    -0.00160 -0.00005 -0.00110
+                    ]
+                  }
+                  coordIndex [
+                    0, 1, 2, -1, 0, 2, 3, -1, 0, 3, 4, -1, 0, 4, 5, -1, 0, 5, 6, -1, 0, 6, 7, -1, 0, 7, 8, -1, 0, 8, 9, -1, 0, 9, 10, -1, 0, 10, 11, -1
+                  ]
+                  creaseAngle 0.6
+                }
+                    }
+                    Transform {
+                      translation -0.0086 0.00010 0.00028
+                      rotation 0 0 1 -1.34
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.70 transparency 0.28 } geometry Capsule { radius 0.000045 height 0.0186 } } ]
+                    }
+                    Transform {
+                      translation -0.0120 0.00007 -0.00065
+                      rotation 0 0 1 -0.94
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.72 transparency 0.34 } geometry Capsule { radius 0.000036 height 0.0118 } } ]
+                    }
+                    Transform {
+                      translation -0.0135 0.00005 -0.00165
+                      rotation 0 0 1 -0.58
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.74 transparency 0.38 } geometry Capsule { radius 0.000030 height 0.0086 } } ]
+                    }
+                    Transform {
+                      translation -0.0060 0.00007 -0.00135
+                      rotation 0 0 1 -0.22
+                      children [ Shape { appearance PBRAppearance { baseColor 0.63 0.56 0.43 roughness 0.74 transparency 0.42 } geometry Capsule { radius 0.000026 height 0.0062 } } ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+          boundingObject Group {
+            children [
+              Transform {
+                translation -0.0098 0.00002 0
+                rotation 0 0 1 -1.33
+                children [ Box { size 0.00100 0.0190 0.0052 } ]
+              }
+              Transform {
+                translation -0.0142 -0.00002 -0.0012
+                rotation 0 0 1 -0.92
+                children [ Box { size 0.00085 0.0120 0.0039 } ]
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00007
+          }
+        }
+      }
+
+      # Articulated legs
+      DEF LEFT_FRONT_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor 0.00490 0.00235 0.00220
+          axis 0 0 1
+        }
+        device [
+          RotationalMotor {
+            name "leg_left_front_coxa"
+            minPosition -0.9
+            maxPosition 0.2
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_left_front_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_left_front_coxa_solid"
+          translation 0.00490 0.00235 0.00220
+          children [
+            Transform {
+              rotation 0 0 1 -1.05000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00023 height 0.00210 } }
+                Transform {
+                  translation 0.00034 -0.00101 0.00030
+                  rotation 0 0 1 0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00013 height 0.00080 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00084 0.00090
+                axis 0 0 1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_left_front_femur"
+                  minPosition -1.3
+                  maxPosition 0.2
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_left_front_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_left_front_femur_solid"
+                translation 0.00055 -0.00084 0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 -0.80000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00035 height 0.00390 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00187 0.00100
+                      axis 0 0 1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_left_front_tibia"
+                        minPosition -1.4
+                        maxPosition 0.15
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_left_front_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_left_front_tibia_solid"
+                      translation 0.00120 -0.00187 0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.44000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00038 height 0.00590 } }
+                            Transform {
+                              translation 0.00036 -0.00083 0.00022
+                              rotation 0 0 1 0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00201 0.00020
+                              rotation 0 0 1 0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00271 0.00080
+                            axis 0 0 1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_left_front_tarsus"
+                              minPosition -0.9
+                              maxPosition 0.15
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_left_front_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_left_front_tarsus_solid"
+                            translation 0.00135 -0.00271 0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.52000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00034 height 0.00480 } }
+                                  Transform {
+                                    translation 0.00058 -0.00230 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00274 0.00013
+                                    rotation 0 0 1 0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00274 -0.00013
+                                    rotation 0 0 1 0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.52000
+                              children [
+                                Box {
+                                  size 0.00097 0.00480 0.00097
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00031
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.44000
+                              children [
+                                Box {
+                                  size 0.00096 0.00590 0.00096
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00035
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 -0.80000
+                              children [
+                                Box {
+                                  size 0.00084 0.00390 0.00084
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00027
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 -1.05000
+                              children [
+                                Box {
+                                  size 0.00062 0.00210 0.00062
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00018
+          }
+        }
+      }
+      DEF RIGHT_FRONT_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor 0.00490 0.00235 -0.00220
+          axis 0 0 -1
+        }
+        device [
+          RotationalMotor {
+            name "leg_right_front_coxa"
+            minPosition -0.2
+            maxPosition 0.9
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_right_front_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_right_front_coxa_solid"
+          translation 0.00490 0.00235 -0.00220
+          children [
+            Transform {
+              rotation 0 0 1 -1.05000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00023 height 0.00210 } }
+                Transform {
+                  translation 0.00034 -0.00101 -0.00030
+                  rotation 0 0 1 -0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00013 height 0.00080 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00084 -0.00090
+                axis 0 0 -1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_right_front_femur"
+                  minPosition -0.2
+                  maxPosition 1.3
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_right_front_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_right_front_femur_solid"
+                translation 0.00055 -0.00084 -0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 -0.80000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00035 height 0.00390 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00187 -0.00100
+                      axis 0 0 -1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_right_front_tibia"
+                        minPosition -0.15
+                        maxPosition 1.4
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_right_front_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_right_front_tibia_solid"
+                      translation 0.00120 -0.00187 -0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.44000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00038 height 0.00590 } }
+                            Transform {
+                              translation 0.00036 -0.00083 -0.00022
+                              rotation 0 0 1 -0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00201 -0.00020
+                              rotation 0 0 1 -0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00271 -0.00080
+                            axis 0 0 -1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_right_front_tarsus"
+                              minPosition -0.15
+                              maxPosition 0.9
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_right_front_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_right_front_tarsus_solid"
+                            translation 0.00135 -0.00271 -0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.52000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00034 height 0.00480 } }
+                                  Transform {
+                                    translation 0.00058 -0.00230 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00274 -0.00013
+                                    rotation 0 0 1 -0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00274 0.00013
+                                    rotation 0 0 1 -0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.52000
+                              children [
+                                Box {
+                                  size 0.00097 0.00480 0.00097
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00031
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.44000
+                              children [
+                                Box {
+                                  size 0.00096 0.00590 0.00096
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00035
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 -0.80000
+                              children [
+                                Box {
+                                  size 0.00084 0.00390 0.00084
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00027
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 -1.05000
+                              children [
+                                Box {
+                                  size 0.00062 0.00210 0.00062
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00018
+          }
+        }
+      }
+      DEF LEFT_MID_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor 0.00035 0.00215 0.00275
+          axis 0 0 1
+        }
+        device [
+          RotationalMotor {
+            name "leg_left_mid_coxa"
+            minPosition -0.9
+            maxPosition 0.2
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_left_mid_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_left_mid_coxa_solid"
+          translation 0.00035 0.00215 0.00275
+          children [
+            Transform {
+              rotation 0 0 1 -0.05000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00026 height 0.00240 } }
+                Transform {
+                  translation 0.00034 -0.00115 0.00030
+                  rotation 0 0 1 0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00015 height 0.00091 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00096 0.00090
+                axis 0 0 1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_left_mid_femur"
+                  minPosition -1.3
+                  maxPosition 0.2
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_left_mid_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_left_mid_femur_solid"
+                translation 0.00055 -0.00096 0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 0.50000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00040 height 0.00450 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00216 0.00100
+                      axis 0 0 1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_left_mid_tibia"
+                        minPosition -1.4
+                        maxPosition 0.15
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_left_mid_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_left_mid_tibia_solid"
+                      translation 0.00120 -0.00216 0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.62000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00042 height 0.00650 } }
+                            Transform {
+                              translation 0.00036 -0.00091 0.00022
+                              rotation 0 0 1 0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00221 0.00020
+                              rotation 0 0 1 0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00299 0.00080
+                            axis 0 0 1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_left_mid_tarsus"
+                              minPosition -0.9
+                              maxPosition 0.15
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_left_mid_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_left_mid_tarsus_solid"
+                            translation 0.00135 -0.00299 0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.66000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00036 height 0.00520 } }
+                                  Transform {
+                                    translation 0.00058 -0.00250 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00296 0.00013
+                                    rotation 0 0 1 0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00296 -0.00013
+                                    rotation 0 0 1 0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.66000
+                              children [
+                                Box {
+                                  size 0.00106 0.00520 0.00106
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00034
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.62000
+                              children [
+                                Box {
+                                  size 0.00106 0.00650 0.00106
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00039
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 0.50000
+                              children [
+                                Box {
+                                  size 0.00097 0.00450 0.00097
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00032
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 -0.05000
+                              children [
+                                Box {
+                                  size 0.00063 0.00240 0.00063
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00018
+          }
+        }
+      }
+      DEF RIGHT_MID_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor 0.00035 0.00215 -0.00275
+          axis 0 0 -1
+        }
+        device [
+          RotationalMotor {
+            name "leg_right_mid_coxa"
+            minPosition -0.2
+            maxPosition 0.9
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_right_mid_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_right_mid_coxa_solid"
+          translation 0.00035 0.00215 -0.00275
+          children [
+            Transform {
+              rotation 0 0 1 -0.05000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00026 height 0.00240 } }
+                Transform {
+                  translation 0.00034 -0.00115 -0.00030
+                  rotation 0 0 1 -0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00015 height 0.00091 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00096 -0.00090
+                axis 0 0 -1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_right_mid_femur"
+                  minPosition -0.2
+                  maxPosition 1.3
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_right_mid_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_right_mid_femur_solid"
+                translation 0.00055 -0.00096 -0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 0.50000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00040 height 0.00450 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00216 -0.00100
+                      axis 0 0 -1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_right_mid_tibia"
+                        minPosition -0.15
+                        maxPosition 1.4
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_right_mid_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_right_mid_tibia_solid"
+                      translation 0.00120 -0.00216 -0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.62000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00042 height 0.00650 } }
+                            Transform {
+                              translation 0.00036 -0.00091 -0.00022
+                              rotation 0 0 1 -0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00221 -0.00020
+                              rotation 0 0 1 -0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00299 -0.00080
+                            axis 0 0 -1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_right_mid_tarsus"
+                              minPosition -0.15
+                              maxPosition 0.9
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_right_mid_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_right_mid_tarsus_solid"
+                            translation 0.00135 -0.00299 -0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.66000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00036 height 0.00520 } }
+                                  Transform {
+                                    translation 0.00058 -0.00250 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00296 -0.00013
+                                    rotation 0 0 1 -0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00296 0.00013
+                                    rotation 0 0 1 -0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.66000
+                              children [
+                                Box {
+                                  size 0.00106 0.00520 0.00106
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00034
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.62000
+                              children [
+                                Box {
+                                  size 0.00106 0.00650 0.00106
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00039
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 0.50000
+                              children [
+                                Box {
+                                  size 0.00097 0.00450 0.00097
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00032
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 -0.05000
+                              children [
+                                Box {
+                                  size 0.00063 0.00240 0.00063
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00018
+          }
+        }
+      }
+      DEF LEFT_REAR_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor -0.00460 0.00220 0.00255
+          axis 0 0 1
+        }
+        device [
+          RotationalMotor {
+            name "leg_left_rear_coxa"
+            minPosition -0.9
+            maxPosition 0.2
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_left_rear_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_left_rear_coxa_solid"
+          translation -0.00460 0.00220 0.00255
+          children [
+            Transform {
+              rotation 0 0 1 0.52000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00031 height 0.00280 } }
+                Transform {
+                  translation 0.00034 -0.00134 0.00030
+                  rotation 0 0 1 0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00017 height 0.00106 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00112 0.00090
+                axis 0 0 1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_left_rear_femur"
+                  minPosition -1.3
+                  maxPosition 0.2
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_left_rear_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_left_rear_femur_solid"
+                translation 0.00055 -0.00112 0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 0.95000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00050 height 0.00560 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00269 0.00100
+                      axis 0 0 1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_left_rear_tibia"
+                        minPosition -1.4
+                        maxPosition 0.15
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_left_rear_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_left_rear_tibia_solid"
+                      translation 0.00120 -0.00269 0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.82000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00050 height 0.00770 } }
+                            Transform {
+                              translation 0.00036 -0.00108 0.00022
+                              rotation 0 0 1 0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00262 0.00020
+                              rotation 0 0 1 0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00354 0.00080
+                            axis 0 0 1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_left_rear_tarsus"
+                              minPosition -0.9
+                              maxPosition 0.15
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_left_rear_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_left_rear_tarsus_solid"
+                            translation 0.00135 -0.00354 0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.74000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00039 height 0.00550 } }
+                                  Transform {
+                                    translation 0.00058 -0.00264 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00313 0.00013
+                                    rotation 0 0 1 0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00313 -0.00013
+                                    rotation 0 0 1 0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.74000
+                              children [
+                                Box {
+                                  size 0.00112 0.00550 0.00112
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00036
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.82000
+                              children [
+                                Box {
+                                  size 0.00125 0.00770 0.00125
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00046
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 0.95000
+                              children [
+                                Box {
+                                  size 0.00121 0.00560 0.00121
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00039
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 0.52000
+                              children [
+                                Box {
+                                  size 0.00074 0.00280 0.00074
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00020
+          }
+        }
+      }
+      DEF RIGHT_REAR_COXA_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor -0.00460 0.00220 -0.00255
+          axis 0 0 -1
+        }
+        device [
+          RotationalMotor {
+            name "leg_right_rear_coxa"
+            minPosition -0.2
+            maxPosition 0.9
+            maxVelocity 8
+            maxTorque 0.03
+          }
+          PositionSensor {
+            name "leg_right_rear_coxa_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "leg_right_rear_coxa_solid"
+          translation -0.00460 0.00220 -0.00255
+          children [
+            Transform {
+              rotation 0 0 1 0.52000
+              children [
+                Shape { appearance PBRAppearance { baseColor 0.78 0.62 0.40 roughness 0.78 } geometry Capsule { radius 0.00031 height 0.00280 } }
+                Transform {
+                  translation 0.00034 -0.00134 -0.00030
+                  rotation 0 0 1 -0.42000
+                  children [
+                    Shape { appearance PBRAppearance { baseColor 0.80 0.67 0.47 roughness 0.72 } geometry Capsule { radius 0.00017 height 0.00106 } }
+                  ]
+                }
+              ]
+            }
+            HingeJoint {
+              jointParameters HingeJointParameters {
+                anchor 0.00055 -0.00112 -0.00090
+                axis 0 0 -1
+              }
+              device [
+                RotationalMotor {
+                  name "leg_right_rear_femur"
+                  minPosition -0.2
+                  maxPosition 1.3
+                  maxVelocity 8
+                  maxTorque 0.03
+                }
+                PositionSensor {
+                  name "leg_right_rear_femur_sensor"
+                }
+              ]
+              endPoint Solid {
+                name "leg_right_rear_femur_solid"
+                translation 0.00055 -0.00112 -0.00090
+                children [
+                  Transform {
+                    rotation 0 0 1 0.95000
+                    children [
+                      Shape { appearance PBRAppearance { baseColor 0.84 0.70 0.48 roughness 0.76 } geometry Capsule { radius 0.00050 height 0.00560 } }
+                    ]
+                  }
+                  HingeJoint {
+                    jointParameters HingeJointParameters {
+                      anchor 0.00120 -0.00269 -0.00100
+                      axis 0 0 -1
+                    }
+                    device [
+                      RotationalMotor {
+                        name "leg_right_rear_tibia"
+                        minPosition -0.15
+                        maxPosition 1.4
+                        maxVelocity 8
+                        maxTorque 0.025
+                      }
+                      PositionSensor {
+                        name "leg_right_rear_tibia_sensor"
+                      }
+                    ]
+                    endPoint Solid {
+                      name "leg_right_rear_tibia_solid"
+                      translation 0.00120 -0.00269 -0.00100
+                      children [
+                        Transform {
+                          rotation 0 0 1 0.82000
+                          children [
+                            Shape { appearance PBRAppearance { baseColor 0.86 0.73 0.50 roughness 0.78 } geometry Capsule { radius 0.00050 height 0.00770 } }
+                            Transform {
+                              translation 0.00036 -0.00108 -0.00022
+                              rotation 0 0 1 -0.66000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00085 } } ]
+                            }
+                            Transform {
+                              translation 0.00048 -0.00262 -0.00020
+                              rotation 0 0 1 -0.72000
+                              children [ Shape { appearance PBRAppearance { baseColor 0.69 0.56 0.39 roughness 0.70 } geometry Capsule { radius 0.00005 height 0.00090 } } ]
+                            }
+                          ]
+                        }
+                        HingeJoint {
+                          jointParameters HingeJointParameters {
+                            anchor 0.00135 -0.00354 -0.00080
+                            axis 0 0 -1
+                          }
+                          device [
+                            RotationalMotor {
+                              name "leg_right_rear_tarsus"
+                              minPosition -0.15
+                              maxPosition 0.9
+                              maxVelocity 10
+                              maxTorque 0.02
+                            }
+                            PositionSensor {
+                              name "leg_right_rear_tarsus_sensor"
+                            }
+                          ]
+                          endPoint Solid {
+                            name "leg_right_rear_tarsus_solid"
+                            translation 0.00135 -0.00354 -0.00080
+                            children [
+                              Transform {
+                                rotation 0 0 1 0.74000
+                                children [
+                                  Shape { appearance PBRAppearance { baseColor 0.88 0.77 0.56 roughness 0.80 } geometry Capsule { radius 0.00039 height 0.00550 } }
+                                  Transform {
+                                    translation 0.00058 -0.00264 0
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.11 0.10 0.08 roughness 0.52 } geometry Sphere { radius 0.00010 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00313 -0.00013
+                                    rotation 0 0 1 -0.78000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00060 } } ]
+                                  }
+                                  Transform {
+                                    translation 0.00076 -0.00313 0.00013
+                                    rotation 0 0 1 -0.58000
+                                    children [ Shape { appearance PBRAppearance { baseColor 0.09 0.08 0.06 roughness 0.52 } geometry Capsule { radius 0.00004 height 0.00058 } } ]
+                                  }
+                                ]
+                              }
+                            ]
+                            boundingObject Transform {
+                              rotation 0 0 1 0.74000
+                              children [
+                                Box {
+                                  size 0.00112 0.00550 0.00112
+                                }
+                              ]
+                            }
+                            physics Physics {
+                              density -1
+                              mass 0.00036
+                            }
+                          }
+                        }
+                      ]
+                      boundingObject Transform {
+                              rotation 0 0 1 0.82000
+                              children [
+                                Box {
+                                  size 0.00125 0.00770 0.00125
+                                }
+                              ]
+                            }
+                      physics Physics {
+                        density -1
+                        mass 0.00046
+                      }
+                    }
+                  }
+                ]
+                boundingObject Transform {
+                              rotation 0 0 1 0.95000
+                              children [
+                                Box {
+                                  size 0.00121 0.00560 0.00121
+                                }
+                              ]
+                            }
+                physics Physics {
+                  density -1
+                  mass 0.00039
+                }
+              }
+            }
+          ]
+          boundingObject Transform {
+                              rotation 0 0 1 0.52000
+                              children [
+                                Box {
+                                  size 0.00074 0.00280 0.00074
+                                }
+                              ]
+                            }
+          physics Physics {
+            density -1
+            mass 0.00020
+          }
+        }
+      }
+
+      # Inertial sensing
+      Accelerometer {
+        name "dros_s_00_accel"
+      }
+      Gyro {
+        name "dros_s_03_gyro"
+      }
+      # Contact sensing around body perimeter
+      TouchSensor {
+        name "dros_s_06_touch_front"
+        type "bumper"
+        translation 0.010 0.0015 0.0
+      }
+      TouchSensor {
+        name "dros_s_07_touch_rear"
+        type "bumper"
+        translation -0.024 0.0009 0.0
+      }
+      TouchSensor {
+        name "dros_s_08_touch_left"
+        type "bumper"
+        translation -0.004 0.0015 0.010
+      }
+      TouchSensor {
+        name "dros_s_09_touch_right"
+        type "bumper"
+        translation -0.004 0.0015 -0.010
+      }
+      # Directional proximity ring for odour/obstacle gradient response.
+      DistanceSensor {
+        name "dros_s_10_prox_00"
+        type "infra-red"
+        translation 0.00800 0.0034 0.00000
+        rotation 0 1 0 0.00000
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_11_prox_01"
+        type "infra-red"
+        translation 0.00759 0.0034 0.00246
+        rotation 0 1 0 0.26180
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_12_prox_02"
+        type "infra-red"
+        translation 0.00639 0.0034 0.00475
+        rotation 0 1 0 0.52360
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_13_prox_03"
+        type "infra-red"
+        translation 0.00449 0.0034 0.00672
+        rotation 0 1 0 0.78540
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_14_prox_04"
+        type "infra-red"
+        translation 0.00200 0.0034 0.00823
+        rotation 0 1 0 1.04720
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_15_prox_05"
+        type "infra-red"
+        translation -0.00089 0.0034 0.00918
+        rotation 0 1 0 1.30900
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_16_prox_06"
+        type "infra-red"
+        translation -0.00400 0.0034 0.00950
+        rotation 0 1 0 1.57080
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_17_prox_07"
+        type "infra-red"
+        translation -0.00711 0.0034 0.00918
+        rotation 0 1 0 1.83260
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_18_prox_08"
+        type "infra-red"
+        translation -0.01000 0.0034 0.00823
+        rotation 0 1 0 2.09440
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_19_prox_09"
+        type "infra-red"
+        translation -0.01249 0.0034 0.00672
+        rotation 0 1 0 2.35619
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_20_prox_10"
+        type "infra-red"
+        translation -0.01439 0.0034 0.00475
+        rotation 0 1 0 2.61799
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_21_prox_11"
+        type "infra-red"
+        translation -0.01559 0.0034 0.00246
+        rotation 0 1 0 2.87979
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_22_prox_12"
+        type "infra-red"
+        translation -0.01600 0.0034 0.00000
+        rotation 0 1 0 3.14159
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_23_prox_13"
+        type "infra-red"
+        translation -0.01559 0.0034 -0.00246
+        rotation 0 1 0 3.40339
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_24_prox_14"
+        type "infra-red"
+        translation -0.01439 0.0034 -0.00475
+        rotation 0 1 0 3.66519
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_25_prox_15"
+        type "infra-red"
+        translation -0.01249 0.0034 -0.00672
+        rotation 0 1 0 3.92699
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_26_prox_16"
+        type "infra-red"
+        translation -0.01000 0.0034 -0.00823
+        rotation 0 1 0 4.18879
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_27_prox_17"
+        type "infra-red"
+        translation -0.00711 0.0034 -0.00918
+        rotation 0 1 0 4.45059
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_28_prox_18"
+        type "infra-red"
+        translation -0.00400 0.0034 -0.00950
+        rotation 0 1 0 4.71239
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_29_prox_19"
+        type "infra-red"
+        translation -0.00089 0.0034 -0.00918
+        rotation 0 1 0 4.97419
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_30_prox_20"
+        type "infra-red"
+        translation 0.00200 0.0034 -0.00823
+        rotation 0 1 0 5.23599
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_31_prox_21"
+        type "infra-red"
+        translation 0.00449 0.0034 -0.00672
+        rotation 0 1 0 5.49779
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_32_prox_22"
+        type "infra-red"
+        translation 0.00639 0.0034 -0.00475
+        rotation 0 1 0 5.75959
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+      DistanceSensor {
+        name "dros_s_33_prox_23"
+        type "infra-red"
+        translation 0.00759 0.0034 -0.00246
+        rotation 0 1 0 6.02139
+        lookupTable [
+          0 1000 0
+          0.18 0 0
+        ]
+      }
+
+      # Compound-eye cameras (left/right) for event-retina encoding.
+      Camera {
+        name "dros_s_34_eye_left"
+        width 32
+        height 24
+        fieldOfView 2.6
+        translation 0.00905 0.00340 0.00230
+        rotation 0 1 0 0.95
+      }
+      Camera {
+        name "dros_s_35_eye_right"
+        width 32
+        height 24
+        fieldOfView 2.6
+        translation 0.00905 0.00340 -0.00230
+        rotation 0 1 0 -0.95
+      }
+
+    DEF JOINT_0_DROS_O_000_720575941552142727 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00250 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_000_720575941552142727"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_0_DROS_O_000_720575941552142727 Solid {
+        name "SEGMENT_0_DROS_O_000_720575941552142727"
+        translation -0.00300 0.00250 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_1_DROS_O_001_720575941527162905 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00232 0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_001_720575941527162905"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_1_DROS_O_001_720575941527162905 Solid {
+        name "SEGMENT_1_DROS_O_001_720575941527162905"
+        translation -0.00300 0.00232 0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_2_DROS_O_002_720575941447863316 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00183 0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_002_720575941447863316"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_2_DROS_O_002_720575941447863316 Solid {
+        name "SEGMENT_2_DROS_O_002_720575941447863316"
+        translation -0.00300 0.00183 0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_3_DROS_O_003_720575941486612034 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00108 0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_003_720575941486612034"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_3_DROS_O_003_720575941486612034 Solid {
+        name "SEGMENT_3_DROS_O_003_720575941486612034"
+        translation -0.00300 0.00108 0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_4_DROS_O_004_720575941633206944 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00020 0.00230
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_004_720575941633206944"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_4_DROS_O_004_720575941633206944 Solid {
+        name "SEGMENT_4_DROS_O_004_720575941633206944"
+        translation -0.00300 0.00020 0.00230
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_5_DROS_O_005_720575941493231536 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00068 0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_005_720575941493231536"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_5_DROS_O_005_720575941493231536 Solid {
+        name "SEGMENT_5_DROS_O_005_720575941493231536"
+        translation -0.00300 -0.00068 0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_6_DROS_O_006_720575941579876085 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00143 0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_006_720575941579876085"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_6_DROS_O_006_720575941579876085 Solid {
+        name "SEGMENT_6_DROS_O_006_720575941579876085"
+        translation -0.00300 -0.00143 0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_7_DROS_O_007_720575941643100754 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00192 0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_007_720575941643100754"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_7_DROS_O_007_720575941643100754 Solid {
+        name "SEGMENT_7_DROS_O_007_720575941643100754"
+        translation -0.00300 -0.00192 0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_8_DROS_O_008_720575941657879576 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00210 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_008_720575941657879576"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_8_DROS_O_008_720575941657879576 Solid {
+        name "SEGMENT_8_DROS_O_008_720575941657879576"
+        translation -0.00300 -0.00210 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_9_DROS_O_009_720575941533704067 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00192 -0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_009_720575941533704067"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_9_DROS_O_009_720575941533704067 Solid {
+        name "SEGMENT_9_DROS_O_009_720575941533704067"
+        translation -0.00300 -0.00192 -0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_10_DROS_O_010_720575941441623899 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00143 -0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_010_720575941441623899"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_10_DROS_O_010_720575941441623899 Solid {
+        name "SEGMENT_10_DROS_O_010_720575941441623899"
+        translation -0.00300 -0.00143 -0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_11_DROS_O_011_720575941456897005 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 -0.00068 -0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_011_720575941456897005"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_11_DROS_O_011_720575941456897005 Solid {
+        name "SEGMENT_11_DROS_O_011_720575941456897005"
+        translation -0.00300 -0.00068 -0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_12_DROS_O_012_720575941488287797 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00020 -0.00230
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_012_720575941488287797"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_12_DROS_O_012_720575941488287797 Solid {
+        name "SEGMENT_12_DROS_O_012_720575941488287797"
+        translation -0.00300 0.00020 -0.00230
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_13_DROS_O_013_720575941720479034 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00108 -0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_013_720575941720479034"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_13_DROS_O_013_720575941720479034 Solid {
+        name "SEGMENT_13_DROS_O_013_720575941720479034"
+        translation -0.00300 0.00108 -0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_14_DROS_O_014_720575941470212471 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00183 -0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_014_720575941470212471"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_14_DROS_O_014_720575941470212471 Solid {
+        name "SEGMENT_14_DROS_O_014_720575941470212471"
+        translation -0.00300 0.00183 -0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_15_DROS_O_015_720575941471839296 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00300 0.00232 -0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_015_720575941471839296"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_15_DROS_O_015_720575941471839296 Solid {
+        name "SEGMENT_15_DROS_O_015_720575941471839296"
+        translation -0.00300 0.00232 -0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_16_DROS_O_016_720575941519464046 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00350 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_016_720575941519464046"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_16_DROS_O_016_720575941519464046 Solid {
+        name "SEGMENT_16_DROS_O_016_720575941519464046"
+        translation -0.00080 0.00350 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_17_DROS_O_017_720575941611791590 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00325 0.00126
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_017_720575941611791590"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_17_DROS_O_017_720575941611791590 Solid {
+        name "SEGMENT_17_DROS_O_017_720575941611791590"
+        translation -0.00080 0.00325 0.00126
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_18_DROS_O_018_720575941618366079 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00253 0.00233
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_018_720575941618366079"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_18_DROS_O_018_720575941618366079 Solid {
+        name "SEGMENT_18_DROS_O_018_720575941618366079"
+        translation -0.00080 0.00253 0.00233
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_19_DROS_O_019_720575941510475536 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00146 0.00305
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_019_720575941510475536"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_19_DROS_O_019_720575941510475536 Solid {
+        name "SEGMENT_19_DROS_O_019_720575941510475536"
+        translation -0.00080 0.00146 0.00305
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_20_DROS_O_020_720575941508453761 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00020 0.00330
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_020_720575941508453761"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_20_DROS_O_020_720575941508453761 Solid {
+        name "SEGMENT_20_DROS_O_020_720575941508453761"
+        translation -0.00080 0.00020 0.00330
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_21_DROS_O_021_720575941568553330 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00106 0.00305
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_021_720575941568553330"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_21_DROS_O_021_720575941568553330 Solid {
+        name "SEGMENT_21_DROS_O_021_720575941568553330"
+        translation -0.00080 -0.00106 0.00305
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_22_DROS_O_022_720575941519463278 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00213 0.00233
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_022_720575941519463278"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_22_DROS_O_022_720575941519463278 Solid {
+        name "SEGMENT_22_DROS_O_022_720575941519463278"
+        translation -0.00080 -0.00213 0.00233
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_23_DROS_O_023_720575941475745898 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00285 0.00126
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_023_720575941475745898"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_23_DROS_O_023_720575941475745898 Solid {
+        name "SEGMENT_23_DROS_O_023_720575941475745898"
+        translation -0.00080 -0.00285 0.00126
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_24_DROS_O_024_720575941652633585 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00310 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_024_720575941652633585"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_24_DROS_O_024_720575941652633585 Solid {
+        name "SEGMENT_24_DROS_O_024_720575941652633585"
+        translation -0.00080 -0.00310 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_25_DROS_O_025_720575941471955264 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00285 -0.00126
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_025_720575941471955264"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_25_DROS_O_025_720575941471955264 Solid {
+        name "SEGMENT_25_DROS_O_025_720575941471955264"
+        translation -0.00080 -0.00285 -0.00126
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_26_DROS_O_026_720575941655597785 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00213 -0.00233
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_026_720575941655597785"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_26_DROS_O_026_720575941655597785 Solid {
+        name "SEGMENT_26_DROS_O_026_720575941655597785"
+        translation -0.00080 -0.00213 -0.00233
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_27_DROS_O_027_720575941440280767 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 -0.00106 -0.00305
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_027_720575941440280767"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_27_DROS_O_027_720575941440280767 Solid {
+        name "SEGMENT_27_DROS_O_027_720575941440280767"
+        translation -0.00080 -0.00106 -0.00305
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_28_DROS_O_028_720575941572713886 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00020 -0.00330
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_028_720575941572713886"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_28_DROS_O_028_720575941572713886 Solid {
+        name "SEGMENT_28_DROS_O_028_720575941572713886"
+        translation -0.00080 0.00020 -0.00330
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_29_DROS_O_029_720575941551991295 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00146 -0.00305
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_029_720575941551991295"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_29_DROS_O_029_720575941551991295 Solid {
+        name "SEGMENT_29_DROS_O_029_720575941551991295"
+        translation -0.00080 0.00146 -0.00305
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_30_DROS_O_030_720575941593843589 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00253 -0.00233
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_030_720575941593843589"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_30_DROS_O_030_720575941593843589 Solid {
+        name "SEGMENT_30_DROS_O_030_720575941593843589"
+        translation -0.00080 0.00253 -0.00233
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_31_DROS_O_031_720575941626500746 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00080 0.00325 -0.00126
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_031_720575941626500746"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_31_DROS_O_031_720575941626500746 Solid {
+        name "SEGMENT_31_DROS_O_031_720575941626500746"
+        translation -0.00080 0.00325 -0.00126
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_32_DROS_O_032_720575941570128498 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00250 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_032_720575941570128498"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_32_DROS_O_032_720575941570128498 Solid {
+        name "SEGMENT_32_DROS_O_032_720575941570128498"
+        translation 0.00140 0.00250 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_33_DROS_O_033_720575941569529458 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00232 0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_033_720575941569529458"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_33_DROS_O_033_720575941569529458 Solid {
+        name "SEGMENT_33_DROS_O_033_720575941569529458"
+        translation 0.00140 0.00232 0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_34_DROS_O_034_720575941595517735 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00183 0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_034_720575941595517735"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_34_DROS_O_034_720575941595517735 Solid {
+        name "SEGMENT_34_DROS_O_034_720575941595517735"
+        translation 0.00140 0.00183 0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_35_DROS_O_035_720575941491992807 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00108 0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_035_720575941491992807"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_35_DROS_O_035_720575941491992807 Solid {
+        name "SEGMENT_35_DROS_O_035_720575941491992807"
+        translation 0.00140 0.00108 0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_36_DROS_O_036_720575941547394081 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00020 0.00230
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_036_720575941547394081"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_36_DROS_O_036_720575941547394081 Solid {
+        name "SEGMENT_36_DROS_O_036_720575941547394081"
+        translation 0.00140 0.00020 0.00230
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_37_DROS_O_037_720575941531180261 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00068 0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_037_720575941531180261"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_37_DROS_O_037_720575941531180261 Solid {
+        name "SEGMENT_37_DROS_O_037_720575941531180261"
+        translation 0.00140 -0.00068 0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_38_DROS_O_038_720575941553670791 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00143 0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_038_720575941553670791"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_38_DROS_O_038_720575941553670791 Solid {
+        name "SEGMENT_38_DROS_O_038_720575941553670791"
+        translation 0.00140 -0.00143 0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_39_DROS_O_039_720575941478187841 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00192 0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_039_720575941478187841"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_39_DROS_O_039_720575941478187841 Solid {
+        name "SEGMENT_39_DROS_O_039_720575941478187841"
+        translation 0.00140 -0.00192 0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_40_DROS_O_040_720575941516874094 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00210 0.00000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_040_720575941516874094"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_40_DROS_O_040_720575941516874094 Solid {
+        name "SEGMENT_40_DROS_O_040_720575941516874094"
+        translation 0.00140 -0.00210 0.00000
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_41_DROS_O_041_720575941455787245 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00192 -0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_041_720575941455787245"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_41_DROS_O_041_720575941455787245 Solid {
+        name "SEGMENT_41_DROS_O_041_720575941455787245"
+        translation 0.00140 -0.00192 -0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_42_DROS_O_042_720575941593715569 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00143 -0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_042_720575941593715569"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_42_DROS_O_042_720575941593715569 Solid {
+        name "SEGMENT_42_DROS_O_042_720575941593715569"
+        translation 0.00140 -0.00143 -0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_43_DROS_O_043_720575941553516167 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 -0.00068 -0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_043_720575941553516167"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_43_DROS_O_043_720575941553516167 Solid {
+        name "SEGMENT_43_DROS_O_043_720575941553516167"
+        translation 0.00140 -0.00068 -0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_44_DROS_O_044_720575941595193558 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00020 -0.00230
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_044_720575941595193558"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_44_DROS_O_044_720575941595193558 Solid {
+        name "SEGMENT_44_DROS_O_044_720575941595193558"
+        translation 0.00140 0.00020 -0.00230
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_45_DROS_O_045_720575941638407199 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00108 -0.00212
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_045_720575941638407199"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_45_DROS_O_045_720575941638407199 Solid {
+        name "SEGMENT_45_DROS_O_045_720575941638407199"
+        translation 0.00140 0.00108 -0.00212
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_46_DROS_O_046_720575941558861839 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00183 -0.00163
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_046_720575941558861839"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_46_DROS_O_046_720575941558861839 Solid {
+        name "SEGMENT_46_DROS_O_046_720575941558861839"
+        translation 0.00140 0.00183 -0.00163
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+    DEF JOINT_47_DROS_O_047_720575941525308582 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00140 0.00232 -0.00088
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "dros_o_047_720575941525308582"
+          maxVelocity 14
+          minPosition -1.6
+          maxPosition 1.6
+        }
+      ]
+      endPoint DEF SEGMENT_47_DROS_O_047_720575941525308582 Solid {
+        name "SEGMENT_47_DROS_O_047_720575941525308582"
+        translation 0.00140 0.00232 -0.00088
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.2
+              roughness 0.55
+              metalness 0
+              transparency 1
+            }
+            geometry Sphere {
+              radius 0.00035
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.0004
+        }
+        physics Physics {
+          density -1
+          mass 0.00010
+        }
+      }
+    }
+
+      Group {
+        children IS extensionSlot
+      }
+    ]
+    boundingObject Group {
+      children [
+        Transform {
+          translation 0.0009 0.0030 0
+          rotation 0 0 1 1.5708
+          children [ Capsule { radius 0.0032 height 0.0082 } ]
+        }
+        Transform {
+          translation 0.0076 0.0031 0
+          children [ Sphere { radius 0.0025 } ]
+        }
+        Transform {
+          translation -0.0056 0.0030 0
+          rotation 0 0 1 1.5708
+          children [ Capsule { radius 0.0030 height 0.0118 } ]
+        }
+        Transform {
+          translation -0.0141 0.0026 0
+          children [ Sphere { radius 0.0020 } ]
+        }
+      ]
+    }
+    physics Physics {
+      density -1
+      mass 0.0018
+    }
+  }
+}

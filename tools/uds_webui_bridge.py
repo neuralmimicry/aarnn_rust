@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import random
 import socket
 import struct
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -40,6 +43,8 @@ class WebUiBridge:
         default_o: int,
         http_timeout: float,
         status_refresh_secs: float,
+        activity_refresh_secs: float,
+        control_period_secs: float,
         verbose: bool,
     ) -> None:
         self.socket_path = socket_path
@@ -49,6 +54,8 @@ class WebUiBridge:
         self.threshold = threshold
         self.http_timeout = max(0.05, http_timeout)
         self.status_refresh_secs = max(0.5, status_refresh_secs)
+        self.activity_refresh_secs = max(0.01, activity_refresh_secs)
+        self.control_period_secs = max(0.005, control_period_secs)
         self.verbose = verbose
 
         self.s_count = max(1, default_s)
@@ -56,10 +63,33 @@ class WebUiBridge:
         self.step_index = 0
         self.output_node_id: str | None = None
         self.last_status_refresh = 0.0
+        self.last_activity_refresh = 0.0
         self.last_error_log = 0.0
+        self._stats_last_log = 0.0
+        self._frames_seen = 0
+        self._injected_spikes = 0
+        self._output_spikes_seen = 0
+        self._io_mode = "threshold"
+        self._rng = random.Random()
 
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        self.sock.settimeout(0.2)
+        self.sock.settimeout(0.05)
+
+        # Non-blocking IPC model:
+        # - UDS loop always replies immediately with cached outputs.
+        # - HTTP bridge work runs in a background worker and coalesces to latest frame.
+        self._cache_lock = threading.Lock()
+        self._cached_outputs = [0.0] * self.o_count
+        self._pending_lock = threading.Lock()
+        self._pending_frame: tuple[int, list[int]] | None = None
+        self._pending_overwrites = 0
+        self._last_overwrite_log = 0.0
+        self._stop_event = threading.Event()
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name=f"uds-webui-bridge-{self.network_id}",
+            daemon=True,
+        )
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -145,8 +175,55 @@ class WebUiBridge:
             self.s_count = len(s_names)
         if isinstance(o_names, list) and o_names:
             self.o_count = len(o_names)
-        self._log(f"handshake accepted S={self.s_count} O={self.o_count}")
+            with self._cache_lock:
+                if len(self._cached_outputs) != self.o_count:
+                    self._cached_outputs = [0.0] * self.o_count
+        self._io_mode = self._classify_io_mode(self.s_count, self.o_count)
+        print(
+            f"[uds_webui_bridge:{self.network_id}] handshake accepted S={self.s_count} O={self.o_count} mode={self._io_mode}",
+            flush=True,
+        )
         return True
+
+    @staticmethod
+    def _classify_io_mode(s_count: int, o_count: int) -> str:
+        if s_count == 24 and o_count == 96:
+            return "celegans-rate"
+        if o_count == 48 and 64 <= s_count <= 4096:
+            return "drosophila-rate"
+        if o_count == 40 and s_count >= 1024:
+            return "nao-rate"
+        return "threshold"
+
+    def _encode_analog_indices(
+        self,
+        sensory: list[float],
+        low_gain: float,
+        quiet_floor: float,
+    ) -> list[int]:
+        out: list[int] = []
+        all_quiet = all(v <= 1e-3 for v in sensory)
+        if all_quiet:
+            floor = max(0.0, min(0.2, quiet_floor * 2.0))
+        else:
+            floor = max(0.0, min(0.1, quiet_floor))
+        for idx, value in enumerate(sensory):
+            v = float(value)
+            if not math.isfinite(v):
+                continue
+            v = min(1.0, max(0.0, v))
+            if v >= 0.999:
+                out.append(idx)
+                continue
+            if v <= 0.0:
+                continue
+            if v >= 0.5:
+                p = min(1.0, 0.82 + 0.18 * v)
+            else:
+                p = max(0.0, min(0.95, floor + low_gain * v))
+            if p > 0.0 and self._rng.random() < p:
+                out.append(idx)
+        return out
 
     def _decode_frame(self, msg: bytes) -> list[float] | None:
         if len(msg) < 4 or len(msg) % 4 != 0:
@@ -159,6 +236,30 @@ class WebUiBridge:
         return list(values)
 
     def _indices_from_sensory(self, sensory: list[float]) -> list[int]:
+        if self._io_mode == "celegans-rate":
+            # Match in-process IPC behavior for Celegans so low analog channels
+            # still generate occasional spikes and keep locomotion active.
+            out: list[int] = []
+            all_quiet = all(v <= 1e-3 for v in sensory)
+            for idx, value in enumerate(sensory):
+                v = min(1.0, max(0.0, value))
+                base_p = 0.08 if all_quiet else 0.01
+                if v >= 0.5:
+                    p = min(1.0, 0.30 + 0.70 * v)
+                elif v > 0.0:
+                    p = 0.02 + 0.22 * v
+                else:
+                    p = 0.0
+                p = max(base_p, p)
+                if p > 0.0 and self._rng.random() < p:
+                    out.append(idx)
+            return out
+        if self._io_mode == "drosophila-rate":
+            # Mirror Rust IPC encoder defaults for Drosophila mixed analog/event streams.
+            return self._encode_analog_indices(sensory, low_gain=0.34, quiet_floor=0.002)
+        if self._io_mode == "nao-rate":
+            # Mirror Rust IPC encoder defaults for NAO visual+proprioceptive channels.
+            return self._encode_analog_indices(sensory, low_gain=0.18, quiet_floor=0.001)
         return [idx for idx, value in enumerate(sensory) if value >= self.threshold]
 
     def _fetch_output_indices(self) -> list[int]:
@@ -182,14 +283,15 @@ class WebUiBridge:
                 return out
         return []
 
-    def _send_injection(self, spike_indices: list[int]) -> None:
+    def _send_injection(self, spike_indices: list[int], step_index: int) -> None:
         # web_ui requires either spike_indices or aer_payload_hex; skip if empty.
         if not spike_indices:
             return
+        self._injected_spikes += len(spike_indices)
         payload = {
             "addr": self.orchestrator_addr,
             "network_id": self.network_id,
-            "step_index": self.step_index,
+            "step_index": step_index,
             "spike_indices": spike_indices,
         }
         self._json_post("/api/aer/inject", payload)
@@ -201,6 +303,89 @@ class WebUiBridge:
                 out[idx] = 1.0
         return struct.pack(f"<{self.o_count}f", *out)
 
+    def _enqueue_pending(self, step_index: int, spike_indices: list[int]) -> None:
+        now = time.time()
+        with self._pending_lock:
+            if self._pending_frame is not None:
+                self._pending_overwrites += 1
+                if now - self._last_overwrite_log >= 2.0:
+                    self._log_error_throttled(
+                        f"coalescing stale UDS frames (replaced {self._pending_overwrites} pending frame(s))"
+                    )
+                    self._pending_overwrites = 0
+                    self._last_overwrite_log = now
+            self._pending_frame = (step_index, spike_indices)
+
+    def _take_pending(self) -> tuple[int, list[int]] | None:
+        with self._pending_lock:
+            item = self._pending_frame
+            self._pending_frame = None
+            return item
+
+    def _set_cached_outputs(self, output_indices: list[int]) -> None:
+        out = [0.0] * self.o_count
+        nonzero = 0
+        for idx in output_indices:
+            if 0 <= idx < self.o_count:
+                out[idx] = 1.0
+                nonzero += 1
+        self._output_spikes_seen += nonzero
+        with self._cache_lock:
+            self._cached_outputs = out
+
+    def _log_stats_periodic(self) -> None:
+        now = time.time()
+        if now - self._stats_last_log < 5.0:
+            return
+        self._stats_last_log = now
+        owner = self.output_node_id if self.output_node_id else "auto"
+        with self._pending_lock:
+            pending = 1 if self._pending_frame is not None else 0
+        print(
+            f"[uds_webui_bridge:{self.network_id}] stats frames={self._frames_seen} "
+            f"injected_spikes={self._injected_spikes} output_spikes={self._output_spikes_seen} "
+            f"pending={pending} owner={owner}",
+            flush=True,
+        )
+
+    def _cached_reply_bytes(self) -> bytes:
+        with self._cache_lock:
+            out = list(self._cached_outputs)
+        if len(out) != self.o_count:
+            out = [0.0] * self.o_count
+        return struct.pack(f"<{self.o_count}f", *out)
+
+    def _worker_loop(self) -> None:
+        next_tick = time.monotonic()
+        while not self._stop_event.is_set():
+            now_mono = time.monotonic()
+            if now_mono < next_tick:
+                self._stop_event.wait(min(0.01, next_tick - now_mono))
+                continue
+            next_tick = now_mono + self.control_period_secs
+
+            pending = self._take_pending()
+            if pending is None:
+                self._log_stats_periodic()
+                continue
+            step_index, spikes = pending
+
+            try:
+                self._refresh_output_owner()
+                self._send_injection(spikes, step_index)
+                now = time.time()
+                if now - self.last_activity_refresh >= self.activity_refresh_secs:
+                    out_indices = self._fetch_output_indices()
+                    self._set_cached_outputs(out_indices)
+                    self.last_activity_refresh = now
+            except urllib.error.HTTPError as exc:
+                self._log_error_throttled(f"http error: {exc}")
+            except urllib.error.URLError as exc:
+                self._log_error_throttled(f"url error: {exc}")
+            except Exception as exc:
+                self._log_error_throttled(f"bridge worker failed: {exc}")
+            self._log_stats_periodic()
+
     def run(self) -> None:
         os.makedirs(os.path.dirname(self.socket_path) or ".", exist_ok=True)
         try:
@@ -211,10 +396,12 @@ class WebUiBridge:
             raise SystemExit(f"failed to remove stale socket '{self.socket_path}': {exc}") from exc
 
         self.sock.bind(self.socket_path)
-        self._log(
-            "listening on "
-            + f"{self.socket_path} -> {self.web_ui_url} (orchestrator={self.orchestrator_addr})"
+        print(
+            f"[uds_webui_bridge:{self.network_id}] listening on {self.socket_path} -> "
+            f"{self.web_ui_url} (orchestrator={self.orchestrator_addr})",
+            flush=True,
         )
+        self._worker.start()
 
         while True:
             try:
@@ -242,22 +429,10 @@ class WebUiBridge:
                 else:
                     sensory = sensory + [0.0] * (self.s_count - len(sensory))
 
-            self._refresh_output_owner()
-
-            try:
-                spikes = self._indices_from_sensory(sensory)
-                self._send_injection(spikes)
-                out_indices = self._fetch_output_indices()
-                reply = self._build_reply(out_indices)
-            except urllib.error.HTTPError as exc:
-                self._log_error_throttled(f"http error: {exc}")
-                reply = self._build_reply([])
-            except urllib.error.URLError as exc:
-                self._log_error_throttled(f"url error: {exc}")
-                reply = self._build_reply([])
-            except Exception as exc:
-                self._log_error_throttled(f"bridge step failed: {exc}")
-                reply = self._build_reply([])
+            spikes = self._indices_from_sensory(sensory)
+            self._frames_seen += 1
+            self._enqueue_pending(self.step_index, spikes)
+            reply = self._cached_reply_bytes()
 
             try:
                 self.sock.sendto(reply, peer)
@@ -266,6 +441,9 @@ class WebUiBridge:
 
             self.step_index += 1
 
+        self._stop_event.set()
+        if self._worker.is_alive():
+            self._worker.join(timeout=1.0)
         try:
             self.sock.close()
         finally:
@@ -295,14 +473,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--http-timeout",
         type=float,
-        default=0.8,
+        default=float(os.environ.get("NM_UDS_WEBUI_HTTP_TIMEOUT", "0.8")),
         help="HTTP timeout in seconds for web_ui calls.",
     )
     parser.add_argument(
         "--status-refresh",
         type=float,
-        default=2.0,
+        default=float(os.environ.get("NM_UDS_WEBUI_STATUS_REFRESH_SECS", "2.0")),
         help="Seconds between status refreshes for output-node tracking.",
+    )
+    parser.add_argument(
+        "--activity-refresh",
+        type=float,
+        default=float(os.environ.get("NM_UDS_WEBUI_ACTIVITY_REFRESH_SECS", "0.05")),
+        help="Seconds between /api/activity polls (outputs are cached between polls).",
+    )
+    parser.add_argument(
+        "--control-period-ms",
+        type=float,
+        default=float(os.environ.get("NM_UDS_WEBUI_CONTROL_PERIOD_MS", "20")),
+        help="Background HTTP control period in milliseconds (latest-frame coalescing).",
     )
     parser.add_argument(
         "--verbose",
@@ -325,6 +515,8 @@ def main() -> None:
         default_o=args.default_o,
         http_timeout=args.http_timeout,
         status_refresh_secs=args.status_refresh,
+        activity_refresh_secs=args.activity_refresh,
+        control_period_secs=max(0.001, args.control_period_ms / 1000.0),
         verbose=args.verbose,
     )
     bridge.run()
@@ -332,4 +524,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

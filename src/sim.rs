@@ -426,15 +426,18 @@ impl ClStpContext {
         stp_rec_decay: f64,
         stp_facil_decay: f64,
     ) -> ClResult<()> {
-        let u_buf = self.u_h.get_mut(layer).ok_or_else(|| {
-            ClError::from(CL_INVALID_VALUE)
-        })?;
-        let x_buf = self.x_h.get_mut(layer).ok_or_else(|| {
-            ClError::from(CL_INVALID_VALUE)
-        })?;
-        let rel_buf = self.rel_h.get_mut(layer).ok_or_else(|| {
-            ClError::from(CL_INVALID_VALUE)
-        })?;
+        let u_buf = self
+            .u_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
+        let x_buf = self
+            .x_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
+        let rel_buf = self
+            .rel_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
         cl_stp_update(
             &self.cl,
             &mut self.pre_spk_h,
