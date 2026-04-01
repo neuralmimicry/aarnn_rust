@@ -41,6 +41,28 @@ python experiments/bandits/bandit.py
 python experiments/rl/rl_router.py
 ```
 
+## Shared token billing via nmchain
+
+The web UI can participate in the shared private token ledger used by the NeuralMimicry portal and Refiner.
+
+Set these environment variables before running `src/bin/web_ui.rs`:
+
+- `NMCHAIN_API_BASE=http://nmchain-host:9080`
+- `NMCHAIN_API_TOKEN=<aarnn-app-token>`
+- `NMCHAIN_APP_ID=aarnn`
+- Optional debit schedule overrides:
+  - `NM_AARNN_TOKEN_CREATE_COST` (default `25`)
+  - `NM_AARNN_TOKEN_IMPORT_COST` (default `25`)
+  - `NM_AARNN_TOKEN_START_COST` (default `5`)
+  - `NM_AARNN_TOKEN_REPEAT_COST` (default `2`)
+  - `NM_AARNN_TOKEN_STEP_COST` (default `1`)
+
+When enabled, the web UI:
+
+- mirrors successful local/OIDC logins to `nmchain`
+- exposes `GET /api/tokens` and `GET /api/tokens/ledger`
+- debits shared user tokens for workspace create/import/start/repeat/step operations
+
 ### Deploy manifests
 
 ```bash

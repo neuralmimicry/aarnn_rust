@@ -31,6 +31,7 @@ pub mod config;
 pub mod engine;
 /// Core neural network data structures including layers, neurons, and synapses.
 pub mod network;
+pub mod nmchain;
 /// Simulation engine responsible for time-stepping and state updates.
 pub mod sim;
 /// Shared spike input/output encoders, transports, and profile-specific adapters.
