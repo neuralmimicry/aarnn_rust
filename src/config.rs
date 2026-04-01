@@ -16,6 +16,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::spike_io::profiles::{NetworkIoProfileSelector, SpikeIoConfig};
+
 /// Species/organism biomimicry profile used to seed AARNN defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AarnnBiomimicryProfile {
@@ -432,6 +434,7 @@ pub fn apply_clumping_layer_defaults(cfg: &mut NetworkConfig) {
 }
 
 fn apply_human_brain_design(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Generic;
     cfg.max_total_neurons = 86_000_000_000;
     cfg.brain_regions.push(BrainRegionConfig {
         name: "Left Cortex".to_string(),
@@ -494,6 +497,7 @@ fn apply_human_brain_design(cfg: &mut NetworkConfig) {
 }
 
 fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Drosophila;
     cfg.max_total_neurons = 139_255;
 
     let optic_types = vec![
@@ -656,6 +660,7 @@ fn apply_fruit_fly_adult_design(cfg: &mut NetworkConfig) {
 }
 
 fn apply_fruit_fly_larva_design(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Drosophila;
     cfg.max_total_neurons = 3016;
 
     let brain_types = vec![
@@ -917,6 +922,7 @@ fn apply_zebra_fish_design(cfg: &mut NetworkConfig) {
 }
 
 fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Celegans;
     cfg.max_total_neurons = 302;
     // Head ganglia (ellipsoid): center (0,7,0), radii (6,8,6)
     cfg.brain_regions.push(BrainRegionConfig {
@@ -1100,6 +1106,7 @@ pub fn brain_region_space_scale(regions: &[BrainRegionConfig]) -> f32 {
 /// Apply the baseline AARNN biomimicry profile used by UI defaults:
 /// human-brain clumping + core AARNN growth/morphology/delay settings.
 pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Generic;
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
     cfg.morpho_growth_enabled = true;
@@ -1277,6 +1284,7 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
     backfill!(theta_rhythm_duty);
     backfill!(theta_rhythm_phase_jitter);
     backfill!(thalamic_gating_enabled);
+    backfill!(spike_io);
 
     backfill!(aarnn_import_topology_rewire_enabled);
     backfill!(aarnn_import_topology_rewire_keep_fraction);
@@ -1298,6 +1306,7 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
 /// local coupling and restrained structural development.
 pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.spike_io.profile = NetworkIoProfileSelector::Celegans;
 
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
@@ -1360,6 +1369,7 @@ pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
 /// active plasticity, and restrained developmental growth.
 pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.spike_io.profile = NetworkIoProfileSelector::Drosophila;
 
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
@@ -2018,6 +2028,10 @@ pub struct NetworkConfig {
     /// Biologically motivated AARNN parameters (gated by `aarnn_layer_depth`).
     pub aarnn_bio: AarnnBioParams,
 
+    // --- External Spike I/O ---
+    /// Declarative encoder/profile/decoder selection for external spike I/O boundaries.
+    pub spike_io: SpikeIoConfig,
+
     // --- UI Configuration ---
     /// Target frame rate for the visualization engine.
     pub ui_target_fps: f32,
@@ -2178,6 +2192,7 @@ impl Default for NetworkConfig {
             synaptic_consolidation_factor: 0.1,
             aarnn_layer_depth: 5,
             aarnn_bio: AarnnBioParams::default(),
+            spike_io: SpikeIoConfig::default(),
             ui_target_fps: 60.0,
         };
         apply_aarnn_human_biomimicry_defaults(&mut cfg);
@@ -2287,7 +2302,10 @@ mod tests {
             default_hidden_layers_for_clumping(ClumpingDesign::NematodeWorm),
             Some(1)
         );
-        assert_eq!(default_hidden_layers_for_clumping(ClumpingDesign::None), None);
+        assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::None),
+            None
+        );
     }
 
     #[test]
@@ -2302,12 +2320,14 @@ mod tests {
         assert_eq!(cfg.max_layers, 10);
         assert_eq!(cfg.sensory_target_layer, Some(9));
         assert_eq!(cfg.output_source_layer, Some(9));
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Drosophila);
 
         apply_clumping_design(&mut cfg, ClumpingDesign::HumanBrain);
         assert_eq!(cfg.num_hidden_layers, 6);
         assert_eq!(cfg.max_layers, 10);
         assert_eq!(cfg.sensory_target_layer, Some(5));
         assert_eq!(cfg.output_source_layer, Some(5));
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Generic);
     }
 
     #[test]
@@ -2324,6 +2344,7 @@ mod tests {
         assert!(cfg.aarnn_import_topology_rewire_enabled);
         assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
         assert!(!cfg.brain_regions.is_empty());
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Celegans);
     }
 
     #[test]
@@ -2340,6 +2361,7 @@ mod tests {
         assert!(cfg.sleep_enabled);
         assert!(cfg.aarnn_import_topology_rewire_enabled);
         assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Drosophila);
         assert!(!cfg.brain_regions.is_empty());
     }
 

@@ -16,6 +16,10 @@
 use ndarray::{s, Array1, Array2};
 use rand::{Rng, RngExt};
 
+use crate::aarnn::dynamics::{
+    apply_synaptic_filter as apply_aarnn_synaptic_filter, SynapticDriveParams,
+};
+use crate::aarnn::plasticity::{stp_update_slice, ShortTermPlasticityParams};
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
     get_global_cl_manager, Buffer, ClError, ClResult, ExecuteKernel, OpenCLManager,
@@ -239,17 +243,14 @@ fn apply_synaptic_filter(
     nmda_ratio: f64,
     syn_gain: f64,
 ) -> Array1<f64> {
-    let mut out = Array1::<f64>::zeros(raw.len());
-    for i in 0..raw.len() {
-        let val = raw[i];
-        let exc = val.max(0.0);
-        let inh = (-val).max(0.0);
-        ampa[i] = ampa[i] * decay_ampa + exc * (1.0 - nmda_ratio);
-        nmda[i] = nmda[i] * decay_nmda + exc * nmda_ratio;
-        gaba[i] = gaba[i] * decay_gaba + inh;
-        out[i] = (ampa[i] + nmda[i] - gaba[i]) * syn_gain;
-    }
-    out
+    apply_aarnn_synaptic_filter(raw, ampa, nmda, gaba, None, 0.0, |_| SynapticDriveParams {
+        nmda_ratio,
+        synaptic_gain: syn_gain,
+        decay_ampa,
+        decay_nmda,
+        decay_gaba,
+        neuromod_excitability_gain: 1.0,
+    })
 }
 
 fn stp_update_cpu(
@@ -261,18 +262,17 @@ fn stp_update_cpu(
     stp_rec_decay: f64,
     stp_facil_decay: f64,
 ) {
-    for i in 0..pre_spks.len() {
-        u[i] = u[i] * stp_facil_decay + stp_u * (1.0 - stp_facil_decay);
-        x[i] = x[i] * stp_rec_decay + (1.0 - stp_rec_decay);
-        if pre_spks[i] != 0 {
-            let rel = (u[i] * x[i]).clamp(0.0, 1.0);
-            x[i] = (x[i] - rel).max(0.0);
-            u[i] = (u[i] + stp_u * (1.0 - u[i])).clamp(0.0, 1.0);
-            release[i] = rel;
-        } else {
-            release[i] = 0.0;
-        }
-    }
+    stp_update_slice(
+        pre_spks,
+        u.as_slice_mut().expect("contiguous STP utilization"),
+        x.as_slice_mut().expect("contiguous STP resources"),
+        release.as_slice_mut().expect("contiguous STP release"),
+        |_| ShortTermPlasticityParams {
+            baseline_utilization: stp_u,
+            recovery_decay: stp_rec_decay,
+            facilitation_decay: stp_facil_decay,
+        },
+    );
 }
 
 #[cfg(feature = "opencl")]

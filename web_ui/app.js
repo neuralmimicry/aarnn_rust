@@ -18,6 +18,19 @@ const startStopBtn = document.getElementById("start-stop");
 const repeatBtn = document.getElementById("repeat");
 const resetBtn = document.getElementById("reset");
 const newBtn = document.getElementById("new");
+const workspaceSelect = document.getElementById("workspace-select");
+const workspaceUserInput = document.getElementById("workspace-user");
+const workspaceNameInput = document.getElementById("workspace-name");
+const workspaceRefreshBtn = document.getElementById("workspace-refresh");
+const workspaceCreateBtn = document.getElementById("workspace-create");
+const workspaceDeleteBtn = document.getElementById("workspace-delete");
+const workspacePullBtn = document.getElementById("workspace-pull");
+const workspacePushBtn = document.getElementById("workspace-push");
+const workspaceStartBtn = document.getElementById("workspace-start");
+const workspaceStopBtn = document.getElementById("workspace-stop");
+const workspaceModeEl = document.getElementById("workspace-mode");
+const workspaceStatusEl = document.getElementById("workspace-status");
+const workspaceAutoscalerEl = document.getElementById("workspace-autoscaler");
 
 const cpuEl = document.getElementById("cpu");
 const ramEl = document.getElementById("ram");
@@ -75,12 +88,53 @@ const signupBtn = document.getElementById("signup-btn");
 const oidcLogin = document.getElementById("oidc-login");
 const userStatus = document.getElementById("user-status");
 const logoutBtn = document.getElementById("logout-btn");
+const eqPanel = document.getElementById("eq-panel");
+const eqEmpty = document.getElementById("eq-empty");
+const scopeCanvas = document.getElementById("scope-canvas");
+const scopeCtx = scopeCanvas ? scopeCanvas.getContext("2d") : null;
+const scopeProbesEl = document.getElementById("scope-probes");
+const probeCountEl = document.getElementById("probe-count");
+const rasterCanvas = document.getElementById("raster-canvas");
+const rasterCtx = rasterCanvas ? rasterCanvas.getContext("2d") : null;
+const rasterFramesEl = document.getElementById("raster-frames");
+const probeSourceInput = document.getElementById("probe-source");
+const probeLayerInput = document.getElementById("probe-layer");
+const probeIndexInput = document.getElementById("probe-index");
+const addProbeBtn = document.getElementById("add-probe");
+const clearProbesBtn = document.getElementById("clear-probes");
+const probeHint = document.getElementById("probe-hint");
+const saveConfigBtn = document.getElementById("save-config");
+const loadConfigBtn = document.getElementById("load-config");
+const saveNetworkBtn = document.getElementById("save-network");
+const loadNetworkBtn = document.getElementById("load-network");
+const saveProbesBtn = document.getElementById("save-probes");
+const loadProbesBtn = document.getElementById("load-probes");
+const toolStatusEl = document.getElementById("tool-status");
+const graphContextMenu = document.getElementById("graph-context-menu");
+const graphContextTitle = document.getElementById("graph-context-title");
+const graphContextDetails = document.getElementById("graph-context-details");
+const graphAddProbeBtn = document.getElementById("graph-add-probe");
 
 const POLL_MS = 2000;
 const ACTIVITY_POLL_MS = 200;
 const SNAPSHOT_POLL_TICK_MS = 150;
 const SNAPSHOT_POLL_PLAYING_MS = 350;
 const SNAPSHOT_POLL_IDLE_MS = 1200;
+const EQ_BANDS = 12;
+const PROBE_HISTORY = 220;
+const RASTER_HISTORY = 180;
+const PROBE_COLORS = [
+  "#71e0b1",
+  "#ffd37a",
+  "#7db8ff",
+  "#ff9b7a",
+  "#d4a8ff",
+  "#9ce67a",
+  "#ffcf99",
+  "#8dd8ff",
+];
+
+let bootstrapRuntimeDefaultUser = "";
 
 const state = {
   targets: loadTargets(),
@@ -110,8 +164,17 @@ const state = {
   allowSignup: false,
   user: null,
   userConfigEnabled: false,
+  runtime: {
+    workspaces: [],
+    activeWorkspace: loadActiveWorkspace(),
+    userId: loadRuntimeUser(),
+    defaultUser: "",
+    autoscaler: null,
+    details: new Map(),
+  },
   lastSnapshotPollAt: 0,
   snapshotFailures: 0,
+  instrumentation: loadInstrumentationState(),
 };
 
 let snapshotFetchInFlight = false;
@@ -120,6 +183,107 @@ let ioSourceRunner = null;
 
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
+
+function probeDefaultLabel(targetType, layer, index) {
+  if (targetType === "hidden") {
+    return `H${layer + 1}:${index} spike`;
+  }
+  if (targetType === "output") {
+    return `O${index} spike`;
+  }
+  return `S${index} spike`;
+}
+
+function normalizeProbe(raw, fallbackId = 1) {
+  const targetType =
+    raw && typeof raw.targetType === "string" && ["sensory", "hidden", "output"].includes(raw.targetType)
+      ? raw.targetType
+      : "sensory";
+  const layer = targetType === "hidden" ? Math.max(0, Math.trunc(Number(raw?.layer || 0))) : 0;
+  const index = Math.max(0, Math.trunc(Number(raw?.index || 0)));
+  const id = Math.max(1, Math.trunc(Number(raw?.id || fallbackId)));
+  return {
+    id,
+    targetType,
+    layer,
+    index,
+    label:
+      raw && typeof raw.label === "string" && raw.label.trim()
+        ? raw.label.trim()
+        : probeDefaultLabel(targetType, layer, index),
+    color:
+      raw && typeof raw.color === "string" && raw.color.trim()
+        ? raw.color.trim()
+        : PROBE_COLORS[(id - 1) % PROBE_COLORS.length],
+    enabled: raw?.enabled !== false,
+    samples: [],
+  };
+}
+
+function serializeProbe(probe) {
+  return {
+    id: probe.id,
+    targetType: probe.targetType,
+    layer: probe.targetType === "hidden" ? probe.layer : 0,
+    index: probe.index,
+    label: probe.label,
+    color: probe.color,
+    enabled: probe.enabled !== false,
+  };
+}
+
+function serializeProbes() {
+  return (state.instrumentation?.probes || []).map(serializeProbe);
+}
+
+function loadInstrumentationState() {
+  let probes = [];
+  try {
+    const raw = localStorage.getItem("nm_instrumentation");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.probes)) {
+        probes = parsed.probes.map((probe, idx) => normalizeProbe(probe, idx + 1));
+      }
+    }
+  } catch (_) {}
+  const nextProbeId = probes.reduce((maxId, probe) => Math.max(maxId, probe.id), 0) + 1;
+  return {
+    probes,
+    nextProbeId,
+    eqBands: Array.from({ length: EQ_BANDS }, () => 0),
+    outputRaster: [],
+    screenNodes: [],
+    contextTarget: null,
+  };
+}
+
+function saveInstrumentationState() {
+  const payload = {
+    probes: serializeProbes(),
+  };
+  if (state.userConfigEnabled) {
+    scheduleUserConfigSave();
+    return;
+  }
+  localStorage.setItem("nm_instrumentation", JSON.stringify(payload));
+}
+
+function resetInstrumentationBuffers({ keepProbes = true } = {}) {
+  state.instrumentation.eqBands = Array.from({ length: EQ_BANDS }, () => 0);
+  state.instrumentation.outputRaster = [];
+  state.instrumentation.screenNodes = [];
+  state.instrumentation.contextTarget = null;
+  if (keepProbes) {
+    state.instrumentation.probes.forEach((probe) => {
+      probe.samples = [];
+    });
+  } else {
+    state.instrumentation.probes = [];
+    state.instrumentation.nextProbeId = 1;
+    saveInstrumentationState();
+  }
+}
 
 function buildUserConfig() {
   const ioConfig = {
@@ -132,8 +296,12 @@ function buildUserConfig() {
     active: state.active,
     activeNetwork: state.activeNetwork,
     activeNode: state.activeNodeId,
+    activeWorkspace: state.runtime.activeWorkspace,
     render: state.render,
     io: ioConfig,
+    instrumentation: {
+      probes: serializeProbes(),
+    },
   };
 }
 
@@ -163,6 +331,7 @@ function applyUserConfig(cfg) {
   if (typeof cfg.active === "string") state.active = cfg.active;
   if (typeof cfg.activeNetwork === "string") state.activeNetwork = cfg.activeNetwork;
   if (typeof cfg.activeNode === "string") state.activeNodeId = cfg.activeNode;
+  if (typeof cfg.activeWorkspace === "string") state.runtime.activeWorkspace = cfg.activeWorkspace;
   if (cfg.render && typeof cfg.render === "object") {
     state.render = {
       ...loadRenderSettings(),
@@ -175,6 +344,14 @@ function applyUserConfig(cfg) {
       ...cfg.io,
     };
   }
+  if (cfg.instrumentation && typeof cfg.instrumentation === "object") {
+    const incoming = Array.isArray(cfg.instrumentation.probes) ? cfg.instrumentation.probes : [];
+    state.instrumentation.probes = incoming.map((probe, idx) => normalizeProbe(probe, idx + 1));
+    state.instrumentation.nextProbeId =
+      state.instrumentation.probes.reduce((maxId, probe) => Math.max(maxId, probe.id), 0) + 1;
+    resetInstrumentationBuffers();
+  }
+  renderInstrumentation();
   suppressUserConfigSave = false;
 }
 
@@ -238,6 +415,109 @@ function loadActiveNode() {
   } catch (_) {
     return "";
   }
+}
+
+function loadActiveWorkspace() {
+  try {
+    return localStorage.getItem("nm_active_workspace") || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function isGeneratedRuntimeUser(value) {
+  return /^web-[a-z0-9]{8}$/i.test((value || "").trim());
+}
+
+function defaultRuntimeUser() {
+  const configured = bootstrapRuntimeDefaultUser.trim();
+  if (configured) {
+    return configured;
+  }
+  return `web-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function loadRuntimeUser() {
+  try {
+    const existing = (localStorage.getItem("nm_runtime_user") || "").trim();
+    if (existing) {
+      return existing;
+    }
+    const generated = defaultRuntimeUser();
+    localStorage.setItem("nm_runtime_user", generated);
+    return generated;
+  } catch (_) {
+    return defaultRuntimeUser();
+  }
+}
+
+function saveRuntimeUser() {
+  try {
+    localStorage.setItem("nm_runtime_user", (state.runtime.userId || "").trim());
+  } catch (_) {}
+}
+
+function saveActiveWorkspace() {
+  if (state.userConfigEnabled) {
+    scheduleUserConfigSave();
+    return;
+  }
+  try {
+    localStorage.setItem("nm_active_workspace", state.runtime.activeWorkspace || "");
+  } catch (_) {}
+}
+
+function applyBootstrapConfig(cfg = {}) {
+  const defaultUser =
+    cfg && typeof cfg.default_runtime_user === "string"
+      ? cfg.default_runtime_user.trim()
+      : "";
+  bootstrapRuntimeDefaultUser = defaultUser;
+  state.runtime.defaultUser = defaultUser;
+  if (state.authMode === "none" && defaultUser) {
+    const current = (state.runtime.userId || "").trim();
+    if (!current || isGeneratedRuntimeUser(current)) {
+      state.runtime.userId = defaultUser;
+      saveRuntimeUser();
+    }
+  }
+}
+
+async function loadBootstrapConfig() {
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) return null;
+    const cfg = await res.json();
+    applyBootstrapConfig(cfg);
+    return cfg;
+  } catch (_) {
+    return null;
+  }
+}
+
+function runtimeUserLabel() {
+  if (state.authMode === "none") {
+    return (state.runtime.userId || "").trim() || "anonymous";
+  }
+  return state.user || "authenticated";
+}
+
+function clusterModeAllowed() {
+  return state.authMode === "none";
+}
+
+function runtimeFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (state.authMode === "none") {
+    const runtimeUser = (state.runtime.userId || "").trim();
+    if (runtimeUser) {
+      headers.set("x-nm-runtime-user", runtimeUser);
+    }
+  }
+  return fetch(path, {
+    ...options,
+    headers,
+  });
 }
 
 function saveActiveNode() {
@@ -329,6 +609,7 @@ function saveRenderSettings() {
 }
 
 async function initAuth() {
+  await loadBootstrapConfig();
   try {
     const modeResp = await fetch("/api/auth/mode");
     if (modeResp.ok) {
@@ -353,6 +634,7 @@ async function initAuth() {
     state.userConfigEnabled = true;
     setUserStatus(state.user);
     await loadUserConfig();
+    await loadRuntimeStatus();
     hideAuthOverlay();
   } else {
     state.user = null;
@@ -428,10 +710,17 @@ async function performLogin(username, password) {
     state.userConfigEnabled = true;
     setUserStatus(state.user);
     await loadUserConfig();
+    await loadRuntimeStatus();
     resetTargetsUi();
     await initTargets();
+    refreshNetworkSelect();
+    if (isWorkspaceMode()) {
+      await fetchSnapshotForActive();
+      await pollActivity();
+    }
     syncRenderControls();
     syncIoControls();
+    renderInstrumentation();
     hideAuthOverlay();
   } catch (e) {
     showAuthError("Login failed.");
@@ -469,6 +758,22 @@ async function performLogout() {
   } catch (_) {}
   state.user = null;
   state.userConfigEnabled = false;
+  state.targets = [];
+  state.active = "";
+  state.activeNetwork = "";
+  state.activeNodeId = "";
+  state.statusByTarget.clear();
+  state.networksByTarget.clear();
+  state.runtime.workspaces = [];
+  state.runtime.details.clear();
+  state.runtime.autoscaler = null;
+  state.snapshot = null;
+  state.activity = null;
+  state.graph = null;
+  resetTargetsUi();
+  refreshWorkspaceSelect();
+  setPlaceholder();
+  drawNetwork();
   setUserStatus(null);
   if (state.authMode !== "none") {
     showAuthOverlay();
@@ -585,6 +890,365 @@ function aggregateClusterStatus() {
   return { nodes, networks };
 }
 
+function isWorkspaceMode() {
+  return !clusterModeAllowed() || Boolean(state.runtime.activeWorkspace);
+}
+
+function getActiveWorkspaceMeta() {
+  return (
+    state.runtime.workspaces.find(
+      (workspace) => workspace.workspace_id === state.runtime.activeWorkspace
+    ) || null
+  );
+}
+
+function getActiveWorkspaceDetail() {
+  return state.runtime.details.get(state.runtime.activeWorkspace) || null;
+}
+
+function cacheWorkspaceDetail(detail) {
+  const workspaceId = detail?.summary?.workspace_id;
+  if (!workspaceId) return;
+  state.runtime.details.set(workspaceId, detail);
+  const idx = state.runtime.workspaces.findIndex(
+    (workspace) => workspace.workspace_id === workspaceId
+  );
+  if (idx >= 0) {
+    state.runtime.workspaces[idx] = {
+      ...state.runtime.workspaces[idx],
+      ...detail.summary,
+    };
+  } else {
+    state.runtime.workspaces.push(detail.summary);
+  }
+}
+
+async function loadWorkspaceDetail(workspaceId = state.runtime.activeWorkspace) {
+  if (!workspaceId) return null;
+  try {
+    const resp = await runtimeFetch(
+      `/api/runtime/workspaces/${encodeURIComponent(workspaceId)}`
+    );
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        state.runtime.details.delete(workspaceId);
+      }
+      return null;
+    }
+    const detail = await resp.json();
+    cacheWorkspaceDetail(detail);
+    return detail;
+  } catch (_) {
+    return null;
+  }
+}
+
+function activeSource() {
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    if (workspace) {
+      return {
+        kind: "workspace",
+        workspace,
+        networkId: workspace.network_id || workspace.workspace_id,
+      };
+    }
+  }
+  if (state.active && state.activeNetwork) {
+    return {
+      kind: "cluster",
+      addr: state.active,
+      networkId: state.activeNetwork,
+      nodeId: state.activeNodeId || "",
+    };
+  }
+  return null;
+}
+
+function sourceRequestKey(source) {
+  if (!source) return "";
+  if (source.kind === "workspace") {
+    return `workspace::${source.workspace.workspace_id}`;
+  }
+  return `${source.addr}::${source.networkId}::${source.nodeId || ""}`;
+}
+
+function workspaceNetworkMeta(workspace, detail = getActiveWorkspaceDetail()) {
+  if (!workspace) return null;
+  const status = detail?.status || {};
+  const hiddenLayers = Number(
+    workspace.num_hidden_layers ??
+      status.num_hidden_layers ??
+      state.snapshot?.net?.num_hidden_layers ??
+      0
+  );
+  const desiredDepth = Number(
+    workspace.desired_aarnn_depth ??
+      status.desired_aarnn_depth ??
+      state.snapshot?.net?.aarnn_layer_depth ??
+      0
+  );
+  return {
+    network_id: workspace.network_id || workspace.workspace_id,
+    playing: Boolean(workspace.running),
+    total_neurons: Number(workspace.total_neurons ?? status.total_neurons ?? 0),
+    num_layers: hiddenLayers + 1,
+    desired_aarnn_depth: desiredDepth,
+    neuron_model: status.neuron_model || state.lastModel || "aarnn",
+    learning_rule: status.learning_rule || state.lastLearning || "aarnn",
+  };
+}
+
+function refreshWorkspaceSelect() {
+  if (!workspaceSelect) return;
+  workspaceSelect.innerHTML = "";
+  if (clusterModeAllowed()) {
+    const clusterOpt = document.createElement("option");
+    clusterOpt.value = "";
+    clusterOpt.textContent = "Cluster / orchestrator mode";
+    workspaceSelect.appendChild(clusterOpt);
+  }
+
+  state.runtime.workspaces.forEach((workspace) => {
+    const opt = document.createElement("option");
+    opt.value = workspace.workspace_id;
+    opt.textContent = `${workspace.name || workspace.workspace_id}${
+      workspace.running ? " (running)" : ""
+    }`;
+    workspaceSelect.appendChild(opt);
+  });
+
+  if (
+    state.runtime.activeWorkspace &&
+    !state.runtime.workspaces.some(
+      (workspace) => workspace.workspace_id === state.runtime.activeWorkspace
+    )
+  ) {
+    state.runtime.activeWorkspace = "";
+    saveActiveWorkspace();
+  }
+  workspaceSelect.value = state.runtime.activeWorkspace || "";
+  syncWorkspaceUi();
+}
+
+function syncWorkspaceUi() {
+  const workspace = getActiveWorkspaceMeta();
+  const detail = getActiveWorkspaceDetail();
+  const running = workspace ? Boolean(detail?.summary?.running ?? workspace.running) : false;
+  const simTimeMs = Number(detail?.status?.sim_time_ms ?? workspace?.sim_time_ms ?? 0);
+  const step = Number(detail?.status?.step ?? workspace?.step ?? 0);
+  if (workspaceModeEl) {
+    workspaceModeEl.textContent = workspace || !clusterModeAllowed() ? "workspace" : "cluster";
+  }
+  if (workspaceUserInput) {
+    if (document.activeElement !== workspaceUserInput) {
+      workspaceUserInput.value = runtimeUserLabel();
+    }
+    workspaceUserInput.disabled = state.authMode !== "none";
+  }
+  if (workspaceStatusEl) {
+    workspaceStatusEl.textContent = workspace
+      ? `${running ? "running" : "stopped"} | t=${simTimeMs.toFixed(1)} ms | step ${step}`
+      : "inactive";
+  }
+  if (workspaceAutoscalerEl) {
+    const autoscaler = state.runtime.autoscaler || {};
+    workspaceAutoscalerEl.textContent = autoscaler.provider
+      ? `${autoscaler.provider}${
+          Number(autoscaler.active_remote_nodes || 0) > 0
+            ? ` | remote ${Number(autoscaler.active_remote_nodes || 0)}`
+            : ""
+        }${autoscaler.last_action ? ` | ${autoscaler.last_action}` : ""}`
+      : "local";
+  }
+  if (input) input.disabled = !clusterModeAllowed();
+  if (addButton) addButton.disabled = !clusterModeAllowed();
+  if (workspaceDeleteBtn) workspaceDeleteBtn.disabled = !workspace;
+  if (workspacePullBtn) workspacePullBtn.disabled = !workspace;
+  if (workspacePushBtn) workspacePushBtn.disabled = !workspace || !(currentNetworkJson() || currentConfigJson());
+  if (workspaceStartBtn) workspaceStartBtn.disabled = !workspace || running;
+  if (workspaceStopBtn) workspaceStopBtn.disabled = !workspace || !running;
+  if (networkSelect) networkSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
+  if (nodeSelect) nodeSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
+}
+
+async function loadRuntimeStatus() {
+  if (state.authMode !== "none" && !state.user) return;
+  try {
+    const resp = await runtimeFetch("/api/runtime/status");
+    if (!resp.ok) {
+      refreshWorkspaceSelect();
+      return;
+    }
+    const data = await resp.json();
+    state.runtime.workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+    state.runtime.autoscaler = data.autoscaler || null;
+    const activeIds = new Set(state.runtime.workspaces.map((workspace) => workspace.workspace_id));
+    Array.from(state.runtime.details.keys()).forEach((workspaceId) => {
+      if (!activeIds.has(workspaceId)) {
+        state.runtime.details.delete(workspaceId);
+      }
+    });
+    if (!clusterModeAllowed()) {
+      if (!state.runtime.activeWorkspace || !activeIds.has(state.runtime.activeWorkspace)) {
+        state.runtime.activeWorkspace = state.runtime.workspaces[0]?.workspace_id || "";
+        saveActiveWorkspace();
+      }
+    }
+    if (state.runtime.activeWorkspace) {
+      await loadWorkspaceDetail(state.runtime.activeWorkspace);
+    }
+    refreshWorkspaceSelect();
+    if (isWorkspaceMode()) {
+      renderWorkspaceSidebar();
+      refreshControlButtons();
+    }
+  } catch (_) {
+    refreshWorkspaceSelect();
+  }
+}
+
+async function createWorkspaceFromCurrentState() {
+  const name = workspaceNameInput ? workspaceNameInput.value.trim() : "";
+  const snapshotJson = currentNetworkJson();
+  const configJson = currentConfigJson();
+  const activeModel = modelSelector.querySelector("button.active")?.dataset.model;
+  const activeLearning = learningSelector.querySelector("button.active")?.dataset.learning;
+  const payload = {
+    workspace_id: name ? name.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-") : undefined,
+    name: name || undefined,
+    snapshot_json: snapshotJson || undefined,
+    config_json: snapshotJson ? undefined : configJson || undefined,
+    neuron_model: activeModel,
+    learning_rule: activeLearning,
+  };
+  try {
+    const resp = await runtimeFetch("/api/runtime/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setToolStatus(err.error || "Failed to create workspace.");
+      return;
+    }
+    const detail = await resp.json();
+    cacheWorkspaceDetail(detail);
+    state.runtime.activeWorkspace = detail?.summary?.workspace_id || payload.workspace_id || "";
+    saveActiveWorkspace();
+    if (workspaceNameInput) workspaceNameInput.value = "";
+    await loadRuntimeStatus();
+    refreshNetworkSelect();
+    await fetchSnapshotForActive();
+    await pollActivity();
+    setToolStatus(`Created workspace ${state.runtime.activeWorkspace}.`);
+  } catch (_) {
+    setToolStatus("Failed to create workspace.");
+  }
+}
+
+async function deleteSelectedWorkspace() {
+  const workspace = getActiveWorkspaceMeta();
+  if (!workspace) return;
+  try {
+    const resp = await runtimeFetch(
+      `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}`,
+      { method: "DELETE" }
+    );
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setToolStatus(err.error || "Failed to delete workspace.");
+      return;
+    }
+    state.runtime.details.delete(workspace.workspace_id);
+    state.runtime.activeWorkspace = "";
+    saveActiveWorkspace();
+    state.snapshot = null;
+    state.activity = null;
+    await loadRuntimeStatus();
+    refreshNetworkSelect();
+    await pollAll();
+    if (!isWorkspaceMode()) {
+      await fetchSnapshotForActive();
+      await pollActivity();
+    } else {
+      rebuildGraph();
+    }
+    setToolStatus(`Deleted workspace ${workspace.workspace_id}.`);
+  } catch (_) {
+    setToolStatus("Failed to delete workspace.");
+  }
+}
+
+async function importWorkspacePayload(raw, kind, extra = {}) {
+  const workspace = getActiveWorkspaceMeta();
+  if (!workspace) {
+    setToolStatus("Select a workspace first.");
+    return false;
+  }
+  try {
+    const resp = await runtimeFetch(
+      `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/import`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payload_json: raw,
+          kind,
+          replace_baseline: Boolean(extra.replaceBaseline),
+          auto_start: Boolean(extra.autoStart),
+          neuron_model: extra.neuron_model,
+          learning_rule: extra.learning_rule,
+        }),
+      }
+    );
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setToolStatus(err.error || "Failed to update workspace.");
+      return false;
+    }
+    const detail = await resp.json();
+    cacheWorkspaceDetail(detail);
+    await loadRuntimeStatus();
+    await fetchSnapshotForActive();
+    await pollActivity();
+    return true;
+  } catch (_) {
+    setToolStatus("Failed to update workspace.");
+    return false;
+  }
+}
+
+async function controlWorkspaceAction(action) {
+  const workspace = getActiveWorkspaceMeta();
+  if (!workspace) return false;
+  try {
+    const resp = await runtimeFetch(
+      `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/control`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      }
+    );
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setToolStatus(err.error || "Failed to control workspace.");
+      return false;
+    }
+    const detail = await resp.json();
+    cacheWorkspaceDetail(detail);
+    await loadRuntimeStatus();
+    await fetchSnapshotForActive();
+    await pollActivity();
+    return true;
+  } catch (_) {
+    setToolStatus("Failed to control workspace.");
+    return false;
+  }
+}
+
 function ensureCard(addr) {
   if (state.cards.has(addr)) return state.cards.get(addr);
   const node = targetTemplate.content.firstElementChild.cloneNode(true);
@@ -625,10 +1289,10 @@ function addTarget(addr) {
 }
 
 async function bootstrapDefaultTarget() {
+  if (!clusterModeAllowed()) return "";
   try {
-    const res = await fetch("/api/config");
-    if (!res.ok) return "";
-    const cfg = await res.json();
+    const cfg = await loadBootstrapConfig();
+    if (!cfg) return "";
     const defaultAddr = normalizeAddr((cfg.default_orchestrator || "").trim());
     if (!defaultAddr) return "";
     if (!state.targets.includes(defaultAddr)) {
@@ -654,6 +1318,8 @@ function setActive(addr) {
   state.active = addr;
   saveActive();
   state.snapshotFailures = 0;
+  hideGraphContextMenu();
+  resetInstrumentationBuffers();
   // Node IDs are ephemeral in clustered runs; default to Auto when switching target.
   state.activeNodeId = "";
   saveActiveNode();
@@ -668,6 +1334,26 @@ function setActive(addr) {
 }
 
 function refreshNetworkSelect() {
+  const workspace = getActiveWorkspaceMeta();
+  if (workspace) {
+    const networkId = workspace.network_id || workspace.workspace_id;
+    networkSelect.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = networkId;
+    opt.textContent = `${workspace.name || workspace.workspace_id} (workspace)`;
+    networkSelect.appendChild(opt);
+    state.activeNetwork = networkId;
+    saveActiveNetwork();
+    refreshNodeSelect();
+    if (state.activeNetwork && state.activeNetwork !== state.lastNetworkId) {
+      state.lastNetworkId = state.activeNetwork;
+      setLayoutForActiveNetwork();
+    }
+    refreshControlButtons();
+    syncWorkspaceUi();
+    return;
+  }
+
   const networks = state.networksByTarget.get(state.active) || [];
   const current = state.activeNetwork;
   networkSelect.innerHTML = "";
@@ -679,6 +1365,7 @@ function refreshNetworkSelect() {
     state.activeNetwork = "";
     saveActiveNetwork();
     state.graph = null;
+    resetInstrumentationBuffers();
     drawNetwork();
     refreshControlButtons();
     return;
@@ -706,9 +1393,15 @@ function refreshNetworkSelect() {
 }
 
 networkSelect.addEventListener("change", () => {
+  if (isWorkspaceMode()) {
+    refreshNetworkSelect();
+    return;
+  }
   state.activeNetwork = networkSelect.value;
   saveActiveNetwork();
   state.snapshotFailures = 0;
+  hideGraphContextMenu();
+  resetInstrumentationBuffers();
   state.activeNodeId = "";
   saveActiveNode();
   refreshNodeSelect();
@@ -721,6 +1414,18 @@ networkSelect.addEventListener("change", () => {
 });
 
 function refreshNodeSelect() {
+  if (isWorkspaceMode()) {
+    nodeSelect.innerHTML = "";
+    const workspaceOpt = document.createElement("option");
+    workspaceOpt.value = "";
+    workspaceOpt.textContent = "Sandbox";
+    nodeSelect.appendChild(workspaceOpt);
+    state.activeNodeId = "";
+    saveActiveNode();
+    nodeSelect.value = "";
+    return;
+  }
+
   const status = state.statusByTarget.get(state.active);
   const nodes = status ? status.nodes || [] : [];
   nodeSelect.innerHTML = "";
@@ -746,8 +1451,14 @@ function refreshNodeSelect() {
 }
 
 nodeSelect.addEventListener("change", () => {
+  if (isWorkspaceMode()) {
+    refreshNodeSelect();
+    return;
+  }
   state.activeNodeId = nodeSelect.value;
   saveActiveNode();
+  hideGraphContextMenu();
+  resetInstrumentationBuffers();
   fetchSnapshotForActive();
 });
 
@@ -882,7 +1593,71 @@ function renderSidebar(nodes, networks, aggregate = null) {
     .join("");
 }
 
+function renderWorkspaceSidebar() {
+  const workspace = getActiveWorkspaceMeta();
+  const detail = getActiveWorkspaceDetail();
+  if (!workspace) {
+    setPlaceholder();
+    return;
+  }
+
+  const status = detail?.status || {};
+  const running = Boolean(detail?.summary?.running ?? workspace.running);
+  const simTimeMs = Number(detail?.status?.sim_time_ms ?? workspace.sim_time_ms ?? 0);
+  const step = Number(detail?.status?.step ?? workspace.step ?? 0);
+  const totalNeurons = Number(detail?.status?.total_neurons ?? workspace.total_neurons ?? 0);
+  const hiddenLayers = Number(
+    detail?.status?.num_hidden_layers ??
+      workspace.num_hidden_layers ??
+      state.snapshot?.net?.num_hidden_layers ??
+      0
+  );
+  const totalLayers = Math.max(0, hiddenLayers + 1);
+  const depth = Number(
+    detail?.status?.desired_aarnn_depth ??
+      workspace.desired_aarnn_depth ??
+      state.snapshot?.net?.aarnn_layer_depth ??
+      0
+  );
+  const updatedAtText =
+    Number(workspace.updated_at_ms || 0) > 0
+      ? new Date(Number(workspace.updated_at_ms)).toLocaleString()
+      : "n/a";
+
+  cpuEl.textContent = "n/a";
+  ramEl.textContent = "sandbox";
+  tempEl.textContent = "n/a";
+  gpuEl.textContent = "Engine-managed";
+  gpuStatusEl.textContent = running ? "Active" : "Idle";
+  neuronsEl.textContent = `${totalNeurons}`;
+  depthStatusEl.textContent = depth > 0 ? `${depth}/${depth}` : "0/0";
+  capacityScoreEl.textContent = "n/a";
+  gaRunningEl.textContent = "No";
+  gaPacingEl.textContent = "No";
+  gaRampEl.textContent = "No";
+  gaProgressEl.textContent = "-";
+  gaBestEl.textContent = "-";
+  clusterGaEvalsEl.textContent = "0";
+  stepTimeEl.textContent = running ? "engine" : "-";
+  activeTargetEl.textContent = `workspace:${workspace.workspace_id}`;
+  nodesCountEl.textContent = "1";
+  networksCountEl.textContent = "1";
+  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(
+    `sandbox | user ${runtimeUserLabel()} | ${running ? "running" : "stopped"} | step ${step} | updated ${updatedAtText}`
+  )}</div>`;
+  clusterNetworksEl.innerHTML = `<div class="line">${escapeHtml(
+    `${workspace.network_id || workspace.workspace_id} | ${running ? "running" : "stopped"} | t ${simTimeMs.toFixed(
+      1
+    )} ms | neurons ${totalNeurons} | layers ${totalLayers} | model ${
+      status.neuron_model || state.lastModel || "aarnn"
+    } | learning ${status.learning_rule || state.lastLearning || "aarnn"}`
+  )}</div>`;
+}
+
 function getActiveNetworkMeta() {
+  if (isWorkspaceMode()) {
+    return workspaceNetworkMeta(getActiveWorkspaceMeta());
+  }
   const networks = state.networksByTarget.get(state.active) || [];
   return networks.find((n) => n.network_id === state.activeNetwork);
 }
@@ -893,6 +1668,9 @@ function playingKey(addr, networkId) {
 }
 
 function getActivePlaying() {
+  if (isWorkspaceMode()) {
+    return Boolean(getActiveWorkspaceMeta()?.running);
+  }
   const key = playingKey(state.active, state.activeNetwork);
   if (key && state.playingOverride.has(key)) {
     return Boolean(state.playingOverride.get(key));
@@ -902,6 +1680,19 @@ function getActivePlaying() {
 }
 
 function setActiveNetworkPlaying(playing) {
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    const detail = getActiveWorkspaceDetail();
+    if (workspace) {
+      workspace.running = playing;
+    }
+    if (detail?.summary) {
+      detail.summary.running = playing;
+    }
+    refreshControlButtons();
+    syncWorkspaceUi();
+    return;
+  }
   const networks = state.networksByTarget.get(state.active);
   if (networks) {
     const meta = networks.find((n) => n.network_id === state.activeNetwork);
@@ -918,6 +1709,17 @@ function setActiveNetworkPlaying(playing) {
 
 function refreshControlButtons() {
   if (!startStopBtn || !repeatBtn || !resetBtn || !newBtn) return;
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    const playing = getActivePlaying();
+    startStopBtn.textContent = playing ? "Stop" : "Start";
+    startStopBtn.disabled = !workspace;
+    repeatBtn.disabled = !workspace;
+    resetBtn.disabled = !workspace;
+    newBtn.disabled = !workspace;
+    syncWorkspaceUi();
+    return;
+  }
   const canControl = Boolean(state.active && state.activeNetwork);
   const playing = getActivePlaying();
   startStopBtn.textContent = playing ? "Stop" : "Start";
@@ -977,6 +1779,11 @@ async function pollAll() {
   if (state.authMode !== "none" && !state.user) {
     return;
   }
+  if (isWorkspaceMode()) {
+    renderWorkspaceSidebar();
+    refreshNetworkSelect();
+    return;
+  }
   if (!state.targets.length) {
     state.statusByTarget.clear();
     state.networksByTarget.clear();
@@ -1032,23 +1839,31 @@ async function pollAll() {
 
 async function fetchSnapshotForActive() {
   if (state.authMode !== "none" && !state.user) return;
-  if (!state.active || !state.activeNetwork) return;
+  const source = activeSource();
+  if (!source) return;
   if (snapshotFetchInFlight) {
     snapshotFetchQueued = true;
     return;
   }
   snapshotFetchInFlight = true;
   state.lastSnapshotPollAt = Date.now();
-  const requestKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
+  const requestKey = sourceRequestKey(source);
   let clearGraph = false;
-  let url = `/api/snapshot?addr=${encodeURIComponent(state.active)}&network_id=${encodeURIComponent(
-    state.activeNetwork
-  )}`;
-  if (state.activeNodeId) {
-    url += `&node_id=${encodeURIComponent(state.activeNodeId)}`;
+  let url = "";
+  let fetcher = fetch;
+  if (source.kind === "workspace") {
+    url = `/api/runtime/workspaces/${encodeURIComponent(source.workspace.workspace_id)}/snapshot`;
+    fetcher = runtimeFetch;
+  } else {
+    url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(
+      source.networkId
+    )}`;
+    if (source.nodeId) {
+      url += `&node_id=${encodeURIComponent(source.nodeId)}`;
+    }
   }
   try {
-    const res = await fetch(url);
+    const res = await fetcher(url);
     if (!res.ok) {
       clearGraph = true;
     } else {
@@ -1057,13 +1872,13 @@ async function fetchSnapshotForActive() {
         clearGraph = true;
       } else {
         const snapshot = JSON.parse(data.snapshot_json);
-        const currentKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
+        const currentKey = sourceRequestKey(activeSource());
         if (requestKey === currentKey) {
           state.snapshotFailures = 0;
           state.snapshot = snapshot;
           syncControlsToSnapshot(snapshot);
           const rebuild = () => {
-            const latestKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
+            const latestKey = sourceRequestKey(activeSource());
             if (latestKey === requestKey) {
               rebuildGraph();
             }
@@ -1082,7 +1897,7 @@ async function fetchSnapshotForActive() {
     clearGraph = true;
   } finally {
     if (clearGraph) {
-      const currentKey = `${state.active}::${state.activeNetwork}::${state.activeNodeId || ""}`;
+      const currentKey = sourceRequestKey(activeSource());
       if (currentKey === requestKey) {
         state.snapshotFailures = (state.snapshotFailures || 0) + 1;
         // Keep the last rendered graph through brief transport hiccups.
@@ -1109,7 +1924,7 @@ function snapshotPollIntervalMs() {
 
 function pollSnapshot() {
   if (state.authMode !== "none" && !state.user) return;
-  if (!state.active || !state.activeNetwork) return;
+  if (!activeSource()) return;
   const now = Date.now();
   if (now - state.lastSnapshotPollAt < snapshotPollIntervalMs()) return;
   state.lastSnapshotPollAt = now;
@@ -1118,18 +1933,31 @@ function pollSnapshot() {
 
 async function pollActivity() {
   if (state.authMode !== "none" && !state.user) return;
-  if (!state.active || !state.activeNetwork) return;
-  let url = `/api/activity?addr=${encodeURIComponent(state.active)}&network_id=${encodeURIComponent(
-    state.activeNetwork
-  )}`;
-  if (state.activeNodeId) {
-    url += `&node_id=${encodeURIComponent(state.activeNodeId)}`;
+  const source = activeSource();
+  if (!source) return;
+  let url = "";
+  let fetcher = fetch;
+  if (source.kind === "workspace") {
+    url = `/api/runtime/workspaces/${encodeURIComponent(source.workspace.workspace_id)}/activity`;
+    fetcher = runtimeFetch;
+  } else {
+    url = `/api/activity?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(
+      source.networkId
+    )}`;
+    if (source.nodeId) {
+      url += `&node_id=${encodeURIComponent(source.nodeId)}`;
+    }
   }
   try {
-    const res = await fetch(url);
+    const res = await fetcher(url);
     if (!res.ok) return;
     const data = await res.json();
-    state.activity = data;
+    const activity =
+      source.kind === "workspace"
+        ? normalizeActivityPayload(data.activity)
+        : normalizeActivityPayload(data);
+    state.activity = activity;
+    pushInstrumentationFrame(activity);
     drawNetwork();
   } catch (_) {}
 }
@@ -1208,15 +2036,35 @@ function buildGraph(snapshot, layout) {
 function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
   if (snapshot.topo) {
     return {
-      sensory: snapshot.topo.sensory_nodes.map((n) => ({ x: n.x, y: n.y })),
-      output: snapshot.topo.output_nodes.map((n) => ({ x: n.x, y: n.y })),
-      hidden: snapshot.topo.layers.map((layer) => layer.map((n) => ({ x: n.x, y: n.y }))),
+      sensory: snapshot.topo.sensory_nodes.map((n, index) => ({
+        x: n.x,
+        y: n.y,
+        kind: "sensory",
+        index,
+      })),
+      output: snapshot.topo.output_nodes.map((n, index) => ({
+        x: n.x,
+        y: n.y,
+        kind: "output",
+        index,
+      })),
+      hidden: snapshot.topo.layers.map((layer, layerIndex) =>
+        layer.map((n, index) => ({
+          x: n.x,
+          y: n.y,
+          kind: "hidden",
+          layer: layerIndex,
+          index,
+        }))
+      ),
     };
   }
   return {
-    sensory: createRingNodes(sensoryCount, 0.65),
-    hidden: hiddenSizes.map((sz, idx) => createRingNodes(sz, 0.2 + idx * 0.07)),
-    output: createRingNodes(outputCount, 0.65, Math.PI / 8),
+    sensory: createRingNodes(sensoryCount, 0.65, 0, { kind: "sensory" }),
+    hidden: hiddenSizes.map((sz, idx) =>
+      createRingNodes(sz, 0.2 + idx * 0.07, 0, { kind: "hidden", layer: idx })
+    ),
+    output: createRingNodes(outputCount, 0.65, Math.PI / 8, { kind: "output" }),
   };
 }
 
@@ -1228,32 +2076,41 @@ function buildConventionalNodes(sensoryCount, hiddenSizes, outputCount) {
     xPositions.push(-0.9 + ratio * 1.8);
   }
   return {
-    sensory: createColumnNodes(sensoryCount, xPositions[0], 0.75),
-    hidden: hiddenSizes.map((sz, idx) => createColumnNodes(sz, xPositions[idx + 1], 0.75)),
-    output: createColumnNodes(outputCount, xPositions[totalColumns - 1], 0.75),
+    sensory: createColumnNodes(sensoryCount, xPositions[0], 0.75, { kind: "sensory" }),
+    hidden: hiddenSizes.map((sz, idx) =>
+      createColumnNodes(sz, xPositions[idx + 1], 0.75, { kind: "hidden", layer: idx })
+    ),
+    output: createColumnNodes(outputCount, xPositions[totalColumns - 1], 0.75, {
+      kind: "output",
+    }),
   };
 }
 
-function createRingNodes(count, radius, phase = 0) {
+function createRingNodes(count, radius, phase = 0, meta = {}) {
   const nodes = [];
   if (!count) return nodes;
   for (let i = 0; i < count; i += 1) {
     const angle = phase + (i / count) * Math.PI * 2;
-    nodes.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    nodes.push({
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      ...meta,
+      index: i,
+    });
   }
   return nodes;
 }
 
-function createColumnNodes(count, x, span) {
+function createColumnNodes(count, x, span, meta = {}) {
   const nodes = [];
   if (!count) return nodes;
   if (count === 1) {
-    nodes.push({ x, y: 0 });
+    nodes.push({ x, y: 0, ...meta, index: 0 });
     return nodes;
   }
   for (let i = 0; i < count; i += 1) {
     const t = i / (count - 1);
-    nodes.push({ x, y: -span + t * (span * 2) });
+    nodes.push({ x, y: -span + t * (span * 2), ...meta, index: i });
   }
   return nodes;
 }
@@ -1311,6 +2168,8 @@ function drawNetwork() {
 
   if (!state.graph) {
     edgeCountEl.textContent = "0";
+    state.instrumentation.screenNodes = [];
+    renderInstrumentation();
     return;
   }
   const { nodes, edges } = state.graph;
@@ -1319,6 +2178,7 @@ function drawNetwork() {
   const radius = Math.min(rect.width, rect.height) * 0.32 * state.view.zoom;
   const cosR = Math.cos(state.view.rotation);
   const sinR = Math.sin(state.view.rotation);
+  const screenNodes = [];
 
   // Draw skull membrane (concave hull of hidden nodes) first
   try {
@@ -1367,12 +2227,12 @@ function drawNetwork() {
   const hiddenActive = active.hidden || [];
   const outputActive = active.output ? active.output.indices || [] : [];
 
-  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", [], cosR, sinR);
+  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", [], cosR, sinR, screenNodes);
   nodes.hidden.forEach((layer, idx) => {
     const activeIdx = hiddenActive[idx] ? hiddenActive[idx].indices || [] : [];
-    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR);
+    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes);
   });
-  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR);
+  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes);
 
   // Draw region labels if enabled
   if (state.render.showRegionLabels && state.snapshot && state.snapshot.net && state.snapshot.net.brain_regions) {
@@ -1424,9 +2284,11 @@ function drawNetwork() {
   }
 
   edgeCountEl.textContent = edges.length.toString();
+  state.instrumentation.screenNodes = screenNodes;
+  renderInstrumentation();
 }
 
-function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR) {
+function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = []) {
   const activeSet = new Set(activeIndices);
   nodes.forEach((node, idx) => {
     const rotated = rotate(node.x, node.y, cosR, sinR);
@@ -1437,11 +2299,604 @@ function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR) 
     ctx.beginPath();
     ctx.arc(x, y, active ? 3.4 : 2.2, 0, Math.PI * 2);
     ctx.fill();
+    screenNodes.push({
+      targetType: node.kind || "sensory",
+      layer: Number.isFinite(node.layer) ? node.layer : 0,
+      index: Number.isFinite(node.index) ? node.index : idx,
+      x,
+      y,
+    });
   });
 }
 
 function rotate(x, y, cosR, sinR) {
   return { x: x * cosR - y * sinR, y: x * sinR + y * cosR };
+}
+
+function formatGraphTarget(target) {
+  if (!target) return "Node";
+  if (target.targetType === "hidden") {
+    return `H${target.layer + 1}:${target.index}`;
+  }
+  if (target.targetType === "output") {
+    return `O${target.index}`;
+  }
+  return `S${target.index}`;
+}
+
+function currentSensoryCount() {
+  return Number(
+    state.snapshot?.net?.num_sensory_neurons || state.graph?.nodes?.sensory?.length || 0
+  );
+}
+
+function currentOutputCount() {
+  return Number(
+    state.snapshot?.net?.num_output_neurons || state.graph?.nodes?.output?.length || 0
+  );
+}
+
+function currentHiddenCount(layer) {
+  if (!Number.isFinite(layer) || layer < 0) return 0;
+  if (state.graph?.nodes?.hidden?.[layer]) {
+    return Number(state.graph.nodes.hidden[layer].length || 0);
+  }
+  return 0;
+}
+
+function probeMatches(probe, target) {
+  if (!probe || !target) return false;
+  return (
+    probe.targetType === target.targetType &&
+    Number(probe.layer || 0) === Number(target.layer || 0) &&
+    Number(probe.index || 0) === Number(target.index || 0)
+  );
+}
+
+function findProbeByTarget(target) {
+  return state.instrumentation.probes.find((probe) => probeMatches(probe, target)) || null;
+}
+
+function setToolStatus(message) {
+  if (toolStatusEl) {
+    toolStatusEl.textContent = message;
+  }
+}
+
+function updateProbeHint() {
+  if (!probeHint) return;
+  const count = state.instrumentation.probes.length;
+  probeHint.textContent = count
+    ? `${count} live spike probe${count === 1 ? "" : "s"} active. Right-click a node or use the controls above to add more.`
+    : "Right-click a node in the graph to add a spike probe without leaving the canvas.";
+}
+
+function syncProbeControls() {
+  if (!probeSourceInput || !probeLayerInput || !probeIndexInput) return;
+  const targetType = probeSourceInput.value || "sensory";
+  const hidden = targetType === "hidden";
+  const maxLayer = Math.max(0, (state.graph?.nodes?.hidden?.length || 1) - 1);
+  const currentLayer = Math.min(
+    maxLayer,
+    Math.max(0, Math.trunc(Number(probeLayerInput.value || 0)))
+  );
+
+  probeLayerInput.disabled = !hidden;
+  probeLayerInput.max = String(maxLayer);
+  probeLayerInput.value = String(hidden ? currentLayer : 0);
+
+  let maxIndex = 0;
+  if (targetType === "hidden") {
+    maxIndex = Math.max(0, currentHiddenCount(currentLayer) - 1);
+  } else if (targetType === "output") {
+    maxIndex = Math.max(0, currentOutputCount() - 1);
+  } else {
+    maxIndex = Math.max(0, currentSensoryCount() - 1);
+  }
+  probeIndexInput.max = String(maxIndex);
+  const currentIndex = Math.min(
+    maxIndex,
+    Math.max(0, Math.trunc(Number(probeIndexInput.value || 0)))
+  );
+  probeIndexInput.value = String(currentIndex);
+  if (addProbeBtn) {
+    addProbeBtn.disabled = maxIndex <= 0;
+  }
+}
+
+function preparePanelCanvas(canvasEl, canvasCtx) {
+  if (!canvasEl || !canvasCtx) return null;
+  const rect = canvasEl.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * ratio));
+  const height = Math.max(1, Math.round(rect.height * ratio));
+  if (canvasEl.width !== width || canvasEl.height !== height) {
+    canvasEl.width = width;
+    canvasEl.height = height;
+  }
+  canvasCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { width: rect.width, height: rect.height };
+}
+
+function renderEqPanel() {
+  if (!eqPanel) return;
+  const bands = state.instrumentation.eqBands || [];
+  const hasSignal = bands.some((value) => value > 0.03);
+  if (eqEmpty) {
+    eqEmpty.classList.toggle("hidden", hasSignal);
+  }
+  eqPanel.innerHTML = bands
+    .map((value, index) => {
+      const height = Math.max(2, Math.round(value * 88));
+      return `<div class="eq-band">
+        <div class="eq-band-bar" style="height:${height}px"></div>
+        <div class="eq-band-label">B${index + 1}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function drawScopePanel() {
+  if (!scopeCanvas || !scopeCtx) return;
+  const rect = preparePanelCanvas(scopeCanvas, scopeCtx);
+  if (!rect) return;
+  scopeCtx.clearRect(0, 0, rect.width, rect.height);
+  scopeCtx.fillStyle = "#171717";
+  scopeCtx.fillRect(0, 0, rect.width, rect.height);
+
+  const probes = state.instrumentation.probes.filter((probe) => probe.enabled !== false);
+  if (probeCountEl) {
+    probeCountEl.textContent = String(state.instrumentation.probes.length);
+  }
+  if (!probes.length) {
+    scopeCtx.fillStyle = "#8a8a8a";
+    scopeCtx.font = "12px sans-serif";
+    scopeCtx.textAlign = "center";
+    scopeCtx.fillText("No probes selected", rect.width / 2, rect.height / 2);
+    return;
+  }
+
+  const left = 12;
+  const top = 10;
+  const width = rect.width - 24;
+  const height = rect.height - 20;
+  const laneHeight = height / probes.length;
+
+  for (let lane = 0; lane < probes.length; lane += 1) {
+    const probe = probes[lane];
+    const laneTop = top + lane * laneHeight;
+    const laneBottom = laneTop + laneHeight - 6;
+    const laneMid = laneBottom - (laneHeight - 16) * 0.5;
+
+    scopeCtx.strokeStyle = "rgba(255,255,255,0.08)";
+    scopeCtx.lineWidth = 1;
+    scopeCtx.beginPath();
+    scopeCtx.moveTo(left, laneMid);
+    scopeCtx.lineTo(left + width, laneMid);
+    scopeCtx.stroke();
+
+    scopeCtx.fillStyle = "#8f8f8f";
+    scopeCtx.font = "10px sans-serif";
+    scopeCtx.textAlign = "left";
+    scopeCtx.fillText(formatGraphTarget(probe), left, laneTop + 9);
+
+    const samples = probe.samples || [];
+    if (!samples.length) continue;
+    scopeCtx.strokeStyle = probe.color;
+    scopeCtx.lineWidth = 1.5;
+    scopeCtx.beginPath();
+    samples.forEach((sample, index) => {
+      const x = left + (index / Math.max(1, PROBE_HISTORY - 1)) * width;
+      const y =
+        laneBottom - 4 - (sample ? laneHeight - 18 : 0);
+      if (index === 0) {
+        scopeCtx.moveTo(x, y);
+      } else {
+        scopeCtx.lineTo(x, y);
+      }
+    });
+    scopeCtx.stroke();
+  }
+}
+
+function drawRasterPanel() {
+  if (!rasterCanvas || !rasterCtx) return;
+  const rect = preparePanelCanvas(rasterCanvas, rasterCtx);
+  if (!rect) return;
+  rasterCtx.clearRect(0, 0, rect.width, rect.height);
+  rasterCtx.fillStyle = "#171717";
+  rasterCtx.fillRect(0, 0, rect.width, rect.height);
+
+  const frames = state.instrumentation.outputRaster || [];
+  if (rasterFramesEl) {
+    rasterFramesEl.textContent = String(frames.length);
+  }
+  const outputCount = currentOutputCount();
+  if (!frames.length || !outputCount) {
+    rasterCtx.fillStyle = "#8a8a8a";
+    rasterCtx.font = "12px sans-serif";
+    rasterCtx.textAlign = "center";
+    rasterCtx.fillText("No output spikes yet", rect.width / 2, rect.height / 2);
+    return;
+  }
+
+  const left = 8;
+  const top = 8;
+  const width = rect.width - 16;
+  const height = rect.height - 16;
+  const cw = width / Math.max(1, frames.length);
+  const ch = height / Math.max(1, outputCount);
+
+  rasterCtx.fillStyle = "rgba(255,255,255,0.06)";
+  rasterCtx.fillRect(left, top, width, height);
+
+  frames.forEach((frame, columnIndex) => {
+    frame.forEach((value, outputIndex) => {
+      if (!value) return;
+      const x = left + columnIndex * cw;
+      const y = top + (outputCount - outputIndex - 1) * ch;
+      rasterCtx.fillStyle = "#9ce67a";
+      rasterCtx.fillRect(x, y, Math.max(1, cw - 1), Math.max(1, ch - 1));
+    });
+  });
+}
+
+function renderProbeList() {
+  if (!scopeProbesEl) return;
+  const probes = state.instrumentation.probes;
+  if (probeCountEl) {
+    probeCountEl.textContent = String(probes.length);
+  }
+  if (!probes.length) {
+    scopeProbesEl.innerHTML = '<div class="muted">No probes selected yet.</div>';
+    updateProbeHint();
+    return;
+  }
+  scopeProbesEl.innerHTML = probes
+    .map(
+      (probe) => `<div class="probe-pill${probe.enabled === false ? " off" : ""}">
+        <span class="probe-swatch" style="background:${escapeHtml(probe.color)}"></span>
+        <button class="probe-toggle" data-probe-toggle="${probe.id}" type="button">${
+          probe.enabled === false ? "Off" : "On"
+        }</button>
+        <span class="probe-label">${escapeHtml(probe.label)}</span>
+        <button class="probe-remove" data-probe-remove="${probe.id}" type="button">×</button>
+      </div>`
+    )
+    .join("");
+  scopeProbesEl.querySelectorAll("[data-probe-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const probeId = Number(button.getAttribute("data-probe-toggle"));
+      const probe = state.instrumentation.probes.find((item) => item.id === probeId);
+      if (!probe) return;
+      probe.enabled = probe.enabled === false;
+      saveInstrumentationState();
+      renderInstrumentation();
+    });
+  });
+  scopeProbesEl.querySelectorAll("[data-probe-remove]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const probeId = Number(button.getAttribute("data-probe-remove"));
+      state.instrumentation.probes = state.instrumentation.probes.filter(
+        (probe) => probe.id !== probeId
+      );
+      saveInstrumentationState();
+      renderInstrumentation();
+      setToolStatus("Removed probe.");
+    });
+  });
+  updateProbeHint();
+}
+
+function renderInstrumentation() {
+  renderEqPanel();
+  drawScopePanel();
+  drawRasterPanel();
+  renderProbeList();
+  syncProbeControls();
+}
+
+function addProbe(target) {
+  if (!target) return null;
+  const maxIndex =
+    target.targetType === "hidden"
+      ? currentHiddenCount(target.layer)
+      : target.targetType === "output"
+      ? currentOutputCount()
+      : currentSensoryCount();
+  if (!maxIndex) {
+    setToolStatus("Load an active network snapshot before adding probes.");
+    return null;
+  }
+  if (target.index < 0 || target.index >= maxIndex) {
+    setToolStatus(`Probe index ${target.index} is out of range for ${target.targetType}.`);
+    return null;
+  }
+  const existing = findProbeByTarget(target);
+  if (existing) {
+    existing.enabled = true;
+    setToolStatus(`Probe already exists: ${existing.label}`);
+    saveInstrumentationState();
+    renderInstrumentation();
+    return existing;
+  }
+  const probeId = state.instrumentation.nextProbeId;
+  const probe = normalizeProbe(
+    {
+      id: probeId,
+      targetType: target.targetType,
+      layer: target.layer,
+      index: target.index,
+      label: probeDefaultLabel(target.targetType, target.layer || 0, target.index),
+      color: PROBE_COLORS[(probeId - 1) % PROBE_COLORS.length],
+      enabled: true,
+    },
+    probeId
+  );
+  state.instrumentation.nextProbeId += 1;
+  state.instrumentation.probes.push(probe);
+  saveInstrumentationState();
+  renderInstrumentation();
+  setToolStatus(`Added probe ${probe.label}.`);
+  return probe;
+}
+
+function updateEqBands(sensoryIndices) {
+  const nextBands = Array.from({ length: EQ_BANDS }, () => 0);
+  const sensoryCount = Math.max(
+    1,
+    currentSensoryCount(),
+    sensoryIndices.reduce((maxIndex, rawIndex) => Math.max(maxIndex, Number(rawIndex) + 1), 0)
+  );
+  if (sensoryIndices.length) {
+    sensoryIndices.forEach((rawIndex) => {
+      const index = Number(rawIndex);
+      if (!Number.isFinite(index) || index < 0) return;
+      const band = Math.max(
+        0,
+        Math.min(EQ_BANDS - 1, Math.floor((index / sensoryCount) * EQ_BANDS))
+      );
+      nextBands[band] += 1;
+    });
+    const denom = Math.max(1, sensoryIndices.length);
+    for (let i = 0; i < nextBands.length; i += 1) {
+      nextBands[i] = Math.min(1, nextBands[i] / denom);
+    }
+  }
+  state.instrumentation.eqBands = state.instrumentation.eqBands.map((previous, index) => {
+    const target = nextBands[index] || 0;
+    if (!sensoryIndices.length) {
+      return previous * 0.95;
+    }
+    return previous * 0.72 + target * 0.28;
+  });
+}
+
+function pushOutputRasterFrame(outputIndices) {
+  const outputCount = currentOutputCount();
+  if (!outputCount) return;
+  const frame = Array.from({ length: outputCount }, () => 0);
+  outputIndices.forEach((rawIndex) => {
+    const index = Number(rawIndex);
+    if (Number.isFinite(index) && index >= 0 && index < outputCount) {
+      frame[index] = 1;
+    }
+  });
+  state.instrumentation.outputRaster.push(frame);
+  while (state.instrumentation.outputRaster.length > RASTER_HISTORY) {
+    state.instrumentation.outputRaster.shift();
+  }
+}
+
+function readProbeValue(probe, sensorySet, hiddenSets, outputSet) {
+  if (probe.targetType === "hidden") {
+    return hiddenSets[probe.layer] && hiddenSets[probe.layer].has(probe.index) ? 1 : 0;
+  }
+  if (probe.targetType === "output") {
+    return outputSet.has(probe.index) ? 1 : 0;
+  }
+  return sensorySet.has(probe.index) ? 1 : 0;
+}
+
+function pushProbeSamples(activity) {
+  const sensorySet = new Set((activity?.sensory?.indices || []).map((index) => Number(index)));
+  const hiddenSets = Array.isArray(activity?.hidden)
+    ? activity.hidden.map((layer) => new Set((layer?.indices || []).map((index) => Number(index))))
+    : [];
+  const outputSet = new Set((activity?.output?.indices || []).map((index) => Number(index)));
+  state.instrumentation.probes.forEach((probe) => {
+    probe.samples.push(readProbeValue(probe, sensorySet, hiddenSets, outputSet));
+    while (probe.samples.length > PROBE_HISTORY) {
+      probe.samples.shift();
+    }
+  });
+}
+
+function pushInstrumentationFrame(activity) {
+  const sensoryIndices = activity?.sensory?.indices || [];
+  const outputIndices = activity?.output?.indices || [];
+  updateEqBands(sensoryIndices);
+  pushOutputRasterFrame(outputIndices);
+  pushProbeSamples(activity || {});
+  renderInstrumentation();
+}
+
+function findNearestGraphNode(clientX, clientY) {
+  if (!canvas || !state.instrumentation.screenNodes.length) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let best = null;
+  let bestDist = Infinity;
+  state.instrumentation.screenNodes.forEach((node) => {
+    const dx = node.x - x;
+    const dy = node.y - y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < bestDist) {
+      best = node;
+      bestDist = dist;
+    }
+  });
+  return bestDist <= 14 ? best : null;
+}
+
+function hideGraphContextMenu() {
+  if (graphContextMenu) {
+    graphContextMenu.classList.add("hidden");
+  }
+  state.instrumentation.contextTarget = null;
+}
+
+function showGraphContextMenu(target, clientX, clientY) {
+  if (!graphContextMenu || !graphContextTitle || !graphContextDetails || !graphAddProbeBtn) return;
+  state.instrumentation.contextTarget = target;
+  const existing = findProbeByTarget(target);
+  graphContextTitle.textContent = formatGraphTarget(target);
+  graphContextDetails.textContent =
+    target.targetType === "hidden"
+      ? `Hidden layer ${target.layer + 1}, neuron ${target.index}.`
+      : target.targetType === "output"
+      ? `Output neuron ${target.index}.`
+      : `Sensory neuron ${target.index}.`;
+  graphAddProbeBtn.textContent = existing ? "Remove Probe" : "Add Probe";
+  graphContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 240, clientX + 12))}px`;
+  graphContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 140, clientY + 12))}px`;
+  graphContextMenu.classList.remove("hidden");
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function pickJsonFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      try {
+        const text = await file.text();
+        resolve(text);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    input.click();
+  });
+}
+
+async function applyRemoteJsonPayload(raw, label) {
+  const payloadKind = label.toLowerCase().includes("snapshot") ? "snapshot" : "config";
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    if (!workspace) {
+      setToolStatus(`Select a workspace before loading ${label.toLowerCase()}.`);
+      return false;
+    }
+    const ok = await importWorkspacePayload(raw, payloadKind, {
+      replaceBaseline: true,
+    });
+    if (ok) {
+      setToolStatus(`${label} applied to workspace ${workspace.workspace_id}.`);
+      resetInstrumentationBuffers();
+    }
+    return ok;
+  }
+  if (!state.active || !state.activeNetwork) {
+    setToolStatus(`Select an active target and network before loading ${label.toLowerCase()}.`);
+    return false;
+  }
+  try {
+    const res = await fetch("/api/update_network", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        addr: state.active,
+        network_id: state.activeNetwork,
+        config_json: raw,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setToolStatus(err.error || `Failed to load ${label.toLowerCase()}.`);
+      return false;
+    }
+    setToolStatus(`${label} applied to ${state.activeNetwork}.`);
+    resetInstrumentationBuffers();
+    await pollAll();
+    await fetchSnapshotForActive();
+    return true;
+  } catch (_) {
+    setToolStatus(`Failed to load ${label.toLowerCase()}.`);
+    return false;
+  }
+}
+
+function currentConfigJson() {
+  if (state.snapshot?.net) {
+    return JSON.stringify(state.snapshot.net, null, 2);
+  }
+  const meta = getActiveNetworkMeta();
+  if (meta?.config_json) {
+    try {
+      return JSON.stringify(JSON.parse(meta.config_json), null, 2);
+    } catch (_) {
+      return meta.config_json;
+    }
+  }
+  return "";
+}
+
+function currentNetworkJson() {
+  return state.snapshot ? JSON.stringify(state.snapshot, null, 2) : "";
+}
+
+function normalizeIndicesEnvelope(raw) {
+  if (Array.isArray(raw)) {
+    return {
+      indices: raw.map((index) => Number(index)).filter((index) => Number.isFinite(index) && index >= 0),
+    };
+  }
+  if (raw && Array.isArray(raw.indices)) {
+    return {
+      indices: raw.indices
+        .map((index) => Number(index))
+        .filter((index) => Number.isFinite(index) && index >= 0),
+    };
+  }
+  return { indices: [] };
+}
+
+function normalizeActivityPayload(activity) {
+  if (!activity || typeof activity !== "object") {
+    return {
+      sensory: { indices: [] },
+      hidden: [],
+      output: { indices: [] },
+    };
+  }
+  return {
+    ...activity,
+    sensory: normalizeIndicesEnvelope(activity.sensory),
+    hidden: Array.isArray(activity.hidden)
+      ? activity.hidden.map((layer) => normalizeIndicesEnvelope(layer))
+      : [],
+    output: normalizeIndicesEnvelope(activity.output),
+  };
 }
 
 function smoothHull(points, iterations = 2) {
@@ -1527,6 +2982,8 @@ function setPlaceholder() {
   networksCountEl.textContent = "0";
   clusterNodesEl.innerHTML = "";
   clusterNetworksEl.innerHTML = "";
+  resetInstrumentationBuffers();
+  renderInstrumentation();
 }
 
 function rebuildGraph() {
@@ -1635,7 +3092,7 @@ function buildAarnnHumanDefaults() {
 }
 
 async function updateNetworkSettings(options = {}) {
-  if (!state.active || !state.activeNetwork) return;
+  if (!activeSource()) return;
   const forceBaseline = options.forceBaseline === true;
   
   const activeModel = modelSelector.querySelector("button.active")?.dataset.model;
@@ -1655,11 +3112,21 @@ async function updateNetworkSettings(options = {}) {
   config.aarnn_bio.neuromodulation_enabled = useNeuromod.checked;
   config.growth_enabled = evolution3d.checked;
   config.clumping_design = clumpingDesign.value;
-  
+  const configJson = JSON.stringify(config);
+
+  if (isWorkspaceMode()) {
+    await importWorkspacePayload(configJson, "config", {
+      replaceBaseline: true,
+      neuron_model: activeModel,
+      learning_rule: activeLearning,
+    });
+    return;
+  }
+
   const payload = {
     addr: state.active,
     network_id: state.activeNetwork,
-    config_json: JSON.stringify(config),
+    config_json: configJson,
     neuron_model: activeModel,
     learning_rule: activeLearning
   };
@@ -1681,6 +3148,17 @@ async function updateNetworkSettings(options = {}) {
 }
 
 async function sendControlAction(action) {
+  if (isWorkspaceMode()) {
+    const ok = await controlWorkspaceAction(action);
+    if (ok) {
+      if (action === "start" || action === "repeat") {
+        setActiveNetworkPlaying(true);
+      } else if (action === "stop" || action === "reset" || action === "new") {
+        setActiveNetworkPlaying(false);
+      }
+    }
+    return;
+  }
   if (!state.active || !state.activeNetwork) return;
   const payload = {
     addr: state.active,
@@ -1710,9 +3188,25 @@ async function sendControlAction(action) {
 }
 
 async function initTargets() {
+  if (!clusterModeAllowed()) {
+    resetTargetsUi();
+    state.statusByTarget.clear();
+    state.networksByTarget.clear();
+    state.active = "";
+    state.activeNetwork = "";
+    state.activeNodeId = "";
+    renderWorkspaceSidebar();
+    refreshNetworkSelect();
+    return;
+  }
   const defaultAddr = await bootstrapDefaultTarget();
   if (state.targets.length === 0) {
-    setPlaceholder();
+    if (isWorkspaceMode()) {
+      renderWorkspaceSidebar();
+      refreshNetworkSelect();
+    } else {
+      setPlaceholder();
+    }
     return;
   }
   state.targets.forEach((addr) => ensureCard(addr));
@@ -2048,6 +3542,110 @@ window.addEventListener("beforeunload", () => {
 function attachControls() {
   syncRenderControls();
   attachIoControls();
+  renderInstrumentation();
+  syncWorkspaceUi();
+  if (workspaceSelect) {
+    workspaceSelect.addEventListener("change", async () => {
+      state.runtime.activeWorkspace = workspaceSelect.value || "";
+      saveActiveWorkspace();
+      state.snapshotFailures = 0;
+      hideGraphContextMenu();
+      resetInstrumentationBuffers();
+      state.activity = null;
+      refreshNetworkSelect();
+      if (state.runtime.activeWorkspace) {
+        await loadWorkspaceDetail(state.runtime.activeWorkspace);
+        await fetchSnapshotForActive();
+        await pollActivity();
+        renderWorkspaceSidebar();
+      } else {
+        await pollAll();
+        if (state.active && state.activeNetwork) {
+          await fetchSnapshotForActive();
+          await pollActivity();
+        }
+      }
+      refreshControlButtons();
+    });
+  }
+  if (workspaceUserInput) {
+    workspaceUserInput.addEventListener("change", async () => {
+      if (state.authMode !== "none") {
+        syncWorkspaceUi();
+        return;
+      }
+      const nextUser = workspaceUserInput.value.trim() || defaultRuntimeUser();
+      state.runtime.userId = nextUser;
+      saveRuntimeUser();
+      state.runtime.workspaces = [];
+      state.runtime.details.clear();
+      await loadRuntimeStatus();
+      refreshNetworkSelect();
+      if (isWorkspaceMode()) {
+        await fetchSnapshotForActive();
+        await pollActivity();
+      } else {
+        await pollAll();
+      }
+      setToolStatus(`Runtime sandbox user set to ${nextUser}.`);
+    });
+  }
+  if (workspaceRefreshBtn) {
+    workspaceRefreshBtn.addEventListener("click", async () => {
+      await loadRuntimeStatus();
+      if (isWorkspaceMode()) {
+        await fetchSnapshotForActive();
+        await pollActivity();
+      } else {
+        await pollAll();
+      }
+    });
+  }
+  if (workspaceCreateBtn) {
+    workspaceCreateBtn.addEventListener("click", () => {
+      createWorkspaceFromCurrentState();
+    });
+  }
+  if (workspaceDeleteBtn) {
+    workspaceDeleteBtn.addEventListener("click", () => {
+      deleteSelectedWorkspace();
+    });
+  }
+  if (workspacePullBtn) {
+    workspacePullBtn.addEventListener("click", async () => {
+      await fetchSnapshotForActive();
+      await pollActivity();
+      setToolStatus(`Pulled workspace ${state.runtime.activeWorkspace}.`);
+    });
+  }
+  if (workspacePushBtn) {
+    workspacePushBtn.addEventListener("click", async () => {
+      const snapshotJson = currentNetworkJson();
+      const configJson = currentConfigJson();
+      const payload = snapshotJson || configJson;
+      if (!payload) {
+        setToolStatus("No snapshot or config is loaded to push.");
+        return;
+      }
+      const kind = snapshotJson ? "snapshot" : "config";
+      const ok = await importWorkspacePayload(payload, kind, {
+        replaceBaseline: true,
+      });
+      if (ok) {
+        setToolStatus(`Pushed ${kind} into workspace ${state.runtime.activeWorkspace}.`);
+      }
+    });
+  }
+  if (workspaceStartBtn) {
+    workspaceStartBtn.addEventListener("click", () => {
+      controlWorkspaceAction("start");
+    });
+  }
+  if (workspaceStopBtn) {
+    workspaceStopBtn.addEventListener("click", () => {
+      controlWorkspaceAction("stop");
+    });
+  }
   layoutButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       setLayout(btn.dataset.layout);
@@ -2083,6 +3681,111 @@ function attachControls() {
     saveRenderSettings();
     drawNetwork();
   });
+
+  if (probeSourceInput) {
+    probeSourceInput.addEventListener("change", syncProbeControls);
+  }
+  if (probeLayerInput) {
+    probeLayerInput.addEventListener("input", syncProbeControls);
+  }
+  if (probeIndexInput) {
+    probeIndexInput.addEventListener("input", syncProbeControls);
+  }
+  if (addProbeBtn) {
+    addProbeBtn.addEventListener("click", () => {
+      syncProbeControls();
+      const targetType = probeSourceInput ? probeSourceInput.value || "sensory" : "sensory";
+      const layer = targetType === "hidden" ? Number(probeLayerInput?.value || 0) : 0;
+      const index = Number(probeIndexInput?.value || 0);
+      addProbe({ targetType, layer, index });
+    });
+  }
+  if (clearProbesBtn) {
+    clearProbesBtn.addEventListener("click", () => {
+      resetInstrumentationBuffers({ keepProbes: false });
+      renderInstrumentation();
+      setToolStatus("Cleared all probes.");
+    });
+  }
+  if (saveConfigBtn) {
+    saveConfigBtn.addEventListener("click", () => {
+      const raw = currentConfigJson();
+      if (!raw) {
+        setToolStatus("No config available to save yet.");
+        return;
+      }
+      downloadTextFile("config.json", raw);
+      setToolStatus("Saved current config to config.json.");
+    });
+  }
+  if (loadConfigBtn) {
+    loadConfigBtn.addEventListener("click", async () => {
+      const raw = await pickJsonFile();
+      if (!raw) {
+        setToolStatus("No config file selected.");
+        return;
+      }
+      applyRemoteJsonPayload(raw, "Config");
+    });
+  }
+  if (saveNetworkBtn) {
+    saveNetworkBtn.addEventListener("click", () => {
+      const raw = currentNetworkJson();
+      if (!raw) {
+        setToolStatus("No snapshot available to save yet.");
+        return;
+      }
+      downloadTextFile("network.json", raw);
+      setToolStatus("Saved current network snapshot to network.json.");
+    });
+  }
+  if (loadNetworkBtn) {
+    loadNetworkBtn.addEventListener("click", async () => {
+      const raw = await pickJsonFile();
+      if (!raw) {
+        setToolStatus("No network file selected.");
+        return;
+      }
+      applyRemoteJsonPayload(raw, "Network snapshot");
+    });
+  }
+  if (saveProbesBtn) {
+    saveProbesBtn.addEventListener("click", () => {
+      downloadTextFile(
+        "probes.json",
+        JSON.stringify({ probes: serializeProbes() }, null, 2)
+      );
+      setToolStatus("Saved local probe set to probes.json.");
+    });
+  }
+  if (loadProbesBtn) {
+    loadProbesBtn.addEventListener("click", async () => {
+      const raw = await pickJsonFile();
+      if (!raw) {
+        setToolStatus("No probe file selected.");
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        const probes = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.probes) ? parsed.probes : null;
+        if (!probes) {
+          setToolStatus("Probe file must be an array or an object with a probes array.");
+          return;
+        }
+        state.instrumentation.probes = probes.map((probe, idx) => normalizeProbe(probe, idx + 1));
+        state.instrumentation.nextProbeId =
+          state.instrumentation.probes.reduce((maxId, probe) => Math.max(maxId, probe.id), 0) + 1;
+        state.instrumentation.probes.forEach((probe) => {
+          probe.samples = [];
+        });
+        saveInstrumentationState();
+        renderInstrumentation();
+        setToolStatus("Loaded local probe set.");
+      } catch (_) {
+        setToolStatus("Probe file is not valid JSON.");
+      }
+    });
+  }
 }
 
 function attachCanvasControls() {
@@ -2090,17 +3793,28 @@ function attachCanvasControls() {
   let lastX = 0;
   let lastY = 0;
   let mode = "pan";
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const target = findNearestGraphNode(e.clientX, e.clientY);
+    if (!target) {
+      hideGraphContextMenu();
+      return;
+    }
+    showGraphContextMenu(target, e.clientX, e.clientY);
+  });
   canvas.addEventListener("pointerdown", (e) => {
+    hideGraphContextMenu();
+    if (e.button === 2) return;
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
     const allowRotate = state.render.layout !== "conventional";
-    mode = allowRotate && (e.button === 2 || e.ctrlKey) ? "rotate" : "pan";
+    mode = allowRotate && e.ctrlKey ? "rotate" : "pan";
     canvas.setPointerCapture(e.pointerId);
     canvas.style.cursor = mode === "pan" ? "grabbing" : "crosshair";
   });
   canvas.addEventListener("pointerup", (e) => {
+    if (!dragging) return;
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
     canvas.style.cursor = "grab";
@@ -2143,13 +3857,43 @@ if (logoutBtn) {
     performLogout();
   });
 }
+if (graphAddProbeBtn) {
+  graphAddProbeBtn.addEventListener("click", () => {
+    const target = state.instrumentation.contextTarget;
+    if (!target) return;
+    const existing = findProbeByTarget(target);
+    if (existing) {
+      state.instrumentation.probes = state.instrumentation.probes.filter(
+        (probe) => !probeMatches(probe, target)
+      );
+      saveInstrumentationState();
+      renderInstrumentation();
+      setToolStatus(`Removed probe ${formatGraphTarget(target)}.`);
+    } else {
+      addProbe(target);
+    }
+    hideGraphContextMenu();
+  });
+}
+window.addEventListener("click", (event) => {
+  if (!graphContextMenu || graphContextMenu.classList.contains("hidden")) return;
+  if (graphContextMenu.contains(event.target)) return;
+  hideGraphContextMenu();
+});
 
 async function boot() {
   await initAuth();
+  await loadRuntimeStatus();
   await initTargets();
   resizeCanvas();
   attachControls();
   attachCanvasControls();
+  renderInstrumentation();
+  refreshNetworkSelect();
+  if (isWorkspaceMode()) {
+    await fetchSnapshotForActive();
+    await pollActivity();
+  }
 }
 
 boot();
@@ -2217,6 +3961,15 @@ resetBioBtn.addEventListener("click", () => {
 });
 
 async function exportModel(format) {
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    if (!workspace) return;
+    const url = `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/export?format=${encodeURIComponent(
+      format
+    )}`;
+    window.open(url, "_blank");
+    return;
+  }
   if (!state.active || !state.activeNetwork) return;
   const url = `/api/export?addr=${encodeURIComponent(state.active)}&network_id=${encodeURIComponent(state.activeNetwork)}&format=${format}`;
   window.open(url, '_blank');
@@ -2228,6 +3981,9 @@ if (exportNirBtn) exportNirBtn.addEventListener("click", () => exportModel("nir"
 if (exportOnnxBtn) exportOnnxBtn.addEventListener("click", () => exportModel("onnx"));
 if (exportTfliteBtn) exportTfliteBtn.addEventListener("click", () => exportModel("tflite"));
 
+setInterval(() => {
+  loadRuntimeStatus();
+}, POLL_MS);
 setInterval(pollAll, POLL_MS);
 setInterval(pollActivity, ACTIVITY_POLL_MS);
 setInterval(pollSnapshot, SNAPSHOT_POLL_TICK_MS);

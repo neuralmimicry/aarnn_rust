@@ -368,6 +368,7 @@ fn main() -> io::Result<()> {
     let quantizer = Quantizer {
         threshold: server_args.spike_threshold,
         probabilistic: true,
+        ..Quantizer::default()
     };
 
     // Shared state for optional visualization

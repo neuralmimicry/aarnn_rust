@@ -14,6 +14,7 @@
 //!   Rust batch path mirrors those outputs for convenience.
 #[macro_use]
 mod obs;
+mod aarnn;
 mod aer;
 mod affinity;
 #[cfg(feature = "robot_io")]
@@ -22,6 +23,7 @@ mod bridge;
 mod cl_compute;
 mod config;
 mod distributed;
+mod engine;
 mod ga;
 #[cfg(feature = "opencl")]
 mod gpu_api;
@@ -35,7 +37,11 @@ mod openmpi_runtime;
 mod providers;
 mod rdma;
 mod runner;
+mod runtime;
+mod runtime_api;
 mod sim;
+#[allow(dead_code)]
+mod spike_io;
 mod stimuli;
 #[cfg(feature = "growth3d")]
 mod topology;
@@ -54,6 +60,9 @@ use crate::config::{
 };
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
+use crate::runtime_api::{
+    BlockingRuntimeClient, WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceImportRequest,
+};
 use crate::stimuli::{AerIoConfig, AerLink};
 use std::sync::atomic::AtomicBool;
 
@@ -108,6 +117,36 @@ impl LearningRule {
             Self::Hebb => "hebb",
             Self::Oja => "oja",
             Self::Aarnn => "aarnn",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum RuntimeAction {
+    Status,
+    Create,
+    Delete,
+    Load,
+    Save,
+    Snapshot,
+    Start,
+    Stop,
+    Reset,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum RuntimePayloadKindArg {
+    Auto,
+    Config,
+    Snapshot,
+}
+
+impl RuntimePayloadKindArg {
+    fn to_payload_kind(self) -> crate::engine::EnginePayloadKind {
+        match self {
+            Self::Auto => crate::engine::EnginePayloadKind::Auto,
+            Self::Config => crate::engine::EnginePayloadKind::Config,
+            Self::Snapshot => crate::engine::EnginePayloadKind::Snapshot,
         }
     }
 }
@@ -219,6 +258,42 @@ struct Cli {
     /// Path to network snapshot JSON file (weights + config)
     #[arg(long)]
     network: Option<String>,
+
+    /// Runtime middleware URL (for workspace-backed UI/CLI flows).
+    #[arg(long)]
+    runtime_url: Option<String>,
+
+    /// Runtime user identity used for workspace isolation.
+    #[arg(long)]
+    runtime_user: Option<String>,
+
+    /// Runtime password used when the runtime API is in local-auth mode.
+    #[arg(long)]
+    runtime_password: Option<String>,
+
+    /// Runtime workspace identifier.
+    #[arg(long)]
+    runtime_workspace: Option<String>,
+
+    /// Human-friendly runtime workspace name used during create.
+    #[arg(long)]
+    runtime_workspace_name: Option<String>,
+
+    /// Runtime management action to execute against the middleware API.
+    #[arg(long, value_enum)]
+    runtime_action: Option<RuntimeAction>,
+
+    /// Payload interpretation for runtime load operations.
+    #[arg(long, value_enum, default_value_t = RuntimePayloadKindArg::Auto)]
+    runtime_payload_kind: RuntimePayloadKindArg,
+
+    /// Create the runtime workspace on demand if it does not already exist.
+    #[arg(long, default_value_t = false)]
+    runtime_create_if_missing: bool,
+
+    /// Push the current UI snapshot back to the runtime workspace when the UI exits.
+    #[arg(long, default_value_t = false)]
+    runtime_save_on_exit: bool,
 
     /// Disable all console/logging output for maximum performance.
     #[arg(long, short, default_value_t = false)]
@@ -419,6 +494,164 @@ fn build_orchestrator_startup_networks(
     Ok(startup_networks)
 }
 
+fn normalize_runtime_url(raw: &str) -> String {
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{}", raw)
+    }
+}
+
+fn build_runtime_client(args: &Cli) -> anyhow::Result<BlockingRuntimeClient> {
+    let url = args
+        .runtime_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("--runtime-url is required for runtime actions"))?;
+    BlockingRuntimeClient::new(
+        normalize_runtime_url(url),
+        args.runtime_user.clone(),
+        args.runtime_password.clone(),
+    )
+}
+
+fn read_runtime_seed_file(path: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read runtime payload file: {}", path))?;
+    if crate::runner::decode_snapshot_with_profile_backfill(&raw).is_ok() {
+        Ok((None, Some(raw)))
+    } else {
+        Ok((Some(raw), None))
+    }
+}
+
+fn runtime_workspace_required(args: &Cli) -> anyhow::Result<String> {
+    args.runtime_workspace
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--runtime-workspace is required for this action"))
+}
+
+fn print_json_pretty<T: serde::Serialize>(value: &T) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
+    let action = match args.runtime_action {
+        Some(action) => action,
+        None => return Ok(()),
+    };
+    let mut client = build_runtime_client(args)?;
+
+    match action {
+        RuntimeAction::Status => {
+            if let Some(workspace_id) = args.runtime_workspace.as_deref() {
+                let detail = client.workspace_detail(workspace_id)?;
+                print_json_pretty(&detail)?;
+            } else {
+                let status = client.runtime_status()?;
+                print_json_pretty(&status)?;
+            }
+        }
+        RuntimeAction::Create => {
+            let mut req = WorkspaceCreateRequest {
+                workspace_id: args.runtime_workspace.clone(),
+                name: args.runtime_workspace_name.clone(),
+                config_json: None,
+                snapshot_json: None,
+                neuron_model: Some(args.neuron_model.to_str().to_string()),
+                learning_rule: Some(args.learning.to_str().to_string()),
+                auto_start: Some(false),
+            };
+            if let Some(network_path) = args.network.as_deref() {
+                req.snapshot_json =
+                    Some(std::fs::read_to_string(network_path).with_context(|| {
+                        format!("Failed to read runtime network payload: {}", network_path)
+                    })?);
+            } else if std::path::Path::new(&args.config).exists() {
+                let (config_json, snapshot_json) = read_runtime_seed_file(&args.config)?;
+                req.config_json = config_json;
+                req.snapshot_json = snapshot_json;
+            }
+            let detail = client.create_workspace(&req)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Delete => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let resp = client.delete_workspace(&workspace_id)?;
+            print_json_pretty(&resp)?;
+        }
+        RuntimeAction::Load => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let (payload_json, kind) = if let Some(network_path) = args.network.as_deref() {
+                (
+                    std::fs::read_to_string(network_path).with_context(|| {
+                        format!("Failed to read runtime network payload: {}", network_path)
+                    })?,
+                    crate::engine::EnginePayloadKind::Snapshot,
+                )
+            } else {
+                let path = args.config.as_str();
+                let raw = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read runtime config payload: {}", path))?;
+                let kind = if args.runtime_payload_kind == RuntimePayloadKindArg::Auto {
+                    if crate::runner::decode_snapshot_with_profile_backfill(&raw).is_ok() {
+                        crate::engine::EnginePayloadKind::Snapshot
+                    } else {
+                        crate::engine::EnginePayloadKind::Config
+                    }
+                } else {
+                    args.runtime_payload_kind.to_payload_kind()
+                };
+                (raw, kind)
+            };
+            let detail = client.import_workspace(
+                &workspace_id,
+                &WorkspaceImportRequest {
+                    payload_json,
+                    kind: Some(kind),
+                    replace_baseline: Some(true),
+                    auto_start: Some(false),
+                    neuron_model: Some(args.neuron_model.to_str().to_string()),
+                    learning_rule: Some(args.learning.to_str().to_string()),
+                },
+            )?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Save => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Save)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Snapshot => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let snapshot = client.workspace_snapshot(&workspace_id)?;
+            if let Some(path) = args.network.as_deref() {
+                std::fs::write(path, snapshot.snapshot_json.as_bytes())
+                    .with_context(|| format!("Failed to write runtime snapshot to {}", path))?;
+                println!("wrote {}", path);
+            } else {
+                println!("{}", snapshot.snapshot_json);
+            }
+        }
+        RuntimeAction::Start => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Start)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Stop => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Stop)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Reset => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Reset)?;
+            print_json_pretty(&detail)?;
+        }
+    }
+    Ok(())
+}
+
 fn distributed_autostart_enabled() -> bool {
     std::env::var("NM_DISTRIBUTED_AUTOSTART")
         .ok()
@@ -515,6 +748,10 @@ fn main() -> anyhow::Result<()> {
         crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    if args.runtime_action.is_some() {
+        return handle_runtime_action(&args);
+    }
+
     maybe_apply_openmpi_bootstrap(&mut args)?;
     configure_openmp_runtime_env();
     if !crate::obs::is_silent() {
@@ -591,6 +828,45 @@ fn main() -> anyhow::Result<()> {
         net_cfg.aarnn_layer_depth = 5;
     }
     startup_config_json = serde_json::to_string(&net_cfg).ok();
+
+    let mut remote_workspace_binding: Option<crate::runtime_api::RemoteWorkspaceBinding> = None;
+    if let (Some(runtime_url), Some(workspace_id)) = (
+        args.runtime_url.as_deref(),
+        args.runtime_workspace.as_deref(),
+    ) {
+        let binding = crate::runtime_api::RemoteWorkspaceBinding {
+            base_url: normalize_runtime_url(runtime_url),
+            user_id: args.runtime_user.clone(),
+            password: args.runtime_password.clone(),
+            workspace_id: workspace_id.to_string(),
+            save_on_exit: args.runtime_save_on_exit,
+        };
+        let mut client = binding.client()?;
+        if args.runtime_create_if_missing {
+            if client.workspace_detail(workspace_id).is_err() {
+                let _ = client.create_workspace(&WorkspaceCreateRequest {
+                    workspace_id: Some(workspace_id.to_string()),
+                    name: args.runtime_workspace_name.clone(),
+                    config_json: startup_config_json.clone(),
+                    snapshot_json: startup_snapshot_json.clone(),
+                    neuron_model: Some(args.neuron_model.to_str().to_string()),
+                    learning_rule: Some(args.learning.to_str().to_string()),
+                    auto_start: Some(false),
+                })?;
+            }
+        }
+        let snapshot = client.workspace_snapshot(workspace_id).with_context(|| {
+            format!(
+                "failed to fetch runtime workspace '{}' from {}",
+                workspace_id, binding.base_url
+            )
+        })?;
+        let snap = crate::runner::decode_snapshot_with_profile_backfill(&snapshot.snapshot_json)?;
+        net_cfg = snap.net;
+        startup_snapshot_json = Some(snapshot.snapshot_json);
+        startup_config_json = serde_json::to_string(&net_cfg).ok();
+        remote_workspace_binding = Some(binding);
+    }
 
     // Initialize tracing/logging if requested via CLI.
     if args.trace {
@@ -696,6 +972,7 @@ fn main() -> anyhow::Result<()> {
             distributed_node,
             args.ui_remote_only,
             startup_snapshot_json,
+            remote_workspace_binding,
             aer_cfg.clone(),
             rt.handle().clone(),
         );
@@ -1305,6 +1582,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 let initial_config = runner.net.clone();
 
                 let mut state = node.state.write().await;
+                let workspace_binding = state.workspace_bindings.get(&args.brain_id).cloned();
                 state.networks.insert(
                     args.brain_id.clone(),
                     std::sync::Arc::new(tokio::sync::RwLock::new(ManagedNetwork {
@@ -1326,6 +1604,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         initial_lif: lif,
                         initial_stdp: stdp,
                         last_config_fingerprint: preload_config_fingerprint,
+                        workspace_binding,
                     })),
                 );
             }

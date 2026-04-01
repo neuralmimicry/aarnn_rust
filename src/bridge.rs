@@ -22,6 +22,14 @@
 
 use std::collections::HashMap;
 
+use crate::spike_io::encoding::{
+    population_decode_average, population_rate_encode_with, population_threshold_encode,
+    TemporalEncodingContext,
+};
+use crate::spike_io::profiles::{
+    decode_network_outputs, encode_network_inputs_with, SpikeInputEncodingStrategy, SpikeIoConfig,
+};
+
 /// Direction of a port range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
@@ -224,7 +232,7 @@ impl TimeSync {
 }
 
 /// Simple spike quantizer from float bands to binary spikes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Quantizer {
     /// Threshold above which a value becomes a spike (1), otherwise 0.
@@ -232,6 +240,8 @@ pub struct Quantizer {
     pub threshold: f32,
     /// If true, use probabilistic (Poisson) encoding instead of fixed thresholding.
     pub probabilistic: bool,
+    /// Optional declarative network spike I/O policy.
+    pub spike_io: Option<SpikeIoConfig>,
 }
 
 impl Default for Quantizer {
@@ -239,52 +249,181 @@ impl Default for Quantizer {
         Self {
             threshold: 0.5,
             probabilistic: true,
+            spike_io: None,
         }
     }
 }
 
 #[allow(dead_code)]
 impl Quantizer {
+    fn mapping_is_direct_sensory(mapping: &IoMapping) -> bool {
+        mapping.total_sensor_values() == mapping.sensory_size
+            && mapping
+                .sensors()
+                .iter()
+                .all(|port| port.neurons_per_value == 1)
+    }
+
+    fn mapping_is_direct_actuator(mapping: &IoMapping) -> bool {
+        mapping.total_actuator_values() == mapping.output_size
+            && mapping
+                .actuators()
+                .iter()
+                .all(|port| port.neurons_per_value == 1)
+    }
+
+    fn collect_normalized_sensor_values(mapping: &IoMapping, inputs: &[f32]) -> Vec<f32> {
+        let mut normalized = vec![0.0f32; mapping.sensory_size];
+        let mut in_idx = 0usize;
+        for p in mapping.sensors() {
+            let num_vals = p.length_neurons / p.neurons_per_value;
+            let port_end = p
+                .start
+                .saturating_add(p.length_neurons)
+                .min(normalized.len());
+            let port_len = port_end.saturating_sub(p.start);
+            let available_vals = inputs.len().saturating_sub(in_idx).min(num_vals);
+            for local_idx in 0..available_vals.min(port_len) {
+                normalized[p.start + local_idx] =
+                    (inputs[in_idx + local_idx] * p.scale + p.bias).clamp(0.0, 1.0);
+            }
+            in_idx += num_vals;
+        }
+        normalized
+    }
+
     pub fn to_spikes(&self, mapping: &IoMapping, inputs: &[f32], dst: &mut [i8]) {
+        self.to_spikes_with_context(mapping, inputs, dst, TemporalEncodingContext::default());
+    }
+
+    pub fn to_spikes_with_context(
+        &self,
+        mapping: &IoMapping,
+        inputs: &[f32],
+        dst: &mut [i8],
+        ctx: TemporalEncodingContext,
+    ) {
+        if let Some(io_cfg) = self.spike_io.as_ref() {
+            if Self::mapping_is_direct_sensory(mapping) {
+                let normalized = Self::collect_normalized_sensor_values(mapping, inputs);
+                encode_network_inputs_with(
+                    io_cfg,
+                    mapping.sensory_size,
+                    mapping.output_size,
+                    &normalized,
+                    dst,
+                    fastrand::f32,
+                    ctx,
+                );
+                return;
+            }
+
+            if !matches!(
+                io_cfg.input_strategy,
+                SpikeInputEncodingStrategy::ProfileDefault
+            ) {
+                dst.fill(0);
+                let mut in_idx = 0usize;
+                for p in mapping.sensors() {
+                    let num_vals = p.length_neurons / p.neurons_per_value;
+                    let port_end = p.start.saturating_add(p.length_neurons).min(dst.len());
+                    let port_len = port_end.saturating_sub(p.start);
+                    let available_vals = inputs.len().saturating_sub(in_idx).min(num_vals);
+                    if port_len == 0 || available_vals == 0 {
+                        in_idx += num_vals;
+                        continue;
+                    }
+
+                    let mut normalized = vec![0.0f32; available_vals];
+                    for (local_idx, value) in normalized.iter_mut().enumerate() {
+                        *value = (inputs[in_idx + local_idx] * p.scale + p.bias).clamp(0.0, 1.0);
+                    }
+
+                    let port_inputs = if p.neurons_per_value > 1 {
+                        let mut expanded = vec![0.0f32; port_len];
+                        for (value_idx, value) in normalized.iter().enumerate() {
+                            let start = value_idx * p.neurons_per_value;
+                            if start >= expanded.len() {
+                                break;
+                            }
+                            let end = (start + p.neurons_per_value).min(expanded.len());
+                            for slot in &mut expanded[start..end] {
+                                *slot = *value;
+                            }
+                        }
+                        expanded
+                    } else {
+                        normalized
+                    };
+
+                    let mut port_cfg = io_cfg.clone();
+                    port_cfg.population.neurons_per_value = p.neurons_per_value.max(1);
+                    encode_network_inputs_with(
+                        &port_cfg,
+                        port_len,
+                        port_len,
+                        &port_inputs,
+                        &mut dst[p.start..port_end],
+                        fastrand::f32,
+                        ctx,
+                    );
+                    in_idx += num_vals;
+                }
+                return;
+            }
+        }
+
+        dst.fill(0);
         let mut in_idx = 0;
         for p in mapping.sensors() {
             let num_vals = p.length_neurons / p.neurons_per_value;
-            for v in 0..num_vals {
-                let val = inputs.get(in_idx).copied().unwrap_or(0.0);
-                let val = (val * p.scale + p.bias).clamp(0.0, 1.0);
-                in_idx += 1;
-
-                for n in 0..p.neurons_per_value {
-                    let target = p.start + v * p.neurons_per_value + n;
-                    if target < dst.len() {
-                        if self.probabilistic {
-                            dst[target] = if fastrand::f32() < val { 1 } else { 0 };
-                        } else {
-                            dst[target] = if val >= self.threshold { 1 } else { 0 };
-                        }
-                    }
+            let port_end = p.start.saturating_add(p.length_neurons).min(dst.len());
+            let port_len = port_end.saturating_sub(p.start);
+            let available_vals = inputs.len().saturating_sub(in_idx).min(num_vals);
+            let mut normalized = vec![0.0f32; available_vals];
+            for (local_idx, value) in normalized.iter_mut().enumerate() {
+                *value = (inputs[in_idx + local_idx] * p.scale + p.bias).clamp(0.0, 1.0);
+            }
+            if port_len > 0 {
+                let port_dst = &mut dst[p.start..port_end];
+                if self.probabilistic {
+                    population_rate_encode_with(
+                        &normalized,
+                        port_dst,
+                        p.neurons_per_value,
+                        fastrand::f32,
+                    );
+                } else {
+                    population_threshold_encode(
+                        &normalized,
+                        port_dst,
+                        p.neurons_per_value,
+                        self.threshold,
+                    );
                 }
             }
+            in_idx += num_vals;
         }
     }
 
     pub fn from_spikes(&self, mapping: &IoMapping, spikes: &[i8], dst: &mut [f32]) {
+        dst.fill(0.0);
         let mut out_idx = 0;
         for p in mapping.actuators() {
             let num_vals = p.length_neurons / p.neurons_per_value;
-            for v in 0..num_vals {
-                let mut acc = 0.0;
-                for n in 0..p.neurons_per_value {
-                    let src = p.start + v * p.neurons_per_value + n;
-                    if src < spikes.len() && spikes[src] > 0 {
-                        acc += 1.0;
-                    }
-                }
-                if out_idx < dst.len() {
-                    dst[out_idx] = acc / (p.neurons_per_value as f32);
-                    out_idx += 1;
-                }
+            if out_idx >= dst.len() {
+                break;
             }
+            let out_end = (out_idx + num_vals).min(dst.len());
+            let src_end = p.start.saturating_add(p.length_neurons).min(spikes.len());
+            if src_end > p.start {
+                population_decode_average(
+                    &spikes[p.start..src_end],
+                    &mut dst[out_idx..out_end],
+                    p.neurons_per_value,
+                );
+            }
+            out_idx += num_vals;
         }
     }
 }
@@ -408,6 +547,7 @@ pub struct ExternalRunnerBridge<S: SensorSource, A: ActuatorSink> {
     pub actuator: A,
     pub quant: Quantizer,
     pub sync: TimeSync,
+    pub input_step_index: usize,
     pub in_buf: Vec<f32>,
     pub spk_s: Vec<i8>,
     pub out_buf: Vec<f32>,
@@ -433,6 +573,7 @@ impl<S: SensorSource, A: ActuatorSink> ExternalRunnerBridge<S, A> {
             actuator,
             quant,
             sync: TimeSync::new(),
+            input_step_index: 0,
             in_buf,
             spk_s,
             out_buf,
@@ -452,16 +593,37 @@ impl<S: SensorSource, A: ActuatorSink> ExternalRunnerBridge<S, A> {
         // Fill inputs and quantize to spikes
         self.sensor.fill_inputs(dt, &mut self.in_buf);
         self.runner.external_reward = self.sensor.reward().unwrap_or(0.0);
-        self.quant
-            .to_spikes(&self.mapping, &self.in_buf, &mut self.spk_s);
+        self.quant.to_spikes_with_context(
+            &self.mapping,
+            &self.in_buf,
+            &mut self.spk_s,
+            TemporalEncodingContext {
+                step_index: self.input_step_index,
+                time_ms: self.runner.t_ms as f32,
+                dt_ms: dt as f32,
+            },
+        );
         // Step the runner with external sensory spikes
         let out = self.runner.step(Some(&self.spk_s));
         // Convert outputs to floats and publish to actuator sink
-        self.quant.from_spikes(
-            &self.mapping,
-            out.spk_o.as_slice().unwrap(),
-            &mut self.out_buf,
-        );
+        if let Some(io_cfg) = self.quant.spike_io.as_ref() {
+            if Quantizer::mapping_is_direct_actuator(&self.mapping) {
+                decode_network_outputs(io_cfg, &self.runner, &mut self.out_buf);
+            } else {
+                self.quant.from_spikes(
+                    &self.mapping,
+                    out.spk_o.as_slice().unwrap(),
+                    &mut self.out_buf,
+                );
+            }
+        } else {
+            self.quant.from_spikes(
+                &self.mapping,
+                out.spk_o.as_slice().unwrap(),
+                &mut self.out_buf,
+            );
+        }
+        self.input_step_index = self.input_step_index.saturating_add(1);
         self.actuator.consume_outputs(t_ms, &self.out_buf);
         out
     }

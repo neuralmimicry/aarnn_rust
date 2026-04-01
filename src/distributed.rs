@@ -80,10 +80,11 @@ mod sysinfo_dummy {
         }
     }
 }
-use crate::aer::{decode_spikes, encode_spikes};
 use crate::config::{LIFParams, NetworkConfig, STDPParams};
 use crate::runner::Runner;
 use crate::sim::{Learning, NeuronModel};
+use crate::spike_io::transport::{encode_exchange, spikes_from_transport};
+use anyhow::Context;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -199,6 +200,98 @@ fn fresh_single_neuron_snapshot(
         .export_network_json()
         .map(|json| (cfg, json))
         .map_err(|e| e.to_string())
+}
+
+fn default_workspace_autosave_steps() -> u64 {
+    10
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct NetworkWorkspaceBinding {
+    pub workspace_id: String,
+    pub latest_snapshot_path: String,
+    #[serde(default)]
+    pub manifest_path: Option<String>,
+    #[serde(default = "default_workspace_autosave_steps")]
+    pub autosave_steps: u64,
+}
+
+fn load_workspace_bindings_from_env() -> HashMap<String, NetworkWorkspaceBinding> {
+    let Some(raw) = std::env::var("NM_RUNTIME_WORKSPACE_BINDINGS").ok() else {
+        return HashMap::new();
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return HashMap::new();
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|err| {
+        nm_err!(
+            "[warn] Failed to parse NM_RUNTIME_WORKSPACE_BINDINGS: {}",
+            err
+        );
+        HashMap::new()
+    })
+}
+
+fn atomic_write_workspace_snapshot(path: &str, payload: &[u8]) -> anyhow::Result<()> {
+    let path = std::path::Path::new(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create '{}'", parent.display()))?;
+    }
+    let tmp_path = path.with_extension(format!("tmp-{}", fastrand::u32(..)));
+    std::fs::write(&tmp_path, payload)
+        .with_context(|| format!("failed to write '{}'", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to rename '{}' to '{}'",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn update_workspace_manifest_saved_at(path: &str, saved_at_ms: u64) -> anyhow::Result<()> {
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path))?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("failed to parse '{}'", path))?;
+    let Some(obj) = value.as_object_mut() else {
+        anyhow::bail!("workspace manifest '{}' is not a JSON object", path);
+    };
+    obj.insert("updated_at_ms".to_string(), serde_json::json!(saved_at_ms));
+    obj.insert(
+        "last_saved_at_ms".to_string(),
+        serde_json::json!(saved_at_ms),
+    );
+    let payload = serde_json::to_vec_pretty(&value)
+        .with_context(|| format!("failed to serialize '{}'", path))?;
+    atomic_write_workspace_snapshot(path, &payload)
+}
+
+fn persist_workspace_snapshot(
+    binding: &NetworkWorkspaceBinding,
+    snapshot_json: &str,
+) -> anyhow::Result<()> {
+    atomic_write_workspace_snapshot(&binding.latest_snapshot_path, snapshot_json.as_bytes())?;
+    if let Some(manifest_path) = binding.manifest_path.as_deref() {
+        if let Err(err) = update_workspace_manifest_saved_at(manifest_path, now_ms()) {
+            nm_err!(
+                "[warn] Failed to update workspace manifest '{}' after snapshot save: {}",
+                manifest_path,
+                err
+            );
+        }
+    }
+    Ok(())
 }
 
 fn apply_control_to_managed_network(
@@ -456,6 +549,7 @@ pub struct ManagedNetwork {
     /// Fingerprint of the most recently applied distributed config/snapshot payload.
     /// Used to avoid expensive no-op reimports on periodic rebalance heartbeats.
     pub last_config_fingerprint: Option<u64>,
+    pub workspace_binding: Option<NetworkWorkspaceBinding>,
 }
 
 fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
@@ -499,6 +593,7 @@ struct SpikeTransportStats {
 pub struct NodeState {
     pub node_id: String,
     pub networks: HashMap<String, Arc<RwLock<ManagedNetwork>>>,
+    pub workspace_bindings: HashMap<String, NetworkWorkspaceBinding>,
     pub peers: HashMap<String, String>, // node_id -> address
     pub network_peers: HashMap<String, Vec<String>>, // network_id -> node ids
     pub peer_last_seen: HashMap<String, std::time::Instant>,
@@ -618,9 +713,9 @@ impl NodeState {
             return best;
         }
 
-        if has_mpi {
+        if candidates.contains(&SpikeTransportMethod::Mpi) {
             SpikeTransportMethod::Mpi
-        } else if has_stream {
+        } else if candidates.contains(&SpikeTransportMethod::PersistentStream) {
             SpikeTransportMethod::PersistentStream
         } else {
             SpikeTransportMethod::BurstStream
@@ -748,6 +843,7 @@ impl DistributedNode {
             state: Arc::new(RwLock::new(NodeState {
                 node_id,
                 networks: HashMap::new(),
+                workspace_bindings: load_workspace_bindings_from_env(),
                 peers: HashMap::new(),
                 network_peers: HashMap::new(),
                 peer_last_seen: HashMap::new(),
@@ -1340,21 +1436,13 @@ impl DistributedNode {
             let mut net = net_arc.write().await;
             if batch.layer_index == EXTERNAL_SENSORY_LAYER_INDEX {
                 let sensory_len = net.runner.net.num_sensory_neurons;
-                let mut spikes = vec![0i8; sensory_len];
-                let mut used_aer = false;
-                if !batch.aer_payload.is_empty()
-                    && decode_spikes(&batch.aer_payload, batch.aer_base, &mut spikes).is_ok()
-                {
-                    used_aer = true;
-                }
-                if !used_aer {
-                    for idx in &batch.spike_indices {
-                        let i = *idx as usize;
-                        if i < spikes.len() {
-                            spikes[i] = 1;
-                        }
-                    }
-                }
+                let spikes = spikes_from_transport(
+                    &batch.aer_payload,
+                    batch.aer_base,
+                    &batch.spike_indices,
+                    sensory_len,
+                )
+                .unwrap_or_else(|_| vec![0i8; sensory_len]);
                 net.external_sensory_spikes = Some(spikes);
             } else {
                 let layer_index = batch.layer_index as usize;
@@ -1374,22 +1462,13 @@ impl DistributedNode {
                             .unwrap_or(false);
                         if !stale {
                             step_map.insert(batch.layer_index, batch.step_index);
-                            let mut spikes = vec![0i8; layer_size];
-                            let mut used_aer = false;
-                            if !batch.aer_payload.is_empty()
-                                && decode_spikes(&batch.aer_payload, batch.aer_base, &mut spikes)
-                                    .is_ok()
-                            {
-                                used_aer = true;
-                            }
-                            if !used_aer {
-                                for idx in &batch.spike_indices {
-                                    let i = *idx as usize;
-                                    if i < spikes.len() {
-                                        spikes[i] = 1;
-                                    }
-                                }
-                            }
+                            let spikes = spikes_from_transport(
+                                &batch.aer_payload,
+                                batch.aer_base,
+                                &batch.spike_indices,
+                                layer_size,
+                            )
+                            .unwrap_or_else(|_| vec![0i8; layer_size]);
                             if batch.is_backward {
                                 net.remote_spikes_bwd.insert(batch.layer_index, spikes);
                             } else {
@@ -2110,10 +2189,13 @@ impl DistributedNode {
                         }
                     }
 
+                    let network_id = cmd.network_id.clone();
+                    let workspace_binding = state.workspace_bindings.get(&network_id).cloned();
+
                     state.networks.insert(
-                        cmd.network_id.clone(),
+                        network_id.clone(),
                         Arc::new(RwLock::new(ManagedNetwork {
-                            id: cmd.network_id,
+                            id: network_id,
                             runner,
                             assigned_layers: cmd.layers,
                             redundant_layers: cmd.redundant_layers,
@@ -2132,6 +2214,7 @@ impl DistributedNode {
                             initial_stdp: stdp,
                             last_config_fingerprint: (!cmd.config_json.is_empty())
                                 .then(|| config_payload_fingerprint(&cmd.config_json)),
+                            workspace_binding,
                         })),
                     );
                 }
@@ -2235,12 +2318,9 @@ impl DistributedNode {
                     }
                     let layer_spikes: Vec<i8> =
                         net.runner.last_spk_h[layer_idx].iter().copied().collect();
-                    let indices = layer_spikes
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
-                        .collect::<Vec<_>>();
-                    let mut aer_payload = encode_spikes(ts_us, 0, &layer_spikes);
+                    let exchange = encode_exchange(ts_us, 0, &layer_spikes);
+                    let indices = exchange.spike_indices;
+                    let mut aer_payload = exchange.aer_payload;
                     if aer_payload.is_empty() {
                         aer_payload.extend_from_slice(b"AER1");
                         aer_payload.extend_from_slice(&ts_us.to_le_bytes());
@@ -2261,6 +2341,33 @@ impl DistributedNode {
                     net.avg_step_time_ms = elapsed;
                 } else {
                     net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
+                }
+
+                if let Some(binding) = net.workspace_binding.as_ref() {
+                    let autosave_steps = binding.autosave_steps.max(1) as usize;
+                    if autosave_steps == 1 || net.runner.t % autosave_steps == 0 {
+                        match net.runner.export_network_json() {
+                            Ok(snapshot_json) => {
+                                if let Err(err) =
+                                    persist_workspace_snapshot(binding, &snapshot_json)
+                                {
+                                    nm_err!(
+                                        "[warn] Failed to persist workspace '{}' for network {}: {}",
+                                        binding.workspace_id,
+                                        net.id,
+                                        err
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                nm_err!(
+                                    "[warn] Failed to export workspace snapshot for network {}: {}",
+                                    net.id,
+                                    err
+                                );
+                            }
+                        }
+                    }
                 }
 
                 // Auto-adjust AARNN depth down if lagging.
@@ -2887,32 +2994,21 @@ impl DistributedNeuromorphic for DistributedNode {
                 .last_spk_h
                 .iter()
                 .map(|layer| {
-                    let indices = layer
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
-                        .collect::<Vec<_>>();
                     let layer_vec: Vec<i8> = layer.iter().copied().collect();
-                    let aer_payload = encode_spikes(ts_us, 0, &layer_vec);
+                    let exchange = encode_exchange(ts_us, 0, &layer_vec);
                     SpikeIndices {
-                        indices,
-                        aer_payload,
-                        aer_base: 0,
+                        indices: exchange.spike_indices,
+                        aer_payload: exchange.aer_payload,
+                        aer_base: exchange.aer_base,
                     }
                 })
                 .collect::<Vec<_>>();
-            let output_indices = net
-                .runner
-                .last_spk_o
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &v)| (v != 0).then_some(i as u32))
-                .collect::<Vec<_>>();
             let output_vec: Vec<i8> = net.runner.last_spk_o.iter().copied().collect();
+            let exchange = encode_exchange(ts_us, 0, &output_vec);
             let output = SpikeIndices {
-                indices: output_indices,
-                aer_payload: encode_spikes(ts_us, 0, &output_vec),
-                aer_base: 0,
+                indices: exchange.spike_indices,
+                aer_payload: exchange.aer_payload,
+                aer_base: exchange.aer_base,
             };
             (hidden, output)
         })

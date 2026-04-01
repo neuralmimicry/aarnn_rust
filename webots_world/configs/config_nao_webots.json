@@ -1,4 +1,9 @@
 {
+  "spike_io": {
+    "profile": "nao",
+    "input_strategy": "profile_default",
+    "output_strategy": "profile_default"
+  },
   "num_sensory_neurons": 76858,
   "num_hidden_layers": 6,
   "num_hidden_per_layer_initial": 96,
@@ -7,8 +12,8 @@
   "p_hidden": 0.16,
   "p_out": 0.24,
   "ga_stall_timeout_secs": 1800,
-  "sensory_target_layer": 0,
-  "output_source_layer": 5,
+  "sensory_target_layer": 1,
+  "output_source_layer": 4,
   "growth_enabled": true,
   "max_layers": 10,
   "saturation_threshold": 0.5,
