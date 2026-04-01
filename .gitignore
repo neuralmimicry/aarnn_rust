@@ -30,7 +30,7 @@ perf_report.txt
 *.tflite
 *.nir.json
 network.json
-network_demo.json
+network_*.json
 config_worker_*.json
 leaderboard.json
 probes.json
