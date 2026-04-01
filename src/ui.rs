@@ -49,7 +49,20 @@ use crate::providers::{
 };
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
+#[cfg(feature = "ui")]
+use crate::runtime_api::{RemoteWorkspaceBinding, WorkspaceControlAction, WorkspaceImportRequest};
 use crate::sim::{Learning, NeuronModel};
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::spike_io::encoding::TemporalEncodingContext;
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::spike_io::profiles::{
+    decode_network_outputs, decode_profile_outputs, encode_network_inputs_with,
+    encode_profile_inputs_with, resolve_network_io_profile, NetworkIoProfile,
+    NetworkIoProfileSelector, ProfileInputEncoding, ProfileOutputEncoding,
+    SpikeInputEncodingStrategy, SpikeInputPrimitive, SpikeIoConfig, SpikeOutputDecodingStrategy,
+};
+#[cfg(feature = "ui")]
+use crate::spike_io::transport::{apply_hex_aer_payload, apply_usize_indices};
 use crate::stimuli::{AerIoConfig, AerLink};
 use rand::{RngExt, SeedableRng};
 use std::collections::HashMap;
@@ -174,18 +187,9 @@ impl HttpAerStreamProvider {
         aer_base: u32,
         spikes: &mut [i8],
     ) -> Result<(), String> {
-        let compact: String = hex_payload.chars().filter(|c| !c.is_whitespace()).collect();
-        let compact = compact
-            .strip_prefix("0x")
-            .or_else(|| compact.strip_prefix("0X"))
-            .unwrap_or(&compact);
-        if compact.is_empty() {
-            return Ok(());
-        }
-        let bytes = hex::decode(compact).map_err(|e| format!("invalid hex payload: {e}"))?;
-        crate::aer::decode_spikes(&bytes, aer_base, spikes)
-            .map_err(|e| format!("invalid AER payload: {:?}", e))?;
-        Ok(())
+        apply_hex_aer_payload(hex_payload, aer_base, spikes)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn parse_line(
@@ -209,11 +213,7 @@ impl HttpAerStreamProvider {
 
         let mut spikes = vec![0i8; sensory_len];
         if let Some(indices) = frame.spike_indices {
-            for idx in indices {
-                if idx < spikes.len() {
-                    spikes[idx] = 1;
-                }
-            }
+            apply_usize_indices(&indices, &mut spikes);
         }
         if let Some(payload_hex) = frame.aer_payload_hex.as_deref() {
             Self::apply_hex_payload(
@@ -669,203 +669,6 @@ fn resolve_ipc_handshake_sizes(
     (sensory, output)
 }
 
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn copy_spike_outputs_to_unit(runner: &Runner, dst: &mut [f32]) {
-    if let Some(src_slice) = runner.last_spk_o.as_slice() {
-        for i in 0..dst.len().min(src_slice.len()) {
-            dst[i] = if src_slice[i] != 0 { 1.0 } else { 0.0 };
-        }
-    } else {
-        for i in 0..dst.len().min(runner.last_spk_o.len()) {
-            dst[i] = if runner.last_spk_o[i] != 0 { 1.0 } else { 0.0 };
-        }
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn izh_membrane_to_unit(v: f64, p: IzhikevichParams, gain: f32) -> f32 {
-    let span = (p.v_th - p.membrane_reset_potential_c).abs().max(1.0);
-    let centered = ((v - p.membrane_reset_potential_c) / span) as f32;
-    if !centered.is_finite() {
-        return 0.5;
-    }
-    (0.5 + 0.5 * (gain * centered).tanh()).clamp(0.0, 1.0)
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn membrane_to_unit(
-    v: f64,
-    neuron_model: &NeuronModel,
-    lif: &LIFParams,
-    aarnn_izh_preset: &str,
-    gain: f32,
-) -> f32 {
-    if !v.is_finite() {
-        return 0.5;
-    }
-    match neuron_model {
-        NeuronModel::Izh(p) => izh_membrane_to_unit(v, *p, gain),
-        NeuronModel::Aarnn => {
-            let p = IzhikevichParams::from_preset(aarnn_izh_preset, lif.dt);
-            izh_membrane_to_unit(v, p, gain)
-        }
-        NeuronModel::Lif => (0.5 + 0.5 * (gain * v as f32).tanh()).clamp(0.0, 1.0),
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn fill_celegans_ipc_outputs(
-    runner: &Runner,
-    dst: &mut [f32],
-    membrane_gain: f32,
-    current_gain: f32,
-    current_mix: f32,
-) {
-    let spike_slice = runner.last_spk_o.as_slice();
-    let current_opt = runner.last_i_o.as_ref();
-    let mix = current_mix.clamp(0.0, 1.0);
-    let count = dst.len().min(runner.v_o.len());
-    for i in 0..count {
-        let membrane = membrane_to_unit(
-            runner.v_o[i],
-            &runner.neuron_model,
-            &runner.lif,
-            &runner.net.aarnn_bio.izh_preset,
-            membrane_gain,
-        );
-        let blended = if let Some(currents) = current_opt {
-            let current_drive = currents
-                .get(i)
-                .copied()
-                .map(|v| {
-                    if !v.is_finite() {
-                        0.5
-                    } else {
-                        (0.5 + 0.5 * (current_gain * v as f32).tanh()).clamp(0.0, 1.0)
-                    }
-                })
-                .unwrap_or(0.5);
-            ((1.0 - mix) * membrane + mix * current_drive).clamp(0.0, 1.0)
-        } else {
-            membrane
-        };
-        let spike_gate = spike_slice
-            .and_then(|s| s.get(i))
-            .copied()
-            .or_else(|| runner.last_spk_o.get(i).copied())
-            .map(|spk| if spk != 0 { 1.0 } else { 0.0 })
-            .unwrap_or(0.0);
-        dst[i] = blended.max(spike_gate);
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IpcIoProfile {
-    Celegans,
-    Drosophila,
-    Nao,
-    Generic,
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn classify_ipc_io_profile(sensory_count: usize, output_count: usize) -> IpcIoProfile {
-    if sensory_count == 24 && output_count == 96 {
-        return IpcIoProfile::Celegans;
-    }
-    if output_count == 48 && sensory_count >= 64 && sensory_count <= 4096 {
-        return IpcIoProfile::Drosophila;
-    }
-    if output_count == 40 && sensory_count >= 1024 {
-        return IpcIoProfile::Nao;
-    }
-    IpcIoProfile::Generic
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn encode_analog_inputs_to_spikes(
-    inputs: &[f32],
-    dst: &mut [i8],
-    rng: &mut rand::rngs::StdRng,
-    low_gain: f32,
-    quiet_floor: f32,
-) {
-    let all_quiet = inputs.iter().all(|v| *v <= 1e-3);
-    let floor = if all_quiet {
-        (quiet_floor * 2.0).clamp(0.0, 0.2)
-    } else {
-        quiet_floor.clamp(0.0, 0.1)
-    };
-    for i in 0..dst.len().min(inputs.len()) {
-        let mut v = inputs[i];
-        if !v.is_finite() {
-            continue;
-        }
-        v = v.clamp(0.0, 1.0);
-        if v >= 0.999 {
-            dst[i] = 1;
-            continue;
-        }
-        if v <= 0.0 {
-            continue;
-        }
-        let p = if v >= 0.5 {
-            (0.82 + 0.18 * v).min(1.0)
-        } else {
-            (floor + low_gain * v).clamp(0.0, 0.95)
-        };
-        if p > 0.0 && rng.random::<f32>() < p {
-            dst[i] = 1;
-        }
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "robot_io", unix))]
-fn fill_graded_ipc_outputs(
-    runner: &Runner,
-    dst: &mut [f32],
-    membrane_gain: f32,
-    current_gain: f32,
-    current_mix: f32,
-) {
-    let spike_slice = runner.last_spk_o.as_slice();
-    let current_opt = runner.last_i_o.as_ref();
-    let mix = current_mix.clamp(0.0, 1.0);
-    let count = dst.len().min(runner.v_o.len());
-    for i in 0..count {
-        let membrane = membrane_to_unit(
-            runner.v_o[i],
-            &runner.neuron_model,
-            &runner.lif,
-            &runner.net.aarnn_bio.izh_preset,
-            membrane_gain,
-        );
-        let blended = if let Some(currents) = current_opt {
-            let current_drive = currents
-                .get(i)
-                .copied()
-                .map(|v| {
-                    if !v.is_finite() {
-                        0.5
-                    } else {
-                        (0.5 + 0.5 * (current_gain * v as f32).tanh()).clamp(0.0, 1.0)
-                    }
-                })
-                .unwrap_or(0.5);
-            ((1.0 - mix) * membrane + mix * current_drive).clamp(0.0, 1.0)
-        } else {
-            membrane
-        };
-        let spike_gate = spike_slice
-            .and_then(|s| s.get(i))
-            .copied()
-            .or_else(|| runner.last_spk_o.get(i).copied())
-            .map(|spk| if spk != 0 { 1.0 } else { 0.0 })
-            .unwrap_or(0.0);
-        dst[i] = blended.max(spike_gate);
-    }
-}
-
 #[cfg(all(feature = "ui", feature = "morpho", feature = "growth3d"))]
 use crate::morphology::SynKind;
 
@@ -903,6 +706,7 @@ pub fn launch_ui(
     distributed_node: Option<DistributedNode>,
     remote_only: bool,
     startup_snapshot_json: Option<String>,
+    remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     aer_cfg: Option<AerIoConfig>,
     runtime_handle: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
@@ -945,6 +749,7 @@ pub fn launch_ui(
                 distributed_node,
                 remote_only,
                 startup_snapshot_json,
+                remote_workspace_binding,
                 aer_cfg,
                 runtime_handle,
             )))
@@ -1468,6 +1273,7 @@ struct App {
     sim_last_spike_count: Arc<AtomicU64>,
     sim_last_spike_len: Arc<AtomicU64>,
     runtime_handle: tokio::runtime::Handle,
+    remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     // Distributed state
     distributed_node: Option<DistributedNode>,
     view_source: ViewSource,
@@ -1764,6 +1570,7 @@ impl App {
         distributed_node: Option<DistributedNode>,
         remote_only: bool,
         startup_snapshot_json: Option<String>,
+        remote_workspace_binding: Option<RemoteWorkspaceBinding>,
         aer_cfg: Option<AerIoConfig>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
@@ -1991,6 +1798,34 @@ impl App {
                         .unwrap_or(0)
                         .min(100_000);
                 #[cfg(all(feature = "robot_io", unix))]
+                let ipc_input_encoding = ProfileInputEncoding {
+                    drosophila_rate: crate::spike_io::encoding::RateEncoding {
+                        low_gain: ipc_dros_input_rate_gain,
+                        quiet_floor: 0.002,
+                        ..crate::spike_io::encoding::RateEncoding::default()
+                    },
+                    nao_rate: crate::spike_io::encoding::RateEncoding {
+                        low_gain: ipc_nao_input_rate_gain,
+                        quiet_floor: 0.001,
+                        ..crate::spike_io::encoding::RateEncoding::default()
+                    },
+                    ..ProfileInputEncoding::default()
+                };
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_output_encoding = ProfileOutputEncoding {
+                    celegans_graded_output: ipc_celegans_graded_output,
+                    non_celegans_graded_output: ipc_non_celegans_graded_output,
+                    celegans_output_gain: ipc_celegans_output_gain,
+                    celegans_output_current_gain: ipc_celegans_output_current_gain,
+                    celegans_output_current_mix: ipc_celegans_output_current_mix,
+                    drosophila_output_gain: ipc_dros_output_gain,
+                    drosophila_output_current_gain: ipc_dros_output_current_gain,
+                    drosophila_output_current_mix: ipc_dros_output_current_mix,
+                    nao_output_gain: ipc_nao_output_gain,
+                    nao_output_current_gain: ipc_nao_output_current_gain,
+                    nao_output_current_mix: ipc_nao_output_current_mix,
+                };
+                #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_celegans_debug_counter: usize = 0;
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_last_reply_values: Vec<f32> = Vec::new();
@@ -2111,52 +1946,69 @@ impl App {
                             match ev {
                                 IpcEvent::Data(t_ms, reward, peer) => {
                                     let mut spk = vec![0i8; srv.s];
-                                    let io_profile = classify_ipc_io_profile(srv.s, srv.o);
-                                    if matches!(io_profile, IpcIoProfile::Celegans) {
-                                        // C. elegans robot channels are mostly analog and often sit
-                                        // just below a hard threshold; use lightweight rate coding
-                                        // so low-but-valid stimuli still drive occasional twitches.
-                                        let all_quiet = inputs.iter().all(|v| *v <= 1e-3);
-                                        for i in 0..srv.s.min(inputs.len()) {
-                                            let v = inputs[i].clamp(0.0, 1.0);
-                                            let base_p = if all_quiet { 0.08 } else { 0.01 };
-                                            let p = if v >= 0.5 {
-                                                (0.30 + 0.70 * v).min(1.0)
-                                            } else if v > 0.0 {
-                                                0.02 + 0.22 * v
+                                    let (io_cfg, io_profile, encode_ctx) =
+                                        if let Ok(r) = sim_runner.try_read() {
+                                            let io_cfg = r.net.spike_io.clone();
+                                            let dt_ms = if t_ms > 0.0 {
+                                                t_ms as f32
                                             } else {
-                                                0.0
-                                            }
-                                            .max(base_p);
-                                            if p > 0.0 && ipc_spike_rng.random::<f32>() < p {
-                                                spk[i] = 1;
-                                            }
-                                        }
-                                    } else if matches!(io_profile, IpcIoProfile::Drosophila) {
-                                        // Drosophila sensory streams blend binary camera events with
-                                        // subthreshold analog modalities; preserve both via low-rate coding.
-                                        encode_analog_inputs_to_spikes(
+                                                r.lif.dt.max(0.001) as f32
+                                            };
+                                            let step_index =
+                                                (r.t_ms / r.lif.dt.max(0.001)).round().max(0.0)
+                                                    as usize;
+                                            let io_profile = resolve_network_io_profile(
+                                                io_cfg.profile,
+                                                srv.s,
+                                                srv.o,
+                                            );
+                                            (
+                                                io_cfg,
+                                                io_profile,
+                                                TemporalEncodingContext {
+                                                    step_index,
+                                                    time_ms: r.t_ms as f32,
+                                                    dt_ms,
+                                                },
+                                            )
+                                        } else {
+                                            let io_cfg = SpikeIoConfig::default();
+                                            let io_profile = resolve_network_io_profile(
+                                                io_cfg.profile,
+                                                srv.s,
+                                                srv.o,
+                                            );
+                                            (
+                                                io_cfg,
+                                                io_profile,
+                                                TemporalEncodingContext {
+                                                    step_index: 0,
+                                                    time_ms: 0.0,
+                                                    dt_ms: if t_ms > 0.0 { t_ms as f32 } else { 1.0 },
+                                                },
+                                            )
+                                        };
+                                    if matches!(
+                                        io_cfg.input_strategy,
+                                        SpikeInputEncodingStrategy::ProfileDefault
+                                    ) {
+                                        encode_profile_inputs_with(
+                                            io_profile,
                                             &inputs,
                                             &mut spk,
-                                            &mut ipc_spike_rng,
-                                            ipc_dros_input_rate_gain,
-                                            0.002,
-                                        );
-                                    } else if matches!(io_profile, IpcIoProfile::Nao) {
-                                        // NAO inputs are predominantly event-coded vision plus analog proprioception.
-                                        encode_analog_inputs_to_spikes(
-                                            &inputs,
-                                            &mut spk,
-                                            &mut ipc_spike_rng,
-                                            ipc_nao_input_rate_gain,
-                                            0.001,
+                                            || ipc_spike_rng.random::<f32>(),
+                                            &ipc_input_encoding,
                                         );
                                     } else {
-                                        for (i, &v) in inputs.iter().enumerate() {
-                                            if v >= 0.5 {
-                                                spk[i] = 1;
-                                            }
-                                        }
+                                        encode_network_inputs_with(
+                                            &io_cfg,
+                                            srv.s,
+                                            srv.o,
+                                            &inputs,
+                                            &mut spk,
+                                            || ipc_spike_rng.random::<f32>(),
+                                            encode_ctx,
+                                        );
                                     }
                                     spikes_source = Some(spk);
                                     if t_ms > 0.0 {
@@ -2281,155 +2133,140 @@ impl App {
                                 #[cfg(all(feature = "robot_io", unix))]
                                 if let Some(ref srv) = sim_ipc_server {
                                     let mut out = vec![0.0f32; srv.o];
-                                    let io_profile = classify_ipc_io_profile(srv.s, srv.o);
-                                    match io_profile {
-                                        IpcIoProfile::Celegans if ipc_celegans_graded_output => {
-                                            fill_celegans_ipc_outputs(
-                                                &r,
-                                                &mut out,
-                                                ipc_celegans_output_gain,
-                                                ipc_celegans_output_current_gain,
-                                                ipc_celegans_output_current_mix,
-                                            );
-                                            if ipc_celegans_debug_interval > 0 {
-                                                ipc_celegans_debug_counter =
-                                                    ipc_celegans_debug_counter.saturating_add(1);
-                                                if ipc_celegans_debug_counter
-                                                    .is_multiple_of(ipc_celegans_debug_interval)
-                                                {
-                                                    let out_min = out
-                                                        .iter()
-                                                        .fold(f32::INFINITY, |acc, &v| acc.min(v));
-                                                    let out_max = out.iter().fold(
-                                                        f32::NEG_INFINITY,
-                                                        |acc, &v| acc.max(v),
-                                                    );
-                                                    let out_mean = if out.is_empty() {
-                                                        0.0
-                                                    } else {
-                                                        out.iter().sum::<f32>() / out.len() as f32
-                                                    };
-                                                    let in_spk = spikes
-                                                        .iter()
-                                                        .filter(|&&v| v != 0)
-                                                        .count();
-                                                    let h_spk = r
-                                                        .last_spk_h
-                                                        .first()
-                                                        .map(|h| {
-                                                            h.iter().filter(|&&v| v != 0).count()
-                                                        })
-                                                        .unwrap_or(0);
-                                                    let recv_in_total: usize =
-                                                        r.recv_in.iter().map(|v| v.len()).sum();
-                                                    let (recv_in_w_sum, recv_in_w_max) = {
-                                                        let mut sum = 0.0f64;
-                                                        let mut max_w = 0.0f64;
-                                                        for (j, syns) in r.recv_in.iter().enumerate()
-                                                        {
-                                                            for &(i, _) in syns {
-                                                                let w = r
-                                                                    .w_in
-                                                                    .get((j, i))
-                                                                    .copied()
-                                                                    .unwrap_or(0.0)
-                                                                    .abs();
-                                                                sum += w;
-                                                                max_w = max_w.max(w);
-                                                            }
-                                                        }
-                                                        (sum, max_w)
-                                                    };
-                                                    #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                                                    let (in_delay_min, in_delay_max) = {
-                                                        let mut min_steps = usize::MAX;
-                                                        let mut max_steps = 0usize;
-                                                        for syns in &r.recv_in {
-                                                            for &(_, syn_idx) in syns {
-                                                                let (steps, _) =
-                                                                    r.syn_delay_and_atten(syn_idx);
-                                                                min_steps = min_steps.min(steps);
-                                                                max_steps = max_steps.max(steps);
-                                                            }
-                                                        }
-                                                        if min_steps == usize::MAX {
-                                                            (0, 0)
-                                                        } else {
-                                                            (min_steps, max_steps)
-                                                        }
-                                                    };
-                                                    #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
-                                                    let (in_delay_min, in_delay_max) =
-                                                        (0usize, 0usize);
-                                                    let (i_h0_min, i_h0_max) = r
-                                                        .last_i_h0
-                                                        .as_ref()
-                                                        .map(|arr| {
-                                                            arr.iter().fold(
-                                                                (f64::INFINITY, f64::NEG_INFINITY),
-                                                                |(mn, mx), &v| {
-                                                                    (mn.min(v), mx.max(v))
-                                                                },
-                                                            )
-                                                        })
-                                                        .unwrap_or((0.0, 0.0));
-                                                    let v_h0_max = r
-                                                        .v_h
-                                                        .first()
-                                                        .map(|arr| {
-                                                            arr.iter().fold(
-                                                                f64::NEG_INFINITY,
-                                                                |mx, &v| mx.max(v),
-                                                            )
-                                                        })
-                                                        .unwrap_or(0.0);
-                                                    let o_spk = r
-                                                        .last_spk_o
-                                                        .iter()
-                                                        .filter(|&&v| v != 0)
-                                                        .count();
-                                                    nm_err!(
-                                                        "[IPC celegans dbg] in_spk={} h0_spk={} out_spk={} recv_in={} w_sum={:.3} w_max={:.3} p_rel={:.3} delay=[{},{}] i_h0=[{:.3},{:.3}] v_h0_max={:.3} out_min={:.3} out_max={:.3} out_mean={:.3} O={}",
-                                                        in_spk,
-                                                        h_spk,
-                                                        o_spk,
-                                                        recv_in_total,
-                                                        recv_in_w_sum,
-                                                        recv_in_w_max,
-                                                        r.net.p_release_default,
-                                                        in_delay_min,
-                                                        in_delay_max,
-                                                        i_h0_min,
-                                                        i_h0_max,
-                                                        v_h0_max,
-                                                        out_min,
-                                                        out_max,
-                                                        out_mean,
-                                                        r.net.num_output_neurons
-                                                    );
+                                    let io_cfg = r.net.spike_io.clone();
+                                    let io_profile =
+                                        resolve_network_io_profile(io_cfg.profile, srv.s, srv.o);
+                                    if matches!(
+                                        io_cfg.output_strategy,
+                                        SpikeOutputDecodingStrategy::ProfileDefault
+                                    ) {
+                                        decode_profile_outputs(
+                                            io_profile,
+                                            &r,
+                                            &mut out,
+                                            &ipc_output_encoding,
+                                        );
+                                    } else {
+                                        decode_network_outputs(&io_cfg, &r, &mut out);
+                                    }
+                                    let celegans_debug_enabled =
+                                        matches!(io_profile, NetworkIoProfile::Celegans)
+                                            && match io_cfg.output_strategy {
+                                                SpikeOutputDecodingStrategy::ProfileDefault => {
+                                                    ipc_output_encoding.celegans_graded_output
                                                 }
+                                                SpikeOutputDecodingStrategy::Graded => true,
+                                                _ => false,
+                                            };
+                                    if celegans_debug_enabled {
+                                        if ipc_celegans_debug_interval > 0 {
+                                            ipc_celegans_debug_counter =
+                                                ipc_celegans_debug_counter.saturating_add(1);
+                                            if ipc_celegans_debug_counter
+                                                .is_multiple_of(ipc_celegans_debug_interval)
+                                            {
+                                                let out_min = out
+                                                    .iter()
+                                                    .fold(f32::INFINITY, |acc, &v| acc.min(v));
+                                                let out_max = out.iter().fold(
+                                                    f32::NEG_INFINITY,
+                                                    |acc, &v| acc.max(v),
+                                                );
+                                                let out_mean = if out.is_empty() {
+                                                    0.0
+                                                } else {
+                                                    out.iter().sum::<f32>() / out.len() as f32
+                                                };
+                                                let in_spk =
+                                                    spikes.iter().filter(|&&v| v != 0).count();
+                                                let h_spk = r
+                                                    .last_spk_h
+                                                    .first()
+                                                    .map(|h| h.iter().filter(|&&v| v != 0).count())
+                                                    .unwrap_or(0);
+                                                let (recv_in_total, recv_in_w_sum, recv_in_w_max) =
+                                                    r.w_in.iter().fold(
+                                                        (0usize, 0.0f64, 0.0f64),
+                                                        |(count, sum, max_w), &w| {
+                                                            let abs_w = w.abs();
+                                                            if abs_w > 0.0 {
+                                                                (
+                                                                    count + 1,
+                                                                    sum + abs_w,
+                                                                    max_w.max(abs_w),
+                                                                )
+                                                            } else {
+                                                                (count, sum, max_w)
+                                                            }
+                                                        },
+                                                    );
+                                                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                                                let (in_delay_min, in_delay_max) = {
+                                                    let mut min_steps = usize::MAX;
+                                                    let mut max_steps = 0usize;
+                                                    for syns in &r.recv_in {
+                                                        for &(_, syn_idx) in syns {
+                                                            let (steps, _) =
+                                                                r.syn_delay_and_atten(syn_idx);
+                                                            min_steps = min_steps.min(steps);
+                                                            max_steps = max_steps.max(steps);
+                                                        }
+                                                    }
+                                                    if min_steps == usize::MAX {
+                                                        (0, 0)
+                                                    } else {
+                                                        (min_steps, max_steps)
+                                                    }
+                                                };
+                                                #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+                                                let (in_delay_min, in_delay_max) = (0usize, 0usize);
+                                                let (i_h0_min, i_h0_max) = r
+                                                    .last_i_h0
+                                                    .as_ref()
+                                                    .map(|arr| {
+                                                        arr.iter().fold(
+                                                            (f64::INFINITY, f64::NEG_INFINITY),
+                                                            |(mn, mx), &v| {
+                                                                (mn.min(v), mx.max(v))
+                                                            },
+                                                        )
+                                                    })
+                                                    .unwrap_or((0.0, 0.0));
+                                                let v_h0_max = r
+                                                    .v_h
+                                                    .first()
+                                                    .map(|arr| {
+                                                        arr.iter().fold(
+                                                            f64::NEG_INFINITY,
+                                                            |mx, &v| mx.max(v),
+                                                        )
+                                                    })
+                                                    .unwrap_or(0.0);
+                                                let o_spk = r
+                                                    .last_spk_o
+                                                    .iter()
+                                                    .filter(|&&v| v != 0)
+                                                    .count();
+                                                nm_err!(
+                                                    "[IPC celegans dbg] in_spk={} h0_spk={} out_spk={} recv_in={} w_sum={:.3} w_max={:.3} p_rel={:.3} delay=[{},{}] i_h0=[{:.3},{:.3}] v_h0_max={:.3} out_min={:.3} out_max={:.3} out_mean={:.3} O={}",
+                                                    in_spk,
+                                                    h_spk,
+                                                    o_spk,
+                                                    recv_in_total,
+                                                    recv_in_w_sum,
+                                                    recv_in_w_max,
+                                                    r.net.p_release_default,
+                                                    in_delay_min,
+                                                    in_delay_max,
+                                                    i_h0_min,
+                                                    i_h0_max,
+                                                    v_h0_max,
+                                                    out_min,
+                                                    out_max,
+                                                    out_mean,
+                                                    r.net.num_output_neurons
+                                                );
                                             }
-                                        }
-                                        IpcIoProfile::Drosophila if ipc_non_celegans_graded_output => {
-                                            fill_graded_ipc_outputs(
-                                                &r,
-                                                &mut out,
-                                                ipc_dros_output_gain,
-                                                ipc_dros_output_current_gain,
-                                                ipc_dros_output_current_mix,
-                                            );
-                                        }
-                                        IpcIoProfile::Nao if ipc_non_celegans_graded_output => {
-                                            fill_graded_ipc_outputs(
-                                                &r,
-                                                &mut out,
-                                                ipc_nao_output_gain,
-                                                ipc_nao_output_current_gain,
-                                                ipc_nao_output_current_mix,
-                                            );
-                                        }
-                                        _ => {
-                                            copy_spike_outputs_to_unit(&r, &mut out);
                                         }
                                     }
                                     ipc_reply_values = Some(out);
@@ -2963,6 +2800,7 @@ impl App {
             quantizer: Quantizer {
                 threshold: 0.2,
                 probabilistic: true,
+                ..Quantizer::default()
             },
             #[cfg(all(feature = "robot_io", unix))]
             last_sensory_inputs_f32: vec![0.0; n_s],
@@ -3039,6 +2877,7 @@ impl App {
             sim_last_spike_count,
             sim_last_spike_len,
             runtime_handle,
+            remote_workspace_binding,
             initial_net_cfg,
             initial_lif,
             initial_stdp,
@@ -3099,6 +2938,92 @@ impl App {
             normalized = format!("http://{}", normalized);
         }
         Some(normalized)
+    }
+
+    fn remote_workspace_client(&self) -> Result<crate::runtime_api::BlockingRuntimeClient, String> {
+        self.remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .client()
+            .map_err(|err| err.to_string())
+    }
+
+    fn push_remote_workspace_snapshot(&self) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?;
+        let snapshot_json = {
+            let runner = self
+                .runner
+                .try_read()
+                .map_err(|_| "Runner busy".to_string())?;
+            runner
+                .export_network_json()
+                .map_err(|err| err.to_string())?
+        };
+        let mut client = self.remote_workspace_client()?;
+        client
+            .import_workspace(
+                &binding.workspace_id,
+                &WorkspaceImportRequest {
+                    payload_json: snapshot_json,
+                    kind: Some(crate::engine::EnginePayloadKind::Snapshot),
+                    replace_baseline: Some(false),
+                    auto_start: Some(false),
+                    neuron_model: None,
+                    learning_rule: None,
+                },
+            )
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    fn pull_remote_workspace_snapshot(&mut self) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .clone();
+        let mut client = self.remote_workspace_client()?;
+        let snapshot = client
+            .workspace_snapshot(&binding.workspace_id)
+            .map_err(|err| err.to_string())?;
+
+        {
+            let mut runner = self
+                .runner
+                .try_write()
+                .map_err(|_| "Runner busy".to_string())?;
+            runner
+                .import_network_json(&snapshot.snapshot_json)
+                .map_err(|err| err.to_string())?;
+            self.initial_net_cfg = runner.net.clone();
+            self.initial_model = runner.neuron_model;
+            self.initial_learning = runner.learning;
+        }
+
+        self.set_standalone_playing(false);
+        self.refresh_ui_buffers();
+        self.status = format!("Pulled remote workspace '{}'", binding.workspace_id);
+        Ok(())
+    }
+
+    fn control_remote_workspace_backend(
+        &mut self,
+        action: WorkspaceControlAction,
+    ) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .clone();
+        let mut client = self.remote_workspace_client()?;
+        client
+            .control_workspace(&binding.workspace_id, action)
+            .map_err(|err| err.to_string())?;
+        self.status = format!("Remote workspace '{}' {:?}", binding.workspace_id, action);
+        Ok(())
     }
 
     fn add_remote_orchestrator_connection(&mut self, addr: &str) -> bool {
@@ -5698,6 +5623,14 @@ fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = self.sim_tx.send(SimControl::Shutdown);
+        if self
+            .remote_workspace_binding
+            .as_ref()
+            .map(|binding| binding.save_on_exit)
+            .unwrap_or(false)
+        {
+            let _ = self.push_remote_workspace_snapshot();
+        }
         if let Some(tx) = &self.ga_control_tx {
             let _ = tx.send(GAControl::Stop);
         }
@@ -7247,6 +7180,45 @@ impl eframe::App for App {
                     };
                     ui.label(format!("Status: {} | Sleep: {}", self.status, sleep_label));
                     ui.separator();
+
+                    if let Some(binding) = self.remote_workspace_binding.clone() {
+                        ui.group(|ui| {
+                            ui.label(format!(
+                                "Remote workspace: {} @ {}",
+                                binding.workspace_id, binding.base_url
+                            ));
+                            ui.horizontal(|ui| {
+                                if ui.button("Pull").on_hover_text("Load the latest backend workspace snapshot into this UI session").clicked() {
+                                    if let Err(err) = self.pull_remote_workspace_snapshot() {
+                                        self.status = format!("Remote pull failed: {}", err);
+                                    }
+                                }
+                                if ui.button("Push").on_hover_text("Save the current UI snapshot back into the backend workspace").clicked() {
+                                    if let Err(err) = self.push_remote_workspace_snapshot() {
+                                        self.status = format!("Remote push failed: {}", err);
+                                    } else {
+                                        self.status = format!("Pushed remote workspace '{}'", binding.workspace_id);
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Start backend").on_hover_text("Resume background stepping in the backend runtime").clicked() {
+                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Start) {
+                                        self.status = format!("Remote start failed: {}", err);
+                                    }
+                                }
+                                if ui.button("Stop backend").on_hover_text("Pause background stepping in the backend runtime").clicked() {
+                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Stop) {
+                                        self.status = format!("Remote stop failed: {}", err);
+                                    }
+                                }
+                            });
+                            if binding.save_on_exit {
+                                ui.small("Remote workspace auto-push on exit is enabled.");
+                            }
+                        });
+                        ui.separator();
+                    }
 
                     let view_is_standalone = matches!(self.view_source, ViewSource::Standalone);
                     let view_playing_state =
@@ -9528,6 +9500,329 @@ impl eframe::App for App {
 
                         #[cfg(all(feature = "robot_io", unix))]
                         ui.collapsing("Encoding", |ui| {
+                            let mut io_changed = false;
+                            {
+                                let spike_io = &mut self.local_net.spike_io;
+                                let prev_profile = spike_io.profile;
+                                let prev_input_strategy = spike_io.input_strategy;
+                                let prev_output_strategy = spike_io.output_strategy;
+                                ui.label("Network spike I/O policy");
+                                ui.horizontal(|ui| {
+                                    ui.label("Profile:");
+                                    egui::ComboBox::from_id_salt("ipc_io_profile")
+                                        .selected_text(spike_io.profile.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Auto,
+                                                "auto",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Generic,
+                                                "generic",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Celegans,
+                                                "celegans",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Drosophila,
+                                                "drosophila",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Nao,
+                                                "nao",
+                                            );
+                                        });
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Input:");
+                                    egui::ComboBox::from_id_salt("ipc_input_strategy")
+                                        .selected_text(spike_io.input_strategy.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::ProfileDefault,
+                                                "profile_default",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Threshold,
+                                                "threshold",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Rate,
+                                                "rate",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationThreshold,
+                                                "population_threshold",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationRate,
+                                                "population_rate",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationLevel,
+                                                "population_level",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Ttfs,
+                                                "ttfs",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Isi,
+                                                "isi",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Phase,
+                                                "phase",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Multiplex,
+                                                "multiplex",
+                                            );
+                                        });
+                                    ui.label("Output:");
+                                    egui::ComboBox::from_id_salt("ipc_output_strategy")
+                                        .selected_text(spike_io.output_strategy.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::ProfileDefault,
+                                                "profile_default",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::Binary,
+                                                "binary",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::PopulationAverage,
+                                                "population_average",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::Graded,
+                                                "graded",
+                                            );
+                                        });
+                                });
+                                io_changed |= prev_profile != spike_io.profile
+                                    || prev_input_strategy != spike_io.input_strategy
+                                    || prev_output_strategy != spike_io.output_strategy;
+                                io_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut spike_io.threshold, 0.0..=1.0)
+                                            .text("Threshold"),
+                                    )
+                                    .on_hover_text(
+                                        "Threshold used by threshold/generic encoders and as a fallback for profile_default",
+                                    )
+                                    .changed();
+                                match spike_io.input_strategy {
+                                    SpikeInputEncodingStrategy::Rate => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.rate.low_gain,
+                                                    0.0..=2.0,
+                                                )
+                                                .text("Rate low gain"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.rate.high_value_bias,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Rate high bias"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::PopulationThreshold
+                                    | SpikeInputEncodingStrategy::PopulationRate
+                                    | SpikeInputEncodingStrategy::PopulationLevel => {}
+                                    SpikeInputEncodingStrategy::Ttfs => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.ttfs.window_steps,
+                                                    1..=128,
+                                                )
+                                                .text("TTFS window"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.ttfs.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("TTFS threshold"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Isi => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.min_interval_steps,
+                                                    1..=64,
+                                                )
+                                                .text("ISI min"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.max_interval_steps,
+                                                    1..=256,
+                                                )
+                                                .text("ISI max"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("ISI threshold"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Phase => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.frequency_hz,
+                                                    0.1..=120.0,
+                                                )
+                                                .text("Phase Hz"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.phase_jitter,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Phase jitter"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Phase gate"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Multiplex => {
+                                        ui.label("Multiplex components");
+                                        let strategies = &mut spike_io.multiplex.strategies;
+                                        let mut toggle =
+                                            |ui: &mut egui::Ui,
+                                             label: &str,
+                                             primitive: SpikeInputPrimitive| {
+                                                let mut enabled = strategies.contains(&primitive);
+                                                if ui.checkbox(&mut enabled, label).changed() {
+                                                    if enabled {
+                                                        if !strategies.contains(&primitive) {
+                                                            strategies.push(primitive);
+                                                        }
+                                                    } else {
+                                                        strategies.retain(|s| *s != primitive);
+                                                    }
+                                                    io_changed = true;
+                                                }
+                                            };
+                                        ui.horizontal(|ui| {
+                                            toggle(ui, "threshold", SpikeInputPrimitive::Threshold);
+                                            toggle(ui, "rate", SpikeInputPrimitive::Rate);
+                                            toggle(ui, "ttfs", SpikeInputPrimitive::Ttfs);
+                                            toggle(ui, "isi", SpikeInputPrimitive::Isi);
+                                            toggle(ui, "phase", SpikeInputPrimitive::Phase);
+                                        });
+                                        ui.horizontal(|ui| {
+                                            toggle(
+                                                ui,
+                                                "population_threshold",
+                                                SpikeInputPrimitive::PopulationThreshold,
+                                            );
+                                            toggle(
+                                                ui,
+                                                "population_rate",
+                                                SpikeInputPrimitive::PopulationRate,
+                                            );
+                                            toggle(
+                                                ui,
+                                                "population_level",
+                                                SpikeInputPrimitive::PopulationLevel,
+                                            );
+                                        });
+                                    }
+                                    SpikeInputEncodingStrategy::ProfileDefault
+                                    | SpikeInputEncodingStrategy::Threshold => {}
+                                }
+                                if matches!(
+                                    spike_io.input_strategy,
+                                    SpikeInputEncodingStrategy::PopulationThreshold
+                                        | SpikeInputEncodingStrategy::PopulationRate
+                                        | SpikeInputEncodingStrategy::PopulationLevel
+                                        | SpikeInputEncodingStrategy::Multiplex
+                                ) || matches!(
+                                    spike_io.output_strategy,
+                                    SpikeOutputDecodingStrategy::PopulationAverage
+                                ) {
+                                    io_changed |= ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut spike_io.population.neurons_per_value,
+                                            )
+                                            .range(1..=128)
+                                            .speed(1.0)
+                                            .prefix("Population n/v "),
+                                        )
+                                        .changed();
+                                    io_changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut spike_io.population.threshold,
+                                                0.0..=1.0,
+                                            )
+                                            .text("Population threshold"),
+                                        )
+                                        .changed();
+                                }
+                            }
+                            if io_changed {
+                                self.ipc_threshold = self.local_net.spike_io.threshold;
+                                self.quantizer.threshold = self.local_net.spike_io.threshold;
+                                let _ = self
+                                    .sim_tx
+                                    .send(SimControl::ApplyConfig(self.local_net.clone()));
+                            }
+
+                            ui.separator();
+                            ui.label("Legacy IPC mapping settings");
                             ui.horizontal(|ui| {
                                 ui.label("Neurons/value:");
                                 if ui.add(egui::DragValue::new(&mut self.ipc_neurons_per_value).range(1..=128))
@@ -9537,14 +9832,20 @@ impl eframe::App for App {
                                     }
                                 }
                             });
-                            ui.checkbox(&mut self.quantizer.probabilistic, "Probabilistic (Poisson)")
-                                .on_hover_text("Enable Poisson-like rate coding (spike patterns related to values)");
+                            ui.checkbox(
+                                &mut self.quantizer.probabilistic,
+                                "Legacy probabilistic quantizer",
+                            )
+                            .on_hover_text(
+                                "Only used by the older port-mapping quantizer paths; the network spike_io policy above drives current IPC encoding",
+                            );
                             
                             let mut thr = self.ipc_threshold;
                             if ui.add(egui::Slider::new(&mut thr, 0.0..=1.0).text("Threshold"))
                                 .on_hover_text("Float→spike threshold; lower to increase activity").changed() {
                                 self.ipc_threshold = thr;
                                 self.quantizer.threshold = thr;
+                                self.local_net.spike_io.threshold = thr;
                             }
                             ui.checkbox(&mut self.ipc_bias_last_sensory_input, "Bias last input")
                                 .on_hover_text("Keep last sensory channel ≥ 0.7 to encourage early spiking");
@@ -10537,6 +10838,45 @@ impl eframe::App for App {
                         }
                         ui.label("Tip: You can set the environment variable NMD_PYTHON to point to your python3 binary.");
                     });
+                    ui.separator();
+                    ui.collapsing("Companion Interfaces", |ui| {
+                        ui.label("Browser surfaces now share a consistent session/runtime shell. Use each surface for the role it is best at instead of forcing one UI to do everything.");
+                        ui.separator();
+                        egui::Grid::new("ui_surface_matrix")
+                            .num_columns(3)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.strong("Surface");
+                                ui.strong("Role");
+                                ui.strong("Best for");
+                                ui.end_row();
+
+                                ui.label("Native UI");
+                                ui.label("Operational");
+                                ui.label("Full simulation control, morphology, GA search, deep local import/export.");
+                                ui.end_row();
+
+                                ui.label("Web UI");
+                                ui.label("Operational");
+                                ui.label("Remote orchestration, browser topology view, probes, browser save/load, export.");
+                                ui.end_row();
+
+                                ui.label("Docs");
+                                ui.label("Reference");
+                                ui.label("Function matrix, auth flow, runtime notes, endpoint contract.");
+                                ui.end_row();
+
+                                ui.label("Swagger");
+                                ui.label("Executable");
+                                ui.label("Same-origin API request testing with the current browser session cookie.");
+                                ui.end_row();
+                            });
+                        ui.separator();
+                        ui.label("When the companion web server is running, the browser routes are:");
+                        ui.label("/  -> Web UI");
+                        ui.label("/docs  -> interface matrix + reference");
+                        ui.label("/docs/swagger  -> interactive API explorer");
+                    });
                 });
             });
         });
@@ -10780,6 +11120,7 @@ impl eframe::App for App {
             let ui_snapshot_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
             #[cfg(feature = "growth3d")]
             let snapshot_topology_allowed = matches!(self.view_source, ViewSource::Standalone);
+            #[cfg(feature = "growth3d")]
             let snapshot_topology_available = ui_snapshot_opt
                 .as_ref()
                 .map(|snap| {

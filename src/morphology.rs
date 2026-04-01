@@ -284,7 +284,7 @@ fn near_colinear_overlap(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> bool
     hi - lo > 0.05
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SynKind {
     In,
     HiddenFwd,
@@ -307,7 +307,7 @@ impl Default for DendriteType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum OrganelleKind {
     Mitochondria,
     Nucleus,
@@ -331,14 +331,14 @@ pub struct SkullMembrane {
     pub energy_fluctuation: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Organelle {
     pub kind: OrganelleKind,
     pub pos: Point3,
     pub activity: f32, // 0.0 to 1.0
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Soma {
     pub id: usize,    // neuron index within its hidden layer
     pub layer: usize, // hidden layer index
@@ -352,7 +352,7 @@ pub struct Soma {
     pub type_name: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AxonSeg {
     pub from: Point3,
     pub to: Point3,
@@ -385,7 +385,7 @@ impl Default for AxonSeg {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Axon {
     pub neuron_layer: usize,
     pub neuron_id: usize,
@@ -396,7 +396,7 @@ pub struct Axon {
     pub organelles: Vec<Organelle>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DendSeg {
     pub from: Point3,
     pub to: Point3,
@@ -435,12 +435,12 @@ impl Default for DendSeg {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DendriticTree {
     pub branches: Vec<DendSeg>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Dendrite {
     pub neuron_layer: usize,
     pub neuron_id: usize,
@@ -451,7 +451,7 @@ pub struct Dendrite {
     pub organelles: Vec<Organelle>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Synapse {
     pub kind: SynKind,
     pub pre_layer: isize, // -1 for sensory, L for output sinks
@@ -474,7 +474,7 @@ pub struct Synapse {
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ReleasedKind {
     In,
     Fwd { layer: usize },
@@ -484,7 +484,7 @@ pub enum ReleasedKind {
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReleasedEvent {
     pub kind: ReleasedKind,
     #[allow(dead_code)]
@@ -496,7 +496,7 @@ pub struct ReleasedEvent {
     pub syn_idx: Option<usize>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Morphology {
     pub somas: Vec<Vec<Soma>>,         // per hidden layer
     pub axons: Vec<Vec<Axon>>,         // per hidden layer
@@ -512,6 +512,7 @@ pub struct Morphology {
 
     pub synapses: Vec<Synapse>, // flat list of synapses
     /// Spatial index for fast proximity lookups (grid or octree, populated on demand)
+    #[serde(skip, default)]
     pub(crate) spatial_index: Option<SpatialIndex>,
     pub skull_membrane: Option<SkullMembrane>,
     pub skull_center_integral: Point3,

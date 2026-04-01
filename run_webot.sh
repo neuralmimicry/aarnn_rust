@@ -230,6 +230,8 @@ REALTIME_MORPHO_INTERVAL_MS="${NM_REALTIME_MORPHO_INTERVAL_MS:-}"
 REALTIME_METABOLIC_INTERVAL_MS="${NM_REALTIME_METABOLIC_INTERVAL_MS:-}"
 REALTIME_MORPHO_MAX_SYNAPSES="${NM_REALTIME_MORPHO_MAX_SYNAPSES:-}"
 MORPHO_ASYNC="${NM_MORPHO_ASYNC:-auto}"
+WEB_UI_RUNTIME_ROOT="${NM_WEB_UI_RUNTIME_ROOT:-$ROOT_DIR/data/runtime}"
+WEB_UI_DEFAULT_RUNTIME_USER="${NM_WEB_UI_DEFAULT_RUNTIME_USER:-}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -679,6 +681,38 @@ remote_path_for_local() {
     else
         printf "%s" "$local_path"
     fi
+}
+
+build_remote_workspace_bindings_json() {
+    local raw="${NM_RUNTIME_WORKSPACE_BINDINGS:-}"
+    [ -z "$raw" ] && return 0
+
+    python3 - "$ROOT_DIR" "$REMOTE_ROOT_DIR" "$raw" <<'PY'
+import json
+import os
+import sys
+
+root_dir = os.path.abspath(sys.argv[1])
+remote_root = sys.argv[2]
+bindings = json.loads(sys.argv[3])
+
+prefix = root_dir + os.sep
+
+def remap(value):
+    if isinstance(value, str):
+        if value == root_dir:
+            return remote_root
+        if value.startswith(prefix):
+            return remote_root + value[len(root_dir):]
+        return value
+    if isinstance(value, list):
+        return [remap(item) for item in value]
+    if isinstance(value, dict):
+        return {key: remap(item) for key, item in value.items()}
+    return value
+
+print(json.dumps(remap(bindings), separators=(",", ":")))
+PY
 }
 
 trim_ws() {
@@ -1643,6 +1677,7 @@ interconnect_counts_for_brain() {
 wait_for_socket() {
     local path="$1"
     local timeout_s="${2:-$WEBOTS_CONNECT_TIMEOUT}"
+    local watched_pid="${3:-}"
     if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
         timeout_s=60
     fi
@@ -1650,6 +1685,9 @@ wait_for_socket() {
     while [ "$SECONDS" -lt "$deadline" ]; do
         if [ -S "$path" ]; then
             return 0
+        fi
+        if [ -n "$watched_pid" ] && ! kill -0 "$watched_pid" 2>/dev/null; then
+            return 1
         fi
         sleep 0.1
     done
@@ -1919,9 +1957,10 @@ start_cluster_runtime() {
             orch_cmd+=(--network "$brain_network")
         fi
         "${orch_cmd[@]}" >"$orch_log" 2>&1 &
-        PIDS+=("$!")
+        local orch_pid="$!"
+        PIDS+=("$orch_pid")
 
-        if ! wait_for_socket "$socket_path"; then
+        if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$orch_pid"; then
             echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $orch_log"
             tail -n 40 "$orch_log" || true
@@ -2018,9 +2057,10 @@ start_cluster_runtime() {
         else
             "${node_cmd[@]}" >"$log_file" 2>&1 &
         fi
-        PIDS+=("$!")
+        local node_pid="$!"
+        PIDS+=("$node_pid")
 
-        if ! wait_for_socket "$socket_path"; then
+        if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$node_pid"; then
             echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $log_file"
             tail -n 40 "$log_file" || true
@@ -2349,6 +2389,15 @@ start_remote_cluster_runtime() {
     local web_ui_api_port="$REMOTE_WEB_UI_PORT"
     local web_ui_api_url=""
     local browser_ui_url="http://$web_ui_host:$REMOTE_WEB_UI_PORT"
+    local remote_runtime_root="$WEB_UI_RUNTIME_ROOT"
+    remote_runtime_root="$(remote_path_for_local "$remote_runtime_root")"
+    local remote_workspace_bindings_json=""
+    if [ -n "${NM_RUNTIME_WORKSPACE_BINDINGS:-}" ]; then
+        remote_workspace_bindings_json="$(build_remote_workspace_bindings_json)" || {
+            echo "Failed to translate runtime workspace bindings for remote hosts."
+            exit 1
+        }
+    fi
     if [ -n "$REMOTE_WEB_UI_API_PORT" ] && [ "$REMOTE_WEB_UI_API_PORT" != "$REMOTE_WEB_UI_PORT" ]; then
         echo "Ignoring --remote-web-ui-api-port=$REMOTE_WEB_UI_API_PORT in web mode."
     fi
@@ -2433,6 +2482,24 @@ start_remote_cluster_runtime() {
                 --grpc-addr "0.0.0.0:$node_port"
                 --orchestrator-addr "$orchestrator_addr_public"
             )
+            if [ -n "$remote_workspace_bindings_json" ]; then
+                node_cmd=("env" "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
+                    "NM_REALTIME_IPC=$REALTIME_IPC" \
+                    "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
+                    "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
+                    "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
+                    "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
+                    "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
+                    "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
+                    "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
+                    "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES" \
+                    "NM_RUNTIME_WORKSPACE_BINDINGS=$remote_workspace_bindings_json" \
+                    target/release/aarnn_rust
+                    --node
+                    --brain-id "$brain"
+                    --grpc-addr "0.0.0.0:$node_port"
+                    --orchestrator-addr "$orchestrator_addr_public")
+            fi
             if [ "$REMOTE_QUIET" -eq 1 ]; then
                 node_cmd+=(--quiet)
             fi
@@ -2455,12 +2522,22 @@ start_remote_cluster_runtime() {
     fi
 
     local web_ui_orchestrator_addr="$orchestrator_addr_public"
-    local web_ui_cmd=(
-        target/release/web_ui
-        --listen "0.0.0.0:$web_ui_api_port"
-        --orchestrator "$web_ui_orchestrator_addr"
-        --auth-mode none
-    )
+    local web_ui_cmd=()
+    if [ -n "$WEB_UI_DEFAULT_RUNTIME_USER" ]; then
+        web_ui_cmd=(env "NM_WEB_UI_DEFAULT_RUNTIME_USER=$WEB_UI_DEFAULT_RUNTIME_USER" \
+            "NM_WEB_UI_RUNTIME_ROOT=$remote_runtime_root" \
+            target/release/web_ui
+            --listen "0.0.0.0:$web_ui_api_port"
+            --orchestrator "$web_ui_orchestrator_addr"
+            --auth-mode none)
+    else
+        web_ui_cmd=(env
+            "NM_WEB_UI_RUNTIME_ROOT=$remote_runtime_root"
+            target/release/web_ui
+            --listen "0.0.0.0:$web_ui_api_port"
+            --orchestrator "$web_ui_orchestrator_addr"
+            --auth-mode none)
+    fi
     local web_ui_cmd_str
     web_ui_cmd_str="$(cmd_to_string "${web_ui_cmd[@]}")"
     remote_start_bg "$web_ui_host" "remote_web_ui_cluster" "$web_ui_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
@@ -2506,8 +2583,9 @@ start_remote_cluster_runtime() {
             --default-o "$DEFAULT_O"
         )
         "${bridge_cmd[@]}" >"$bridge_log" 2>&1 &
-        PIDS+=("$!")
-        if ! wait_for_socket "$socket_path"; then
+        local bridge_pid="$!"
+        PIDS+=("$bridge_pid")
+        if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$bridge_pid"; then
             echo "Failed to bind local bridge socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $bridge_log"
             tail -n 60 "$bridge_log" || true
@@ -2590,9 +2668,10 @@ start_uds_runtime() {
             uds_cmd+=(--network "$brain_network")
         fi
         "${uds_cmd[@]}" >"$log_file" 2>&1 &
-        PIDS+=("$!")
+        local uds_pid="$!"
+        PIDS+=("$uds_pid")
 
-        if ! wait_for_socket "$socket_path"; then
+        if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$uds_pid"; then
             echo "Failed to bind socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $log_file"
             exit 1

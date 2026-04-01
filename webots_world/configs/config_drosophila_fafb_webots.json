@@ -1,4 +1,9 @@
 {
+  "spike_io": {
+    "profile": "drosophila",
+    "input_strategy": "profile_default",
+    "output_strategy": "profile_default"
+  },
   "num_sensory_neurons": 418,
   "num_hidden_layers": 40,
   "num_hidden_per_layer_initial": 512,

@@ -22,6 +22,32 @@
 //!   the appropriate features and the AARNN model is selected.
 use ndarray::{s, Array1, Array2};
 
+use crate::aarnn::dynamics::{
+    apply_active_dendritic_compartment, apply_gap_junction_mean_field,
+    apply_synaptic_filter as apply_aarnn_synaptic_filter, precalculate_decays,
+    sanitize_current_array as sanitize_current_array_ref,
+    sanitize_current_value as sanitize_current_value_ref, AarnnDecays, ActiveDendriteSpec,
+    DendriteStructureSignal, SynapticDriveParams,
+};
+#[cfg(feature = "growth3d")]
+use crate::aarnn::dynamics::{
+    apply_local_gap_junction_coupling, volume_transmission_factors_for_layer, SpatialPoint3,
+};
+#[cfg(feature = "growth3d")]
+use crate::aarnn::plasticity::enforce_dale_matrix_cols_with_mask as dale_enforce_cols_with_mask;
+use crate::aarnn::plasticity::{
+    apply_synaptic_scaling_matrix_rows as scale_synaptic_rows,
+    enforce_dale_matrix_cols as dale_enforce_cols,
+    is_inhibitory_presyn as inferred_inhibitory_presyn,
+    release_probability as release_probability_ref, stp_update_slice as stp_update_slice_ref,
+    triplet_eta_scale, ShortTermPlasticityParams,
+};
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+use crate::aarnn::transmission::{
+    compute_delay_and_attenuation, CompartmentClass, DelayAttenuationSpec,
+    DendriticTransmissionProfile, FatigueProfile, MyelinationProfile,
+};
+
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
     Buffer, CLBuffers, ExecuteKernel, OpenCLManager, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
@@ -107,10 +133,246 @@ pub fn nd_from_mat_u32(m: &Matrix2U32) -> Array2<u32> {
     a
 }
 
+fn vec_from_arr1_f64(a: &Array1<f64>) -> Vec<f64> {
+    a.iter().copied().collect()
+}
+
+fn vec_from_arr1_f32(a: &Array1<f32>) -> Vec<f32> {
+    a.iter().copied().collect()
+}
+
+fn vec_from_arr1_i32(a: &Array1<i32>) -> Vec<i32> {
+    a.iter().copied().collect()
+}
+
+fn vec_from_arr1_i8(a: &Array1<i8>) -> Vec<i8> {
+    a.iter().copied().collect()
+}
+
+fn vec_from_layers_f64(layers: &[Array1<f64>]) -> Vec<Vec<f64>> {
+    layers.iter().map(vec_from_arr1_f64).collect()
+}
+
+fn vec_from_layers_f32(layers: &[Array1<f32>]) -> Vec<Vec<f32>> {
+    layers.iter().map(vec_from_arr1_f32).collect()
+}
+
+fn vec_from_layers_i32(layers: &[Array1<i32>]) -> Vec<Vec<i32>> {
+    layers.iter().map(vec_from_arr1_i32).collect()
+}
+
+fn vec_from_layers_i8(layers: &[Array1<i8>]) -> Vec<Vec<i8>> {
+    layers.iter().map(vec_from_arr1_i8).collect()
+}
+
+fn array1_from_vec_f64(values: &[f64], len: usize) -> Array1<f64> {
+    let mut out = Array1::<f64>::zeros(len);
+    let copy_len = len.min(values.len());
+    for idx in 0..copy_len {
+        out[idx] = values[idx];
+    }
+    out
+}
+
+fn array1_from_vec_f32(values: &[f32], len: usize) -> Array1<f32> {
+    let mut out = Array1::<f32>::zeros(len);
+    let copy_len = len.min(values.len());
+    for idx in 0..copy_len {
+        out[idx] = values[idx];
+    }
+    out
+}
+
+fn array1_from_vec_i32(values: &[i32], len: usize) -> Array1<i32> {
+    let mut out = Array1::<i32>::zeros(len);
+    let copy_len = len.min(values.len());
+    for idx in 0..copy_len {
+        out[idx] = values[idx];
+    }
+    out
+}
+
+fn array1_from_vec_i8(values: &[i8], len: usize) -> Array1<i8> {
+    let mut out = Array1::<i8>::zeros(len);
+    let copy_len = len.min(values.len());
+    for idx in 0..copy_len {
+        out[idx] = values[idx];
+    }
+    out
+}
+
+fn layers_from_vec_f64(values: &[Vec<f64>], sizes: &[usize]) -> Vec<Array1<f64>> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(idx, len)| {
+            array1_from_vec_f64(values.get(idx).map(Vec::as_slice).unwrap_or(&[]), *len)
+        })
+        .collect()
+}
+
+fn layers_from_vec_f32(values: &[Vec<f32>], sizes: &[usize]) -> Vec<Array1<f32>> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(idx, len)| {
+            array1_from_vec_f32(values.get(idx).map(Vec::as_slice).unwrap_or(&[]), *len)
+        })
+        .collect()
+}
+
+fn layers_from_vec_i32(values: &[Vec<i32>], sizes: &[usize]) -> Vec<Array1<i32>> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(idx, len)| {
+            array1_from_vec_i32(values.get(idx).map(Vec::as_slice).unwrap_or(&[]), *len)
+        })
+        .collect()
+}
+
+fn layers_from_vec_i8(values: &[Vec<i8>], sizes: &[usize]) -> Vec<Array1<i8>> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(idx, len)| {
+            array1_from_vec_i8(values.get(idx).map(Vec::as_slice).unwrap_or(&[]), *len)
+        })
+        .collect()
+}
+
+fn history_from_frames(
+    frames: &[Vec<i8>],
+    frame_len: usize,
+    hist_len: usize,
+) -> VecDeque<Array1<i8>> {
+    let wanted = hist_len.max(1);
+    let mut out = VecDeque::with_capacity(wanted);
+    for idx in 0..wanted {
+        out.push_back(array1_from_vec_i8(
+            frames.get(idx).map(Vec::as_slice).unwrap_or(&[]),
+            frame_len,
+        ));
+    }
+    out
+}
+
+fn vec_from_history_frames(history: &VecDeque<Array1<i8>>) -> Vec<Vec<i8>> {
+    history.iter().map(vec_from_arr1_i8).collect()
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct SnapshotRuntimeState {
+    pub v_h: Vec<Vec<f64>>,
+    pub u_h: Option<Vec<Vec<f64>>>,
+    pub v_o: Vec<f64>,
+    pub u_o: Option<Vec<f64>>,
+    pub refr_h: Option<Vec<Vec<i32>>>,
+    pub refr_o: Option<Vec<i32>>,
+    pub izh_refr_h: Option<Vec<Vec<i32>>>,
+    pub izh_refr_o: Option<Vec<i32>>,
+    pub syn_ampa_h: Vec<Vec<f64>>,
+    pub syn_nmda_h: Vec<Vec<f64>>,
+    pub syn_gaba_h: Vec<Vec<f64>>,
+    pub syn_ampa_o: Vec<f64>,
+    pub syn_nmda_o: Vec<f64>,
+    pub syn_gaba_o: Vec<f64>,
+    pub thr_offset_h: Vec<Vec<f64>>,
+    pub thr_offset_o: Vec<f64>,
+    pub rate_ema_h: Vec<Vec<f64>>,
+    pub rate_ema_o: Vec<f64>,
+    pub stp_u_s: Vec<f64>,
+    pub stp_x_s: Vec<f64>,
+    pub stp_u_h: Vec<Vec<f64>>,
+    pub stp_x_h: Vec<Vec<f64>>,
+    pub dend_ca_h: Vec<Vec<f64>>,
+    pub dend_plateau_h: Vec<Vec<f64>>,
+    pub x_pre_in: Vec<f64>,
+    pub pred_s: Vec<f64>,
+    pub x_post_h: Vec<Vec<f64>>,
+    pub x_pre_h: Vec<Vec<f64>>,
+    pub x_post_o: Vec<f64>,
+    pub last_spk_h: Vec<Vec<i8>>,
+    pub last_spk_o: Vec<i8>,
+    pub theta_phase: f32,
+    pub thalamic_gate_phase: f32,
+    pub neuromod_dopamine: f32,
+    pub neuromod_ach: f32,
+    pub neuromod_serotonin: f32,
+    pub resonance_level: f32,
+    pub external_reward: f32,
+    pub sleep_active: bool,
+    pub world_model_state: Vec<f64>,
+    pub world_model_proj: Option<Matrix2>,
+    pub world_model_input_dim: usize,
+    pub world_model_prev_state: Vec<f64>,
+    pub feedback_enabled: bool,
+    pub feedback_map: Vec<i32>,
+    #[cfg(feature = "growth3d")]
+    pub rate_h: Vec<Vec<f32>>,
+    #[cfg(feature = "growth3d")]
+    pub since_growth_ms: Vec<Vec<f32>>,
+    #[cfg(feature = "growth3d")]
+    pub since_last_bouton_ms: Vec<Vec<f32>>,
+    #[cfg(feature = "growth3d")]
+    pub growth_queue: Vec<GrowthAction>,
+    #[cfg(feature = "growth3d")]
+    pub last_global_growth_ms: f32,
+    #[cfg(feature = "growth3d")]
+    pub last_sensory_formation_ms: f64,
+    #[cfg(feature = "growth3d")]
+    pub last_output_formation_ms: f64,
+    #[cfg(feature = "growth3d")]
+    pub target_num_sensory: usize,
+    #[cfg(feature = "growth3d")]
+    pub target_num_output: usize,
+    #[cfg(feature = "growth3d")]
+    pub spawn_energy_depletion_zones: Vec<SpawnEnergyDepletionZone>,
+    pub spk_hist_h: Vec<Vec<Vec<i8>>>,
+    pub spk_hist_s: Vec<Vec<i8>>,
+    pub hist_len: usize,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub morph: Option<crate::morphology::Morphology>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_ax_len: Vec<f32>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_den_len: Vec<f32>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_path_len_scale: f32,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_myelin: Vec<f32>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_ax_steps: Vec<usize>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub syn_den_steps: Vec<usize>,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub bouton_latency_steps: usize,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub bouton_jitter_steps: usize,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub morpho_accumulated_dt: f32,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub metabolic_accumulated_dt: f32,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub morpho_async_seq: u64,
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    pub released_events: Vec<crate::morphology::ReleasedEvent>,
+    #[cfg(any(feature = "ui", feature = "growth3d"))]
+    pub last_i_h0: Option<Vec<f64>>,
+    #[cfg(any(feature = "ui", feature = "growth3d"))]
+    pub last_i_f: Vec<Vec<f64>>,
+    #[cfg(any(feature = "ui", feature = "growth3d"))]
+    pub last_i_o: Option<Vec<f64>>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Snapshot {
     pub net: crate::config::NetworkConfig,
+    pub t: usize,
+    pub t_ms: f64,
+    pub rng_seed: Option<u64>,
     #[cfg(feature = "growth3d")]
     pub topo: Option<crate::topology::Topology3D>,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -128,12 +390,16 @@ pub struct Snapshot {
     pub p_out: Option<Matrix2U32>,
     /// Global layer range if this is a partial snapshot (distributed)
     pub layer_range: Option<(usize, usize)>,
+    pub runtime_state: Option<SnapshotRuntimeState>,
 }
 
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
             net: crate::config::NetworkConfig::default(),
+            t: 0,
+            t_ms: 0.0,
+            rng_seed: None,
             #[cfg(feature = "growth3d")]
             topo: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -157,6 +423,7 @@ impl Default for Snapshot {
             p_rec: None,
             p_out: None,
             layer_range: None,
+            runtime_state: None,
         }
     }
 }
@@ -273,27 +540,10 @@ struct ImportEdgeCandidate {
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{ReleasedEvent, ReleasedKind};
 
-#[derive(Clone, Copy, Debug)]
-struct PrecalculatedDecays {
-    stp_rec_decay: f64,
-    stp_facil_decay: f64,
-    syn_decay_ampa: f64,
-    syn_decay_nmda: f64,
-    syn_decay_gaba: f64,
-    thr_decay: f64,
-    homeo_decay: f64,
-    base_homeo_target: f64,
-    izh_refractory_steps: i32,
-    #[allow(dead_code)]
-    neuromod_plasticity_gain: f64,
-    #[allow(dead_code)]
-    neuromod_excitability_gain: f64,
-    #[allow(dead_code)]
-    izh_params: IzhikevichParams,
-}
+type PrecalculatedDecays = AarnnDecays;
 
 #[cfg(feature = "growth3d")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct GrowthAction {
     // source layer where the saturated parent neuron resides
     layer: usize,
@@ -304,7 +554,7 @@ struct GrowthAction {
 }
 
 #[cfg(feature = "growth3d")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct SpawnEnergyDepletionZone {
     x: f32,
     y: f32,
@@ -394,6 +644,7 @@ pub struct Runner {
     /// If true, last output spikes are looped back to sensory inputs via `feedback_map`.
     pub feedback_enabled: bool,
     pub feedback_map: Vec<i32>,
+    pub rng: fastrand::Rng,
 
     // Morphology-driven routing caches (built only when morpho+growth3d)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -874,19 +1125,12 @@ impl Runner {
 
     #[inline]
     fn sanitize_current_value(i: f64) -> f64 {
-        const I_ABS_LIMIT: f64 = 250.0;
-        if !i.is_finite() {
-            0.0
-        } else {
-            i.clamp(-I_ABS_LIMIT, I_ABS_LIMIT)
-        }
+        sanitize_current_value_ref(i)
     }
 
     #[inline]
     fn sanitize_current_array(curr: &mut Array1<f64>) {
-        for v in curr.iter_mut() {
-            *v = Self::sanitize_current_value(*v);
-        }
+        sanitize_current_array_ref(curr);
     }
 
     #[inline]
@@ -1014,31 +1258,15 @@ impl Runner {
         bio_vec: Option<&Vec<crate::config::AarnnBioParams>>,
         default_decays: &PrecalculatedDecays,
     ) -> Array1<f64> {
-        let mut out = Array1::<f64>::zeros(raw.len());
-        for i in 0..raw.len() {
+        apply_aarnn_synaptic_filter(raw, ampa, nmda, gaba, vmem, nmda_voltage_sensitivity, |i| {
             let (bio, d) = if let Some(bv) = bio_vec {
                 let b = &bv[i];
                 (b, Self::get_decays_static(dt, b))
             } else {
                 (default_bio, *default_decays)
             };
-            let val = raw[i];
-            let exc = val.max(0.0);
-            let inh = (-val).max(0.0);
-            let nmda_gate = if nmda_voltage_sensitivity > 0.0 {
-                let vm = vmem.and_then(|v| v.get(i)).copied().unwrap_or(0.0);
-                let x = (nmda_voltage_sensitivity * (vm + 40.0)).clamp(-60.0, 60.0);
-                1.0 / (1.0 + (-x).exp())
-            } else {
-                1.0
-            };
-            ampa[i] = ampa[i] * d.syn_decay_ampa + exc * (1.0 - bio.nmda_ratio);
-            nmda[i] = nmda[i] * d.syn_decay_nmda + exc * bio.nmda_ratio * nmda_gate;
-            gaba[i] = gaba[i] * d.syn_decay_gaba + inh;
-            out[i] =
-                (ampa[i] + nmda[i] - gaba[i]) * bio.synaptic_gain * d.neuromod_excitability_gain;
-        }
-        out
+            SynapticDriveParams::from_bio(bio, d)
+        })
     }
 
     #[inline]
@@ -1115,77 +1343,35 @@ impl Runner {
         let dt = self.lif.dt.max(0.001);
         for j in 0..n {
             let bio = self.hidden_bio_params(layer, j);
-            if !bio.dendritic_active_enabled {
-                continue;
-            }
-            let tau_ca = bio.dendritic_ca_tau_ms.max(1.0);
-            let tau_plateau = bio.dendritic_plateau_tau_ms.max(1.0);
-            let ca_decay = (-dt / tau_ca).exp();
-            let plateau_decay = (-dt / tau_plateau).exp();
-            let ca_influx = bio.dendritic_ca_influx_gain.max(0.0);
-            let plateau_threshold = bio.dendritic_plateau_threshold.max(0.0);
-            let plateau_gain = bio.dendritic_plateau_gain.max(0.0);
-            if ca_influx <= 0.0 || plateau_gain <= 0.0 {
-                continue;
-            }
-
-            let exc = curr[j].max(0.0);
+            let spec = ActiveDendriteSpec::from_bio(bio);
             let (dend_stim, branch_factor) = self.hidden_dendritic_structure_signal(layer, j);
-            let drive = 0.75 * exc + 0.25 * dend_stim * branch_factor;
-            let ca = (self.dend_ca_h[layer][j] * ca_decay + ca_influx * drive).clamp(0.0, 1.0e6);
-            self.dend_ca_h[layer][j] = ca;
-
-            let over = (ca - plateau_threshold).max(0.0);
-            let trigger = over / (1.0 + over);
-            let plateau = (self.dend_plateau_h[layer][j] * plateau_decay
-                + trigger * (1.0 - plateau_decay))
-                .clamp(0.0, 1.0);
-            self.dend_plateau_h[layer][j] = plateau;
-
-            let gain = (1.0 + plateau_gain * plateau * branch_factor).clamp(1.0, 3.0);
-            if curr[j] >= 0.0 {
-                curr[j] *= gain;
-            } else {
-                // Preserve inhibitory drive polarity while allowing weaker dendritic shaping of inhibition.
-                curr[j] *= 1.0 + 0.25 * (gain - 1.0);
-            }
+            apply_active_dendritic_compartment(
+                &mut curr[j],
+                &mut self.dend_ca_h[layer][j],
+                &mut self.dend_plateau_h[layer][j],
+                dt,
+                spec,
+                DendriteStructureSignal {
+                    local_stimulus: dend_stim,
+                    branching_gain: branch_factor,
+                },
+            );
         }
-    }
-
-    #[inline]
-    fn hash_to_unit(mut x: u64) -> f64 {
-        x ^= x >> 33;
-        x = x.wrapping_mul(0xff51afd7ed558ccd);
-        x ^= x >> 33;
-        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-        x ^= x >> 33;
-        (x as f64) / (u64::MAX as f64)
     }
 
     #[inline]
     fn release_probability(&self, syn_idx: Option<usize>) -> f32 {
-        let base = self.net.p_release_default.clamp(0.0, 1.0);
-        let hetero = self.net.aarnn_release_prob_heterogeneity.clamp(0.0, 1.0);
-        if hetero <= 0.0 {
-            return base;
-        }
-        let seed = syn_idx
-            .map(|idx| (idx as u64).wrapping_mul(0x9e3779b185ebca87))
-            .unwrap_or_else(|| (self.t as u64).wrapping_mul(0xd2b74407b1ce6e93));
-        let h = Self::hash_to_unit(seed);
-        let delta = ((h * 2.0) - 1.0) as f32 * hetero;
-        (base + delta).clamp(0.0, 1.0)
+        release_probability_ref(
+            self.net.p_release_default,
+            self.net.aarnn_release_prob_heterogeneity,
+            syn_idx,
+            self.t as u64,
+        )
     }
 
     #[inline]
     fn apply_gap_junction_coupling(curr: &mut Array1<f64>, v: &Array1<f64>, strength: f64) {
-        if strength <= 0.0 || curr.len() < 2 || v.len() != curr.len() {
-            return;
-        }
-        let mean_v = v.iter().sum::<f64>() / (v.len() as f64);
-        for j in 0..curr.len() {
-            curr[j] += strength * (mean_v - v[j]);
-        }
+        apply_gap_junction_mean_field(curr, v, strength);
     }
 
     #[cfg(feature = "growth3d")]
@@ -1245,42 +1431,27 @@ impl Runner {
                 if let Some(nodes) = nodes_opt {
                     if nodes.len() == curr.len() {
                         let inhibitory_only = self.net.aarnn_gap_junction_inhibitory_only;
-                        let mut delta = vec![0.0f64; curr.len()];
-                        let mut local_edges = 0usize;
-                        for j in 0..curr.len() {
-                            if inhibitory_only && !self.hidden_is_inhibitory(layer, j) {
-                                continue;
-                            }
-                            let pj = &nodes[j];
-                            let mut sum = 0.0f64;
-                            let mut wsum = 0.0f64;
-                            for i in 0..curr.len() {
-                                if i == j {
-                                    continue;
-                                }
-                                if inhibitory_only && !self.hidden_is_inhibitory(layer, i) {
-                                    continue;
-                                }
-                                let pi = &nodes[i];
-                                let dx = (pi.x - pj.x) as f64;
-                                let dy = (pi.y - pj.y) as f64;
-                                let dz = (pi.z - pj.z) as f64;
-                                let d = (dx * dx + dy * dy + dz * dz).sqrt();
-                                if d <= radius && d > 1.0e-9 {
-                                    let w = (1.0 - d / radius).max(0.0);
-                                    sum += w * (v[i] - v[j]);
-                                    wsum += w;
-                                    local_edges += 1;
-                                }
-                            }
-                            if wsum > 1.0e-9 {
-                                delta[j] = strength * (sum / wsum);
-                            }
-                        }
-                        if local_edges > 0 {
-                            for j in 0..curr.len() {
-                                curr[j] += delta[j];
-                            }
+                        let inhibitory_mask = if inhibitory_only {
+                            Some(
+                                (0..curr.len())
+                                    .map(|idx| self.hidden_is_inhibitory(layer, idx))
+                                    .collect::<Vec<_>>(),
+                            )
+                        } else {
+                            None
+                        };
+                        if apply_local_gap_junction_coupling(
+                            curr,
+                            v,
+                            strength,
+                            radius,
+                            inhibitory_mask.as_deref(),
+                            |idx| SpatialPoint3 {
+                                x: nodes[idx].x as f64,
+                                y: nodes[idx].y as f64,
+                                z: nodes[idx].z as f64,
+                            },
+                        ) {
                             return;
                         }
                     }
@@ -1306,7 +1477,7 @@ impl Runner {
         if strength <= 0.0 {
             return factors;
         }
-        let mut sources: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let mut sources: Vec<SpatialPoint3> = Vec::new();
         for l in 0..self.net.num_hidden_layers {
             let nodes = if let Some(nodes) = self.topo.layers.get(l) {
                 nodes
@@ -1325,7 +1496,11 @@ impl Runner {
                     continue;
                 }
                 let n = &nodes[j];
-                sources.push((n.x as f64, n.y as f64, n.z as f64, 1.0));
+                sources.push(SpatialPoint3 {
+                    x: n.x as f64,
+                    y: n.y as f64,
+                    z: n.z as f64,
+                });
             }
         }
         if sources.is_empty() {
@@ -1334,8 +1509,6 @@ impl Runner {
 
         let tone = ((self.neuromod_dopamine + self.neuromod_ach + self.neuromod_serotonin) / 3.0)
             .clamp(0.0, 3.0) as f64;
-        let tone_scale = tone / 3.0;
-        let two_sigma2 = 2.0 * radius * radius;
 
         for l in 0..self.net.num_hidden_layers {
             let nodes = if let Some(nodes) = self.topo.layers.get(l) {
@@ -1344,21 +1517,14 @@ impl Runner {
                 continue;
             };
             let n = self.layer_size(l).min(nodes.len());
-            for j in 0..n {
-                let p = &nodes[j];
-                let mut field = 0.0f64;
-                for (sx, sy, sz, amp) in &sources {
-                    let dx = p.x as f64 - *sx;
-                    let dy = p.y as f64 - *sy;
-                    let dz = p.z as f64 - *sz;
-                    let d2 = dx * dx + dy * dy + dz * dz;
-                    if d2 <= radius * radius {
-                        field += *amp * (-(d2 / two_sigma2)).exp();
+            factors[l] =
+                volume_transmission_factors_for_layer(n, radius, strength, tone, &sources, |idx| {
+                    SpatialPoint3 {
+                        x: nodes[idx].x as f64,
+                        y: nodes[idx].y as f64,
+                        z: nodes[idx].z as f64,
                     }
-                }
-                let gain = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
-                factors[l][j] = gain;
-            }
+                });
         }
         factors
     }
@@ -1373,13 +1539,7 @@ impl Runner {
 
     #[inline]
     fn is_inhibitory_presyn(pre_idx: usize, inhibitory_fraction: f64, salt: u64) -> bool {
-        if inhibitory_fraction <= 0.0 {
-            return false;
-        }
-        let seed = (pre_idx as u64)
-            .wrapping_mul(0x9e3779b185ebca87)
-            .wrapping_add(salt);
-        Self::hash_to_unit(seed) < inhibitory_fraction
+        inferred_inhibitory_presyn(pre_idx, inhibitory_fraction, salt)
     }
 
     fn enforce_dale_matrix_cols(
@@ -1389,18 +1549,7 @@ impl Runner {
         max_abs_w: f64,
         salt: u64,
     ) {
-        if strictness <= 0.0 || mat.is_empty() {
-            return;
-        }
-        for j in 0..mat.nrows() {
-            for i in 0..mat.ncols() {
-                let w = mat[(j, i)];
-                let inhibitory = Self::is_inhibitory_presyn(i, inhibitory_fraction, salt);
-                let target = if inhibitory { -w.abs() } else { w.abs() };
-                let blended = w + strictness * (target - w);
-                mat[(j, i)] = blended.clamp(-max_abs_w, max_abs_w);
-            }
-        }
+        dale_enforce_cols(mat, inhibitory_fraction, strictness, max_abs_w, salt);
     }
 
     #[cfg(feature = "growth3d")]
@@ -1410,18 +1559,7 @@ impl Runner {
         strictness: f64,
         max_abs_w: f64,
     ) {
-        if strictness <= 0.0 || mat.is_empty() {
-            return;
-        }
-        for j in 0..mat.nrows() {
-            for i in 0..mat.ncols() {
-                let w = mat[(j, i)];
-                let inhibitory = inhibitory_mask.get(i).copied().unwrap_or(false);
-                let target = if inhibitory { -w.abs() } else { w.abs() };
-                let blended = w + strictness * (target - w);
-                mat[(j, i)] = blended.clamp(-max_abs_w, max_abs_w);
-            }
-        }
+        dale_enforce_cols_with_mask(mat, inhibitory_mask, strictness, max_abs_w);
     }
 
     fn enforce_dale_constraints(&mut self) {
@@ -1579,20 +1717,7 @@ impl Runner {
     }
 
     fn apply_synaptic_scaling_matrix_rows(mat: &mut Array2<f64>, strength: f64, target: f64) {
-        if strength <= 0.0 || target <= 0.0 || mat.is_empty() {
-            return;
-        }
-        for mut row in mat.axis_iter_mut(ndarray::Axis(0)) {
-            let sum_abs = row.iter().map(|w| w.abs()).sum::<f64>();
-            if sum_abs <= 1.0e-9 {
-                continue;
-            }
-            let desired_ratio = (target / sum_abs).clamp(0.25, 4.0);
-            let scale = 1.0 + strength * (desired_ratio - 1.0);
-            for w in row.iter_mut() {
-                *w *= scale;
-            }
-        }
+        scale_synaptic_rows(mat, strength, target);
     }
 
     fn apply_synaptic_scaling(&mut self) {
@@ -3429,6 +3554,7 @@ impl Runner {
             world_model_prev_state: Vec::new(),
             feedback_enabled: false,
             feedback_map,
+            rng: fastrand::Rng::new(),
             decay_m,
             decay_pre,
             decay_post,
@@ -3733,33 +3859,130 @@ impl Runner {
     }
 
     fn get_decays_static(dt: f64, bio: &crate::config::AarnnBioParams) -> PrecalculatedDecays {
-        PrecalculatedDecays {
-            stp_rec_decay: (-(dt / bio.stp_tau_rec_ms.max(1e-6))).exp(),
-            stp_facil_decay: (-(dt / bio.stp_tau_facil_ms.max(1e-6))).exp(),
-            syn_decay_ampa: (-(dt / bio.ampa_tau_ms.max(1e-6))).exp(),
-            syn_decay_nmda: (-(dt / bio.nmda_tau_ms.max(1e-6))).exp(),
-            syn_decay_gaba: (-(dt / bio.gaba_tau_ms.max(1e-6))).exp(),
-            thr_decay: (-(dt / bio.adaptive_threshold_tau_ms.max(1e-6))).exp(),
-            homeo_decay: (-(dt / bio.homeostasis_tau_ms.max(1e-6))).exp(),
-            base_homeo_target: bio.homeostasis_target_rate_hz * dt / 1000.0,
-            izh_refractory_steps: (bio.izh_refractory_ms / dt.max(1e-6)).round() as i32,
-            neuromod_plasticity_gain: if bio.neuromodulation_enabled {
-                (bio.dopamine_gain / bio.serotonin_gain.max(1e-6)).max(0.0)
-            } else {
-                1.0
-            },
-            neuromod_excitability_gain: if bio.neuromodulation_enabled {
-                bio.acetylcholine_gain.max(0.0)
-            } else {
-                1.0
-            },
-            izh_params: crate::config::IzhikevichParams::from_preset(&bio.izh_preset, dt),
+        precalculate_decays(dt, bio)
+    }
+
+    fn snapshot_runtime_state(&self) -> SnapshotRuntimeState {
+        SnapshotRuntimeState {
+            v_h: vec_from_layers_f64(&self.v_h),
+            u_h: self.u_h.as_ref().map(|layers| vec_from_layers_f64(layers)),
+            v_o: vec_from_arr1_f64(&self.v_o),
+            u_o: self.u_o.as_ref().map(vec_from_arr1_f64),
+            refr_h: self
+                .refr_h
+                .as_ref()
+                .map(|layers| vec_from_layers_i32(layers)),
+            refr_o: self.refr_o.as_ref().map(vec_from_arr1_i32),
+            izh_refr_h: self
+                .izh_refr_h
+                .as_ref()
+                .map(|layers| vec_from_layers_i32(layers)),
+            izh_refr_o: self.izh_refr_o.as_ref().map(vec_from_arr1_i32),
+            syn_ampa_h: vec_from_layers_f64(&self.syn_ampa_h),
+            syn_nmda_h: vec_from_layers_f64(&self.syn_nmda_h),
+            syn_gaba_h: vec_from_layers_f64(&self.syn_gaba_h),
+            syn_ampa_o: vec_from_arr1_f64(&self.syn_ampa_o),
+            syn_nmda_o: vec_from_arr1_f64(&self.syn_nmda_o),
+            syn_gaba_o: vec_from_arr1_f64(&self.syn_gaba_o),
+            thr_offset_h: vec_from_layers_f64(&self.thr_offset_h),
+            thr_offset_o: vec_from_arr1_f64(&self.thr_offset_o),
+            rate_ema_h: vec_from_layers_f64(&self.rate_ema_h),
+            rate_ema_o: vec_from_arr1_f64(&self.rate_ema_o),
+            stp_u_s: vec_from_arr1_f64(&self.stp_u_s),
+            stp_x_s: vec_from_arr1_f64(&self.stp_x_s),
+            stp_u_h: vec_from_layers_f64(&self.stp_u_h),
+            stp_x_h: vec_from_layers_f64(&self.stp_x_h),
+            dend_ca_h: vec_from_layers_f64(&self.dend_ca_h),
+            dend_plateau_h: vec_from_layers_f64(&self.dend_plateau_h),
+            x_pre_in: vec_from_arr1_f64(&self.x_pre_in),
+            pred_s: vec_from_arr1_f64(&self.pred_s),
+            x_post_h: vec_from_layers_f64(&self.x_post_h),
+            x_pre_h: vec_from_layers_f64(&self.x_pre_h),
+            x_post_o: vec_from_arr1_f64(&self.x_post_o),
+            last_spk_h: vec_from_layers_i8(&self.last_spk_h),
+            last_spk_o: vec_from_arr1_i8(&self.last_spk_o),
+            theta_phase: self.theta_phase,
+            thalamic_gate_phase: self.thalamic_gate_phase,
+            neuromod_dopamine: self.neuromod_dopamine,
+            neuromod_ach: self.neuromod_ach,
+            neuromod_serotonin: self.neuromod_serotonin,
+            resonance_level: self.resonance_level,
+            external_reward: self.external_reward,
+            sleep_active: self.sleep_active,
+            world_model_state: self.world_model_state.clone(),
+            world_model_proj: self.world_model_proj.as_ref().map(mat_from_nd),
+            world_model_input_dim: self.world_model_input_dim,
+            world_model_prev_state: self.world_model_prev_state.clone(),
+            feedback_enabled: self.feedback_enabled,
+            feedback_map: self.feedback_map.clone(),
+            #[cfg(feature = "growth3d")]
+            rate_h: vec_from_layers_f32(&self.rate_h),
+            #[cfg(feature = "growth3d")]
+            since_growth_ms: vec_from_layers_f32(&self.since_growth_ms),
+            #[cfg(feature = "growth3d")]
+            since_last_bouton_ms: vec_from_layers_f32(&self.since_last_bouton_ms),
+            #[cfg(feature = "growth3d")]
+            growth_queue: self.growth_queue.clone(),
+            #[cfg(feature = "growth3d")]
+            last_global_growth_ms: self.last_global_growth_ms,
+            #[cfg(feature = "growth3d")]
+            last_sensory_formation_ms: self.last_sensory_formation_ms,
+            #[cfg(feature = "growth3d")]
+            last_output_formation_ms: self.last_output_formation_ms,
+            #[cfg(feature = "growth3d")]
+            target_num_sensory: self.target_num_sensory,
+            #[cfg(feature = "growth3d")]
+            target_num_output: self.target_num_output,
+            #[cfg(feature = "growth3d")]
+            spawn_energy_depletion_zones: self.spawn_energy_depletion_zones.clone(),
+            spk_hist_h: self
+                .spk_hist_h
+                .iter()
+                .map(vec_from_history_frames)
+                .collect(),
+            spk_hist_s: vec_from_history_frames(&self.spk_hist_s),
+            hist_len: self.hist_len,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morph: Some(self.morph.clone()),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_ax_len: self.syn_ax_len.clone(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_den_len: self.syn_den_len.clone(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_path_len_scale: self.syn_path_len_scale,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_myelin: self.syn_myelin.clone(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_ax_steps: self.syn_ax_steps.clone(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            syn_den_steps: self.syn_den_steps.clone(),
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            bouton_latency_steps: self.bouton_latency_steps,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            bouton_jitter_steps: self.bouton_jitter_steps,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morpho_accumulated_dt: self.morpho_accumulated_dt,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            metabolic_accumulated_dt: self.metabolic_accumulated_dt,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            morpho_async_seq: self.morpho_async_seq,
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            released_events: self.released_events.clone(),
+            #[cfg(any(feature = "ui", feature = "growth3d"))]
+            last_i_h0: self.last_i_h0.as_ref().map(vec_from_arr1_f64),
+            #[cfg(any(feature = "ui", feature = "growth3d"))]
+            last_i_f: vec_from_layers_f64(&self.last_i_f),
+            #[cfg(any(feature = "ui", feature = "growth3d"))]
+            last_i_o: self.last_i_o.as_ref().map(vec_from_arr1_f64),
         }
     }
 
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             net: self.net.clone(),
+            t: self.t,
+            t_ms: self.t_ms,
+            rng_seed: Some(self.rng.get_seed()),
             #[cfg(feature = "growth3d")]
             topo: Some(self.topo.clone()),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -3779,6 +4002,7 @@ impl Runner {
             p_rec: Some(self.conn_presence_rec.iter().map(mat_from_nd_u32).collect()),
             p_out: Some(mat_from_nd_u32(&self.conn_presence_out)),
             layer_range: self.layer_range.as_ref().map(|r| (r.start, r.end)),
+            runtime_state: Some(self.snapshot_runtime_state()),
         }
     }
 
@@ -3786,6 +4010,154 @@ impl Runner {
         let snap = self.snapshot();
         let s = serde_json::to_string_pretty(&snap)?;
         Ok(s)
+    }
+
+    fn apply_snapshot_runtime_state(&mut self, state: SnapshotRuntimeState) {
+        let hidden_sizes: Vec<usize> = self.v_h.iter().map(|layer| layer.len()).collect();
+        let hidden_layers = hidden_sizes.len();
+
+        self.v_h = layers_from_vec_f64(&state.v_h, &hidden_sizes);
+        self.u_h = self
+            .u_h
+            .as_ref()
+            .map(|_| layers_from_vec_f64(state.u_h.as_deref().unwrap_or(&[]), &hidden_sizes));
+        self.v_o = array1_from_vec_f64(&state.v_o, self.net.num_output_neurons);
+        self.u_o = self.u_o.as_ref().map(|_| {
+            array1_from_vec_f64(
+                state.u_o.as_deref().unwrap_or(&[]),
+                self.net.num_output_neurons,
+            )
+        });
+        self.refr_h = self
+            .refr_h
+            .as_ref()
+            .map(|_| layers_from_vec_i32(state.refr_h.as_deref().unwrap_or(&[]), &hidden_sizes));
+        self.refr_o = self.refr_o.as_ref().map(|_| {
+            array1_from_vec_i32(
+                state.refr_o.as_deref().unwrap_or(&[]),
+                self.net.num_output_neurons,
+            )
+        });
+        self.izh_refr_h = self.izh_refr_h.as_ref().map(|_| {
+            layers_from_vec_i32(state.izh_refr_h.as_deref().unwrap_or(&[]), &hidden_sizes)
+        });
+        self.izh_refr_o = self.izh_refr_o.as_ref().map(|_| {
+            array1_from_vec_i32(
+                state.izh_refr_o.as_deref().unwrap_or(&[]),
+                self.net.num_output_neurons,
+            )
+        });
+
+        self.syn_ampa_h = layers_from_vec_f64(&state.syn_ampa_h, &hidden_sizes);
+        self.syn_nmda_h = layers_from_vec_f64(&state.syn_nmda_h, &hidden_sizes);
+        self.syn_gaba_h = layers_from_vec_f64(&state.syn_gaba_h, &hidden_sizes);
+        self.syn_ampa_o = array1_from_vec_f64(&state.syn_ampa_o, self.net.num_output_neurons);
+        self.syn_nmda_o = array1_from_vec_f64(&state.syn_nmda_o, self.net.num_output_neurons);
+        self.syn_gaba_o = array1_from_vec_f64(&state.syn_gaba_o, self.net.num_output_neurons);
+        self.thr_offset_h = layers_from_vec_f64(&state.thr_offset_h, &hidden_sizes);
+        self.thr_offset_o = array1_from_vec_f64(&state.thr_offset_o, self.net.num_output_neurons);
+        self.rate_ema_h = layers_from_vec_f64(&state.rate_ema_h, &hidden_sizes);
+        self.rate_ema_o = array1_from_vec_f64(&state.rate_ema_o, self.net.num_output_neurons);
+        self.stp_u_s = array1_from_vec_f64(&state.stp_u_s, self.net.num_sensory_neurons);
+        self.stp_x_s = array1_from_vec_f64(&state.stp_x_s, self.net.num_sensory_neurons);
+        self.stp_u_h = layers_from_vec_f64(&state.stp_u_h, &hidden_sizes);
+        self.stp_x_h = layers_from_vec_f64(&state.stp_x_h, &hidden_sizes);
+        self.dend_ca_h = layers_from_vec_f64(&state.dend_ca_h, &hidden_sizes);
+        self.dend_plateau_h = layers_from_vec_f64(&state.dend_plateau_h, &hidden_sizes);
+        self.x_pre_in = array1_from_vec_f64(&state.x_pre_in, self.net.num_sensory_neurons);
+        self.pred_s = array1_from_vec_f64(&state.pred_s, self.net.num_sensory_neurons);
+        self.x_post_h = layers_from_vec_f64(&state.x_post_h, &hidden_sizes);
+        self.x_pre_h = layers_from_vec_f64(&state.x_pre_h, &hidden_sizes);
+        self.x_post_o = array1_from_vec_f64(&state.x_post_o, self.net.num_output_neurons);
+        self.last_spk_h = layers_from_vec_i8(&state.last_spk_h, &hidden_sizes);
+        self.last_spk_o = array1_from_vec_i8(&state.last_spk_o, self.net.num_output_neurons);
+        self.theta_phase = state.theta_phase;
+        self.thalamic_gate_phase = state.thalamic_gate_phase;
+        self.neuromod_dopamine = state.neuromod_dopamine;
+        self.neuromod_ach = state.neuromod_ach;
+        self.neuromod_serotonin = state.neuromod_serotonin;
+        self.resonance_level = state.resonance_level;
+        self.external_reward = state.external_reward;
+        self.sleep_active = state.sleep_active;
+        self.world_model_state = state.world_model_state;
+        self.world_model_proj = state.world_model_proj.as_ref().map(nd_from_mat);
+        self.world_model_input_dim = state.world_model_input_dim;
+        self.world_model_prev_state = state.world_model_prev_state;
+        self.feedback_enabled = state.feedback_enabled;
+        self.feedback_map = state.feedback_map;
+        if self.feedback_map.len() != self.net.num_output_neurons {
+            self.feedback_map.resize(self.net.num_output_neurons, -1);
+        }
+        for target in &mut self.feedback_map {
+            if *target < 0 || (*target as usize) >= self.net.num_sensory_neurons {
+                *target = -1;
+            }
+        }
+
+        #[cfg(feature = "growth3d")]
+        {
+            self.rate_h = layers_from_vec_f32(&state.rate_h, &hidden_sizes);
+            self.since_growth_ms = layers_from_vec_f32(&state.since_growth_ms, &hidden_sizes);
+            self.since_last_bouton_ms =
+                layers_from_vec_f32(&state.since_last_bouton_ms, &hidden_sizes);
+            self.growth_queue = state.growth_queue;
+            self.last_global_growth_ms = state.last_global_growth_ms;
+            self.last_sensory_formation_ms = state.last_sensory_formation_ms;
+            self.last_output_formation_ms = state.last_output_formation_ms;
+            self.target_num_sensory = state.target_num_sensory.max(self.net.num_sensory_neurons);
+            self.target_num_output = state.target_num_output.max(self.net.num_output_neurons);
+            self.spawn_energy_depletion_zones = state.spawn_energy_depletion_zones;
+        }
+
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        {
+            if let Some(morph) = state.morph {
+                self.morph = morph;
+                self.rebuild_syn_maps_from_morph();
+            }
+            self.syn_ax_len = state.syn_ax_len;
+            self.syn_den_len = state.syn_den_len;
+            self.syn_path_len_scale = state.syn_path_len_scale;
+            self.syn_myelin = state.syn_myelin;
+            self.syn_ax_steps = state.syn_ax_steps;
+            self.syn_den_steps = state.syn_den_steps;
+            self.bouton_latency_steps = state.bouton_latency_steps;
+            self.bouton_jitter_steps = state.bouton_jitter_steps;
+            self.morpho_accumulated_dt = state.morpho_accumulated_dt;
+            self.metabolic_accumulated_dt = state.metabolic_accumulated_dt;
+            self.morpho_async_seq = state.morpho_async_seq;
+            self.released_events = state.released_events;
+        }
+
+        let hist_len = state.hist_len.max(1);
+        self.hist_len = hist_len;
+        self.spk_hist_h = (0..hidden_layers)
+            .map(|layer| {
+                history_from_frames(
+                    state
+                        .spk_hist_h
+                        .get(layer)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                    hidden_sizes.get(layer).copied().unwrap_or(0),
+                    hist_len,
+                )
+            })
+            .collect();
+        self.spk_hist_s =
+            history_from_frames(&state.spk_hist_s, self.net.num_sensory_neurons, hist_len);
+
+        #[cfg(any(feature = "ui", feature = "growth3d"))]
+        {
+            self.last_i_h0 = state.last_i_h0.as_ref().map(|values| {
+                array1_from_vec_f64(values, hidden_sizes.first().copied().unwrap_or(0))
+            });
+            self.last_i_f = layers_from_vec_f64(&state.last_i_f, &hidden_sizes);
+            self.last_i_o = state
+                .last_i_o
+                .as_ref()
+                .map(|values| array1_from_vec_f64(values, self.net.num_output_neurons));
+        }
     }
 
     #[cfg(feature = "growth3d")]
@@ -4191,6 +4563,10 @@ impl Runner {
     #[allow(dead_code)]
     pub fn import_network_json(&mut self, s: &str) -> anyhow::Result<()> {
         let snap = decode_snapshot_with_profile_backfill(s)?;
+        let snapshot_step = snap.t;
+        let snapshot_time_ms = snap.t_ms.max(0.0);
+        let snapshot_rng_seed = snap.rng_seed;
+        let snapshot_runtime_state = snap.runtime_state;
         // Update config first to ensure dimensions agree
         self.net = snap.net;
         self.layer_range = snap.layer_range.map(|(s, e)| s..e);
@@ -4338,7 +4714,9 @@ impl Runner {
             // Ensure growth vectors match new topology
             self.ensure_growth_vectors();
             self.sync_bio_from_topo();
-            self.apply_import_topology_sparse_rewiring();
+            if snapshot_runtime_state.is_none() {
+                self.apply_import_topology_sparse_rewiring();
+            }
         }
         #[cfg(feature = "opencl")]
         {
@@ -4370,6 +4748,14 @@ impl Runner {
 
         // Clear all runtime state after structural update
         self.reset();
+        if let Some(runtime_state) = snapshot_runtime_state {
+            self.apply_snapshot_runtime_state(runtime_state);
+        }
+        self.t = snapshot_step;
+        self.t_ms = snapshot_time_ms;
+        if let Some(seed) = snapshot_rng_seed {
+            self.rng.seed(seed);
+        }
 
         Ok(())
     }
@@ -5121,6 +5507,7 @@ impl Runner {
     /// - When AARNN+morphology are active, synaptic currents are accumulated
     ///   using exact per‑synapse delays.
     pub fn step(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
+        fastrand::seed(self.rng.get_seed());
         let (in_l, out_l) = self.get_io_layers();
 
         // 1. Core structural sync: ensure dimensions match config before capturing locals
@@ -5585,60 +5972,69 @@ impl Runner {
                 self.clear_cl_stp_buffers();
             }
             if !stp_gpu_updated_s {
-                for i in 0..num_sensory_neurons {
-                    let bio = {
-                        #[cfg(feature = "growth3d")]
-                        {
-                            &self.bio_s[i]
+                stp_update_slice_ref(
+                    &s_t,
+                    self.stp_u_s
+                        .as_slice_mut()
+                        .expect("contiguous sensory STP utilization"),
+                    self.stp_x_s
+                        .as_slice_mut()
+                        .expect("contiguous sensory STP resources"),
+                    &mut stp_release_s,
+                    |_i| {
+                        let bio = {
+                            #[cfg(feature = "growth3d")]
+                            {
+                                &self.bio_s[_i]
+                            }
+                            #[cfg(not(feature = "growth3d"))]
+                            {
+                                &self.net.aarnn_bio
+                            }
+                        };
+                        let d = Self::get_decays_static(self.lif.dt, bio);
+                        ShortTermPlasticityParams {
+                            baseline_utilization: bio.stp_u,
+                            recovery_decay: d.stp_rec_decay,
+                            facilitation_decay: d.stp_facil_decay,
                         }
-                        #[cfg(not(feature = "growth3d"))]
-                        {
-                            &self.net.aarnn_bio
-                        }
-                    };
-                    let d = Self::get_decays_static(self.lif.dt, bio);
-                    self.stp_u_s[i] =
-                        self.stp_u_s[i] * d.stp_facil_decay + bio.stp_u * (1.0 - d.stp_facil_decay);
-                    self.stp_x_s[i] = self.stp_x_s[i] * d.stp_rec_decay + (1.0 - d.stp_rec_decay);
-                    if s_t[i] != 0 {
-                        let rel = (self.stp_u_s[i] * self.stp_x_s[i]).clamp(0.0, 1.0);
-                        self.stp_x_s[i] = (self.stp_x_s[i] - rel).max(0.0);
-                        self.stp_u_s[i] =
-                            (self.stp_u_s[i] + bio.stp_u * (1.0 - self.stp_u_s[i])).clamp(0.0, 1.0);
-                        stp_release_s[i] = rel;
-                    }
-                }
+                    },
+                );
             }
             for l in 0..num_hidden_layers {
                 if stp_gpu_updated_h[l] {
                     continue;
                 }
-                let layer_sz = self.layer_size(l);
-                for j in 0..layer_sz {
-                    let bio = {
-                        #[cfg(feature = "growth3d")]
-                        {
-                            &self.bio_h[l][j]
+                stp_update_slice_ref(
+                    prev_spk_h[l]
+                        .as_slice()
+                        .expect("contiguous hidden spike history"),
+                    self.stp_u_h[l]
+                        .as_slice_mut()
+                        .expect("contiguous hidden STP utilization"),
+                    self.stp_x_h[l]
+                        .as_slice_mut()
+                        .expect("contiguous hidden STP resources"),
+                    &mut stp_release_h[l],
+                    |_j| {
+                        let bio = {
+                            #[cfg(feature = "growth3d")]
+                            {
+                                &self.bio_h[l][_j]
+                            }
+                            #[cfg(not(feature = "growth3d"))]
+                            {
+                                &self.net.aarnn_bio
+                            }
+                        };
+                        let d = Self::get_decays_static(self.lif.dt, bio);
+                        ShortTermPlasticityParams {
+                            baseline_utilization: bio.stp_u,
+                            recovery_decay: d.stp_rec_decay,
+                            facilitation_decay: d.stp_facil_decay,
                         }
-                        #[cfg(not(feature = "growth3d"))]
-                        {
-                            &self.net.aarnn_bio
-                        }
-                    };
-                    let d = Self::get_decays_static(self.lif.dt, bio);
-                    self.stp_u_h[l][j] = self.stp_u_h[l][j] * d.stp_facil_decay
-                        + bio.stp_u * (1.0 - d.stp_facil_decay);
-                    self.stp_x_h[l][j] =
-                        self.stp_x_h[l][j] * d.stp_rec_decay + (1.0 - d.stp_rec_decay);
-                    if prev_spk_h[l][j] != 0 {
-                        let rel = (self.stp_u_h[l][j] * self.stp_x_h[l][j]).clamp(0.0, 1.0);
-                        self.stp_x_h[l][j] = (self.stp_x_h[l][j] - rel).max(0.0);
-                        self.stp_u_h[l][j] = (self.stp_u_h[l][j]
-                            + bio.stp_u * (1.0 - self.stp_u_h[l][j]))
-                            .clamp(0.0, 1.0);
-                        stp_release_h[l][j] = rel;
-                    }
-                }
+                    },
+                );
             }
         }
 
@@ -10517,9 +10913,7 @@ impl Runner {
                     } else {
                         0.0
                     };
-                    let triplet_mod = (ltp_gain * pre_mean * post_mean) - (ltd_gain * rate_mean);
-                    let triplet_scale = (1.0 + triplet_mod).clamp(0.05, 5.0);
-                    eta *= triplet_scale;
+                    eta *= triplet_eta_scale(pre_mean, post_mean, rate_mean, ltp_gain, ltd_gain);
                 }
             }
             if eta != 0.0 {
@@ -11614,6 +12008,7 @@ impl Runner {
 
         self.t += 1;
         self.t_ms += self.lif.dt;
+        self.rng.seed(fastrand::get_seed());
         StepOut {
             t: self.t,
             t_ms: self.t_ms,
@@ -13110,127 +13505,97 @@ impl Runner {
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     #[inline]
     pub fn syn_delay_and_atten(&self, syn_idx: usize) -> (usize, f64) {
-        let depth = self.net.aarnn_layer_depth;
-        let ax_steps = self.syn_ax_steps.get(syn_idx).copied().unwrap_or(0);
-        let den_steps = self.syn_den_steps.get(syn_idx).copied().unwrap_or(0);
-        let base = ax_steps + den_steps + self.bouton_latency_steps;
-        let mut steps = if depth >= 2 {
-            self.apply_jitter_steps(base, syn_idx)
-        } else {
-            base
+        let syn = match self.morph.synapses.get(syn_idx) {
+            Some(syn) => syn,
+            None => return (0, 1.0),
         };
-        let mut atten = 1.0f64;
-        let atten_k = self.net.aarnn_distance_attenuation_per_unit.max(0.0) as f64;
-        if atten_k > 0.0 {
-            let ax_len = self.syn_ax_len.get(syn_idx).copied().unwrap_or(0.0) as f64;
-            let den_len = self.syn_den_len.get(syn_idx).copied().unwrap_or(0.0) as f64;
-            let dist = (ax_len + den_len).max(0.0);
-            let dist_scale = self.syn_path_len_scale.max(1.0e-3) as f64;
-            let normalized_dist = if dist > 0.0 { dist / dist_scale } else { 0.0 };
-            atten = (-atten_k * normalized_dist).exp().clamp(1.0e-2, 1.0);
-        }
-        if let Some(syn) = self.morph.synapses.get(syn_idx) {
-            let (dend_type, trunk_len) = self.syn_post_dendrite_profile(syn);
-            let (forward_gain, bap_gain, _) = self.dendrite_compartment_params(dend_type);
-            let trunk_scale = self.syn_path_len_scale.max(1.0e-3);
-            let trunk_norm = (trunk_len / trunk_scale).max(0.0) as f64;
-            atten *= forward_gain.clamp(0.25, 3.0);
-            if matches!(syn.kind, crate::morphology::SynKind::HiddenBwd) {
-                atten *= bap_gain.clamp(0.25, 3.0);
-                steps = ((steps as f64) / bap_gain.max(1.0e-3)).round() as usize;
-            }
-            let trunk_delay = match dend_type {
-                crate::morphology::DendriteType::Apical => 1.0 + 0.45 * trunk_norm,
-                crate::morphology::DendriteType::Basal => 1.0 + 0.20 * trunk_norm,
-                crate::morphology::DendriteType::Generic => 1.0 + 0.30 * trunk_norm,
-            };
-            steps = ((steps as f64) * trunk_delay.max(0.1)).round() as usize;
-        }
-        if self.net.aarnn_myelination_enabled {
-            let m = self
-                .syn_myelin
-                .get(syn_idx)
-                .copied()
-                .unwrap_or(self.net.aarnn_myelin_initial)
-                .clamp(0.0, 1.0) as f64;
-            let g_min = self.net.aarnn_myelin_min_conduction_gain.max(0.1) as f64;
-            let g_max =
-                self.net
+        let (dend_type, trunk_len) = self.syn_post_dendrite_profile(syn);
+        let (forward_gain, bap_gain, _) = self.dendrite_compartment_params(dend_type);
+        let dendritic_profile = Some(DendriticTransmissionProfile {
+            compartment: match dend_type {
+                crate::morphology::DendriteType::Apical => CompartmentClass::Apical,
+                crate::morphology::DendriteType::Basal => CompartmentClass::Basal,
+                crate::morphology::DendriteType::Generic => CompartmentClass::Generic,
+            },
+            trunk_length: trunk_len as f64,
+            forward_gain,
+            backprop_gain: bap_gain,
+            is_backward_path: matches!(syn.kind, crate::morphology::SynKind::HiddenBwd),
+        });
+
+        let myelination = if self.net.aarnn_myelination_enabled {
+            Some(MyelinationProfile {
+                level: self
+                    .syn_myelin
+                    .get(syn_idx)
+                    .copied()
+                    .unwrap_or(self.net.aarnn_myelin_initial)
+                    .clamp(0.0, 1.0) as f64,
+                min_gain: self.net.aarnn_myelin_min_conduction_gain.max(0.1) as f64,
+                max_gain: self
+                    .net
                     .aarnn_myelin_max_conduction_gain
-                    .max(self.net.aarnn_myelin_min_conduction_gain + 1.0e-3) as f64;
-            let conduction_gain = (g_min + (g_max - g_min) * m).max(1.0e-3);
-            steps = ((steps as f64) / conduction_gain).round() as usize;
-            atten *= (0.9 + 0.1 * m).clamp(0.5, 1.1);
-        }
+                    .max(self.net.aarnn_myelin_min_conduction_gain + 1.0e-3)
+                    as f64,
+            })
+        } else {
+            None
+        };
 
-        if depth >= 3 {
-            if let Some(syn) = self.morph.synapses.get(syn_idx) {
-                let ax_atp = match syn.pre_layer {
-                    -1 => self
-                        .morph
-                        .sensory_axons
-                        .get(syn.pre_id)
-                        .map(|a| a.atp)
-                        .unwrap_or(1.0),
-                    l if (l as usize) < self.morph.axons.len() => self.morph.axons[l as usize]
-                        .get(syn.pre_id)
-                        .map(|a| a.atp)
-                        .unwrap_or(1.0),
-                    _ => 1.0,
-                };
-                let den_atp = match syn.post_layer {
-                    l if l >= 0 && (l as usize) < self.morph.dendrites.len() => {
-                        self.morph.dendrites[l as usize]
-                            .get(syn.post_id)
-                            .map(|d| d.atp)
-                            .unwrap_or(1.0)
-                    }
-                    l if l == self.net.num_hidden_layers as isize => self
-                        .morph
-                        .output_dendrites
-                        .get(syn.post_id)
-                        .map(|d| d.atp)
-                        .unwrap_or(1.0),
-                    _ => 1.0,
-                };
-                let fatigue = (ax_atp * den_atp).clamp(0.01, 1.0) as f64;
+        let fatigue = if self.net.aarnn_layer_depth >= 3 {
+            let ax_atp = match syn.pre_layer {
+                -1 => self
+                    .morph
+                    .sensory_axons
+                    .get(syn.pre_id)
+                    .map(|a| a.atp)
+                    .unwrap_or(1.0),
+                l if (l as usize) < self.morph.axons.len() => self.morph.axons[l as usize]
+                    .get(syn.pre_id)
+                    .map(|a| a.atp)
+                    .unwrap_or(1.0),
+                _ => 1.0,
+            };
+            let den_atp = match syn.post_layer {
+                l if l >= 0 && (l as usize) < self.morph.dendrites.len() => self.morph.dendrites
+                    [l as usize]
+                    .get(syn.post_id)
+                    .map(|d| d.atp)
+                    .unwrap_or(1.0),
+                l if l == self.net.num_hidden_layers as isize => self
+                    .morph
+                    .output_dendrites
+                    .get(syn.post_id)
+                    .map(|d| d.atp)
+                    .unwrap_or(1.0),
+                _ => 1.0,
+            };
+            Some(FatigueProfile {
+                axon_atp: ax_atp as f64,
+                dendrite_atp: den_atp as f64,
+            })
+        } else {
+            None
+        };
 
-                // If very fatigued, increase delay (slower conduction)
-                if fatigue < 0.5 {
-                    steps = (steps as f64 * (1.0 + (0.5 - fatigue))).round() as usize;
-                }
-            }
-        }
-
-        (steps, atten)
-    }
-
-    #[cfg(all(feature = "morpho", feature = "growth3d"))]
-    #[inline]
-    fn apply_jitter_steps(&self, steps: usize, syn_idx: usize) -> usize {
-        // Deterministic per-step jitter based on (t, syn_idx)
-        let max_ms = self.net.bouton_jitter_ms.max(0.0);
-        if max_ms <= 0.0 {
-            return steps;
-        }
-        let dt = self.lif.dt.max(1e-6) as f32;
-        let max_j = (max_ms / dt).round() as i32;
-        if max_j == 0 {
-            return steps;
-        }
-        // xorshift-ish hash
-        let mut x: u64 = (self.t as u64).wrapping_mul(0x9E3779B185EBCA87)
-            ^ (syn_idx as u64).wrapping_mul(0xD2B74407B1CE6E93);
-        x ^= x >> 33;
-        x = x.wrapping_mul(0xff51afd7ed558ccd);
-        x ^= x >> 33;
-        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-        x ^= x >> 33;
-        let r = (x & 0xffff) as i32; // 0..65535
-        let s = (r - 32768) as f32 / 32768.0; // ~[-1,1]
-        let jitter = (s * (max_j as f32)).round() as i32;
-        let val = (steps as i32 + jitter).max(0);
-        val as usize
+        let result = compute_delay_and_attenuation(DelayAttenuationSpec {
+            depth: self.net.aarnn_layer_depth,
+            dt_ms: self.lif.dt,
+            time_seed: self.t as u64,
+            synapse_index: syn_idx,
+            axon_steps: self.syn_ax_steps.get(syn_idx).copied().unwrap_or(0),
+            dendrite_steps: self.syn_den_steps.get(syn_idx).copied().unwrap_or(0),
+            bouton_latency_steps: self.bouton_latency_steps,
+            jitter_ms: self.net.bouton_jitter_ms as f64,
+            attenuation_per_unit: self.net.aarnn_distance_attenuation_per_unit as f64,
+            axon_length: self.syn_ax_len.get(syn_idx).copied().unwrap_or(0.0) as f64,
+            dendrite_length: self.syn_den_len.get(syn_idx).copied().unwrap_or(0.0) as f64,
+            path_length_scale: self.syn_path_len_scale as f64,
+            dendritic_profile,
+            myelination,
+            fatigue,
+        });
+        (result.steps, result.attenuation)
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -17018,6 +17383,88 @@ mod tests {
         assert!(r.net.aarnn_import_topology_rewire_enabled);
         assert!((r.net.aarnn_import_topology_rewire_keep_fraction - 0.78).abs() < 1.0e-6);
         assert!((r.net.aarnn_import_topology_rewire_region_bias - 0.24).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_runtime_state_and_rng_continuation() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.num_sensory_neurons = 4;
+        net.num_hidden_layers = 2;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_synaptic_energy_randomness = 0.35;
+
+        let mut runner = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        runner.rng.seed(0x5EED_A11C_u64);
+
+        let warmup_inputs = [
+            [1, 0, 0, 1],
+            [0, 1, 1, 0],
+            [1, 1, 0, 0],
+            [0, 0, 1, 1],
+            [1, 0, 1, 0],
+        ];
+        for input in warmup_inputs {
+            runner.step(Some(&input));
+        }
+
+        let expected_step = runner.t;
+        let expected_time_ms = runner.t_ms;
+        let expected_seed = runner.rng.get_seed();
+        let snapshot_json = runner.export_network_json().expect("export snapshot");
+
+        let continuation_inputs = [[0, 1, 0, 1], [1, 1, 1, 0], [0, 0, 1, 0]];
+        let mut expected_hidden = Vec::new();
+        let mut expected_output = Vec::new();
+        let mut expected_seeds = Vec::new();
+        for input in continuation_inputs {
+            let out = runner.step(Some(&input));
+            expected_hidden.push(
+                out.spk_h
+                    .iter()
+                    .map(|layer| layer.iter().copied().collect::<Vec<i8>>())
+                    .collect::<Vec<Vec<i8>>>(),
+            );
+            expected_output.push(out.spk_o.iter().copied().collect::<Vec<i8>>());
+            expected_seeds.push(runner.rng.get_seed());
+        }
+
+        let mut resumed = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        resumed
+            .import_network_json(&snapshot_json)
+            .expect("import snapshot");
+
+        assert_eq!(resumed.t, expected_step);
+        assert!((resumed.t_ms - expected_time_ms).abs() < 1.0e-9);
+        assert_eq!(resumed.rng.get_seed(), expected_seed);
+
+        for (idx, input) in continuation_inputs.iter().enumerate() {
+            let out = resumed.step(Some(input));
+            let got_hidden = out
+                .spk_h
+                .iter()
+                .map(|layer| layer.iter().copied().collect::<Vec<i8>>())
+                .collect::<Vec<Vec<i8>>>();
+            let got_output = out.spk_o.iter().copied().collect::<Vec<i8>>();
+            assert_eq!(
+                got_hidden, expected_hidden[idx],
+                "hidden spikes diverged at continuation step {idx}"
+            );
+            assert_eq!(
+                got_output, expected_output[idx],
+                "output spikes diverged at continuation step {idx}"
+            );
+            assert_eq!(
+                resumed.rng.get_seed(),
+                expected_seeds[idx],
+                "rng seed diverged at continuation step {idx}"
+            );
+        }
     }
 
     #[test]

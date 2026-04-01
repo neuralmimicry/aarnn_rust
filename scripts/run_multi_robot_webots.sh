@@ -12,6 +12,11 @@ WEB_UI_LISTEN="${WEB_UI_LISTEN:-0.0.0.0:8080}"
 WORLD_FILE="${WORLD_FILE:-$ROOT_DIR/webots_world/worlds/multi_neuroworld.wbt}"
 TMP_CELEGANS_WORLD="${TMP_CELEGANS_WORLD:-/tmp/aarnn_tmp_celegans_assets_ignore.wbt}"
 TMP_DROSOPHILA_WORLD="${TMP_DROSOPHILA_WORLD:-/tmp/aarnn_tmp_drosophila_assets_ignore.wbt}"
+WEBOTS_RUNTIME_ROOT="${WEBOTS_RUNTIME_ROOT:-${NM_RUNTIME_ROOT:-$ROOT_DIR/data/runtime}}"
+WEBOTS_RUNTIME_USER="${WEBOTS_RUNTIME_USER:-webots}"
+WEBOTS_WORKSPACE_PREFIX="${WEBOTS_WORKSPACE_PREFIX:-webots}"
+WEBOTS_WORKSPACE_AUTOSAVE_STEPS="${WEBOTS_WORKSPACE_AUTOSAVE_STEPS:-10}"
+WEBOTS_WORKSPACE_RESUME_EXISTING="${WEBOTS_WORKSPACE_RESUME_EXISTING:-1}"
 
 COUNT_CELEGANS_OVERRIDE=""
 COUNT_DROSOPHILA_BANC_OVERRIDE=""
@@ -105,6 +110,17 @@ export NM_CAMERA_RETINA_WIDTH NM_CAMERA_RETINA_HEIGHT
 
 PASS_THROUGH_ARGS=()
 
+pass_through_has_arg() {
+  local needle="$1"
+  local arg
+  for arg in "${PASS_THROUGH_ARGS[@]}"; do
+    if [ "$arg" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/run_multi_robot_webots.sh [options] [run_webot passthrough args]
@@ -122,6 +138,8 @@ Options:
 
 Environment:
   UI_MODE, ROBOT_SPEC, REMOTE_COMPUTE, ORCHESTRATOR_PORT, WEB_UI_LISTEN,
+  WEBOTS_RUNTIME_ROOT, WEBOTS_RUNTIME_USER, WEBOTS_WORKSPACE_PREFIX,
+  WEBOTS_WORKSPACE_AUTOSAVE_STEPS, WEBOTS_WORKSPACE_RESUME_EXISTING,
   CELEGANS_* / DROSOPHILA_* / NAO_* path and build variables.
 
 Notes:
@@ -832,6 +850,8 @@ declare -a DROS_FAFB_BRAINS=()
 declare -a NAO_BRAINS=()
 declare -a NETWORK_MAP_ENTRIES=()
 declare -a CONFIG_MAP_ENTRIES=()
+declare -A BRAIN_NETWORK_FILES=()
+declare -A BRAIN_CONFIG_FILES=()
 
 PRIMARY_NETWORK_FILE=""
 PRIMARY_CONFIG_FILE=""
@@ -841,12 +861,119 @@ add_brain_mapping() {
   local network_file="$2"
   local config_file="$3"
   BRAINS+=("$brain")
+  BRAIN_NETWORK_FILES["$brain"]="$network_file"
+  BRAIN_CONFIG_FILES["$brain"]="$config_file"
   NETWORK_MAP_ENTRIES+=("$brain=$network_file")
   CONFIG_MAP_ENTRIES+=("$brain=$config_file")
   if [ -z "$PRIMARY_NETWORK_FILE" ]; then
     PRIMARY_NETWORK_FILE="$network_file"
     PRIMARY_CONFIG_FILE="$config_file"
   fi
+}
+
+rebuild_network_map_from_workspace_bindings() {
+  local bindings_json="$1"
+  while IFS=$'\t' read -r brain snapshot_path; do
+    [ -n "$brain" ] || continue
+    [ -n "$snapshot_path" ] || continue
+    BRAIN_NETWORK_FILES["$brain"]="$snapshot_path"
+  done < <(
+    python3 - "$bindings_json" <<'PY'
+import json
+import sys
+
+bindings = json.loads(sys.argv[1])
+for brain in sorted(bindings):
+    latest = str(bindings[brain].get("latest_snapshot_path") or "").strip()
+    if latest:
+        print(f"{brain}\t{latest}")
+PY
+  )
+
+  NETWORK_MAP_ENTRIES=()
+  PRIMARY_NETWORK_FILE=""
+  local brain
+  for brain in "${BRAINS[@]}"; do
+    local network_file="${BRAIN_NETWORK_FILES[$brain]}"
+    NETWORK_MAP_ENTRIES+=("$brain=$network_file")
+    if [ -z "$PRIMARY_NETWORK_FILE" ]; then
+      PRIMARY_NETWORK_FILE="$network_file"
+    fi
+  done
+  NETWORK_MAP_CSV="$(IFS=','; echo "${NETWORK_MAP_ENTRIES[*]}")"
+}
+
+prepare_runtime_workspaces() {
+  local helper="$ROOT_DIR/scripts/prepare_runtime_workspaces.py"
+  if [ ! -f "$helper" ]; then
+    echo "Missing runtime workspace helper: $helper"
+    exit 1
+  fi
+  if ! [[ "$WEBOTS_WORKSPACE_AUTOSAVE_STEPS" =~ ^[0-9]+$ ]] || [ "$WEBOTS_WORKSPACE_AUTOSAVE_STEPS" -le 0 ]; then
+    echo "Invalid WEBOTS_WORKSPACE_AUTOSAVE_STEPS='$WEBOTS_WORKSPACE_AUTOSAVE_STEPS' (must be a positive integer)."
+    exit 1
+  fi
+  if ! [[ "$WEBOTS_WORKSPACE_RESUME_EXISTING" =~ ^[0-9]+$ ]]; then
+    echo "Invalid WEBOTS_WORKSPACE_RESUME_EXISTING='$WEBOTS_WORKSPACE_RESUME_EXISTING' (use 0 or 1)."
+    exit 1
+  fi
+
+  local -a triples=("$WEBOTS_WORKSPACE_PREFIX")
+  local brain
+  for brain in "${BRAINS[@]}"; do
+    triples+=("$brain" "${BRAIN_NETWORK_FILES[$brain]}" "${BRAIN_CONFIG_FILES[$brain]}")
+  done
+
+  local specs_json
+  specs_json="$(python3 - "${triples[@]}" <<'PY'
+import json
+import sys
+
+prefix = sys.argv[1].strip() or "webots"
+args = sys.argv[2:]
+if len(args) % 3 != 0:
+    raise SystemExit(2)
+
+specs = []
+for i in range(0, len(args), 3):
+    brain_id, snapshot_path, config_path = args[i:i + 3]
+    workspace_id = f"{prefix}-{brain_id.replace('_', '-')}"
+    display_name = brain_id.replace("_", " ").upper()
+    specs.append(
+        {
+            "brain_id": brain_id,
+            "workspace_id": workspace_id,
+            "name": display_name,
+            "snapshot_path": snapshot_path,
+            "config_path": config_path,
+            "neuron_model": "aarnn",
+            "learning_rule": "aarnn",
+        }
+    )
+
+print(json.dumps(specs, separators=(",", ":")))
+PY
+)"
+
+  local bindings_json
+  bindings_json="$(python3 "$helper" \
+    --root "$WEBOTS_RUNTIME_ROOT" \
+    --user "$WEBOTS_RUNTIME_USER" \
+    --autosave-steps "$WEBOTS_WORKSPACE_AUTOSAVE_STEPS" \
+    --resume-existing "$WEBOTS_WORKSPACE_RESUME_EXISTING" \
+    --spec-json "$specs_json")" || {
+      echo "Failed to prepare runtime workspaces."
+      exit 1
+    }
+  if [ -z "$bindings_json" ]; then
+    echo "Runtime workspace helper returned an empty bindings payload."
+    exit 1
+  fi
+
+  export NM_RUNTIME_WORKSPACE_BINDINGS="$bindings_json"
+  export NM_WEB_UI_RUNTIME_ROOT="$WEBOTS_RUNTIME_ROOT"
+  export NM_WEB_UI_DEFAULT_RUNTIME_USER="$WEBOTS_RUNTIME_USER"
+  rebuild_network_map_from_workspace_bindings "$bindings_json"
 }
 
 for i in $(seq 1 "$COUNT_CELEGANS"); do
@@ -881,6 +1008,8 @@ DROS_BANC_BRAINS_CSV="$(IFS=','; echo "${DROS_BANC_BRAINS[*]}")"
 DROS_FAFB_BRAINS_CSV="$(IFS=','; echo "${DROS_FAFB_BRAINS[*]}")"
 NAO_BRAINS_CSV="$(IFS=','; echo "${NAO_BRAINS[*]}")"
 
+prepare_runtime_workspaces
+
 python3 "$ROOT_DIR/scripts/build_webots_multi_world.py" \
   --world "$WORLD_FILE" \
   --celegans-proto "$CELEGANS_PROTO_FILE" \
@@ -899,6 +1028,9 @@ echo "  nao: $COUNT_NAO"
 echo "  total robots/brains: $TOTAL_ROBOTS"
 echo "  world: $WORLD_FILE"
 echo "  brains: $BRAINS_CSV"
+echo "  runtime root: $WEBOTS_RUNTIME_ROOT"
+echo "  runtime user: $WEBOTS_RUNTIME_USER"
+echo "  workspace prefix: $WEBOTS_WORKSPACE_PREFIX"
 
 RUN_WEBOT_BASE=(
   "$ROOT_DIR/run_webot.sh"
@@ -996,6 +1128,7 @@ if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
 fi
 
 BACKEND_PID=""
+PREBUILT_LOCAL_WEB_RUNTIME=0
 cleanup() {
   if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
     kill -TERM "$BACKEND_PID" 2>/dev/null || true
@@ -1004,12 +1137,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${RUN_WEBOT_BASE[@]}" \
-  --runtime cluster \
-  --node-ui-hidden \
-  --orchestrator-port "$ORCHESTRATOR_PORT" \
-  --no-orchestrator-ui \
-  "${PASS_THROUGH_ARGS[@]}" &
+if ! pass_through_has_arg "--no-build"; then
+  echo "Prebuilding local web runtime binaries..."
+  cargo build --release --bin aarnn_rust --all-features
+  cargo build --release --bin web_ui
+  PREBUILT_LOCAL_WEB_RUNTIME=1
+fi
+
+RUN_WEBOT_ARGS=(
+  "${RUN_WEBOT_BASE[@]}"
+  --runtime cluster
+  --node-ui-hidden
+  --orchestrator-port "$ORCHESTRATOR_PORT"
+  --no-orchestrator-ui
+)
+if [ "$PREBUILT_LOCAL_WEB_RUNTIME" -eq 1 ]; then
+  RUN_WEBOT_ARGS+=(--no-build)
+fi
+RUN_WEBOT_ARGS+=("${PASS_THROUGH_ARGS[@]}")
+
+"${RUN_WEBOT_ARGS[@]}" &
 BACKEND_PID="$!"
 
 echo "Waiting for orchestrator on port $ORCHESTRATOR_PORT..."
@@ -1031,10 +1178,6 @@ done
 if [ "$ORCH_READY" -ne 1 ]; then
   echo "Timed out waiting for orchestrator on port $ORCHESTRATOR_PORT."
   exit 1
-fi
-
-if [ ! -x "$ROOT_DIR/target/release/web_ui" ]; then
-  cargo build --release --bin web_ui
 fi
 
 echo "Starting web_ui on $WEB_UI_LISTEN (orchestrator http://127.0.0.1:$ORCHESTRATOR_PORT)"

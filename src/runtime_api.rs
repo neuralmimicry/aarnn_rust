@@ -1,0 +1,398 @@
+use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus};
+use anyhow::{anyhow, Context};
+use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::Method;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::time::Duration;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AutoscalerReport {
+    pub provider: String,
+    pub enabled: bool,
+    pub local_worker_limit: usize,
+    pub requested_remote_nodes: usize,
+    pub active_remote_nodes: usize,
+    pub last_action: Option<String>,
+    #[serde(default)]
+    pub controller_role: Option<String>,
+    #[serde(default)]
+    pub pressure_signals: Vec<String>,
+    #[serde(default)]
+    pub local_cpu_usage_pct: Option<f32>,
+    #[serde(default)]
+    pub local_memory_usage_pct: Option<f32>,
+    #[serde(default)]
+    pub local_avg_step_time_ms: Option<f32>,
+    #[serde(default)]
+    pub cluster_nodes: Option<usize>,
+    #[serde(default)]
+    pub cluster_avg_cpu_usage_pct: Option<f32>,
+    #[serde(default)]
+    pub cluster_avg_step_time_ms: Option<f32>,
+    #[serde(default)]
+    pub cluster_load_skew: Option<f32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceSummary {
+    pub workspace_id: String,
+    pub network_id: String,
+    pub name: String,
+    pub running: bool,
+    pub step: u64,
+    pub sim_time_ms: f64,
+    pub num_sensory_neurons: usize,
+    pub num_hidden_layers: usize,
+    pub num_output_neurons: usize,
+    pub total_neurons: usize,
+    pub desired_aarnn_depth: usize,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub last_saved_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct RuntimeStatusResponse {
+    pub user_id: String,
+    pub tick_interval_ms: u64,
+    pub local_worker_limit: usize,
+    pub total_users: usize,
+    pub total_workspaces: usize,
+    pub running_workspaces: usize,
+    pub autoscaler: AutoscalerReport,
+    pub workspaces: Vec<WorkspaceSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceDetailResponse {
+    pub summary: WorkspaceSummary,
+    pub status: EngineStatus,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceSnapshotResponse {
+    pub workspace_id: String,
+    pub snapshot_json: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceActivityResponse {
+    pub workspace_id: String,
+    pub activity: EngineActivity,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceCreateRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub config_json: Option<String>,
+    #[serde(default)]
+    pub snapshot_json: Option<String>,
+    #[serde(default)]
+    pub neuron_model: Option<String>,
+    #[serde(default)]
+    pub learning_rule: Option<String>,
+    #[serde(default)]
+    pub auto_start: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkspaceImportRequest {
+    pub payload_json: String,
+    #[serde(default)]
+    pub kind: Option<EnginePayloadKind>,
+    #[serde(default)]
+    pub replace_baseline: Option<bool>,
+    #[serde(default)]
+    pub auto_start: Option<bool>,
+    #[serde(default)]
+    pub neuron_model: Option<String>,
+    #[serde(default)]
+    pub learning_rule: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceControlAction {
+    Start,
+    Stop,
+    Repeat,
+    Reset,
+    New,
+    Save,
+    Step,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkspaceControlRequest {
+    pub action: WorkspaceControlAction,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AuthModeResponse {
+    mode: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeAuthMode {
+    Unknown,
+    None,
+    Local,
+    Oidc,
+}
+
+pub struct BlockingRuntimeClient {
+    base_url: String,
+    client: Client,
+    runtime_user: Option<String>,
+    runtime_password: Option<String>,
+    auth_mode: RuntimeAuthMode,
+    authenticated: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteWorkspaceBinding {
+    pub base_url: String,
+    pub user_id: Option<String>,
+    pub password: Option<String>,
+    pub workspace_id: String,
+    pub save_on_exit: bool,
+}
+
+impl RemoteWorkspaceBinding {
+    pub fn client(&self) -> anyhow::Result<BlockingRuntimeClient> {
+        BlockingRuntimeClient::new(
+            self.base_url.clone(),
+            self.user_id.clone(),
+            self.password.clone(),
+        )
+    }
+}
+
+impl BlockingRuntimeClient {
+    pub fn new(
+        base_url: impl Into<String>,
+        runtime_user: Option<String>,
+        runtime_password: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let client = Client::builder()
+            .cookie_store(true)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .context("failed to build runtime HTTP client")?;
+        Ok(Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            client,
+            runtime_user,
+            runtime_password,
+            auth_mode: RuntimeAuthMode::Unknown,
+            authenticated: false,
+        })
+    }
+
+    pub fn runtime_status(&mut self) -> anyhow::Result<RuntimeStatusResponse> {
+        self.request_json(Method::GET, "/api/runtime/status")
+    }
+
+    pub fn list_workspaces(&mut self) -> anyhow::Result<Vec<WorkspaceSummary>> {
+        self.request_json(Method::GET, "/api/runtime/workspaces")
+    }
+
+    pub fn create_workspace(
+        &mut self,
+        req: &WorkspaceCreateRequest,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.request_json_with_body(Method::POST, "/api/runtime/workspaces", req)
+    }
+
+    pub fn workspace_detail(
+        &mut self,
+        workspace_id: &str,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.request_json(
+            Method::GET,
+            &format!("/api/runtime/workspaces/{}", workspace_id),
+        )
+    }
+
+    pub fn delete_workspace(&mut self, workspace_id: &str) -> anyhow::Result<serde_json::Value> {
+        self.request_json(
+            Method::DELETE,
+            &format!("/api/runtime/workspaces/{}", workspace_id),
+        )
+    }
+
+    pub fn workspace_snapshot(
+        &mut self,
+        workspace_id: &str,
+    ) -> anyhow::Result<WorkspaceSnapshotResponse> {
+        self.request_json(
+            Method::GET,
+            &format!("/api/runtime/workspaces/{}/snapshot", workspace_id),
+        )
+    }
+
+    pub fn workspace_activity(
+        &mut self,
+        workspace_id: &str,
+    ) -> anyhow::Result<WorkspaceActivityResponse> {
+        self.request_json(
+            Method::GET,
+            &format!("/api/runtime/workspaces/{}/activity", workspace_id),
+        )
+    }
+
+    pub fn control_workspace(
+        &mut self,
+        workspace_id: &str,
+        action: WorkspaceControlAction,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.request_json_with_body(
+            Method::POST,
+            &format!("/api/runtime/workspaces/{}/control", workspace_id),
+            &WorkspaceControlRequest { action },
+        )
+    }
+
+    pub fn import_workspace(
+        &mut self,
+        workspace_id: &str,
+        req: &WorkspaceImportRequest,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.request_json_with_body(
+            Method::POST,
+            &format!("/api/runtime/workspaces/{}/import", workspace_id),
+            req,
+        )
+    }
+
+    fn request_json<T: DeserializeOwned>(
+        &mut self,
+        method: Method,
+        path: &str,
+    ) -> anyhow::Result<T> {
+        self.ensure_session()?;
+        let response = self
+            .build_request(method, path)
+            .send()
+            .with_context(|| format!("runtime request to '{}' failed", self.url_for(path)))?;
+        self.decode_response(response)
+    }
+
+    fn request_json_with_body<B: Serialize, T: DeserializeOwned>(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        self.ensure_session()?;
+        let response = self
+            .build_request(method, path)
+            .json(body)
+            .send()
+            .with_context(|| format!("runtime request to '{}' failed", self.url_for(path)))?;
+        self.decode_response(response)
+    }
+
+    fn ensure_session(&mut self) -> anyhow::Result<()> {
+        if self.auth_mode == RuntimeAuthMode::Unknown {
+            let auth: AuthModeResponse = self
+                .client
+                .get(self.url_for("/api/auth/mode"))
+                .send()
+                .context("failed to query runtime auth mode")?
+                .json()
+                .context("failed to decode runtime auth mode")?;
+            self.auth_mode = match auth.mode.as_str() {
+                "none" => RuntimeAuthMode::None,
+                "local" => RuntimeAuthMode::Local,
+                "oidc" => RuntimeAuthMode::Oidc,
+                _ => RuntimeAuthMode::Unknown,
+            };
+        }
+
+        if self.authenticated {
+            return Ok(());
+        }
+
+        match self.auth_mode {
+            RuntimeAuthMode::None => {
+                self.authenticated = true;
+                Ok(())
+            }
+            RuntimeAuthMode::Local => {
+                let username = self
+                    .runtime_user
+                    .clone()
+                    .ok_or_else(|| anyhow!("runtime username is required for local auth"))?;
+                let password = self
+                    .runtime_password
+                    .clone()
+                    .ok_or_else(|| anyhow!("runtime password is required for local auth"))?;
+                let response = self
+                    .client
+                    .post(self.url_for("/api/login"))
+                    .json(&serde_json::json!({ "username": username, "password": password }))
+                    .send()
+                    .context("failed to authenticate to runtime API")?;
+                if !response.status().is_success() {
+                    let text = response
+                        .text()
+                        .unwrap_or_else(|_| "login failed".to_string());
+                    return Err(anyhow!("runtime login failed: {}", text));
+                }
+                self.authenticated = true;
+                Ok(())
+            }
+            RuntimeAuthMode::Oidc => Err(anyhow!(
+                "runtime API is using OIDC; browser-based login is required"
+            )),
+            RuntimeAuthMode::Unknown => Err(anyhow!("runtime auth mode is unknown")),
+        }
+    }
+
+    fn build_request(&self, method: Method, path: &str) -> RequestBuilder {
+        let mut builder = self.client.request(method, self.url_for(path));
+        if self.auth_mode == RuntimeAuthMode::None {
+            if let Some(user_id) = self.runtime_user.as_deref() {
+                if !user_id.trim().is_empty() {
+                    builder = builder.header("x-nm-runtime-user", user_id.trim());
+                }
+            }
+        }
+        builder
+    }
+
+    fn url_for(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    fn decode_response<T: DeserializeOwned>(
+        &self,
+        response: reqwest::blocking::Response,
+    ) -> anyhow::Result<T> {
+        if response.status().is_success() {
+            return response
+                .json()
+                .context("failed to decode runtime response body");
+        }
+
+        let status = response.status();
+        let text = response
+            .text()
+            .unwrap_or_else(|_| "failed to read error body".to_string());
+        let message = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or(text);
+        Err(anyhow!("runtime request failed ({}): {}", status, message))
+    }
+}

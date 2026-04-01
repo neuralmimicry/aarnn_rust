@@ -1,18 +1,33 @@
 #![recursion_limit = "2048"]
 
+use aarnn_rust::auth_store::{
+    FileOidcPendingStore, FileSessionStore, OidcPendingRecord, SessionRecord,
+};
+use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::distributed::proto::{
     control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
     NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
 };
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
+use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
+use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
+use aarnn_rust::runtime_api::{
+    WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
+};
+use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
+use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
+use aarnn_rust::spike_io::profiles::{encode_network_inputs_with, SpikeIoConfig};
+use aarnn_rust::spike_io::transport::{
+    decode_hex_payload as decode_spike_hex_payload, encode_exchange, spikes_from_transport,
+};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use axum::{
-    extract::{DefaultBodyLimit, Form, Query, State},
+    extract::{DefaultBodyLimit, Form, Path, Query, State},
     http::{HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Redirect},
@@ -33,7 +48,8 @@ use openidconnect::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -88,6 +104,22 @@ struct Args {
     /// User database file path.
     #[arg(long, default_value = "data/users.json")]
     users_file: String,
+
+    /// Root directory for persistent runtime workspace sandboxes.
+    #[arg(long, default_value = "data/runtime")]
+    runtime_root: String,
+
+    /// Scheduler tick interval for background workspace stepping.
+    #[arg(long, default_value_t = 25)]
+    runtime_tick_ms: u64,
+
+    /// Local worker limit for parallel workspace execution (0 = auto).
+    #[arg(long, default_value_t = 0)]
+    runtime_workers: usize,
+
+    /// Workspace autosave cadence in scheduler steps.
+    #[arg(long, default_value_t = 50)]
+    runtime_autosave_steps: u64,
 
     /// Allow local signup via the web UI (auth_mode=local).
     #[arg(long, default_value_t = false)]
@@ -149,9 +181,11 @@ impl AuthMode {
 #[derive(Clone)]
 struct AppState {
     default_orchestrator: Option<String>,
+    default_runtime_user: Option<String>,
     auth: AuthConfig,
     users: Arc<RwLock<UserStore>>,
-    sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+    session_store: Arc<FileSessionStore>,
+    runtime: Arc<RuntimeManager>,
 }
 
 #[derive(Clone)]
@@ -171,6 +205,13 @@ fn env_opt(key: &str) -> Option<String> {
 }
 
 fn apply_env_overrides(args: &mut Args) {
+    if args.runtime_root.trim() == "data/runtime" {
+        if let Some(runtime_root) =
+            env_opt("NM_WEB_UI_RUNTIME_ROOT").or_else(|| env_opt("NM_RUNTIME_ROOT"))
+        {
+            args.runtime_root = runtime_root;
+        }
+    }
     if args.oidc_issuer.is_none() {
         args.oidc_issuer = env_opt("NM_OIDC_ISSUER");
     }
@@ -199,12 +240,7 @@ struct OidcConfig {
     client: OidcClient,
     http_client: reqwest::Client,
     issuer: String,
-    pending: Arc<RwLock<HashMap<String, OidcPending>>>,
-}
-
-struct OidcPending {
-    nonce: Nonce,
-    pkce_verifier: PkceCodeVerifier,
+    pending: Arc<FileOidcPendingStore>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -218,15 +254,9 @@ struct UserRecord {
     config: Option<serde_json::Value>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct UserStore {
     users: Vec<UserRecord>,
-}
-
-#[derive(Clone)]
-struct SessionInfo {
-    username: String,
-    expires_at: u64,
 }
 
 #[derive(Clone)]
@@ -243,11 +273,11 @@ impl UserStore {
     }
 
     async fn save(&self, path: &str) -> anyhow::Result<()> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            let _ = fs::create_dir_all(parent).await;
-        }
-        let raw = serde_json::to_string_pretty(self)?;
-        fs::write(path, raw).await?;
+        let path = PathBuf::from(path);
+        let snapshot = self.clone();
+        tokio::task::spawn_blocking(move || write_json_pretty(&path, &snapshot))
+            .await
+            .map_err(|err| anyhow::anyhow!("user store save task failed: {}", err))??;
         Ok(())
     }
 
@@ -277,6 +307,33 @@ impl UserStore {
         }
         format!("{}-{}", base, now_ts())
     }
+}
+
+fn users_lock_path(path: &str) -> PathBuf {
+    PathBuf::from(format!("{}.lock", path))
+}
+
+async fn load_users_fresh(state: &AppState) -> UserStore {
+    let users = UserStore::load(&state.auth.users_file).await;
+    *state.users.write().await = users.clone();
+    users
+}
+
+async fn modify_users<T, F>(state: &AppState, op: F) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut UserStore) -> anyhow::Result<T>,
+{
+    let _lease = acquire_lease_with_timeout(
+        users_lock_path(&state.auth.users_file),
+        Duration::from_secs(5),
+        Duration::from_millis(25),
+    )
+    .await?;
+    let mut users = UserStore::load(&state.auth.users_file).await;
+    let result = op(&mut users)?;
+    users.save(&state.auth.users_file).await?;
+    *state.users.write().await = users;
+    Ok(result)
 }
 
 fn now_ts() -> u64 {
@@ -376,9 +433,13 @@ struct AerInjectPayload {
     network_id: String,
     node_id: Option<String>,
     step_index: Option<i64>,
+    time_ms: Option<f32>,
+    dt_ms: Option<f32>,
     aer_base: Option<u32>,
     aer_payload_hex: Option<String>,
     spike_indices: Option<Vec<u32>>,
+    input_values: Option<Vec<f32>>,
+    spike_io: Option<SpikeIoConfig>,
     is_backward: Option<bool>,
 }
 
@@ -397,9 +458,13 @@ struct AerStreamFrame {
     network_id: Option<String>,
     node_id: Option<String>,
     step_index: Option<i64>,
+    time_ms: Option<f32>,
+    dt_ms: Option<f32>,
     aer_base: Option<u32>,
     aer_payload_hex: Option<String>,
     spike_indices: Option<Vec<u32>>,
+    input_values: Option<Vec<f32>>,
+    spike_io: Option<SpikeIoConfig>,
     is_backward: Option<bool>,
 }
 
@@ -436,6 +501,7 @@ struct AuthModeResponse {
 #[derive(Serialize)]
 struct UiConfigResponse {
     default_orchestrator: Option<String>,
+    default_runtime_user: Option<String>,
 }
 
 #[tokio::main]
@@ -443,6 +509,18 @@ async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
     let auth_mode_val = AuthMode::parse(&args.auth_mode);
+    let auth_root = std::path::Path::new(&args.users_file)
+        .parent()
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("data/auth"));
+    let session_store = Arc::new(FileSessionStore::new(auth_root.join("sessions")));
+    let oidc_pending_store = Arc::new(FileOidcPendingStore::new(auth_root.join("oidc-pending")));
+    let users_lock = acquire_lease_with_timeout(
+        users_lock_path(&args.users_file),
+        Duration::from_secs(5),
+        Duration::from_millis(25),
+    )
+    .await?;
     let mut users = UserStore::load(&args.users_file).await;
 
     if auth_mode_val == AuthMode::Local {
@@ -468,6 +546,7 @@ async fn main() -> anyhow::Result<()> {
             let _ = users.save(&args.users_file).await;
         }
     }
+    drop(users_lock);
 
     let oidc = if auth_mode_val == AuthMode::Oidc {
         let issuer = args
@@ -504,7 +583,7 @@ async fn main() -> anyhow::Result<()> {
             client,
             http_client,
             issuer,
-            pending: Arc::new(RwLock::new(HashMap::new())),
+            pending: oidc_pending_store,
         })
     } else {
         None
@@ -518,11 +597,36 @@ async fn main() -> anyhow::Result<()> {
         oidc,
     };
 
+    let runtime = RuntimeManager::new(RuntimeConfig {
+        root_dir: std::path::PathBuf::from(&args.runtime_root),
+        tick_interval_ms: args.runtime_tick_ms.max(1),
+        local_worker_limit: if args.runtime_workers == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .max(1)
+        } else {
+            args.runtime_workers.max(1)
+        },
+        autosave_steps: args.runtime_autosave_steps.max(1),
+        continuum: aarnn_rust::runtime::ContinuumAutoscalerConfig::from_env(),
+        reconcile_interval_ms: env_opt("NM_RUNTIME_RECONCILE_INTERVAL_MS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1000),
+        autoscaler_interval_ms: env_opt("NM_RUNTIME_AUTOSCALER_INTERVAL_MS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(2000),
+        orchestrator_addr: args.orchestrator.clone(),
+    })
+    .await?;
+
     let state = Arc::new(AppState {
         default_orchestrator: args.orchestrator,
+        default_runtime_user: env_opt("NM_WEB_UI_DEFAULT_RUNTIME_USER"),
         auth,
         users: Arc::new(RwLock::new(users)),
-        sessions: Arc::new(RwLock::new(HashMap::new())),
+        session_store,
+        runtime,
     });
 
     let api = Router::new()
@@ -534,6 +638,35 @@ async fn main() -> anyhow::Result<()> {
         .route("/signup", post(signup))
         .route("/logout", post(logout))
         .route("/user/config", get(get_user_config).post(set_user_config))
+        .route("/runtime/status", get(runtime_status))
+        .route(
+            "/runtime/workspaces",
+            get(runtime_workspaces).post(create_runtime_workspace),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}",
+            get(runtime_workspace_detail).delete(delete_runtime_workspace),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/snapshot",
+            get(runtime_workspace_snapshot),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/activity",
+            get(runtime_workspace_activity),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/control",
+            post(control_runtime_workspace),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/import",
+            post(import_runtime_workspace),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/export",
+            get(export_runtime_workspace),
+        )
         .route("/status", get(status))
         .route("/snapshot", get(snapshot))
         .route("/activity", get(activity))
@@ -551,6 +684,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
         .route("/docs", get(docs_page))
         .route("/docs/", get(docs_page))
@@ -583,6 +717,15 @@ async fn app_js() -> impl IntoResponse {
         HeaderValue::from_static("application/javascript; charset=utf-8"),
     );
     (headers, include_str!("../../web_ui/app.js"))
+}
+
+async fn shell_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    (headers, include_str!("../../web_ui/shell.js"))
 }
 
 async fn style_css() -> impl IntoResponse {
@@ -683,7 +826,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
           "UiConfigResponse": {
             "type": "object",
             "properties": {
-              "default_orchestrator": { "type": "string", "nullable": true, "description": "Default gRPC orchestrator address." }
+              "default_orchestrator": { "type": "string", "nullable": true, "description": "Default gRPC orchestrator address." },
+              "default_runtime_user": { "type": "string", "nullable": true, "description": "Default runtime workspace namespace used for anonymous browser sessions." }
             }
           },
           "MeResponse": {
@@ -886,20 +1030,24 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             },
             "required": ["network_id", "action"]
           },
-          "AerInjectPayload": {
-            "type": "object",
-            "properties": {
-              "addr": { "type": "string", "nullable": true, "description": "Orchestrator address; defaults to server config." },
-              "network_id": { "type": "string" },
-              "node_id": { "type": "string", "nullable": true, "description": "Optional specific node target." },
-              "step_index": { "type": "integer", "format": "int64", "nullable": true },
-              "aer_base": { "type": "integer", "format": "uint32", "nullable": true, "description": "Base address for decoding AER payload." },
-              "aer_payload_hex": { "type": "string", "nullable": true, "description": "Hex-encoded AER1 payload bytes." },
-              "spike_indices": { "type": "array", "items": { "type": "integer", "format": "uint32" }, "nullable": true, "description": "Fallback direct sensory spike indices." },
-              "is_backward": { "type": "boolean", "nullable": true, "description": "Reserved; normally false for sensory injection." }
-            },
-            "required": ["network_id"]
-          },
+              "AerInjectPayload": {
+                "type": "object",
+                "properties": {
+                  "addr": { "type": "string", "nullable": true, "description": "Orchestrator address; defaults to server config." },
+                  "network_id": { "type": "string" },
+                  "node_id": { "type": "string", "nullable": true, "description": "Optional specific node target." },
+                  "step_index": { "type": "integer", "format": "int64", "nullable": true },
+                  "time_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional physical time for temporal encoders such as phase coding." },
+                  "dt_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional timestep used for temporal encoders when `time_ms` is omitted." },
+                  "aer_base": { "type": "integer", "format": "uint32", "nullable": true, "description": "Base address for decoding AER payload." },
+                  "aer_payload_hex": { "type": "string", "nullable": true, "description": "Hex-encoded AER1 payload bytes." },
+                  "spike_indices": { "type": "array", "items": { "type": "integer", "format": "uint32" }, "nullable": true, "description": "Fallback direct sensory spike indices." },
+                  "input_values": { "type": "array", "items": { "type": "number", "format": "float" }, "nullable": true, "description": "Continuous input values to encode into spikes using `spike_io`." },
+                  "spike_io": { "type": "object", "nullable": true, "description": "Optional spike I/O override. Supports explicit profile/input/output selection including `ttfs`, `isi`, `phase`, and `multiplex`." },
+                  "is_backward": { "type": "boolean", "nullable": true, "description": "Reserved; normally false for sensory injection." }
+                },
+                "required": ["network_id"]
+              },
           "AerInjectResponse": {
             "type": "object",
             "properties": {
@@ -1175,11 +1323,11 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
-        "/api/aer/inject": {
-          "post": {
-            "tags": ["network"],
-            "summary": "Inject one AER exchange into a running network",
-            "description": "Injects sensory spikes into the next simulation step. Accepts either a hex-encoded AER payload (`aer_payload_hex`) or direct `spike_indices`.",
+            "/api/aer/inject": {
+              "post": {
+                "tags": ["network"],
+                "summary": "Inject one AER exchange into a running network",
+                "description": "Injects sensory spikes into the next simulation step. Accepts raw spike transports (`aer_payload_hex`, `spike_indices`) or continuous `input_values` that are encoded using the provided `spike_io` policy.",
             "operationId": "injectAerExchange",
             "security": [{ "cookieAuth": [] }],
             "requestBody": {
@@ -1194,15 +1342,27 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                         "spike_indices": [0, 4, 17]
                       }
                     },
-                    "aerPayloadHex": {
-                      "value": {
-                        "network_id": "default",
-                        "aer_base": 4096,
-                        "aer_payload_hex": "41455231b80b0000000000000100802001"
+                        "aerPayloadHex": {
+                          "value": {
+                            "network_id": "default",
+                            "aer_base": 4096,
+                            "aer_payload_hex": "41455231b80b0000000000000100802001"
+                          }
+                        },
+                        "ttfsValues": {
+                          "value": {
+                            "network_id": "default",
+                            "step_index": 3,
+                            "input_values": [0.1, 0.6, 0.95],
+                            "spike_io": {
+                              "profile": "generic",
+                              "input_strategy": "ttfs",
+                              "ttfs": { "threshold": 0.0, "window_steps": 8 }
+                            }
+                          }
+                        }
                       }
                     }
-                  }
-                }
               }
             },
             "responses": {
@@ -1213,11 +1373,11 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
-        "/api/aer/stream": {
-          "post": {
-            "tags": ["network"],
-            "summary": "Inject a stream of AER exchanges (NDJSON over HTTP)",
-            "description": "Accepts newline-delimited JSON frames in request body. Each frame can contain `aer_payload_hex` or `spike_indices`. Use `Content-Type: application/x-ndjson`.",
+            "/api/aer/stream": {
+              "post": {
+                "tags": ["network"],
+                "summary": "Inject a stream of AER exchanges (NDJSON over HTTP)",
+                "description": "Accepts newline-delimited JSON frames in request body. Each frame can contain raw spike transport fields (`aer_payload_hex`, `spike_indices`) or `input_values` with a `spike_io` encoder selection. Use `Content-Type: application/x-ndjson`.",
             "operationId": "streamAerExchange",
             "security": [{ "cookieAuth": [] }],
             "parameters": [
@@ -1235,10 +1395,10 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                   "schema": { "type": "string", "description": "NDJSON frames, one JSON object per line." },
                   "examples": {
                     "ndjson": {
-                      "value": "{\"spike_indices\":[0,1,2]}\\n{\"spike_indices\":[5,9]}\\n"
+                          "value": "{\"spike_indices\":[0,1,2]}\\n{\"input_values\":[0.2,0.9],\"spike_io\":{\"profile\":\"generic\",\"input_strategy\":\"phase\",\"phase\":{\"frequency_hz\":8.0,\"threshold\":0.55}}}\\n"
+                        }
+                      }
                     }
-                  }
-                }
               }
             },
             "responses": {
@@ -1334,8 +1494,16 @@ async fn api_auth_middleware(
     next: middleware::Next,
 ) -> axum::response::Response {
     if state.auth.mode == AuthMode::None {
+        let runtime_user = req
+            .headers()
+            .get("x-nm-runtime-user")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("anonymous")
+            .to_string();
         req.extensions_mut().insert(AuthUser {
-            username: "anonymous".to_string(),
+            username: runtime_user,
         });
         return next.run(req).await;
     }
@@ -1373,7 +1541,23 @@ async fn auth_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
 async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(UiConfigResponse {
         default_orchestrator: state.default_orchestrator.clone(),
+        default_runtime_user: state.default_runtime_user.clone(),
     })
+}
+
+fn forbid_shared_cluster_api(state: &AppState) -> Option<axum::response::Response> {
+    if state.auth.mode == AuthMode::None {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "shared cluster-wide APIs are disabled for authenticated sessions; use /api/runtime/workspaces/*"
+            })),
+        )
+            .into_response(),
+    )
 }
 
 async fn me(State(state): State<Arc<AppState>>, jar: CookieJar) -> axum::response::Response {
@@ -1411,7 +1595,7 @@ async fn login(
         )
             .into_response();
     }
-    let users = state.users.read().await;
+    let users = load_users_fresh(&state).await;
     let user = match users.find_by_username(username) {
         Some(u) => u,
         None => {
@@ -1442,13 +1626,23 @@ async fn login(
 
     let session_id = new_session_id();
     let expires_at = now_ts() + state.auth.session_ttl_secs;
-    state.sessions.write().await.insert(
-        session_id.clone(),
-        SessionInfo {
-            username: username.to_string(),
-            expires_at,
-        },
-    );
+    if let Err(err) = state
+        .session_store
+        .put(
+            &session_id,
+            &SessionRecord {
+                username: username.to_string(),
+                expires_at,
+            },
+        )
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to persist session: {}", err) })),
+        )
+            .into_response();
+    }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
     (jar, Json(json!({ "ok": true, "username": username }))).into_response()
@@ -1482,14 +1676,6 @@ async fn signup(
             .into_response();
     }
 
-    let mut users = state.users.write().await;
-    if users.find_by_username(username).is_some() {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "user exists" })),
-        )
-            .into_response();
-    }
     let hash = match hash_password(password) {
         Ok(h) => h,
         Err(e) => {
@@ -1500,23 +1686,37 @@ async fn signup(
                 .into_response();
         }
     };
-    users.users.push(UserRecord {
-        username: username.to_string(),
-        password_hash: Some(hash),
-        oidc_subject: None,
-        oidc_issuer: None,
-        email: None,
-        created_at: now_ts(),
-        config: None,
-    });
-    let _ = users.save(&state.auth.users_file).await;
+    if let Err(err) = modify_users(&state, |users| {
+        if users.find_by_username(username).is_some() {
+            anyhow::bail!("user exists");
+        }
+        users.users.push(UserRecord {
+            username: username.to_string(),
+            password_hash: Some(hash.clone()),
+            oidc_subject: None,
+            oidc_issuer: None,
+            email: None,
+            created_at: now_ts(),
+            config: None,
+        });
+        Ok(())
+    })
+    .await
+    {
+        let code = if err.to_string() == "user exists" {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return (code, Json(json!({ "error": err.to_string() }))).into_response();
+    }
     Json(json!({ "ok": true })).into_response()
 }
 
 async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
     if let Some(cookie) = jar.get("nm_session") {
         let session_id = cookie.value().to_string();
-        state.sessions.write().await.remove(&session_id);
+        let _ = state.session_store.delete(&session_id).await;
     }
     let mut expired = Cookie::new("nm_session", "");
     expired.set_path("/");
@@ -1531,7 +1731,7 @@ async fn get_user_config(
     if state.auth.mode == AuthMode::None {
         return Json(json!({ "config": {} })).into_response();
     }
-    let users = state.users.read().await;
+    let users = load_users_fresh(&state).await;
     if let Some(rec) = users.find_by_username(&user.username) {
         return Json(json!({ "config": rec.config.clone().unwrap_or_else(|| json!({})) }))
             .into_response();
@@ -1551,25 +1751,197 @@ async fn set_user_config(
     if state.auth.mode == AuthMode::None {
         return Json(json!({ "ok": true })).into_response();
     }
-    let mut users = state.users.write().await;
-    let rec = match users.find_by_username_mut(&user.username) {
-        Some(rec) => rec,
-        None => {
-            users.users.push(UserRecord {
-                username: user.username.clone(),
-                password_hash: None,
-                oidc_subject: None,
-                oidc_issuer: None,
-                email: None,
-                created_at: now_ts(),
-                config: None,
-            });
-            users.find_by_username_mut(&user.username).unwrap()
-        }
-    };
-    rec.config = Some(payload.config);
-    let _ = users.save(&state.auth.users_file).await;
+    if let Err(err) = modify_users(&state, |users| {
+        let rec = match users.find_by_username_mut(&user.username) {
+            Some(rec) => rec,
+            None => {
+                users.users.push(UserRecord {
+                    username: user.username.clone(),
+                    password_hash: None,
+                    oidc_subject: None,
+                    oidc_issuer: None,
+                    email: None,
+                    created_at: now_ts(),
+                    config: None,
+                });
+                users.find_by_username_mut(&user.username).unwrap()
+            }
+        };
+        rec.config = Some(payload.config.clone());
+        Ok(())
+    })
+    .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response();
+    }
     Json(json!({ "ok": true })).into_response()
+}
+
+async fn runtime_status(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> axum::response::Response {
+    match state.runtime.runtime_status(&user.username).await {
+        Ok(status) => Json(status).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspaces(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> axum::response::Response {
+    match state.runtime.list_workspaces(&user.username).await {
+        Ok(workspaces) => Json(workspaces).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_runtime_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<WorkspaceCreateRequest>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .create_workspace(&user.username, payload)
+        .await
+    {
+        Ok(detail) => Json(detail).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_detail(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .workspace_detail(&user.username, &workspace_id)
+        .await
+    {
+        Ok(detail) => Json(detail).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_runtime_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .delete_workspace(&user.username, &workspace_id)
+        .await
+    {
+        Ok(resp) => Json(resp).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_snapshot(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .workspace_snapshot(&user.username, &workspace_id)
+        .await
+    {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_activity(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .workspace_activity(&user.username, &workspace_id)
+        .await
+    {
+        Ok(activity) => Json(activity).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn control_runtime_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Json(payload): Json<WorkspaceControlRequest>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .control_workspace(&user.username, &workspace_id, payload.action)
+        .await
+    {
+        Ok(detail) => Json(detail).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn import_runtime_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Json(payload): Json<WorkspaceImportRequest>,
+) -> axum::response::Response {
+    match state
+        .runtime
+        .import_workspace_json(&user.username, &workspace_id, payload)
+        .await
+    {
+        Ok(detail) => Json(detail).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1603,13 +1975,23 @@ async fn oidc_login(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .set_pkce_challenge(pkce_challenge)
         .url();
     let state_key = csrf_state.secret().to_string();
-    oidc.pending.write().await.insert(
-        state_key,
-        OidcPending {
-            nonce,
-            pkce_verifier,
-        },
-    );
+    if let Err(err) = oidc
+        .pending
+        .put(
+            &state_key,
+            &OidcPendingRecord {
+                nonce: nonce.secret().to_string(),
+                pkce_verifier: pkce_verifier.secret().to_string(),
+            },
+        )
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to persist oidc state: {}", err) })),
+        )
+            .into_response();
+    }
     Redirect::to(auth_url.as_str()).into_response()
 }
 
@@ -1628,9 +2010,16 @@ async fn oidc_callback(
                 .into_response();
         }
     };
-    let pending = {
-        let mut pending = oidc.pending.write().await;
-        pending.remove(&query.state)
+    let pending = oidc.pending.take(&query.state).await;
+    let pending = match pending {
+        Ok(pending) => pending,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to load oidc state: {}", err) })),
+            )
+                .into_response();
+        }
     };
     let pending = match pending {
         Some(p) => p,
@@ -1642,6 +2031,8 @@ async fn oidc_callback(
                 .into_response();
         }
     };
+    let pending_nonce = Nonce::new(pending.nonce);
+    let pending_pkce_verifier = PkceCodeVerifier::new(pending.pkce_verifier);
 
     let token_req = match oidc
         .client
@@ -1657,7 +2048,7 @@ async fn oidc_callback(
         }
     };
     let token_resp = match token_req
-        .set_pkce_verifier(pending.pkce_verifier)
+        .set_pkce_verifier(pending_pkce_verifier)
         .request_async(&oidc.http_client)
         .await
     {
@@ -1681,7 +2072,7 @@ async fn oidc_callback(
                 .into_response();
         }
     };
-    let claims = match id_token.claims(&oidc.client.id_token_verifier(), &pending.nonce) {
+    let claims = match id_token.claims(&oidc.client.id_token_verifier(), &pending_nonce) {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -1694,40 +2085,62 @@ async fn oidc_callback(
     let subject = claims.subject().as_str().to_string();
     let email = claims.email().map(|e| e.as_str().to_string());
 
-    let mut users = state.users.write().await;
-    let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
-        if rec.email.is_none() {
-            rec.email = email.clone();
+    let username = match modify_users(&state, |users| {
+        let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
+            if rec.email.is_none() {
+                rec.email = email.clone();
+            }
+            rec.username.clone()
+        } else {
+            let base = email
+                .as_deref()
+                .and_then(|e| e.split('@').next())
+                .unwrap_or("oidc");
+            let username = users.ensure_unique_username(base);
+            users.users.push(UserRecord {
+                username: username.clone(),
+                password_hash: None,
+                oidc_subject: Some(subject.clone()),
+                oidc_issuer: Some(oidc.issuer.clone()),
+                email: email.clone(),
+                created_at: now_ts(),
+                config: None,
+            });
+            username
+        };
+        Ok(username)
+    })
+    .await
+    {
+        Ok(username) => username,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist user: {}", err) })),
+            )
+                .into_response();
         }
-        rec.username.clone()
-    } else {
-        let base = email
-            .as_deref()
-            .and_then(|e| e.split('@').next())
-            .unwrap_or("oidc");
-        let username = users.ensure_unique_username(base);
-        users.users.push(UserRecord {
-            username: username.clone(),
-            password_hash: None,
-            oidc_subject: Some(subject.clone()),
-            oidc_issuer: Some(oidc.issuer.clone()),
-            email: email.clone(),
-            created_at: now_ts(),
-            config: None,
-        });
-        username
     };
-    let _ = users.save(&state.auth.users_file).await;
 
     let session_id = new_session_id();
     let expires_at = now_ts() + state.auth.session_ttl_secs;
-    state.sessions.write().await.insert(
-        session_id.clone(),
-        SessionInfo {
-            username: username.clone(),
-            expires_at,
-        },
-    );
+    if let Err(err) = state
+        .session_store
+        .put(
+            &session_id,
+            &SessionRecord {
+                username: username.clone(),
+                expires_at,
+            },
+        )
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to persist session: {}", err) })),
+        )
+            .into_response();
+    }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
     (jar, Redirect::to("/")).into_response()
@@ -1825,44 +2238,66 @@ async fn oidc_exchange(
         }
     };
 
-    let mut users = state.users.write().await;
-    let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
-        if rec.email.is_none() {
-            rec.email = email.clone();
+    let username = match modify_users(&state, |users| {
+        let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
+            if rec.email.is_none() {
+                rec.email = email.clone();
+            }
+            rec.username.clone()
+        } else {
+            let base = preferred_username
+                .clone()
+                .or_else(|| {
+                    email
+                        .as_ref()
+                        .and_then(|e| e.split('@').next().map(|s| s.to_string()))
+                })
+                .unwrap_or_else(|| "oidc".to_string());
+            let username = users.ensure_unique_username(&base);
+            users.users.push(UserRecord {
+                username: username.clone(),
+                password_hash: None,
+                oidc_subject: Some(subject.clone()),
+                oidc_issuer: Some(oidc.issuer.clone()),
+                email: email.clone(),
+                created_at: now_ts(),
+                config: None,
+            });
+            username
+        };
+        Ok(username)
+    })
+    .await
+    {
+        Ok(username) => username,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist user: {}", err) })),
+            )
+                .into_response();
         }
-        rec.username.clone()
-    } else {
-        let base = preferred_username
-            .clone()
-            .or_else(|| {
-                email
-                    .as_ref()
-                    .and_then(|e| e.split('@').next().map(|s| s.to_string()))
-            })
-            .unwrap_or_else(|| "oidc".to_string());
-        let username = users.ensure_unique_username(&base);
-        users.users.push(UserRecord {
-            username: username.clone(),
-            password_hash: None,
-            oidc_subject: Some(subject.clone()),
-            oidc_issuer: Some(oidc.issuer.clone()),
-            email: email.clone(),
-            created_at: now_ts(),
-            config: None,
-        });
-        username
     };
-    let _ = users.save(&state.auth.users_file).await;
 
     let session_id = new_session_id();
     let expires_at = now_ts() + state.auth.session_ttl_secs;
-    state.sessions.write().await.insert(
-        session_id.clone(),
-        SessionInfo {
-            username: username.clone(),
-            expires_at,
-        },
-    );
+    if let Err(err) = state
+        .session_store
+        .put(
+            &session_id,
+            &SessionRecord {
+                username: username.clone(),
+                expires_at,
+            },
+        )
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to persist session: {}", err) })),
+        )
+            .into_response();
+    }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
     (jar, Redirect::to(&next_path)).into_response()
@@ -1870,13 +2305,14 @@ async fn oidc_exchange(
 
 async fn session_user(state: &AppState, jar: &CookieJar) -> Option<String> {
     let session_id = jar.get("nm_session")?.value().to_string();
-    let mut sessions = state.sessions.write().await;
-    if let Some(info) = sessions.get(&session_id) {
-        if info.expires_at > now_ts() {
-            return Some(info.username.clone());
-        }
+    let session = match state.session_store.get(&session_id).await {
+        Ok(session) => session,
+        Err(_) => return None,
+    }?;
+    if session.expires_at > now_ts() {
+        return Some(session.username);
     }
-    sessions.remove(&session_id);
+    let _ = state.session_store.delete(&session_id).await;
     None
 }
 
@@ -1884,6 +2320,9 @@ async fn status(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatusQuery>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let addr = query
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -2026,6 +2465,9 @@ async fn snapshot(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -2105,6 +2547,9 @@ async fn activity(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ActivityQuery>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -2190,6 +2635,9 @@ async fn update_network(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UpdateNetworkPayload>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let addr = payload
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -2252,6 +2700,9 @@ async fn control_network(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ControlNetworkPayload>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let addr = payload
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -2323,80 +2774,11 @@ async fn control_network(
     (StatusCode::OK, Json(json!({ "success": resp.success }))).into_response()
 }
 
-async fn export(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<ExportQuery>,
-) -> impl IntoResponse {
-    let Some(network_id) = query.network_id.clone() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "missing network_id" })),
-        )
-            .into_response();
-    };
-    let addr = query
-        .addr
-        .or_else(|| state.default_orchestrator.clone())
-        .ok_or(StatusCode::BAD_REQUEST);
-
-    let addr = match addr {
-        Ok(mut addr) => {
-            if !addr.starts_with("http://") && !addr.starts_with("https://") {
-                addr = format!("http://{}", addr);
-            }
-            addr
-        }
-        Err(code) => {
-            return (
-                code,
-                Json(json!({ "error": "missing orchestrator address" })),
-            )
-                .into_response()
-        }
-    };
-
-    let target_addrs = match resolve_network_addrs(addr.clone(), &network_id, None).await {
-        Ok(addrs) => addrs,
-        Err(resp) => return resp.into_response(),
-    };
-
-    let mut snapshot_json: Option<String> = None;
-    let mut last_error = String::from("no candidate target attempted");
-    for target_addr in target_addrs {
-        let mut client = match connect_cluster_client(target_addr.clone()).await {
-            Ok(client) => client,
-            Err(e) => {
-                last_error = format!("connect failed via {}: {}", target_addr, e);
-                continue;
-            }
-        };
-
-        match client
-            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
-                network_id: network_id.clone(),
-            }))
-            .await
-        {
-            Ok(resp) => {
-                snapshot_json = Some(resp.into_inner().snapshot_json);
-                break;
-            }
-            Err(e) => {
-                last_error = format!("snapshot failed via {}: {}", target_addr, e);
-            }
-        }
-    }
-
-    let Some(snapshot_json) = snapshot_json else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": last_error })),
-        )
-            .into_response();
-    };
-
-    let format = query.format.to_lowercase();
-
+async fn export_snapshot_payload(
+    network_id: String,
+    snapshot_json: String,
+    format: String,
+) -> axum::response::Response {
     let (script, arg_in, arg_out, ext) = match format.as_str() {
         "neuroml" => ("export_neuroml.py", "--in-network", "--out-neuroml", "nml"),
         "pynn" => ("export_pynn.py", "--in-network", "--out-pynn", "py"),
@@ -2469,6 +2851,113 @@ async fn export(
     }
 }
 
+async fn export(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ExportQuery>,
+) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
+    let Some(network_id) = query.network_id.clone() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing network_id" })),
+        )
+            .into_response();
+    };
+    let addr = query
+        .addr
+        .or_else(|| state.default_orchestrator.clone())
+        .ok_or(StatusCode::BAD_REQUEST);
+
+    let addr = match addr {
+        Ok(mut addr) => {
+            if !addr.starts_with("http://") && !addr.starts_with("https://") {
+                addr = format!("http://{}", addr);
+            }
+            addr
+        }
+        Err(code) => {
+            return (
+                code,
+                Json(json!({ "error": "missing orchestrator address" })),
+            )
+                .into_response()
+        }
+    };
+
+    let target_addrs = match resolve_network_addrs(addr.clone(), &network_id, None).await {
+        Ok(addrs) => addrs,
+        Err(resp) => return resp.into_response(),
+    };
+
+    let mut snapshot_json: Option<String> = None;
+    let mut last_error = String::from("no candidate target attempted");
+    for target_addr in target_addrs {
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = format!("connect failed via {}: {}", target_addr, e);
+                continue;
+            }
+        };
+
+        match client
+            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+                network_id: network_id.clone(),
+            }))
+            .await
+        {
+            Ok(resp) => {
+                snapshot_json = Some(resp.into_inner().snapshot_json);
+                break;
+            }
+            Err(e) => {
+                last_error = format!("snapshot failed via {}: {}", target_addr, e);
+            }
+        }
+    }
+
+    let Some(snapshot_json) = snapshot_json else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": last_error })),
+        )
+            .into_response();
+    };
+
+    export_snapshot_payload(network_id, snapshot_json, query.format.to_lowercase()).await
+}
+
+async fn export_runtime_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<ExportQuery>,
+) -> impl IntoResponse {
+    let snapshot = match state
+        .runtime
+        .workspace_snapshot(&user.username, &workspace_id)
+        .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    export_snapshot_payload(
+        snapshot.workspace_id,
+        snapshot.snapshot_json,
+        query.format.to_lowercase(),
+    )
+    .await
+}
+
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
 fn normalize_target_addr(raw: &str) -> String {
@@ -2498,30 +2987,128 @@ fn decode_hex_payload(raw: Option<String>) -> Result<Vec<u8>, ApiError> {
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    hex::decode(trimmed).map_err(|e| {
+    decode_spike_hex_payload(trimmed).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("invalid aer_payload_hex: {}", e) })),
+            Json(json!({ "error": e.to_string() })),
         )
     })
 }
 
-fn build_aer_batch(
+async fn fetch_network_config(
+    target_addr: &str,
+    network_id: &str,
+) -> Result<NetworkConfig, ApiError> {
+    let mut client = connect_cluster_client(target_addr.to_string())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("connect failed: {}", e) })),
+            )
+        })?;
+    let snapshot_json = client
+        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+            network_id: network_id.to_string(),
+        }))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("snapshot failed: {}", e) })),
+            )
+        })?
+        .into_inner()
+        .snapshot_json;
+
+    if let Ok(snapshot) = decode_snapshot_with_profile_backfill(&snapshot_json) {
+        Ok(snapshot.net)
+    } else {
+        serde_json::from_str::<NetworkConfig>(&snapshot_json).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to parse network snapshot: {}", e) })),
+            )
+        })
+    }
+}
+
+async fn build_aer_batch(
+    target_addr: &str,
     network_id: String,
     step_index: i64,
+    time_ms: Option<f32>,
+    dt_ms: Option<f32>,
     aer_base: u32,
     is_backward: bool,
     aer_payload_hex: Option<String>,
     spike_indices: Option<Vec<u32>>,
+    input_values: Option<Vec<f32>>,
+    spike_io: Option<SpikeIoConfig>,
 ) -> Result<SpikeBatch, ApiError> {
     let aer_payload = decode_hex_payload(aer_payload_hex)?;
     let spike_indices = spike_indices.unwrap_or_default();
-    if aer_payload.is_empty() && spike_indices.is_empty() {
+    let has_input_values = input_values
+        .as_ref()
+        .map(|values| !values.is_empty())
+        .unwrap_or(false);
+    if aer_payload.is_empty() && spike_indices.is_empty() && !has_input_values {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "either aer_payload_hex or spike_indices must be provided" })),
+            Json(json!({
+                "error": "provide aer_payload_hex, spike_indices, or input_values"
+            })),
         ));
     }
+
+    if has_input_values {
+        let net_cfg = fetch_network_config(target_addr, &network_id).await?;
+        let mut combined = spikes_from_transport(
+            &aer_payload,
+            aer_base,
+            &spike_indices,
+            net_cfg.num_sensory_neurons,
+        )
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?;
+        let mut encoded = vec![0i8; net_cfg.num_sensory_neurons];
+        let dt_ms = dt_ms.unwrap_or(1.0).max(0.001);
+        let time_ms = time_ms.unwrap_or_else(|| step_index.max(0) as f32 * dt_ms);
+        let io_cfg = spike_io.unwrap_or_else(|| net_cfg.spike_io.clone());
+        encode_network_inputs_with(
+            &io_cfg,
+            net_cfg.num_sensory_neurons,
+            net_cfg.num_output_neurons,
+            input_values.as_deref().unwrap_or(&[]),
+            &mut encoded,
+            fastrand::f32,
+            TemporalEncodingContext {
+                step_index: step_index.max(0) as usize,
+                time_ms,
+                dt_ms,
+            },
+        );
+        for (dst, src) in combined.iter_mut().zip(encoded.iter()) {
+            if *src != 0 {
+                *dst = 1;
+            }
+        }
+        let exchange = encode_exchange((time_ms.max(0.0) * 1000.0) as u64, aer_base, &combined);
+        return Ok(SpikeBatch {
+            network_id,
+            layer_index: EXTERNAL_SENSORY_LAYER_INDEX,
+            step_index,
+            spike_indices: exchange.spike_indices,
+            is_backward,
+            aer_payload: exchange.aer_payload,
+            aer_base: exchange.aer_base,
+        });
+    }
+
     Ok(SpikeBatch {
         network_id,
         layer_index: EXTERNAL_SENSORY_LAYER_INDEX,
@@ -2582,6 +3169,9 @@ async fn aer_inject(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AerInjectPayload>,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -2604,13 +3194,20 @@ async fn aer_inject(
     };
 
     let batch = match build_aer_batch(
+        &target_addr,
         payload.network_id.clone(),
         payload.step_index.unwrap_or(0),
+        payload.time_ms,
+        payload.dt_ms,
         payload.aer_base.unwrap_or(0),
         payload.is_backward.unwrap_or(false),
         payload.aer_payload_hex,
         payload.spike_indices,
-    ) {
+        payload.input_values,
+        payload.spike_io,
+    )
+    .await
+    {
         Ok(batch) => batch,
         Err(err) => return err.into_response(),
     };
@@ -2634,6 +3231,9 @@ async fn aer_stream(
     Query(query): Query<AerStreamQuery>,
     body: axum::body::Body,
 ) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
     let orchestrator_addr =
         match resolve_addr_or_default(query.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -2724,13 +3324,20 @@ async fn aer_stream(
                     .into_response();
             }
             let batch = match build_aer_batch(
+                &orchestrator_addr,
                 frame_network_id,
                 frame.step_index.or(query.step_index).unwrap_or(0),
+                frame.time_ms,
+                frame.dt_ms,
                 frame.aer_base.or(query.aer_base).unwrap_or(0),
                 frame.is_backward.or(query.is_backward).unwrap_or(false),
                 frame.aer_payload_hex,
                 frame.spike_indices,
-            ) {
+                frame.input_values,
+                frame.spike_io,
+            )
+            .await
+            {
                 Ok(batch) => batch,
                 Err(err) => return err.into_response(),
             };
@@ -2793,13 +3400,20 @@ async fn aer_stream(
                     .into_response();
             }
             let batch = match build_aer_batch(
+                &orchestrator_addr,
                 frame_network_id,
                 frame.step_index.or(query.step_index).unwrap_or(0),
+                frame.time_ms,
+                frame.dt_ms,
                 frame.aer_base.or(query.aer_base).unwrap_or(0),
                 frame.is_backward.or(query.is_backward).unwrap_or(false),
                 frame.aer_payload_hex,
                 frame.spike_indices,
-            ) {
+                frame.input_values,
+                frame.spike_io,
+            )
+            .await
+            {
                 Ok(batch) => batch,
                 Err(err) => return err.into_response(),
             };

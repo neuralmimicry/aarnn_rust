@@ -17,16 +17,24 @@
 /// Observability tools for logging, probing, and data export.
 pub mod obs;
 
+/// AARNN-specific algorithm kernels partitioned into replaceable modules.
+pub mod aarnn;
 /// Address-Event Representation (AER) encoding/decoding.
 pub mod aer;
 /// Optional AER <-> CAN conversion helpers for robotic endpoints.
 pub mod aer_can;
+/// Shared filesystem-backed auth/session stores used by scaled frontends.
+pub mod auth_store;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
+/// User-agnostic engine facade around `Runner`.
+pub mod engine;
 /// Core neural network data structures including layers, neurons, and synapses.
 pub mod network;
 /// Simulation engine responsible for time-stepping and state updates.
 pub mod sim;
+/// Shared spike input/output encoders, transports, and profile-specific adapters.
+pub mod spike_io;
 /// UDP-based AER stimuli IO bridge.
 pub mod stimuli;
 
@@ -43,6 +51,12 @@ pub mod openmpi_runtime;
 pub mod rdma;
 /// Orchestration logic for running simulations in various modes.
 pub mod runner;
+/// Persistent runtime middleware for multi-user workspaces and scheduling.
+pub mod runtime;
+/// Shared request/response models and clients for runtime-facing frontends.
+pub mod runtime_api;
+/// Shared file/lease primitives for runtime coordination on PVC-backed deployments.
+pub mod shared_fs;
 
 #[cfg(feature = "growth3d")]
 /// Topological and spatial layout definitions for 3D neural growth.

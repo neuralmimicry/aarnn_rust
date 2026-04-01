@@ -3,19 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Neuromorphic Remote UI</title>
+    <title>Neural Mimicry Control Surface</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <div class="app">
       <header class="topbar">
         <div class="topbar-left">
-          <div class="title">Neuromorphic Network</div>
-          <div class="subtitle">Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)</div>
+          <div class="title">Neural Mimicry</div>
+          <div class="subtitle">Continuum control surface for persistent biomimetic workspaces and live orchestration</div>
         </div>
         <div class="topbar-right">
           <a class="btn ghost small" href="/docs" target="_blank" rel="noopener">Docs</a>
-          <a class="btn ghost small" href="/docs/swagger" target="_blank" rel="noopener">API</a>
+          <a class="btn ghost small" href="/docs/swagger" target="_blank" rel="noopener">Swagger</a>
           <span id="user-status">Signed out</span>
           <button class="btn ghost small" id="logout-btn" type="button">Logout</button>
         </div>
@@ -27,7 +27,7 @@
             <div class="panel-header">
               <div class="panel-left">
                 <div class="panel-title">Network</div>
-                <div class="panel-hint">Right-click a node or edge to add a probe</div>
+                <div class="panel-hint">Right-click a node to add a live spike probe. Drag to pan, Ctrl+drag to rotate.</div>
               </div>
               <div class="panel-actions">
                 <div class="panel-select">
@@ -59,8 +59,8 @@
               </div>
               <div class="control-group">
                 <span>Weight threshold</span>
-                <input type="range" id="weight-threshold" min="0" max="1" step="0.01" value="0.35" />
-                <span id="weight-threshold-value">0.35</span>
+                <input type="range" id="weight-threshold" min="0" max="1" step="0.01" value="0.00" />
+                <span id="weight-threshold-value">0.00</span>
               </div>
               <div class="panel-metric">Edges drawn: <span id="edge-count">0</span></div>
             </div>
@@ -91,16 +91,29 @@
 
           <section class="bottom-panels">
             <div class="small-panel">
-              <div class="panel-title">Graphic EQ</div>
-              <div class="panel-body muted">No data</div>
+              <div class="panel-header panel-header-inline">
+                <div class="panel-title">Graphic EQ</div>
+                <div class="panel-chip">Derived sensory bands</div>
+              </div>
+              <div class="panel-body">
+                <div id="eq-panel" class="eq-panel" aria-label="Sensory activity bands"></div>
+                <div id="eq-empty" class="panel-empty muted">Waiting for sensory activity</div>
+              </div>
             </div>
             <div class="small-panel">
-              <div class="panel-title">Oscilloscope</div>
-              <div class="panel-body muted">No probes</div>
+              <div class="panel-header panel-header-inline">
+                <div class="panel-title">Oscilloscope</div>
+                <div class="panel-chip"><span id="probe-count">0</span> probes</div>
+              </div>
+              <canvas id="scope-canvas" class="mini-canvas" width="320" height="130"></canvas>
+              <div id="scope-probes" class="probe-list"></div>
             </div>
             <div class="small-panel">
-              <div class="panel-title">Output raster</div>
-              <div class="panel-body muted">No spikes</div>
+              <div class="panel-header panel-header-inline">
+                <div class="panel-title">Output raster</div>
+                <div class="panel-chip"><span id="raster-frames">0</span> frames</div>
+              </div>
+              <canvas id="raster-canvas" class="mini-canvas" width="320" height="130"></canvas>
             </div>
           </section>
         </main>
@@ -113,6 +126,43 @@
               <button class="btn ghost" id="repeat" title="Reset state and start from t=0" disabled>Repeat</button>
               <button class="btn ghost" id="reset" title="Reset to startup state (stopped)" disabled>Reset</button>
               <button class="btn ghost" id="new" title="Create a fresh single-neuron network (clears loaded snapshot)" disabled>New</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">Workspace Runtime</div>
+            <div class="panel-note">Persistent user sandboxes shared across Webots, Continuum middleware, browser tooling, and native UI.</div>
+            <div class="panel-row workspace-row">
+              <div class="workspace-field">
+                <label for="workspace-select">Workspace</label>
+                <select id="workspace-select"></select>
+              </div>
+              <button class="btn ghost small" id="workspace-refresh" type="button">Refresh</button>
+            </div>
+            <div class="panel-row workspace-row">
+              <div class="workspace-field">
+                <label for="workspace-user">Workspace namespace</label>
+                <input id="workspace-user" type="text" placeholder="runtime user" />
+              </div>
+            </div>
+            <div class="panel-row workspace-row">
+              <div class="workspace-field">
+                <label for="workspace-name">New workspace</label>
+                <input id="workspace-name" type="text" placeholder="celegans-lab" />
+              </div>
+              <button class="btn" id="workspace-create" type="button">Create</button>
+              <button class="btn ghost" id="workspace-delete" type="button">Delete</button>
+            </div>
+            <div class="workspace-status-grid">
+              <div>Mode: <span id="workspace-mode">cluster</span></div>
+              <div>Runtime: <span id="workspace-status">inactive</span></div>
+              <div>Autoscaler: <span id="workspace-autoscaler">local</span></div>
+            </div>
+            <div class="panel-row workspace-actions">
+              <button class="btn ghost" id="workspace-pull" type="button">Pull</button>
+              <button class="btn ghost" id="workspace-push" type="button">Push</button>
+              <button class="btn ghost" id="workspace-start" type="button">Start</button>
+              <button class="btn ghost" id="workspace-stop" type="button">Stop</button>
             </div>
           </section>
 
@@ -236,7 +286,43 @@
           </section>
 
           <section class="panel">
+            <div class="panel-title">Instrumentation</div>
+            <div class="panel-row instrumentation-row">
+              <label for="probe-source">Target</label>
+              <select id="probe-source">
+                <option value="sensory">Sensory</option>
+                <option value="hidden">Hidden</option>
+                <option value="output">Output</option>
+              </select>
+              <label for="probe-layer">Layer</label>
+              <input id="probe-layer" type="number" min="0" step="1" value="0" />
+              <label for="probe-index">Index</label>
+              <input id="probe-index" type="number" min="0" step="1" value="0" />
+            </div>
+            <div class="panel-row">
+              <button class="btn" id="add-probe" type="button">Add Probe</button>
+              <button class="btn ghost" id="clear-probes" type="button">Clear Probes</button>
+            </div>
+            <div class="panel-body muted" id="probe-hint">Right-click a node in the graph to add a spike probe without leaving the canvas.</div>
+          </section>
+
+          <section class="panel">
             <div class="panel-title">Tools &amp; Model I/O</div>
+            <div class="panel-subtitle">Save / Load</div>
+            <div class="panel-row">
+              <button class="btn ghost" id="save-config" type="button">Save Config</button>
+              <button class="btn ghost" id="load-config" type="button">Load Config</button>
+            </div>
+            <div class="panel-row">
+              <button class="btn ghost" id="save-network" type="button">Save Network</button>
+              <button class="btn ghost" id="load-network" type="button">Load Network</button>
+            </div>
+            <div class="panel-row">
+              <button class="btn ghost" id="save-probes" type="button">Save Probes</button>
+              <button class="btn ghost" id="load-probes" type="button">Load Probes</button>
+            </div>
+            <div class="panel-note" id="tool-status">Network config, snapshots, and local probe sets round-trip from this browser surface.</div>
+            <div class="panel-subtitle">Export</div>
             <div class="panel-row">
               <button class="btn" id="export-neuroml">Export NeuroML</button>
               <button class="btn" id="export-pynn">Export PyNN</button>
@@ -258,6 +344,19 @@
             <div id="cluster-nodes" class="panel-sublist"></div>
             <div id="cluster-networks" class="panel-sublist"></div>
           </section>
+
+          <section class="panel">
+            <div class="panel-title">Companion Interfaces</div>
+            <div class="panel-list">
+              <div>Web UI: remote orchestration, live topology, probes, save/load, export.</div>
+              <div>Docs: function matrix, auth flow, runtime notes, endpoint reference.</div>
+              <div>Swagger: same-origin API try-it-out with the current session cookie.</div>
+            </div>
+            <div class="panel-row">
+              <a class="btn ghost small" href="/docs" target="_blank" rel="noopener">Open Docs</a>
+              <a class="btn ghost small" href="/docs/swagger" target="_blank" rel="noopener">Open Swagger</a>
+            </div>
+          </section>
         </aside>
       </div>
     </div>
@@ -270,7 +369,7 @@
     </template>
 
     <footer class="footer">
-      <span>Polling every 2 seconds</span>
+      <span>Status 2.0s | Activity 0.2s | Snapshot 0.35-1.2s</span>
     </footer>
 
     <div id="auth-overlay" class="auth-overlay hidden">
@@ -291,6 +390,12 @@
         <div class="auth-divider">or</div>
         <a class="btn" id="oidc-login" href="/auth/oidc/login">Continue with SSO</a>
       </div>
+    </div>
+
+    <div id="graph-context-menu" class="graph-context-menu hidden">
+      <div class="graph-context-title" id="graph-context-title">Node</div>
+      <div class="graph-context-details" id="graph-context-details">Add a live spike probe to this node.</div>
+      <button class="btn small" id="graph-add-probe" type="button">Add Probe</button>
     </div>
 
     <script src="/app.js"></script>

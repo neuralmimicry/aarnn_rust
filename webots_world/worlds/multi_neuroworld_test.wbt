@@ -9,7 +9,7 @@ WorldInfo {
   # Slightly larger time step to keep Webots responsive with articulated
   # multi-robot scenes and clustered controller traffic.
   basicTimeStep 32
-  gravity 0 -9.81 0
+  gravity 9.81
 }
 Viewpoint {
   fieldOfView 0.92
@@ -21,7 +21,8 @@ TexturedBackground {
 }
 TexturedBackgroundLight {
 }
-# Level world geometry (zero roll), gravity downward (0, -9.81, 0).
+# Historical manual reference world; the generated multi-world launcher uses
+# `scripts/build_webots_multi_world.py` instead of this file.
 RectangleArena {
   floorSize 34.00 34.00
   wallHeight 1.5
@@ -599,4 +600,3 @@ CelegansRobot {
     "NM_ACTUATORS_celegans_02=^celegans_o_[0-9]{3}_.*$"
   ]
 }
-
