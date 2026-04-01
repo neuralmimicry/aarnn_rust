@@ -10,11 +10,17 @@ use aarnn_rust::distributed::proto::{
     NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
 };
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
+use aarnn_rust::nmchain::{
+    NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest,
+    NmChainLedgerResponse, NmChainLoginObservedRequest, NmChainTokenMutationRequest,
+};
 use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
-    WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
+    WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest,
+    WorkspaceImportRequest,
 };
+use anyhow::Context;
 use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
 use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
 use aarnn_rust::spike_io::profiles::{encode_network_inputs_with, SpikeIoConfig};
@@ -152,6 +158,22 @@ struct Args {
     /// OIDC redirect URL (auth_mode=oidc).
     #[arg(long)]
     oidc_redirect_url: Option<String>,
+
+    /// Optional nmchain API base URL for shared auth and token accounting.
+    #[arg(long)]
+    nmchain_api_base: Option<String>,
+
+    /// nmchain application id presented in audit records.
+    #[arg(long)]
+    nmchain_app_id: Option<String>,
+
+    /// Bearer token used for nmchain API access.
+    #[arg(long)]
+    nmchain_api_token: Option<String>,
+
+    /// nmchain HTTP timeout in seconds.
+    #[arg(long, default_value_t = 10)]
+    nmchain_timeout_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +208,8 @@ struct AppState {
     users: Arc<RwLock<UserStore>>,
     session_store: Arc<FileSessionStore>,
     runtime: Arc<RuntimeManager>,
+    chain: Option<Arc<NmChainClient>>,
+    token_pricing: TokenPricing,
 }
 
 #[derive(Clone)]
@@ -195,6 +219,66 @@ struct AuthConfig {
     allow_signup: bool,
     session_ttl_secs: u64,
     oidc: Option<OidcConfig>,
+}
+
+#[derive(Clone, Debug)]
+struct TokenPricing {
+    create_workspace: i64,
+    import_workspace: i64,
+    start_workspace: i64,
+    repeat_workspace: i64,
+    step_workspace: i64,
+}
+
+impl TokenPricing {
+    fn from_env() -> Self {
+        Self {
+            create_workspace: env_opt("NM_AARNN_TOKEN_CREATE_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(25)
+                .max(0),
+            import_workspace: env_opt("NM_AARNN_TOKEN_IMPORT_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(25)
+                .max(0),
+            start_workspace: env_opt("NM_AARNN_TOKEN_START_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(5)
+                .max(0),
+            repeat_workspace: env_opt("NM_AARNN_TOKEN_REPEAT_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(2)
+                .max(0),
+            step_workspace: env_opt("NM_AARNN_TOKEN_STEP_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(1)
+                .max(0),
+        }
+    }
+
+    fn control_cost(&self, action: WorkspaceControlAction) -> i64 {
+        match action {
+            WorkspaceControlAction::Start => self.start_workspace,
+            WorkspaceControlAction::Repeat => self.repeat_workspace,
+            WorkspaceControlAction::Step => self.step_workspace,
+            WorkspaceControlAction::Stop
+            | WorkspaceControlAction::Reset
+            | WorkspaceControlAction::New
+            | WorkspaceControlAction::Save => 0,
+        }
+    }
+}
+
+fn control_action_label(action: WorkspaceControlAction) -> &'static str {
+    match action {
+        WorkspaceControlAction::Start => "start",
+        WorkspaceControlAction::Stop => "stop",
+        WorkspaceControlAction::Repeat => "repeat",
+        WorkspaceControlAction::Reset => "reset",
+        WorkspaceControlAction::New => "new",
+        WorkspaceControlAction::Save => "save",
+        WorkspaceControlAction::Step => "step",
+    }
 }
 
 fn env_opt(key: &str) -> Option<String> {
@@ -224,6 +308,26 @@ fn apply_env_overrides(args: &mut Args) {
     if args.oidc_redirect_url.is_none() {
         args.oidc_redirect_url =
             env_opt("NM_OIDC_REDIRECT_URI").or_else(|| env_opt("NM_OIDC_REDIRECT_URL"));
+    }
+    if args.nmchain_api_base.is_none() {
+        args.nmchain_api_base =
+            env_opt("NMCHAIN_API_BASE").or_else(|| env_opt("NM_AARNN_CHAIN_API_BASE"));
+    }
+    if args.nmchain_app_id.is_none() {
+        args.nmchain_app_id =
+            env_opt("NMCHAIN_APP_ID").or_else(|| Some("aarnn".to_string()));
+    }
+    if args.nmchain_api_token.is_none() {
+        args.nmchain_api_token =
+            env_opt("NMCHAIN_API_TOKEN").or_else(|| env_opt("NM_AARNN_CHAIN_API_TOKEN"));
+    }
+    if args.nmchain_timeout_secs == 10 {
+        if let Some(timeout) = env_opt("NMCHAIN_TIMEOUT")
+            .or_else(|| env_opt("NM_AARNN_CHAIN_TIMEOUT"))
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            args.nmchain_timeout_secs = timeout.max(1);
+        }
     }
 
     if args.auth_mode.trim().eq_ignore_ascii_case("none") {
@@ -388,6 +492,11 @@ fn safe_next_path(value: Option<String>) -> String {
 #[derive(Deserialize)]
 struct StatusQuery {
     addr: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TokenLedgerQuery {
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -597,6 +706,19 @@ async fn main() -> anyhow::Result<()> {
         oidc,
     };
 
+    let chain = match args.nmchain_api_base.clone() {
+        Some(base_url) if !base_url.trim().is_empty() => Some(Arc::new(NmChainClient::new(
+            base_url,
+            args.nmchain_app_id
+                .clone()
+                .unwrap_or_else(|| "aarnn".to_string()),
+            args.nmchain_api_token.clone(),
+            Duration::from_secs(args.nmchain_timeout_secs.max(1)),
+        )?)),
+        _ => None,
+    };
+    let token_pricing = TokenPricing::from_env();
+
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: std::path::PathBuf::from(&args.runtime_root),
         tick_interval_ms: args.runtime_tick_ms.max(1),
@@ -627,6 +749,8 @@ async fn main() -> anyhow::Result<()> {
         users: Arc::new(RwLock::new(users)),
         session_store,
         runtime,
+        chain,
+        token_pricing,
     });
 
     let api = Router::new()
@@ -637,6 +761,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/login", post(login))
         .route("/signup", post(signup))
         .route("/logout", post(logout))
+        .route("/tokens", get(tokens_balance))
+        .route("/tokens/ledger", get(tokens_ledger))
         .route("/user/config", get(get_user_config).post(set_user_config))
         .route("/runtime/status", get(runtime_status))
         .route(
@@ -1645,6 +1771,8 @@ async fn login(
     }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
+    chain_sync_identity_best_effort(&state, username, "local", None, None, "login").await;
+    chain_record_login_best_effort(&state, username, "local", Some(session_id), "login").await;
     (jar, Json(json!({ "ok": true, "username": username }))).into_response()
 }
 
@@ -1710,6 +1838,7 @@ async fn signup(
         };
         return (code, Json(json!({ "error": err.to_string() }))).into_response();
     }
+    chain_sync_identity_best_effort(&state, username, "local", None, None, "signup").await;
     Json(json!({ "ok": true })).into_response()
 }
 
@@ -1722,6 +1851,251 @@ async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
     expired.set_path("/");
     let jar = jar.remove(expired);
     (jar, Json(json!({ "ok": true })))
+}
+
+fn pricing_payload(pricing: &TokenPricing) -> Value {
+    json!({
+        "create_workspace": pricing.create_workspace,
+        "import_workspace": pricing.import_workspace,
+        "start_workspace": pricing.start_workspace,
+        "repeat_workspace": pricing.repeat_workspace,
+        "step_workspace": pricing.step_workspace,
+    })
+}
+
+async fn chain_sync_identity_best_effort(
+    state: &AppState,
+    username: &str,
+    provider: &str,
+    email: Option<String>,
+    subject: Option<String>,
+    source: &str,
+) {
+    let Some(chain) = state.chain.as_ref() else {
+        return;
+    };
+    let payload = NmChainIdentityUpsertRequest {
+        request_id: None,
+        user_id: username.to_string(),
+        role: Some("user".to_string()),
+        email,
+        provider: Some(provider.to_string()),
+        subject,
+        meta: json!({ "source": source }),
+    };
+    if let Err(err) = chain.upsert_identity(&payload).await {
+        eprintln!("[warn] nmchain identity upsert failed for {}: {}", username, err);
+    }
+}
+
+async fn chain_record_login_best_effort(
+    state: &AppState,
+    username: &str,
+    auth_mode: &str,
+    session_id: Option<String>,
+    source: &str,
+) {
+    let Some(chain) = state.chain.as_ref() else {
+        return;
+    };
+    let payload = NmChainLoginObservedRequest {
+        request_id: None,
+        user_id: username.to_string(),
+        system: chain.app_id().to_string(),
+        auth_mode: Some(auth_mode.to_string()),
+        session_id,
+        remote_addr: None,
+        meta: json!({ "source": source }),
+    };
+    if let Err(err) = chain.observe_login(&payload).await {
+        eprintln!("[warn] nmchain login record failed for {}: {}", username, err);
+    }
+}
+
+async fn chain_token_snapshot(
+    state: &AppState,
+    username: &str,
+) -> anyhow::Result<Option<NmChainAccountSnapshot>> {
+    let Some(chain) = state.chain.as_ref() else {
+        return Ok(None);
+    };
+    chain
+        .account_snapshot("user", username)
+        .await
+        .map(Some)
+        .context("failed to fetch nmchain token snapshot")
+}
+
+async fn chain_token_entries(
+    state: &AppState,
+    username: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<aarnn_rust::nmchain::NmChainLedgerEntry>> {
+    let Some(chain) = state.chain.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let response: NmChainLedgerResponse = chain
+        .ledger_entries("user", username, limit)
+        .await
+        .context("failed to fetch nmchain token ledger")?;
+    Ok(response.entries)
+}
+
+async fn ensure_token_budget(state: &AppState, username: &str, cost: i64) -> anyhow::Result<()> {
+    if cost <= 0 {
+        return Ok(());
+    }
+    let Some(snapshot) = chain_token_snapshot(state, username).await? else {
+        return Ok(());
+    };
+    if snapshot.available < cost {
+        anyhow::bail!(
+            "insufficient tokens: need {}, available {}",
+            cost,
+            snapshot.available
+        );
+    }
+    Ok(())
+}
+
+async fn debit_tokens(
+    state: &AppState,
+    username: &str,
+    amount: i64,
+    request_id: String,
+    meta: Value,
+) -> anyhow::Result<()> {
+    if amount <= 0 {
+        return Ok(());
+    }
+    let Some(chain) = state.chain.as_ref() else {
+        return Ok(());
+    };
+    let result = chain
+        .apply_token(&NmChainTokenMutationRequest {
+            request_id: Some(request_id),
+            account_scope: "user".to_string(),
+            account_id: username.to_string(),
+            entry_type: "debit".to_string(),
+            delta: -amount,
+            meta,
+        })
+        .await
+        .context("failed to debit tokens from nmchain")?;
+    if let Some(entry) = result.entry {
+        if entry.shortfall > 0 {
+            anyhow::bail!("token debit shortfall: {}", entry.shortfall);
+        }
+    }
+    Ok(())
+}
+
+async fn refund_tokens(
+    state: &AppState,
+    username: &str,
+    amount: i64,
+    request_id: String,
+    meta: Value,
+) {
+    if amount <= 0 {
+        return;
+    }
+    let Some(chain) = state.chain.as_ref() else {
+        return;
+    };
+    let payload = NmChainTokenMutationRequest {
+        request_id: Some(request_id),
+        account_scope: "user".to_string(),
+        account_id: username.to_string(),
+        entry_type: "refund".to_string(),
+        delta: amount,
+        meta,
+    };
+    if let Err(err) = chain.apply_token(&payload).await {
+        eprintln!("[warn] nmchain refund failed for {}: {}", username, err);
+    }
+}
+
+async fn tokens_balance(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> axum::response::Response {
+    let pricing = pricing_payload(&state.token_pricing);
+    match chain_token_snapshot(&state, &user.username).await {
+        Ok(Some(snapshot)) => Json(json!({
+            "configured": true,
+            "pricing": pricing,
+            "balance": snapshot.balance,
+            "tokens": snapshot.tokens,
+            "paid_balance": snapshot.paid_balance,
+            "free_balance": snapshot.free_balance,
+            "available": snapshot.available,
+            "reserved": snapshot.reserved,
+            "in_use": snapshot.in_use,
+            "capacity": snapshot.capacity,
+            "display_capacity": snapshot.display_capacity,
+            "low_threshold": snapshot.low_threshold,
+            "status": snapshot.status,
+            "last_topup_tokens": snapshot.last_topup_tokens,
+            "last_topup_at": snapshot.last_topup_at,
+            "updated_at": snapshot.updated_at,
+            "spent_total": snapshot.spent_total,
+            "cashout_total": snapshot.cashout_total,
+            "shortfall_total": snapshot.shortfall_total,
+            "free_grant_total": snapshot.free_grant_total,
+            "identity": snapshot.identity,
+        }))
+        .into_response(),
+        Ok(None) => Json(json!({
+            "configured": false,
+            "pricing": pricing,
+            "balance": 0,
+            "tokens": 0,
+            "paid_balance": 0,
+            "free_balance": 0,
+            "available": 0,
+            "reserved": 0,
+            "in_use": 0,
+            "capacity": 0,
+            "display_capacity": 1,
+            "low_threshold": 0,
+            "status": "unconfigured",
+            "last_topup_tokens": 0,
+            "last_topup_at": null,
+            "updated_at": null,
+            "spent_total": 0,
+            "cashout_total": 0,
+            "shortfall_total": 0,
+            "free_grant_total": 0,
+            "identity": null,
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn tokens_ledger(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<TokenLedgerQuery>,
+) -> axum::response::Response {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    match chain_token_entries(&state, &user.username, limit).await {
+        Ok(entries) => Json(json!({
+            "configured": state.chain.is_some(),
+            "entries": entries,
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_user_config(
@@ -1814,12 +2188,51 @@ async fn create_runtime_workspace(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<WorkspaceCreateRequest>,
 ) -> axum::response::Response {
+    let cost = state.token_pricing.create_workspace;
+    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+        )
+            .into_response();
+    }
     match state
         .runtime
         .create_workspace(&user.username, payload)
         .await
     {
-        Ok(detail) => Json(detail).into_response(),
+        Ok(detail) => {
+            if cost > 0 {
+                let workspace_id = detail.summary.workspace_id.clone();
+                let request_id =
+                    format!("aarnn:create:{}:{}", user.username.trim(), workspace_id.trim());
+                let debit = debit_tokens(
+                    &state,
+                    &user.username,
+                    cost,
+                    request_id,
+                    json!({
+                        "operation": "create_workspace",
+                        "workspace_id": workspace_id,
+                        "network_id": detail.summary.network_id,
+                        "source": "aarnn_web_ui",
+                    }),
+                )
+                .await;
+                if let Err(err) = debit {
+                    let _ = state
+                        .runtime
+                        .delete_workspace(&user.username, &detail.summary.workspace_id)
+                        .await;
+                    return (
+                        StatusCode::PAYMENT_REQUIRED,
+                        Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+                    )
+                        .into_response();
+                }
+            }
+            Json(detail).into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
@@ -1910,17 +2323,68 @@ async fn control_runtime_workspace(
     Path(workspace_id): Path<String>,
     Json(payload): Json<WorkspaceControlRequest>,
 ) -> axum::response::Response {
+    let cost = state.token_pricing.control_cost(payload.action);
+    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+        )
+            .into_response();
+    }
+    let action_name = control_action_label(payload.action);
+    let debit_request_id = format!(
+        "aarnn:control:{}:{}:{}:{}",
+        user.username.trim(),
+        workspace_id.trim(),
+        action_name,
+        now_ts()
+    );
+    if let Err(err) = debit_tokens(
+        &state,
+        &user.username,
+        cost,
+        debit_request_id.clone(),
+        json!({
+            "operation": "control_workspace",
+            "workspace_id": workspace_id,
+            "action": action_name,
+            "source": "aarnn_web_ui",
+        }),
+    )
+    .await
+    {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+        )
+            .into_response();
+    }
     match state
         .runtime
         .control_workspace(&user.username, &workspace_id, payload.action)
         .await
     {
         Ok(detail) => Json(detail).into_response(),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": err.to_string() })),
-        )
-            .into_response(),
+        Err(err) => {
+            refund_tokens(
+                &state,
+                &user.username,
+                cost,
+                format!("refund:{}", debit_request_id),
+                json!({
+                    "operation": "control_workspace_refund",
+                    "workspace_id": workspace_id,
+                    "action": action_name,
+                    "source": "aarnn_web_ui",
+                }),
+            )
+            .await;
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1930,12 +2394,50 @@ async fn import_runtime_workspace(
     Path(workspace_id): Path<String>,
     Json(payload): Json<WorkspaceImportRequest>,
 ) -> axum::response::Response {
+    let cost = state.token_pricing.import_workspace;
+    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+        )
+            .into_response();
+    }
     match state
         .runtime
         .import_workspace_json(&user.username, &workspace_id, payload)
         .await
     {
-        Ok(detail) => Json(detail).into_response(),
+        Ok(detail) => {
+            if cost > 0 {
+                let request_id = format!(
+                    "aarnn:import:{}:{}:{}",
+                    user.username.trim(),
+                    workspace_id.trim(),
+                    now_ts()
+                );
+                if let Err(err) = debit_tokens(
+                    &state,
+                    &user.username,
+                    cost,
+                    request_id,
+                    json!({
+                        "operation": "import_workspace",
+                        "workspace_id": workspace_id,
+                        "network_id": detail.summary.network_id,
+                        "source": "aarnn_web_ui",
+                    }),
+                )
+                .await
+                {
+                    return (
+                        StatusCode::PAYMENT_REQUIRED,
+                        Json(json!({ "error": err.to_string(), "required_tokens": cost })),
+                    )
+                        .into_response();
+                }
+            }
+            Json(detail).into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
@@ -2143,6 +2645,23 @@ async fn oidc_callback(
     }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
+    chain_sync_identity_best_effort(
+        &state,
+        &username,
+        "oidc",
+        email.clone(),
+        Some(subject.clone()),
+        "oidc_callback",
+    )
+    .await;
+    chain_record_login_best_effort(
+        &state,
+        &username,
+        "oidc",
+        Some(session_id),
+        "oidc_callback",
+    )
+    .await;
     (jar, Redirect::to("/")).into_response()
 }
 
@@ -2300,6 +2819,23 @@ async fn oidc_exchange(
     }
     let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
     let jar = jar.add(cookie);
+    chain_sync_identity_best_effort(
+        &state,
+        &username,
+        "oidc",
+        email.clone(),
+        Some(subject.clone()),
+        "oidc_exchange",
+    )
+    .await;
+    chain_record_login_best_effort(
+        &state,
+        &username,
+        "oidc",
+        Some(session_id),
+        "oidc_exchange",
+    )
+    .await;
     (jar, Redirect::to(&next_path)).into_response()
 }
 

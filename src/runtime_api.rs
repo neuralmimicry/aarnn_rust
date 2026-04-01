@@ -64,6 +64,61 @@ pub struct RuntimeStatusResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct TokenBalanceResponse {
+    pub configured: bool,
+    pub balance: i64,
+    pub tokens: i64,
+    pub paid_balance: i64,
+    pub free_balance: i64,
+    pub available: i64,
+    pub reserved: i64,
+    pub in_use: i64,
+    pub capacity: i64,
+    pub display_capacity: i64,
+    pub low_threshold: i64,
+    pub status: String,
+    pub last_topup_tokens: i64,
+    pub last_topup_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub spent_total: i64,
+    pub cashout_total: i64,
+    pub shortfall_total: i64,
+    pub free_grant_total: i64,
+    #[serde(default)]
+    pub pricing: serde_json::Value,
+    #[serde(default)]
+    pub identity: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct TokenLedgerEntry {
+    pub tx_id: String,
+    pub request_id: Option<String>,
+    pub block_index: u64,
+    pub block_hash: String,
+    pub ts: String,
+    pub account_scope: String,
+    pub account_id: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    pub delta: i64,
+    pub balance_after: i64,
+    pub paid_after: i64,
+    pub free_after: i64,
+    pub reserved_after: i64,
+    pub shortfall: i64,
+    pub actor_app: String,
+    #[serde(default)]
+    pub meta: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct TokenLedgerResponse {
+    pub configured: bool,
+    pub entries: Vec<TokenLedgerEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct WorkspaceDetailResponse {
     pub summary: WorkspaceSummary,
     pub status: EngineStatus,
@@ -195,6 +250,14 @@ impl BlockingRuntimeClient {
 
     pub fn runtime_status(&mut self) -> anyhow::Result<RuntimeStatusResponse> {
         self.request_json(Method::GET, "/api/runtime/status")
+    }
+
+    pub fn token_balance(&mut self) -> anyhow::Result<TokenBalanceResponse> {
+        self.request_json(Method::GET, "/api/tokens")
+    }
+
+    pub fn token_ledger(&mut self, limit: usize) -> anyhow::Result<TokenLedgerResponse> {
+        self.request_json(Method::GET, &format!("/api/tokens/ledger?limit={}", limit.max(1)))
     }
 
     pub fn list_workspaces(&mut self) -> anyhow::Result<Vec<WorkspaceSummary>> {
