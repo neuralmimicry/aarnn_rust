@@ -56,8 +56,11 @@ pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
             let idx = parse_env_usize("NM_UI_CL_DEVICE_INDEX")
                 .or_else(|| parse_env_usize("NM_CL_DEVICE_INDEX"))
                 .unwrap_or(0);
-            match OpenCLManager::new_with_preferred_device_index(idx) {
-                Ok(manager) => {
+            let init_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                OpenCLManager::new_with_preferred_device_index(idx)
+            }));
+            match init_result {
+                Ok(Ok(manager)) => {
                     let device_name = manager
                         .device
                         .name()
@@ -80,8 +83,15 @@ pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
                     );
                     Some(Arc::new(manager))
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     nm_err!("[warn] OpenCL unavailable: {}", e);
+                    None
+                }
+                Err(payload) => {
+                    nm_err!(
+                        "[warn] OpenCL/CUDA initialization panicked: {}. Falling back to CPU-only execution.",
+                        panic_payload_to_string(payload)
+                    );
                     None
                 }
             }
@@ -93,6 +103,16 @@ fn parse_env_usize(name: &str) -> Option<usize> {
     std::env::var(name)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 fn opencl_device_ids_by_type(

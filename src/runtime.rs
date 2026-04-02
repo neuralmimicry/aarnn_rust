@@ -581,10 +581,13 @@ impl RuntimeAutoscaler for ContinuumAutoscaler {
     fn evaluate<'a>(&'a self, metrics: RuntimeMetrics) -> AutoscalerFuture<'a> {
         Box::pin(async move {
             let controller_lock_path = self.controller_lock_path();
-            let controller_lock =
-                tokio::task::spawn_blocking(move || try_acquire_lease(&controller_lock_path))
-                    .await
-                    .context("autoscaler controller lease task failed")??;
+            let controller_lock = tokio::task::spawn_blocking(
+                move || -> anyhow::Result<Option<FileLease>> {
+                    try_acquire_lease(&controller_lock_path)
+                },
+            )
+            .await
+            .context("autoscaler controller lease task failed")??;
 
             let cluster = match self.fetch_cluster_telemetry().await {
                 Ok(cluster) => cluster,
@@ -1628,9 +1631,11 @@ impl RuntimeManager {
         handle: &Arc<WorkspaceHandle>,
     ) -> anyhow::Result<Option<FileLease>> {
         let lease_path = handle.lease_path();
-        tokio::task::spawn_blocking(move || try_acquire_lease(&lease_path))
-            .await
-            .context("workspace lease task failed")?
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<FileLease>> {
+            try_acquire_lease(&lease_path)
+        })
+        .await
+        .context("workspace lease task failed")?
     }
 
     async fn acquire_workspace_lease(
