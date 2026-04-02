@@ -21,6 +21,18 @@ This repository integrates the existing neuromorphic build and container workflo
 scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust brainregions false
 ```
 
+## Release workflow
+
+GitHub Actions binary release automation lives in `.github/workflows/build-and-release.yml`.
+
+- `Cargo.toml` is the release version source of truth.
+- official GitHub releases require a matching `vX.Y.Z` tag.
+- `scripts/package-release.sh --version <cargo-version> --output-dir ./dist` builds the release tarball and checksum manifest.
+- manual `workflow_dispatch` runs can package artifacts from any ref.
+- publish steps only run from a `v*` tag ref, either automatically on tag push or manually from `workflow_dispatch`.
+
+The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. The existing `.github/workflows/container-build.yml` pipeline remains the multi-arch container promotion path for richer runtime images.
+
 ### Train a sample model artefact
 
 ```bash

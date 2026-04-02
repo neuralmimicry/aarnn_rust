@@ -39,6 +39,7 @@ mod rdma;
 mod runner;
 mod runtime;
 mod runtime_api;
+mod shared_fs;
 mod sim;
 #[allow(dead_code)]
 mod spike_io;

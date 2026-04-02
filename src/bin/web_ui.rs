@@ -94,6 +94,7 @@ async fn connect_cluster_client(
 }
 
 #[derive(Parser, Debug)]
+#[command(author, version, about = "AARNN web UI server", long_about = None)]
 struct Args {
     /// Listen address for the web UI server.
     #[arg(long, default_value = "0.0.0.0:8080")]
@@ -1642,6 +1643,12 @@ async fn api_auth_middleware(
             | "/api/login"
             | "/api/signup"
             | "/api/me"
+            | "/openapi.json"
+            | "/config"
+            | "/auth/mode"
+            | "/login"
+            | "/signup"
+            | "/me"
     ) {
         return next.run(req).await;
     }

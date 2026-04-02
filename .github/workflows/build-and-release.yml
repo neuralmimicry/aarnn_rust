@@ -1,0 +1,234 @@
+name: Build and Release
+
+on:
+  pull_request:
+    branches:
+      - brainregions
+      - engine
+      - main
+      - master
+  push:
+    branches:
+      - brainregions
+      - engine
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub release from the selected v* tag ref"
+        required: true
+        type: boolean
+        default: false
+      draft_release:
+        description: "Mark a manually published release as draft"
+        required: true
+        type: boolean
+        default: false
+      prerelease:
+        description: "Mark a manually published release as prerelease"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev protobuf-compiler
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check build
+        run: cargo check --locked --all-targets
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+      - name: Build release binaries
+        run: cargo build --locked --release --bin aarnn_rust --bin web_ui
+
+      - name: Smoke test CLI help
+        run: cargo run --locked --release --bin aarnn_rust -- --help
+
+      - name: Smoke test web UI help
+        run: cargo run --locked --release --bin web_ui -- --help
+
+      - name: Validate release script
+        run: bash -n scripts/package-release.sh
+
+  package-release:
+    name: Package Release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      artifact_version: ${{ steps.meta.outputs.artifact_version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev protobuf-compiler
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          short_sha="${GITHUB_SHA::0:7}"
+          release_tag=""
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            release_tag="${GITHUB_REF#refs/tags/}"
+            artifact_version="${release_tag#v}"
+          else
+            artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
+          fi
+
+          if [[ -n "$release_tag" && "$artifact_version" != "$cargo_version" ]]; then
+            echo "::error::Tag ${release_tag} does not match Cargo.toml"
+            echo "::error::version ${cargo_version}"
+            exit 1
+          fi
+
+          artifact_name="aarnn-rust-release-${artifact_version}-linux-x86_64"
+
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/package-release.sh
+          ./scripts/package-release.sh \
+            --version "${{ steps.meta.outputs.artifact_version }}" \
+            --output-dir ./dist
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish Release
+    needs: package-release
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    permissions:
+      contents: write
+    steps:
+      - name: Validate publish target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ needs.package-release.outputs.release_tag }}" ]]; then
+            echo "::error::Publishing requires a v* tag ref"
+            exit 1
+          fi
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.package-release.outputs.artifact_name }}
+          path: ./dist
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.package-release.outputs.release_tag }}
+          DRAFT_RELEASE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.draft_release }}
+          MANUAL_PRERELEASE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=(dist/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No packaged artifacts were downloaded"
+            exit 1
+          fi
+
+          title="AARNN Rust ${RELEASE_TAG}"
+          prerelease="${MANUAL_PRERELEASE}"
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" && "${RELEASE_TAG}" == *-* ]]; then
+            prerelease="true"
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+            exit 0
+          fi
+
+          args=(
+            "${RELEASE_TAG}"
+            "${files[@]}"
+            --target "${GITHUB_SHA}"
+            --title "${title}"
+            --generate-notes
+          )
+
+          if [[ "${DRAFT_RELEASE}" == "true" ]]; then
+            args+=(--draft)
+          fi
+          if [[ "${prerelease}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "${args[@]}"
