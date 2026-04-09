@@ -7,6 +7,7 @@ This repository integrates the existing neuromorphic build and container workflo
 - Existing multi-architecture container build based on the project `Containerfile`
 - Local build script that reuses CI-built architecture images for manifest completion
 - GitHub Actions workflow for immutable multi-arch builds and promotion
+- Optional FPAA startup autodetection for AARNN kernels, with Pi.HAT GPIO/SPI and USB probe support
 - Kubernetes operator-style control plane for `Model`, `Experiment`, and `Dataset`
 - Argo Rollouts canary delivery and Istio traffic management
 - Shadow deployment, canary promotion, and blue/green targeting
@@ -52,6 +53,50 @@ python experiments/ab/ab_test.py
 python experiments/bandits/bandit.py
 python experiments/rl/rl_router.py
 ```
+
+## FPAA offload startup support
+
+The Rust runtime can now probe for an attached FPAA at startup and expose per-kernel
+offload routing controls for the AARNN path.
+
+What it does:
+
+- probes for a Pi.HAT-style FPAA through GPIO/SPI, defaulting to `/dev/spidev0.0`
+- probes for USB-connected FPAA endpoints through `/dev/ttyUSB*`, `/dev/ttyACM*`, and `/dev/serial/by-id`
+- verifies whether expected AARNN kernel images are present by checking the Okika manifest, `.ahf` export, and `fpaa/runtime_state.json`
+- runs host-side sample tests for the supported FPAA-realizable AARNN kernels
+- computes requested vs effective routing so unverified kernels fall back to software automatically
+- exposes the same controls in the CLI and the native egui UI
+
+Main CLI entry points:
+
+```bash
+# Print detection and verification status, then exit
+cargo run --bin aarnn_rust -- --fpaa-status-only
+
+# Prefer Pi.HAT probing and request FPAA for two kernels
+cargo run --bin aarnn_rust -- \
+  --fpaa-transport pihat \
+  --fpaa-route synaptic_filter=fpaa \
+  --fpaa-route stp=fpaa
+
+# Require hardware and use a USB hint while probing
+cargo run --bin aarnn_rust -- \
+  --fpaa-mode required \
+  --fpaa-transport usb \
+  --fpaa-usb-hint okika \
+  --fpaa-print-status
+```
+
+In the egui application, the controls are under `AARNN -> Biological Realism -> FPAA Offload`.
+
+Current limit:
+
+- startup detection, verification, and routing selection are implemented
+- the numerical AARNN kernels still execute in Rust unless a real hardware data-path is added
+- if hardware is missing, not ready, or not verified, the effective route is forced back to software
+
+The generated Xcos and Okika collateral lives under `fpaa/`. Start with `fpaa/README.md`.
 
 ## Shared token billing via nmchain
 

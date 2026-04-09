@@ -24,6 +24,7 @@ mod cl_compute;
 mod config;
 mod distributed;
 mod engine;
+mod fpaa;
 mod ga;
 #[cfg(feature = "opencl")]
 mod gpu_api;
@@ -57,7 +58,8 @@ use rand::{RngExt, SeedableRng};
 use serde::Deserialize;
 
 use crate::config::{
-    apply_clumping_layer_defaults, IzhikevichParams, LIFParams, NetworkConfig, STDPParams,
+    apply_clumping_layer_defaults, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference,
+    IzhikevichParams, LIFParams, NetworkConfig, STDPParams,
 };
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
@@ -148,6 +150,40 @@ impl RuntimePayloadKindArg {
             Self::Auto => crate::engine::EnginePayloadKind::Auto,
             Self::Config => crate::engine::EnginePayloadKind::Config,
             Self::Snapshot => crate::engine::EnginePayloadKind::Snapshot,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum FpaaModeArg {
+    Auto,
+    Disabled,
+    Required,
+}
+
+impl From<FpaaModeArg> for FpaaStartupMode {
+    fn from(value: FpaaModeArg) -> Self {
+        match value {
+            FpaaModeArg::Auto => FpaaStartupMode::Auto,
+            FpaaModeArg::Disabled => FpaaStartupMode::Disabled,
+            FpaaModeArg::Required => FpaaStartupMode::Required,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum FpaaTransportArg {
+    Auto,
+    Pihat,
+    Usb,
+}
+
+impl From<FpaaTransportArg> for FpaaTransportPreference {
+    fn from(value: FpaaTransportArg) -> Self {
+        match value {
+            FpaaTransportArg::Auto => FpaaTransportPreference::Auto,
+            FpaaTransportArg::Pihat => FpaaTransportPreference::PiHat,
+            FpaaTransportArg::Usb => FpaaTransportPreference::Usb,
         }
     }
 }
@@ -259,6 +295,38 @@ struct Cli {
     /// Path to network snapshot JSON file (weights + config)
     #[arg(long)]
     network: Option<String>,
+
+    /// FPAA startup policy: auto-detect, disable, or require hardware readiness.
+    #[arg(long, value_enum)]
+    fpaa_mode: Option<FpaaModeArg>,
+
+    /// Preferred FPAA host transport to probe first.
+    #[arg(long, value_enum)]
+    fpaa_transport: Option<FpaaTransportArg>,
+
+    /// Override one kernel route, e.g. --fpaa-route synaptic_filter=fpaa
+    #[arg(long = "fpaa-route")]
+    fpaa_routes: Vec<String>,
+
+    /// Force startup FPAA sample tests on when probing hardware.
+    #[arg(long, default_value_t = false)]
+    fpaa_self_test: bool,
+
+    /// Override the SPI device used for Pi.HAT probing.
+    #[arg(long)]
+    fpaa_spi_device: Option<String>,
+
+    /// Optional USB device path or product-name hint for USB probing.
+    #[arg(long)]
+    fpaa_usb_hint: Option<String>,
+
+    /// Print full FPAA status JSON at startup and continue.
+    #[arg(long, default_value_t = false)]
+    fpaa_print_status: bool,
+
+    /// Print full FPAA status JSON at startup and exit.
+    #[arg(long, default_value_t = false)]
+    fpaa_status_only: bool,
 
     /// Runtime middleware URL (for workspace-backed UI/CLI flows).
     #[arg(long)]
@@ -653,6 +721,70 @@ fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn parse_fpaa_route_assignment(raw: &str) -> anyhow::Result<(crate::fpaa::FpaaKernel, FpaaKernelRoute)> {
+    let (kernel_raw, route_raw) = raw
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("invalid --fpaa-route '{}', expected kernel=software|fpaa", raw))?;
+    let kernel = crate::fpaa::FpaaKernel::parse_id(kernel_raw)
+        .ok_or_else(|| anyhow::anyhow!("unknown FPAA kernel '{}'", kernel_raw))?;
+    let route = match route_raw.trim().to_ascii_lowercase().as_str() {
+        "software" | "sw" => FpaaKernelRoute::Software,
+        "fpaa" => FpaaKernelRoute::Fpaa,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unknown FPAA route '{}', expected software or fpaa",
+                other
+            ))
+        }
+    };
+    Ok((kernel, route))
+}
+
+fn apply_fpaa_cli_overrides(net_cfg: &mut NetworkConfig, args: &Cli) -> anyhow::Result<()> {
+    if let Some(mode) = args.fpaa_mode {
+        net_cfg.fpaa.startup_mode = mode.into();
+    }
+    if let Some(transport) = args.fpaa_transport {
+        net_cfg.fpaa.transport_preference = transport.into();
+    }
+    if args.fpaa_self_test {
+        net_cfg.fpaa.run_self_test_on_startup = true;
+    }
+    if let Some(spi_device) = args.fpaa_spi_device.as_deref() {
+        net_cfg.fpaa.spi_device = spi_device.to_string();
+    }
+    if let Some(usb_hint) = args.fpaa_usb_hint.as_deref() {
+        net_cfg.fpaa.usb_device_hint = usb_hint.to_string();
+    }
+    for assignment in &args.fpaa_routes {
+        let (kernel, route) = parse_fpaa_route_assignment(assignment)?;
+        *kernel.route_mut(&mut net_cfg.fpaa.routing) = route;
+    }
+    Ok(())
+}
+
+fn log_fpaa_status(status: &crate::fpaa::FpaaRuntimeStatus) {
+    nm_log!("[info] {}", status.summary);
+    if let Some(err) = status.startup_error.as_deref() {
+        nm_log!("[warn] FPAA startup: {}", err);
+    }
+    for kernel in &status.kernels {
+        if kernel.requested_route == FpaaKernelRoute::Fpaa
+            || kernel.effective_route == FpaaKernelRoute::Fpaa
+        {
+            nm_log!(
+                "[info] FPAA kernel {} requested={:?} effective={:?} verification={} self_test={} note={}",
+                kernel.kernel.id(),
+                kernel.requested_route,
+                kernel.effective_route,
+                kernel.verification.label(),
+                kernel.sample_test.label(),
+                kernel.note
+            );
+        }
+    }
+}
+
 fn distributed_autostart_enabled() -> bool {
     std::env::var("NM_DISTRIBUTED_AUTOSTART")
         .ok()
@@ -828,6 +960,7 @@ fn main() -> anyhow::Result<()> {
         net_cfg.use_morphology = true;
         net_cfg.aarnn_layer_depth = 5;
     }
+    apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
     startup_config_json = serde_json::to_string(&net_cfg).ok();
 
     let mut remote_workspace_binding: Option<crate::runtime_api::RemoteWorkspaceBinding> = None;
@@ -864,9 +997,22 @@ fn main() -> anyhow::Result<()> {
         })?;
         let snap = crate::runner::decode_snapshot_with_profile_backfill(&snapshot.snapshot_json)?;
         net_cfg = snap.net;
+        apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
         startup_snapshot_json = Some(snapshot.snapshot_json);
         startup_config_json = serde_json::to_string(&net_cfg).ok();
         remote_workspace_binding = Some(binding);
+    }
+
+    let fpaa_status = crate::fpaa::startup_probe(&net_cfg.fpaa);
+    if args.fpaa_print_status || args.fpaa_status_only {
+        print_json_pretty(&fpaa_status)?;
+    }
+    log_fpaa_status(&fpaa_status);
+    if let Some(err) = fpaa_status.unmet_requirement() {
+        return Err(anyhow::anyhow!(err));
+    }
+    if args.fpaa_status_only {
+        return Ok(());
     }
 
     // Initialize tracing/logging if requested via CLI.

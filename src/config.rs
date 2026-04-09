@@ -18,6 +18,114 @@ use std::collections::HashSet;
 
 use crate::spike_io::profiles::{NetworkIoProfileSelector, SpikeIoConfig};
 
+/// Startup policy for optional FPAA offload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FpaaStartupMode {
+    Auto,
+    Disabled,
+    Required,
+}
+
+impl Default for FpaaStartupMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Preferred host transport when probing for an attached FPAA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FpaaTransportPreference {
+    Auto,
+    PiHat,
+    Usb,
+}
+
+impl Default for FpaaTransportPreference {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Requested backend for one AARNN kernel family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FpaaKernelRoute {
+    Software,
+    Fpaa,
+}
+
+impl Default for FpaaKernelRoute {
+    fn default() -> Self {
+        Self::Software
+    }
+}
+
+/// Per-kernel backend routing preferences for the AARNN path.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FpaaRoutingConfig {
+    pub synaptic_filter: FpaaKernelRoute,
+    pub short_term_plasticity: FpaaKernelRoute,
+    pub adaptive_threshold_homeostasis: FpaaKernelRoute,
+    pub active_dendrite: FpaaKernelRoute,
+    pub gap_junction_field: FpaaKernelRoute,
+    pub morphology_transmission: FpaaKernelRoute,
+    pub triplet_scaling_dale_hybrid: FpaaKernelRoute,
+}
+
+impl Default for FpaaRoutingConfig {
+    fn default() -> Self {
+        Self {
+            synaptic_filter: FpaaKernelRoute::Software,
+            short_term_plasticity: FpaaKernelRoute::Software,
+            adaptive_threshold_homeostasis: FpaaKernelRoute::Software,
+            active_dendrite: FpaaKernelRoute::Software,
+            gap_junction_field: FpaaKernelRoute::Software,
+            morphology_transmission: FpaaKernelRoute::Software,
+            triplet_scaling_dale_hybrid: FpaaKernelRoute::Software,
+        }
+    }
+}
+
+/// Host-side FPAA detection, verification, and routing settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FpaaConfig {
+    /// Auto-detect, disable, or require a hardware FPAA at startup.
+    pub startup_mode: FpaaStartupMode,
+    /// Probe order for supported host transports.
+    pub transport_preference: FpaaTransportPreference,
+    /// Run host-side sample tests when an FPAA is detected.
+    pub run_self_test_on_startup: bool,
+    /// Root directory containing generated Okika manifests and configuration images.
+    pub manifest_root: String,
+    /// Runtime state file written after a successful hardware programming step.
+    pub runtime_state_path: String,
+    /// Preferred SPI device for Pi.HAT mode.
+    pub spi_device: String,
+    /// Optional USB device or product-name hint for serial-style USB adapters.
+    pub usb_device_hint: String,
+    /// Per-kernel routing requests.
+    pub routing: FpaaRoutingConfig,
+}
+
+impl Default for FpaaConfig {
+    fn default() -> Self {
+        Self {
+            startup_mode: FpaaStartupMode::Auto,
+            transport_preference: FpaaTransportPreference::Auto,
+            run_self_test_on_startup: true,
+            manifest_root: "fpaa/okika".to_string(),
+            runtime_state_path: "fpaa/runtime_state.json".to_string(),
+            spi_device: "/dev/spidev0.0".to_string(),
+            usb_device_hint: String::new(),
+            routing: FpaaRoutingConfig::default(),
+        }
+    }
+}
+
 /// Species/organism biomimicry profile used to seed AARNN defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AarnnBiomimicryProfile {
@@ -2032,6 +2140,10 @@ pub struct NetworkConfig {
     /// Declarative encoder/profile/decoder selection for external spike I/O boundaries.
     pub spike_io: SpikeIoConfig,
 
+    // --- Optional FPAA Offload ---
+    /// Host-side FPAA detection, verification, and kernel-routing policy.
+    pub fpaa: FpaaConfig,
+
     // --- UI Configuration ---
     /// Target frame rate for the visualization engine.
     pub ui_target_fps: f32,
@@ -2193,6 +2305,7 @@ impl Default for NetworkConfig {
             aarnn_layer_depth: 5,
             aarnn_bio: AarnnBioParams::default(),
             spike_io: SpikeIoConfig::default(),
+            fpaa: FpaaConfig::default(),
             ui_target_fps: 60.0,
         };
         apply_aarnn_human_biomimicry_defaults(&mut cfg);
