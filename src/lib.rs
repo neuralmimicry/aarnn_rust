@@ -25,6 +25,8 @@ pub mod aer;
 pub mod aer_can;
 /// Shared filesystem-backed auth/session stores used by scaled frontends.
 pub mod auth_store;
+/// Shared Refiner/Postgres-backed auth and token client helpers.
+pub mod central_auth;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
 /// FPAA discovery, verification, and routing helpers.

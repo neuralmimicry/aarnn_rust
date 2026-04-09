@@ -1,5 +1,5 @@
 use crate::distributed::proto::{
-    distributed_neuromorphic_client::DistributedNeuromorphicClient, StatusRequest,
+    StatusRequest, distributed_neuromorphic_client::DistributedNeuromorphicClient,
 };
 use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
 use crate::runtime_api::{
@@ -7,8 +7,8 @@ use crate::runtime_api::{
     WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
     WorkspaceSnapshotResponse, WorkspaceSummary,
 };
-use crate::shared_fs::{acquire_lease_with_timeout, try_acquire_lease, FileLease};
-use anyhow::{anyhow, Context};
+use crate::shared_fs::{FileLease, acquire_lease_with_timeout, try_acquire_lease};
+use anyhow::{Context, anyhow};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{watch, RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, watch};
 use tokio::time::{Duration, MissedTickBehavior};
 use tonic::Request;
 
@@ -38,6 +38,10 @@ fn default_worker_limit() -> usize {
         .map(|n| n.get())
         .unwrap_or(1)
         .max(1)
+}
+
+fn default_resume_existing_workspaces() -> bool {
+    true
 }
 
 fn now_ms() -> u64 {
@@ -581,13 +585,12 @@ impl RuntimeAutoscaler for ContinuumAutoscaler {
     fn evaluate<'a>(&'a self, metrics: RuntimeMetrics) -> AutoscalerFuture<'a> {
         Box::pin(async move {
             let controller_lock_path = self.controller_lock_path();
-            let controller_lock = tokio::task::spawn_blocking(
-                move || -> anyhow::Result<Option<FileLease>> {
+            let controller_lock =
+                tokio::task::spawn_blocking(move || -> anyhow::Result<Option<FileLease>> {
                     try_acquire_lease(&controller_lock_path)
-                },
-            )
-            .await
-            .context("autoscaler controller lease task failed")??;
+                })
+                .await
+                .context("autoscaler controller lease task failed")??;
 
             let cluster = match self.fetch_cluster_telemetry().await {
                 Ok(cluster) => cluster,
@@ -759,6 +762,7 @@ pub struct RuntimeConfig {
     pub root_dir: PathBuf,
     pub tick_interval_ms: u64,
     pub local_worker_limit: usize,
+    pub resume_existing_workspaces: bool,
     pub autosave_steps: u64,
     pub continuum: Option<ContinuumAutoscalerConfig>,
     pub reconcile_interval_ms: u64,
@@ -772,6 +776,7 @@ impl Default for RuntimeConfig {
             root_dir: default_root_dir(),
             tick_interval_ms: 25,
             local_worker_limit: default_worker_limit(),
+            resume_existing_workspaces: default_resume_existing_workspaces(),
             autosave_steps: 50,
             continuum: ContinuumAutoscalerConfig::from_env(),
             reconcile_interval_ms: 1000,
@@ -828,6 +833,7 @@ struct WorkspaceHandle {
     manifest: RwLock<WorkspaceManifest>,
     engine: Mutex<RunnerEngine>,
     running: AtomicBool,
+    resume_suppressed: AtomicBool,
     stepping: AtomicBool,
     avg_step_time_micros: AtomicU64,
     status_cache: RwLock<crate::engine::EngineStatus>,
@@ -1091,6 +1097,7 @@ impl RuntimeManager {
             manifest: RwLock::new(manifest),
             engine: Mutex::new(engine),
             running: AtomicBool::new(req.auto_start.unwrap_or(false)),
+            resume_suppressed: AtomicBool::new(false),
             stepping: AtomicBool::new(false),
             avg_step_time_micros: AtomicU64::new(0),
             status_cache: RwLock::new(status),
@@ -1251,6 +1258,7 @@ impl RuntimeManager {
                     manifest.desired_running = true;
                     manifest.updated_at_ms = now_ms();
                 }
+                handle.resume_suppressed.store(false, Ordering::SeqCst);
                 handle.running.store(true, Ordering::SeqCst);
                 self.persist_manifest_only(&handle).await?;
             }
@@ -1260,6 +1268,7 @@ impl RuntimeManager {
                     manifest.desired_running = false;
                     manifest.updated_at_ms = now_ms();
                 }
+                handle.resume_suppressed.store(false, Ordering::SeqCst);
                 handle.running.store(false, Ordering::SeqCst);
                 self.persist_manifest_only(&handle).await?;
             }
@@ -1289,6 +1298,9 @@ impl RuntimeManager {
                         manifest.last_saved_at_ms = Some(now_ms());
                         manifest.engine = engine.spec().clone();
                     }
+                    handle_for_reset
+                        .resume_suppressed
+                        .store(false, Ordering::SeqCst);
                     handle_for_reset.running.store(true, Ordering::SeqCst);
                     persist_handle_files(&handle_for_reset, &snapshot_json, false)
                 })
@@ -1321,6 +1333,9 @@ impl RuntimeManager {
                         manifest.last_saved_at_ms = Some(now_ms());
                         manifest.engine = engine.spec().clone();
                     }
+                    handle_for_reset
+                        .resume_suppressed
+                        .store(false, Ordering::SeqCst);
                     handle_for_reset.running.store(false, Ordering::SeqCst);
                     persist_handle_files(&handle_for_reset, &snapshot_json, false)
                 })
@@ -1355,6 +1370,9 @@ impl RuntimeManager {
                         .map_err(|_| anyhow!("workspace engine lock poisoned"))? = engine;
                     *handle_for_new.status_cache.blocking_write() = status;
                     *handle_for_new.activity_cache.blocking_write() = activity;
+                    handle_for_new
+                        .resume_suppressed
+                        .store(false, Ordering::SeqCst);
                     handle_for_new.running.store(false, Ordering::SeqCst);
                     persist_handle_files(&handle_for_new, &snapshot_json, true)
                 })
@@ -1705,9 +1723,10 @@ impl RuntimeManager {
 
         let Some(snapshot_mtime) = snapshot_mtime else {
             *handle.manifest.write().await = disk_manifest.clone();
-            handle
-                .running
-                .store(disk_manifest.desired_running, Ordering::SeqCst);
+            handle.running.store(
+                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             return Ok(());
         };
         if snapshot_mtime <= current_manifest_snapshot_ms && !manifest_changed {
@@ -1715,9 +1734,10 @@ impl RuntimeManager {
         }
         if snapshot_mtime <= current_manifest_snapshot_ms {
             *handle.manifest.write().await = disk_manifest.clone();
-            handle
-                .running
-                .store(disk_manifest.desired_running, Ordering::SeqCst);
+            handle.running.store(
+                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             return Ok(());
         }
 
@@ -1744,9 +1764,11 @@ impl RuntimeManager {
                 manifest.last_saved_at_ms = Some(snapshot_mtime);
                 manifest.engine = engine.spec().clone();
             }
-            handle_for_refresh
-                .running
-                .store(disk_manifest.desired_running, Ordering::SeqCst);
+            handle_for_refresh.running.store(
+                disk_manifest.desired_running
+                    && !handle_for_refresh.resume_suppressed.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             Ok(())
         })
         .await
@@ -1906,6 +1928,8 @@ impl RuntimeManager {
 
                 let status = engine.status();
                 let activity = engine.activity();
+                let resume_suppressed =
+                    !self.config.resume_existing_workspaces && manifest.desired_running;
                 loaded.insert(
                     key.clone(),
                     Arc::new(WorkspaceHandle {
@@ -1913,7 +1937,8 @@ impl RuntimeManager {
                         dir: workspace_dir.clone(),
                         manifest: RwLock::new(manifest.clone()),
                         engine: Mutex::new(engine),
-                        running: AtomicBool::new(manifest.desired_running),
+                        running: AtomicBool::new(manifest.desired_running && !resume_suppressed),
+                        resume_suppressed: AtomicBool::new(resume_suppressed),
                         stepping: AtomicBool::new(false),
                         avg_step_time_micros: AtomicU64::new(0),
                         status_cache: RwLock::new(status),
