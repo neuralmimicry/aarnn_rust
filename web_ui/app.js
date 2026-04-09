@@ -31,6 +31,7 @@ const workspaceStopBtn = document.getElementById("workspace-stop");
 const workspaceModeEl = document.getElementById("workspace-mode");
 const workspaceStatusEl = document.getElementById("workspace-status");
 const workspaceAutoscalerEl = document.getElementById("workspace-autoscaler");
+const workspaceFeedbackEl = document.getElementById("workspace-feedback");
 
 const cpuEl = document.getElementById("cpu");
 const ramEl = document.getElementById("ram");
@@ -180,6 +181,7 @@ const state = {
 let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
 let ioSourceRunner = null;
+let runtimeStatusRequestSeq = 0;
 
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
@@ -1074,13 +1076,17 @@ function syncWorkspaceUi() {
 
 async function loadRuntimeStatus() {
   if (state.authMode !== "none" && !state.user) return;
+  const requestSeq = ++runtimeStatusRequestSeq;
   try {
     const resp = await runtimeFetch("/api/runtime/status");
+    // Ignore stale responses so an older poll cannot wipe a newer workspace list.
+    if (requestSeq !== runtimeStatusRequestSeq) return;
     if (!resp.ok) {
       refreshWorkspaceSelect();
       return;
     }
     const data = await resp.json();
+    if (requestSeq !== runtimeStatusRequestSeq) return;
     state.runtime.workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
     state.runtime.autoscaler = data.autoscaler || null;
     const activeIds = new Set(state.runtime.workspaces.map((workspace) => workspace.workspace_id));
@@ -1104,6 +1110,7 @@ async function loadRuntimeStatus() {
       refreshControlButtons();
     }
   } catch (_) {
+    if (requestSeq !== runtimeStatusRequestSeq) return;
     refreshWorkspaceSelect();
   }
 }
@@ -1130,20 +1137,26 @@ async function createWorkspaceFromCurrentState() {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      setToolStatus(err.error || "Failed to create workspace.");
+      const message = formatWorkspaceApiError(err, "Failed to create workspace.");
+      setWorkspaceFeedback(message, "error");
+      setToolStatus(message);
       return;
     }
     const detail = await resp.json();
     cacheWorkspaceDetail(detail);
     state.runtime.activeWorkspace = detail?.summary?.workspace_id || payload.workspace_id || "";
     saveActiveWorkspace();
+    refreshWorkspaceSelect();
     if (workspaceNameInput) workspaceNameInput.value = "";
     await loadRuntimeStatus();
     refreshNetworkSelect();
     await fetchSnapshotForActive();
     await pollActivity();
-    setToolStatus(`Created workspace ${state.runtime.activeWorkspace}.`);
+    const message = `Created workspace ${state.runtime.activeWorkspace}.`;
+    setWorkspaceFeedback(message, "success");
+    setToolStatus(message);
   } catch (_) {
+    setWorkspaceFeedback("Failed to create workspace.", "error");
     setToolStatus("Failed to create workspace.");
   }
 }
@@ -1158,7 +1171,9 @@ async function deleteSelectedWorkspace() {
     );
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      setToolStatus(err.error || "Failed to delete workspace.");
+      const message = formatWorkspaceApiError(err, "Failed to delete workspace.");
+      setWorkspaceFeedback(message, "error");
+      setToolStatus(message);
       return;
     }
     state.runtime.details.delete(workspace.workspace_id);
@@ -1175,8 +1190,11 @@ async function deleteSelectedWorkspace() {
     } else {
       rebuildGraph();
     }
-    setToolStatus(`Deleted workspace ${workspace.workspace_id}.`);
+    const message = `Deleted workspace ${workspace.workspace_id}.`;
+    setWorkspaceFeedback(message, "success");
+    setToolStatus(message);
   } catch (_) {
+    setWorkspaceFeedback("Failed to delete workspace.", "error");
     setToolStatus("Failed to delete workspace.");
   }
 }
@@ -1184,6 +1202,7 @@ async function deleteSelectedWorkspace() {
 async function importWorkspacePayload(raw, kind, extra = {}) {
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) {
+    setWorkspaceFeedback("Select a workspace first.", "error");
     setToolStatus("Select a workspace first.");
     return false;
   }
@@ -1205,7 +1224,9 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
     );
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      setToolStatus(err.error || "Failed to update workspace.");
+      const message = formatWorkspaceApiError(err, "Failed to update workspace.");
+      setWorkspaceFeedback(message, "error");
+      setToolStatus(message);
       return false;
     }
     const detail = await resp.json();
@@ -1213,8 +1234,10 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
     await loadRuntimeStatus();
     await fetchSnapshotForActive();
     await pollActivity();
+    setWorkspaceFeedback(`Updated workspace ${workspace.workspace_id}.`, "success");
     return true;
   } catch (_) {
+    setWorkspaceFeedback("Failed to update workspace.", "error");
     setToolStatus("Failed to update workspace.");
     return false;
   }
@@ -1234,7 +1257,9 @@ async function controlWorkspaceAction(action) {
     );
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      setToolStatus(err.error || "Failed to control workspace.");
+      const message = formatWorkspaceApiError(err, "Failed to control workspace.");
+      setWorkspaceFeedback(message, "error");
+      setToolStatus(message);
       return false;
     }
     const detail = await resp.json();
@@ -1242,8 +1267,10 @@ async function controlWorkspaceAction(action) {
     await loadRuntimeStatus();
     await fetchSnapshotForActive();
     await pollActivity();
+    setWorkspaceFeedback(`Workspace ${workspace.workspace_id} ${action}.`, "success");
     return true;
   } catch (_) {
+    setWorkspaceFeedback("Failed to control workspace.", "error");
     setToolStatus("Failed to control workspace.");
     return false;
   }
@@ -2361,6 +2388,30 @@ function setToolStatus(message) {
   if (toolStatusEl) {
     toolStatusEl.textContent = message;
   }
+}
+
+function setWorkspaceFeedback(message, tone = "") {
+  if (!workspaceFeedbackEl) return;
+  workspaceFeedbackEl.textContent = message || "Workspace actions appear here.";
+  workspaceFeedbackEl.classList.remove("is-success", "is-error");
+  if (tone === "success") workspaceFeedbackEl.classList.add("is-success");
+  if (tone === "error") workspaceFeedbackEl.classList.add("is-error");
+}
+
+function formatWorkspaceApiError(err, fallback) {
+  const fallbackMessage = fallback || "Workspace operation failed.";
+  const raw = typeof err?.error === "string" ? err.error.trim() : "";
+  const required = Number(err?.required_tokens);
+  if (raw) {
+    if (Number.isFinite(required) && required > 0 && /insufficient tokens/i.test(raw)) {
+      return `${raw}. Token-gated workspace actions are enabled for this deployment.`;
+    }
+    return raw;
+  }
+  if (Number.isFinite(required) && required > 0) {
+    return `${fallbackMessage} Requires ${required} tokens.`;
+  }
+  return fallbackMessage;
 }
 
 function updateProbeHint() {

@@ -27,7 +27,8 @@ use crate::aer::decode_events;
 #[cfg(feature = "ui")]
 use crate::config::{
     apply_aarnn_human_biomimicry_defaults, apply_clumping_design, apply_clumping_layer_defaults,
-    ClumpingDesign, IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
+    ClumpingDesign, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference,
+    IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
 };
 #[cfg(feature = "ui")]
 use crate::distributed::{
@@ -37,6 +38,8 @@ use crate::distributed::{
     },
     DistributedNode, ManagedNetwork,
 };
+#[cfg(feature = "ui")]
+use crate::fpaa::{FpaaKernel, FpaaRuntimeStatus};
 use crate::ga::GASearch;
 #[cfg(all(feature = "ui", feature = "image_input"))]
 use crate::providers::ImageFileProvider;
@@ -69,7 +72,7 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::sync::RwLock;
@@ -1172,6 +1175,10 @@ struct App {
     boost_connectivity_count: usize,
     // Local copy of config for UI editing
     local_net: NetworkConfig,
+    // FPAA discovery / routing status for the local host
+    fpaa_status: FpaaRuntimeStatus,
+    fpaa_last_refresh: Instant,
+    fpaa_last_signature: String,
     // External IPC (UDS) state (only when robot_io feature is on)
     #[cfg(all(feature = "robot_io", unix))]
     ipc_sock_path: String,
@@ -1588,6 +1595,8 @@ impl App {
         }
         let initial_net_cfg = runner.net.clone();
         let local_net = runner.net.clone();
+        let fpaa_signature = serde_json::to_string(&local_net.fpaa).unwrap_or_default();
+        let fpaa_status = crate::fpaa::startup_probe(&local_net.fpaa);
         let n_s = runner.net.num_sensory_neurons;
         // allocate activity buffers
         let hidden_layer_sizes: Vec<usize> = (0..runner.net.num_hidden_layers)
@@ -2715,6 +2724,9 @@ impl App {
             aarnn_defaults_applied: false,
             boost_connectivity_count: 0,
             local_net: local_net.clone(),
+            fpaa_status,
+            fpaa_last_refresh: Instant::now(),
+            fpaa_last_signature: fpaa_signature,
             #[cfg(feature = "sysinfo")]
             sys_snapshot,
             #[cfg(feature = "sysinfo")]
@@ -3135,6 +3147,177 @@ impl App {
 
         self.refresh_ui_buffers();
         self.status = "Applied AARNN human-brain biomimicry defaults".into();
+    }
+
+    fn refresh_fpaa_status(&mut self, force: bool) {
+        let signature = serde_json::to_string(&self.local_net.fpaa).unwrap_or_default();
+        let stale = self.fpaa_last_refresh.elapsed() >= Duration::from_secs(5);
+        if force || stale || signature != self.fpaa_last_signature {
+            self.fpaa_status = crate::fpaa::startup_probe(&self.local_net.fpaa);
+            self.fpaa_last_refresh = Instant::now();
+            self.fpaa_last_signature = signature;
+        }
+    }
+
+    fn fpaa_route_label(route: FpaaKernelRoute) -> &'static str {
+        match route {
+            FpaaKernelRoute::Software => "Software",
+            FpaaKernelRoute::Fpaa => "FPAA",
+        }
+    }
+
+    fn render_fpaa_controls(&mut self, ui: &mut egui::Ui) -> bool {
+        self.refresh_fpaa_status(false);
+        let mut changed = false;
+
+        ui.group(|ui| {
+            ui.label("FPAA Offload");
+            ui.small(self.fpaa_status.summary.as_str());
+            if let Some(transport) = self.fpaa_status.detected_transport.as_ref() {
+                ui.small(format!(
+                    "Transport: {} | {} | ready={}",
+                    transport.kind.label(),
+                    transport.path,
+                    transport.ready
+                ));
+            } else {
+                ui.small("Transport: not detected");
+            }
+            if let Some(err) = self.fpaa_status.startup_error.as_deref() {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            ui.horizontal(|ui| {
+                ui.label("Startup mode");
+                egui::ComboBox::from_id_salt("fpaa_startup_mode")
+                    .selected_text(match self.local_net.fpaa.startup_mode {
+                        FpaaStartupMode::Auto => "Auto",
+                        FpaaStartupMode::Disabled => "Disabled",
+                        FpaaStartupMode::Required => "Required",
+                    })
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Auto,
+                                "Auto",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Disabled,
+                                "Disabled",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Required,
+                                "Required",
+                            )
+                            .changed();
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Transport");
+                egui::ComboBox::from_id_salt("fpaa_transport_pref")
+                    .selected_text(match self.local_net.fpaa.transport_preference {
+                        FpaaTransportPreference::Auto => "Auto",
+                        FpaaTransportPreference::PiHat => "Pi.HAT",
+                        FpaaTransportPreference::Usb => "USB",
+                    })
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::Auto,
+                                "Auto",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::PiHat,
+                                "Pi.HAT",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::Usb,
+                                "USB",
+                            )
+                            .changed();
+                    });
+            });
+            changed |= ui
+                .checkbox(
+                    &mut self.local_net.fpaa.run_self_test_on_startup,
+                    "Run FPAA sample tests at startup",
+                )
+                .changed();
+            ui.horizontal(|ui| {
+                if ui.button("Refresh FPAA").clicked() {
+                    self.refresh_fpaa_status(true);
+                    self.status = self.fpaa_status.summary.clone();
+                }
+                if ui.button("Re-run tests").clicked() {
+                    self.local_net.fpaa.run_self_test_on_startup = true;
+                    self.refresh_fpaa_status(true);
+                    self.status = format!("FPAA re-probed: {}", self.fpaa_status.summary);
+                    changed = true;
+                }
+            });
+            ui.separator();
+            for kernel in FpaaKernel::ALL {
+                let requested = kernel.route_mut(&mut self.local_net.fpaa.routing);
+                let effective = self.fpaa_status.effective_route(kernel);
+                let status = self
+                    .fpaa_status
+                    .kernels
+                    .iter()
+                    .find(|item| item.kernel == kernel);
+                ui.horizontal(|ui| {
+                    ui.label(kernel.label());
+                    egui::ComboBox::from_id_salt(format!("fpaa_kernel_route_{}", kernel.id()))
+                        .selected_text(Self::fpaa_route_label(*requested))
+                        .show_ui(ui, |ui| {
+                            changed |= ui
+                                .selectable_value(
+                                    requested,
+                                    FpaaKernelRoute::Software,
+                                    "Software",
+                                )
+                                .changed();
+                            changed |= ui
+                                .selectable_value(requested, FpaaKernelRoute::Fpaa, "FPAA")
+                                .changed();
+                        });
+                    let effective_color = if effective == FpaaKernelRoute::Fpaa {
+                        egui::Color32::LIGHT_GREEN
+                    } else {
+                        egui::Color32::LIGHT_YELLOW
+                    };
+                    ui.colored_label(
+                        effective_color,
+                        format!("effective {}", Self::fpaa_route_label(effective)),
+                    );
+                });
+                if let Some(status) = status {
+                    ui.small(format!(
+                        "verify={} | self-test={} | {}",
+                        status.verification.label(),
+                        status.sample_test.label(),
+                        status.note
+                    ));
+                }
+            }
+        });
+
+        if changed {
+            self.refresh_fpaa_status(true);
+        }
+        changed
     }
 
     fn cache_sizes_counts(runner: &Runner) -> (Vec<usize>, Vec<usize>, usize) {
@@ -5668,6 +5851,7 @@ impl eframe::App for App {
                 self.hot_core_top = snap.hot_core_top.clone();
             }
         }
+        self.refresh_fpaa_status(false);
         self.reap_finished_ga_thread();
 
         let runner_arc = self.runner.clone();
@@ -7179,6 +7363,7 @@ impl eframe::App for App {
                         "busy"
                     };
                     ui.label(format!("Status: {} | Sleep: {}", self.status, sleep_label));
+                    ui.small(format!("FPAA: {}", self.fpaa_status.summary));
                     ui.separator();
 
                     if let Some(binding) = self.remote_workspace_binding.clone() {
@@ -8192,6 +8377,13 @@ impl eframe::App for App {
                             self.aarnn_defaults_applied = true;
                         }
                         let mut need_apply = false;
+                        let mut fpaa_changed = false;
+                        ui.collapsing("FPAA Offload", |ui| {
+                            fpaa_changed |= self.render_fpaa_controls(ui);
+                        });
+                        if fpaa_changed {
+                            need_apply = true;
+                        }
                         {
                             let net = &mut self.local_net;
                             let mut changed = false;

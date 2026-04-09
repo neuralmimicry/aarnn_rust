@@ -27,6 +27,8 @@ pub mod aer_can;
 pub mod auth_store;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
+/// FPAA discovery, verification, and routing helpers.
+pub mod fpaa;
 /// User-agnostic engine facade around `Runner`.
 pub mod engine;
 /// Core neural network data structures including layers, neurons, and synapses.

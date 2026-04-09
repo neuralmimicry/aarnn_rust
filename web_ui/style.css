@@ -7,7 +7,7 @@
   color: #d7d7d7;
 }
 
-/* Neural Mimicry brand overrides */
+/* NeuralMimicry brand overrides */
 :root {
   --nm-bg-1: #1b2833;
   --nm-bg-2: #263846;
@@ -1196,6 +1196,18 @@ a.btn {
   background: #1b1b1b;
   color: #c6cbd1;
   font-size: 11px;
+}
+
+.workspace-feedback {
+  min-height: 1.4em;
+}
+
+.workspace-feedback.is-success {
+  color: #8ad6a3;
+}
+
+.workspace-feedback.is-error {
+  color: #ff9b7a;
 }
 
 .workspace-actions {

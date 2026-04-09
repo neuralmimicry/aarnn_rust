@@ -1,0 +1,54 @@
+{
+  "id": "adaptive_threshold_homeostasis",
+  "title": "AARNN Adaptive Threshold and Homeostasis",
+  "analog_class": "analog_core",
+  "rust_modules": ["src/sim.rs", "src/runner.rs", "src/aarnn/dynamics.rs"],
+  "rust_functions": ["adaptive_threshold_update", "homeostasis_rate_ema"],
+  "defaults": {
+    "adaptive_threshold_tau_ms": 200.0,
+    "adaptive_threshold_increment": 0.5,
+    "adaptive_threshold_min": -2.0,
+    "adaptive_threshold_max": 5.0,
+    "homeostasis_target_rate_hz": 3.0,
+    "homeostasis_tau_ms": 2000.0,
+    "homeostasis_gain": 0.25
+  },
+  "xcos_workspace": {
+    "inputs": ["adaptive_threshold_spikes"],
+    "outputs": ["adaptive_threshold_offset", "adaptive_threshold_rate_ema"],
+    "script": "../xcos/03_adaptive_threshold_homeostasis.sce"
+  },
+  "hasler_xcos_blocks": [
+    "Arbitrary Generator",
+    "OTA",
+    "Capacitor",
+    "Common-Drain",
+    "Buffer",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "03_adaptive_threshold_homeostasis.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Spike-driven threshold accumulator",
+      "Slow leak stage for threshold relaxation",
+      "Rate EMA integrator",
+      "Error-to-threshold correction stage",
+      "Comparator or neuron-threshold control node"
+    ],
+    "limitations": [
+      "The target-rate setpoint is a global bias and is easiest to trim from the host.",
+      "Threshold clamps are physical rail limits in hardware rather than software min/max operations."
+    ]
+  }
+}
