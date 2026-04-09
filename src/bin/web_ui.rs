@@ -3,56 +3,60 @@
 use aarnn_rust::auth_store::{
     FileOidcPendingStore, FileSessionStore, OidcPendingRecord, SessionRecord,
 };
-use aarnn_rust::config::NetworkConfig;
-use aarnn_rust::distributed::proto::{
-    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-    network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
-    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
+use aarnn_rust::central_auth::{
+    CentralApiError, CentralAuthClient, CentralLoginResponse, CentralSessionResponse,
+    CentralTokenActionResponse, CentralTokenLedgerResponse, CentralTokenSnapshot,
 };
+use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
+use aarnn_rust::distributed::proto::{
+    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
+    NetworkUpdateRequest, SpikeBatch, StatusRequest, control_update,
+    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+};
 use aarnn_rust::nmchain::{
-    NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest,
-    NmChainLedgerResponse, NmChainLoginObservedRequest, NmChainTokenMutationRequest,
+    NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
+    NmChainLoginObservedRequest, NmChainTokenMutationRequest,
 };
 use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
-    WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest,
-    WorkspaceImportRequest,
+    WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
 };
-use anyhow::Context;
 use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
 use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
-use aarnn_rust::spike_io::profiles::{encode_network_inputs_with, SpikeIoConfig};
+use aarnn_rust::spike_io::profiles::{SpikeIoConfig, encode_network_inputs_with};
 use aarnn_rust::spike_io::transport::{
     decode_hex_payload as decode_spike_hex_payload, encode_exchange, spikes_from_transport,
 };
+use anyhow::Context;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::{
-    extract::{DefaultBodyLimit, Form, Path, Query, State},
-    http::{HeaderValue, StatusCode},
-    middleware,
-    response::{IntoResponse, Redirect},
-    routing::{get, post},
     Extension, Json, Router,
+    extract::{DefaultBodyLimit, Form, Path, Query, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware,
+    response::{IntoResponse, Redirect, Response},
+    routing::{get, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use clap::Parser;
 use futures_util::StreamExt;
 use openidconnect::{
+    AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    OAuth2TokenResponse, RedirectUrl, Scope, TokenResponse,
     core::{
         CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims,
     },
-    reqwest, AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
-    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse,
+    reqwest,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -60,7 +64,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
@@ -175,6 +179,14 @@ struct Args {
     /// nmchain HTTP timeout in seconds.
     #[arg(long, default_value_t = 10)]
     nmchain_timeout_secs: u64,
+
+    /// Optional shared Refiner auth API base URL.
+    #[arg(long)]
+    central_auth_api_base: Option<String>,
+
+    /// Shared Refiner auth HTTP timeout in seconds.
+    #[arg(long, default_value_t = 10)]
+    central_auth_timeout_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,11 +218,17 @@ struct AppState {
     default_orchestrator: Option<String>,
     default_runtime_user: Option<String>,
     auth: AuthConfig,
+    cors: CorsConfig,
     users: Arc<RwLock<UserStore>>,
     session_store: Arc<FileSessionStore>,
     runtime: Arc<RuntimeManager>,
     chain: Option<Arc<NmChainClient>>,
     token_pricing: TokenPricing,
+}
+
+#[derive(Clone, Default)]
+struct CorsConfig {
+    allowed_origins: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -220,6 +238,7 @@ struct AuthConfig {
     allow_signup: bool,
     session_ttl_secs: u64,
     oidc: Option<OidcConfig>,
+    central: Option<Arc<CentralAuthClient>>,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +308,109 @@ fn env_opt(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn env_bool(keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| env_opt(key).and_then(|value| parse_env_bool(&value)))
+}
+
+fn normalize_origin(value: &str) -> Option<String> {
+    let normalized = value.trim().trim_end_matches('/');
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_string())
+    }
+}
+
+fn env_list(keys: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    for key in keys {
+        if let Some(raw) = env_opt(key) {
+            values.extend(raw.split(',').filter_map(normalize_origin));
+        }
+    }
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn cors_allowed_origins_from_env() -> HashSet<String> {
+    env_list(&["AARNN_CORS_ORIGINS", "NM_CORS_ORIGINS"])
+        .into_iter()
+        .collect()
+}
+
+fn cors_enabled_path(path: &str) -> bool {
+    matches!(path, "/api/auth/mode" | "/auth/oidc/exchange" | "/auth/access/exchange")
+}
+
+fn allowed_cors_origin(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    if state.cors.allowed_origins.is_empty() {
+        return None;
+    }
+    let origin = headers.get(header::ORIGIN)?.to_str().ok()?;
+    let normalized = normalize_origin(origin)?;
+    state
+        .cors
+        .allowed_origins
+        .contains(&normalized)
+        .then_some(normalized)
+}
+
+fn add_vary(headers: &mut HeaderMap, value: &'static str) {
+    let current = headers
+        .get(header::VARY)
+        .and_then(|existing| existing.to_str().ok())
+        .unwrap_or("");
+    if current
+        .split(',')
+        .any(|item| item.trim().eq_ignore_ascii_case(value))
+    {
+        return;
+    }
+    let merged = if current.is_empty() {
+        value.to_string()
+    } else {
+        format!("{}, {}", current, value)
+    };
+    if let Ok(header_value) = HeaderValue::from_str(&merged) {
+        headers.insert(header::VARY, header_value);
+    }
+}
+
+fn apply_cors_headers(headers: &mut HeaderMap, origin: &str) {
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    }
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+        HeaderValue::from_static("true"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Content-Type, Authorization, X-Requested-With"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("600"),
+    );
+    add_vary(headers, "Origin");
+    add_vary(headers, "Access-Control-Request-Method");
+    add_vary(headers, "Access-Control-Request-Headers");
+}
+
 fn apply_env_overrides(args: &mut Args) {
     if args.runtime_root.trim() == "data/runtime" {
         if let Some(runtime_root) =
@@ -315,8 +437,7 @@ fn apply_env_overrides(args: &mut Args) {
             env_opt("NMCHAIN_API_BASE").or_else(|| env_opt("NM_AARNN_CHAIN_API_BASE"));
     }
     if args.nmchain_app_id.is_none() {
-        args.nmchain_app_id =
-            env_opt("NMCHAIN_APP_ID").or_else(|| Some("aarnn".to_string()));
+        args.nmchain_app_id = env_opt("NMCHAIN_APP_ID").or_else(|| Some("aarnn".to_string()));
     }
     if args.nmchain_api_token.is_none() {
         args.nmchain_api_token =
@@ -330,6 +451,18 @@ fn apply_env_overrides(args: &mut Args) {
             args.nmchain_timeout_secs = timeout.max(1);
         }
     }
+    if args.central_auth_api_base.is_none() {
+        args.central_auth_api_base = env_opt("AARNN_CENTRAL_AUTH_API_BASE")
+            .or_else(|| env_opt("NM_CENTRAL_AUTH_API_BASE"));
+    }
+    if args.central_auth_timeout_secs == 10 {
+        if let Some(timeout) = env_opt("AARNN_CENTRAL_AUTH_TIMEOUT_SECS")
+            .or_else(|| env_opt("NM_CENTRAL_AUTH_TIMEOUT_SECS"))
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            args.central_auth_timeout_secs = timeout.max(1);
+        }
+    }
 
     if args.auth_mode.trim().eq_ignore_ascii_case("none") {
         if let Some(mode) = env_opt("NM_AUTH_MODE").or_else(|| env_opt("NM_OIDC_AUTH_MODE")) {
@@ -338,6 +471,33 @@ fn apply_env_overrides(args: &mut Args) {
             args.auth_mode = "oidc".to_string();
         }
     }
+}
+
+async fn cors_middleware(
+    State(state): State<Arc<AppState>>,
+    req: axum::http::Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    if !cors_enabled_path(&path) {
+        return next.run(req).await;
+    }
+
+    let allowed_origin = allowed_cors_origin(&state, req.headers());
+    if req.method() == Method::OPTIONS {
+        if let Some(origin) = allowed_origin {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            apply_cors_headers(response.headers_mut(), &origin);
+            return response;
+        }
+        return next.run(req).await;
+    }
+
+    let mut response = next.run(req).await;
+    if let Some(origin) = allowed_origin {
+        apply_cors_headers(response.headers_mut(), &origin);
+    }
+    response
 }
 
 #[derive(Clone)]
@@ -367,6 +527,7 @@ struct UserStore {
 #[derive(Clone)]
 struct AuthUser {
     username: String,
+    access_token: Option<String>,
 }
 
 impl UserStore {
@@ -490,6 +651,61 @@ fn safe_next_path(value: Option<String>) -> String {
     "/".to_string()
 }
 
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)?;
+    if let Some(token) = raw.strip_prefix("Bearer ") {
+        return Some(token.trim().to_string());
+    }
+    if let Some(token) = raw.strip_prefix("bearer ") {
+        return Some(token.trim().to_string());
+    }
+    None
+}
+
+fn central_login_username(response: &CentralLoginResponse, fallback: &str) -> Option<String> {
+    let candidate = response
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback.trim());
+    (!candidate.is_empty()).then(|| candidate.to_string())
+}
+
+fn central_session_username(response: &CentralSessionResponse) -> Option<String> {
+    response
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+async fn store_browser_session(
+    state: &AppState,
+    jar: CookieJar,
+    username: String,
+    access_token: Option<String>,
+) -> anyhow::Result<(CookieJar, String)> {
+    let session_id = new_session_id();
+    let expires_at = now_ts() + state.auth.session_ttl_secs;
+    state.session_store
+        .put(
+            &session_id,
+            &SessionRecord {
+                username,
+                expires_at,
+                access_token,
+            },
+        )
+        .await?;
+    let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
+    Ok((jar.add(cookie), session_id))
+}
+
 #[derive(Deserialize)]
 struct StatusQuery {
     addr: Option<String>,
@@ -598,6 +814,12 @@ struct OidcExchangePayload {
 }
 
 #[derive(Deserialize)]
+struct AccessExchangePayload {
+    access_token: Option<String>,
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct UserConfigPayload {
     config: serde_json::Value,
 }
@@ -606,6 +828,7 @@ struct UserConfigPayload {
 struct AuthModeResponse {
     mode: String,
     allow_signup: bool,
+    central_auth: bool,
 }
 
 #[derive(Serialize)]
@@ -619,6 +842,13 @@ async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
     let auth_mode_val = AuthMode::parse(&args.auth_mode);
+    let central_auth = match args.central_auth_api_base.clone() {
+        Some(base_url) if !base_url.trim().is_empty() => Some(Arc::new(CentralAuthClient::new(
+            base_url,
+            Duration::from_secs(args.central_auth_timeout_secs.max(1)),
+        )?)),
+        _ => None,
+    };
     let auth_root = std::path::Path::new(&args.users_file)
         .parent()
         .map(|path| path.to_path_buf())
@@ -633,7 +863,7 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     let mut users = UserStore::load(&args.users_file).await;
 
-    if auth_mode_val == AuthMode::Local {
+    if auth_mode_val == AuthMode::Local && central_auth.is_none() {
         if let (Some(user), Some(pass)) = (args.local_user.as_deref(), args.local_pass.as_deref()) {
             let hash = hash_password(pass)?;
             let existing = users.find_by_username_mut(user);
@@ -702,9 +932,10 @@ async fn main() -> anyhow::Result<()> {
     let auth = AuthConfig {
         mode: auth_mode_val,
         users_file: args.users_file.clone(),
-        allow_signup: args.allow_signup,
+        allow_signup: args.allow_signup && central_auth.is_none(),
         session_ttl_secs: args.session_ttl_secs,
         oidc,
+        central: central_auth,
     };
 
     let chain = match args.nmchain_api_base.clone() {
@@ -719,6 +950,9 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
     let token_pricing = TokenPricing::from_env();
+    let cors = CorsConfig {
+        allowed_origins: cors_allowed_origins_from_env(),
+    };
 
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: std::path::PathBuf::from(&args.runtime_root),
@@ -731,6 +965,12 @@ async fn main() -> anyhow::Result<()> {
         } else {
             args.runtime_workers.max(1)
         },
+        resume_existing_workspaces: env_bool(&[
+            "NM_RUNTIME_RESUME_EXISTING_WORKSPACES",
+            "NM_WEB_UI_RESUME_EXISTING_WORKSPACES",
+            "AARNN_RUNTIME_RESUME_EXISTING_WORKSPACES",
+        ])
+        .unwrap_or(true),
         autosave_steps: args.runtime_autosave_steps.max(1),
         continuum: aarnn_rust::runtime::ContinuumAutoscalerConfig::from_env(),
         reconcile_interval_ms: env_opt("NM_RUNTIME_RECONCILE_INTERVAL_MS")
@@ -747,6 +987,7 @@ async fn main() -> anyhow::Result<()> {
         default_orchestrator: args.orchestrator,
         default_runtime_user: env_opt("NM_WEB_UI_DEFAULT_RUNTIME_USER"),
         auth,
+        cors,
         users: Arc::new(RwLock::new(users)),
         session_store,
         runtime,
@@ -817,11 +1058,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/docs/", get(docs_page))
         .route("/docs/swagger", get(swagger_page))
         .route("/docs/swagger/", get(swagger_page))
+        .route("/auth/access/exchange", post(access_exchange))
         .route("/auth/oidc/login", get(oidc_login))
         .route("/auth/oidc/callback", get(oidc_callback))
         .route("/auth/oidc/exchange", post(oidc_exchange))
         .nest("/api", api)
-        .with_state(state);
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            cors_middleware,
+        ));
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     axum::serve(listener, app).await?;
@@ -1631,6 +1877,7 @@ async fn api_auth_middleware(
             .to_string();
         req.extensions_mut().insert(AuthUser {
             username: runtime_user,
+            access_token: None,
         });
         return next.run(req).await;
     }
@@ -1653,8 +1900,12 @@ async fn api_auth_middleware(
         return next.run(req).await;
     }
     let jar = CookieJar::from_headers(req.headers());
-    if let Some(user) = session_user(&state, &jar).await {
-        req.extensions_mut().insert(AuthUser { username: user });
+    if let Some(user) = session_auth_user(&state, &jar).await {
+        req.extensions_mut().insert(user);
+        return next.run(req).await;
+    }
+    if let Some(user) = bearer_auth_user(&state, req.headers()).await {
+        req.extensions_mut().insert(user);
         return next.run(req).await;
     }
     (
@@ -1668,6 +1919,7 @@ async fn auth_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     Json(AuthModeResponse {
         mode: state.auth.mode.as_str().to_string(),
         allow_signup: state.auth.allow_signup,
+        central_auth: state.auth.central.is_some(),
     })
 }
 
@@ -1693,12 +1945,19 @@ fn forbid_shared_cluster_api(state: &AppState) -> Option<axum::response::Respons
     )
 }
 
-async fn me(State(state): State<Arc<AppState>>, jar: CookieJar) -> axum::response::Response {
+async fn me(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> axum::response::Response {
     if state.auth.mode == AuthMode::None {
         return Json(json!({ "authenticated": false, "mode": "none" })).into_response();
     }
-    if let Some(user) = session_user(&state, &jar).await {
-        return Json(json!({ "authenticated": true, "username": user })).into_response();
+    if let Some(user) = session_auth_user(&state, &jar).await {
+        return Json(json!({ "authenticated": true, "username": user.username })).into_response();
+    }
+    if let Some(user) = bearer_auth_user(&state, &headers).await {
+        return Json(json!({ "authenticated": true, "username": user.username })).into_response();
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -1728,6 +1987,74 @@ async fn login(
         )
             .into_response();
     }
+    if let Some(central) = state.auth.central.as_ref() {
+        let response = match central.login(username, password).await {
+            Ok(response) => response,
+            Err(err) => {
+                let status = err.status.unwrap_or(502);
+                let error = err
+                    .payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("central_auth_failed");
+                let details = err
+                    .payload
+                    .get("details")
+                    .and_then(Value::as_str)
+                    .unwrap_or(err.message.as_str());
+                return (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(json!({
+                        "error": error,
+                        "details": details,
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let session_username = match central_login_username(&response, username) {
+            Some(value) => value,
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+                )
+                    .into_response();
+            }
+        };
+        let access_token = match response
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => Some(value.to_string()),
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return an access token" })),
+                )
+                    .into_response();
+            }
+        };
+        let (jar, session_id) =
+            match store_browser_session(&state, jar, session_username.clone(), access_token).await {
+                Ok(result) => result,
+                Err(err) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                    )
+                        .into_response();
+                }
+            };
+        chain_sync_identity_best_effort(&state, &session_username, "local", None, None, "login")
+            .await;
+        chain_record_login_best_effort(&state, &session_username, "local", Some(session_id), "login")
+            .await;
+        return (jar, Json(json!({ "ok": true, "username": session_username }))).into_response();
+    }
+
     let users = load_users_fresh(&state).await;
     let user = match users.find_by_username(username) {
         Some(u) => u,
@@ -1757,27 +2084,16 @@ async fn login(
             .into_response();
     }
 
-    let session_id = new_session_id();
-    let expires_at = now_ts() + state.auth.session_ttl_secs;
-    if let Err(err) = state
-        .session_store
-        .put(
-            &session_id,
-            &SessionRecord {
-                username: username.to_string(),
-                expires_at,
-            },
-        )
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to persist session: {}", err) })),
-        )
-            .into_response();
-    }
-    let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
-    let jar = jar.add(cookie);
+    let (jar, session_id) = match store_browser_session(&state, jar, username.to_string(), None).await {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist session: {}", err) })),
+            )
+                .into_response();
+        }
+    };
     chain_sync_identity_best_effort(&state, username, "local", None, None, "login").await;
     chain_record_login_best_effort(&state, username, "local", Some(session_id), "login").await;
     (jar, Json(json!({ "ok": true, "username": username }))).into_response()
@@ -1795,6 +2111,13 @@ async fn signup(
             .into_response();
     }
     if !state.auth.allow_signup {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "signup disabled" })),
+        )
+            .into_response();
+    }
+    if state.auth.central.is_some() {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "signup disabled" })),
@@ -1860,6 +2183,57 @@ async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
     (jar, Json(json!({ "ok": true })))
 }
 
+async fn access_exchange(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    Form(payload): Form<AccessExchangePayload>,
+) -> impl IntoResponse {
+    let next_path = safe_next_path(payload.next);
+    let Some(central) = state.auth.central.as_ref() else {
+        return Redirect::to(&next_path).into_response();
+    };
+    let Some(access_token) = payload
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Redirect::to(&next_path).into_response();
+    };
+    let session = match central.session(access_token).await {
+        Ok(session) => session,
+        Err(_) => return Redirect::to(&next_path).into_response(),
+    };
+    if !session.authenticated {
+        return Redirect::to(&next_path).into_response();
+    }
+    let Some(username) = central_session_username(&session) else {
+        return Redirect::to(&next_path).into_response();
+    };
+    let (jar, session_id) =
+        match store_browser_session(&state, jar, username.clone(), Some(access_token.to_string())).await {
+            Ok(result) => result,
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                )
+                    .into_response();
+            }
+        };
+    chain_sync_identity_best_effort(&state, &username, "central_access", None, None, "access_exchange")
+        .await;
+    chain_record_login_best_effort(
+        &state,
+        &username,
+        "central_access",
+        Some(session_id),
+        "access_exchange",
+    )
+    .await;
+    (jar, Redirect::to(&next_path)).into_response()
+}
+
 fn pricing_payload(pricing: &TokenPricing) -> Value {
     json!({
         "create_workspace": pricing.create_workspace,
@@ -1891,7 +2265,10 @@ async fn chain_sync_identity_best_effort(
         meta: json!({ "source": source }),
     };
     if let Err(err) = chain.upsert_identity(&payload).await {
-        eprintln!("[warn] nmchain identity upsert failed for {}: {}", username, err);
+        eprintln!(
+            "[warn] nmchain identity upsert failed for {}: {}",
+            username, err
+        );
     }
 }
 
@@ -1915,7 +2292,10 @@ async fn chain_record_login_best_effort(
         meta: json!({ "source": source }),
     };
     if let Err(err) = chain.observe_login(&payload).await {
-        eprintln!("[warn] nmchain login record failed for {}: {}", username, err);
+        eprintln!(
+            "[warn] nmchain login record failed for {}: {}",
+            username, err
+        );
     }
 }
 
@@ -1948,11 +2328,48 @@ async fn chain_token_entries(
     Ok(response.entries)
 }
 
-async fn ensure_token_budget(state: &AppState, username: &str, cost: i64) -> anyhow::Result<()> {
+async fn central_token_snapshot(
+    state: &AppState,
+    access_token: &str,
+) -> Result<Option<CentralTokenSnapshot>, CentralApiError> {
+    let Some(central) = state.auth.central.as_ref() else {
+        return Ok(None);
+    };
+    central.token_snapshot(access_token).await.map(Some)
+}
+
+async fn central_token_entries(
+    state: &AppState,
+    access_token: &str,
+    limit: usize,
+) -> Result<Vec<aarnn_rust::central_auth::CentralTokenLedgerEntry>, CentralApiError> {
+    let Some(central) = state.auth.central.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let response: CentralTokenLedgerResponse = central.token_ledger(access_token, limit).await?;
+    Ok(response.entries)
+}
+
+async fn ensure_token_budget(state: &AppState, user: &AuthUser, cost: i64) -> anyhow::Result<()> {
     if cost <= 0 {
         return Ok(());
     }
-    let Some(snapshot) = chain_token_snapshot(state, username).await? else {
+    if let Some(access_token) = user.access_token.as_deref() {
+        if let Some(snapshot) = central_token_snapshot(state, access_token)
+            .await
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?
+        {
+            if snapshot.available < cost {
+                anyhow::bail!(
+                    "insufficient tokens: need {}, available {}",
+                    cost,
+                    snapshot.available
+                );
+            }
+            return Ok(());
+        }
+    }
+    let Some(snapshot) = chain_token_snapshot(state, &user.username).await? else {
         return Ok(());
     };
     if snapshot.available < cost {
@@ -1967,13 +2384,31 @@ async fn ensure_token_budget(state: &AppState, username: &str, cost: i64) -> any
 
 async fn debit_tokens(
     state: &AppState,
-    username: &str,
+    user: &AuthUser,
     amount: i64,
     request_id: String,
     meta: Value,
 ) -> anyhow::Result<()> {
     if amount <= 0 {
         return Ok(());
+    }
+    if let Some(access_token) = user.access_token.as_deref() {
+        if let Some(central) = state.auth.central.as_ref() {
+            let response: CentralTokenActionResponse = central
+                .debit_tokens(access_token, amount, &request_id, meta)
+                .await
+                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            let used_total = response
+                .used
+                .unwrap_or_else(|| response.entry.as_ref().map(|entry| entry.delta.abs()).unwrap_or(amount));
+            let shortfall = response
+                .shortfall
+                .unwrap_or_else(|| response.entry.as_ref().map(|entry| entry.shortfall).unwrap_or(0));
+            if shortfall > 0 || used_total < amount {
+                anyhow::bail!("token debit shortfall: {}", shortfall.max(amount - used_total));
+            }
+            return Ok(());
+        }
     }
     let Some(chain) = state.chain.as_ref() else {
         return Ok(());
@@ -1982,7 +2417,7 @@ async fn debit_tokens(
         .apply_token(&NmChainTokenMutationRequest {
             request_id: Some(request_id),
             account_scope: "user".to_string(),
-            account_id: username.to_string(),
+            account_id: user.username.to_string(),
             entry_type: "debit".to_string(),
             delta: -amount,
             meta,
@@ -1999,7 +2434,7 @@ async fn debit_tokens(
 
 async fn refund_tokens(
     state: &AppState,
-    username: &str,
+    user: &AuthUser,
     amount: i64,
     request_id: String,
     meta: Value,
@@ -2007,19 +2442,30 @@ async fn refund_tokens(
     if amount <= 0 {
         return;
     }
+    if let Some(access_token) = user.access_token.as_deref() {
+        if let Some(central) = state.auth.central.as_ref() {
+            if let Err(err) = central
+                .refund_tokens(access_token, amount, &request_id, meta)
+                .await
+            {
+                eprintln!("[warn] central refund failed for {}: {}", user.username, err);
+            }
+            return;
+        }
+    }
     let Some(chain) = state.chain.as_ref() else {
         return;
     };
     let payload = NmChainTokenMutationRequest {
         request_id: Some(request_id),
         account_scope: "user".to_string(),
-        account_id: username.to_string(),
+        account_id: user.username.to_string(),
         entry_type: "refund".to_string(),
         delta: amount,
         meta,
     };
     if let Err(err) = chain.apply_token(&payload).await {
-        eprintln!("[warn] nmchain refund failed for {}: {}", username, err);
+        eprintln!("[warn] nmchain refund failed for {}: {}", user.username, err);
     }
 }
 
@@ -2028,6 +2474,41 @@ async fn tokens_balance(
     Extension(user): Extension<AuthUser>,
 ) -> axum::response::Response {
     let pricing = pricing_payload(&state.token_pricing);
+    if let Some(access_token) = user.access_token.as_deref() {
+        if let Some(central) = state.auth.central.as_ref() {
+            return match central.token_snapshot(access_token).await {
+                Ok(snapshot) => Json(json!({
+                    "configured": true,
+                    "pricing": pricing,
+                    "balance": snapshot.balance,
+                    "tokens": snapshot.tokens,
+                    "paid_balance": snapshot.paid_balance,
+                    "free_balance": snapshot.free_balance,
+                    "available": snapshot.available,
+                    "reserved": snapshot.reserved,
+                    "in_use": snapshot.in_use,
+                    "capacity": snapshot.capacity,
+                    "display_capacity": snapshot.display_capacity,
+                    "low_threshold": snapshot.low_threshold,
+                    "status": snapshot.status,
+                    "last_topup_tokens": snapshot.last_topup_tokens,
+                    "last_topup_at": snapshot.last_topup_at,
+                    "updated_at": snapshot.updated_at,
+                    "spent_total": snapshot.spent_total,
+                    "cashout_total": snapshot.cashout_total,
+                    "shortfall_total": snapshot.shortfall_total,
+                    "free_grant_total": snapshot.free_grant_total,
+                    "identity": snapshot.identity,
+                }))
+                .into_response(),
+                Err(err) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": err.to_string() })),
+                )
+                    .into_response(),
+            };
+        }
+    }
     match chain_token_snapshot(&state, &user.username).await {
         Ok(Some(snapshot)) => Json(json!({
             "configured": true,
@@ -2091,6 +2572,22 @@ async fn tokens_ledger(
     Query(query): Query<TokenLedgerQuery>,
 ) -> axum::response::Response {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    if let Some(access_token) = user.access_token.as_deref() {
+        if state.auth.central.is_some() {
+            return match central_token_entries(&state, access_token, limit).await {
+                Ok(entries) => Json(json!({
+                    "configured": true,
+                    "entries": entries,
+                }))
+                .into_response(),
+                Err(err) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": err.to_string() })),
+                )
+                    .into_response(),
+            };
+        }
+    }
     match chain_token_entries(&state, &user.username, limit).await {
         Ok(entries) => Json(json!({
             "configured": state.chain.is_some(),
@@ -2196,7 +2693,7 @@ async fn create_runtime_workspace(
     Json(payload): Json<WorkspaceCreateRequest>,
 ) -> axum::response::Response {
     let cost = state.token_pricing.create_workspace;
-    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+    if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
             StatusCode::PAYMENT_REQUIRED,
             Json(json!({ "error": err.to_string(), "required_tokens": cost })),
@@ -2211,11 +2708,14 @@ async fn create_runtime_workspace(
         Ok(detail) => {
             if cost > 0 {
                 let workspace_id = detail.summary.workspace_id.clone();
-                let request_id =
-                    format!("aarnn:create:{}:{}", user.username.trim(), workspace_id.trim());
+                let request_id = format!(
+                    "aarnn:create:{}:{}",
+                    user.username.trim(),
+                    workspace_id.trim()
+                );
                 let debit = debit_tokens(
                     &state,
-                    &user.username,
+                    &user,
                     cost,
                     request_id,
                     json!({
@@ -2331,7 +2831,7 @@ async fn control_runtime_workspace(
     Json(payload): Json<WorkspaceControlRequest>,
 ) -> axum::response::Response {
     let cost = state.token_pricing.control_cost(payload.action);
-    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+    if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
             StatusCode::PAYMENT_REQUIRED,
             Json(json!({ "error": err.to_string(), "required_tokens": cost })),
@@ -2348,7 +2848,7 @@ async fn control_runtime_workspace(
     );
     if let Err(err) = debit_tokens(
         &state,
-        &user.username,
+        &user,
         cost,
         debit_request_id.clone(),
         json!({
@@ -2375,7 +2875,7 @@ async fn control_runtime_workspace(
         Err(err) => {
             refund_tokens(
                 &state,
-                &user.username,
+                &user,
                 cost,
                 format!("refund:{}", debit_request_id),
                 json!({
@@ -2402,7 +2902,7 @@ async fn import_runtime_workspace(
     Json(payload): Json<WorkspaceImportRequest>,
 ) -> axum::response::Response {
     let cost = state.token_pricing.import_workspace;
-    if let Err(err) = ensure_token_budget(&state, &user.username, cost).await {
+    if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
             StatusCode::PAYMENT_REQUIRED,
             Json(json!({ "error": err.to_string(), "required_tokens": cost })),
@@ -2424,7 +2924,7 @@ async fn import_runtime_workspace(
                 );
                 if let Err(err) = debit_tokens(
                     &state,
-                    &user.username,
+                    &user,
                     cost,
                     request_id,
                     json!({
@@ -2593,6 +3093,87 @@ async fn oidc_callback(
     };
     let subject = claims.subject().as_str().to_string();
     let email = claims.email().map(|e| e.as_str().to_string());
+    let raw_id_token = id_token.to_string();
+    let raw_access_token = token_resp.access_token().secret().to_string();
+
+    if let Some(central) = state.auth.central.as_ref() {
+        let response = match central
+            .oidc_exchange(&raw_id_token, Some(raw_access_token.as_str()))
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return (
+                    StatusCode::from_u16(err.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(json!({
+                        "error": err
+                            .payload
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("central_auth_failed"),
+                        "details": err
+                            .payload
+                            .get("details")
+                            .and_then(Value::as_str)
+                            .unwrap_or(err.message.as_str()),
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let fallback_username = email
+            .as_deref()
+            .and_then(|value| value.split('@').next())
+            .unwrap_or("oidc");
+        let username = match central_login_username(&response, fallback_username) {
+            Some(username) => username,
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+                )
+                    .into_response();
+            }
+        };
+        let access_token = match response
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => Some(value.to_string()),
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return an access token" })),
+                )
+                    .into_response();
+            }
+        };
+        let (jar, session_id) =
+            match store_browser_session(&state, jar, username.clone(), access_token).await {
+                Ok(result) => result,
+                Err(err) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                    )
+                        .into_response();
+                }
+            };
+        chain_sync_identity_best_effort(
+            &state,
+            &username,
+            "oidc",
+            email.clone(),
+            Some(subject.clone()),
+            "oidc_callback",
+        )
+        .await;
+        chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_callback")
+            .await;
+        return (jar, Redirect::to("/")).into_response();
+    }
 
     let username = match modify_users(&state, |users| {
         let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
@@ -2631,27 +3212,16 @@ async fn oidc_callback(
         }
     };
 
-    let session_id = new_session_id();
-    let expires_at = now_ts() + state.auth.session_ttl_secs;
-    if let Err(err) = state
-        .session_store
-        .put(
-            &session_id,
-            &SessionRecord {
-                username: username.clone(),
-                expires_at,
-            },
-        )
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to persist session: {}", err) })),
-        )
-            .into_response();
-    }
-    let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
-    let jar = jar.add(cookie);
+    let (jar, session_id) = match store_browser_session(&state, jar, username.clone(), None).await {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist session: {}", err) })),
+            )
+                .into_response();
+        }
+    };
     chain_sync_identity_best_effort(
         &state,
         &username,
@@ -2661,14 +3231,8 @@ async fn oidc_callback(
         "oidc_callback",
     )
     .await;
-    chain_record_login_best_effort(
-        &state,
-        &username,
-        "oidc",
-        Some(session_id),
-        "oidc_callback",
-    )
-    .await;
+    chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_callback")
+        .await;
     (jar, Redirect::to("/")).into_response()
 }
 
@@ -2764,6 +3328,111 @@ async fn oidc_exchange(
         }
     };
 
+    if let Some(central) = state.auth.central.as_ref() {
+        let raw_id_token = match payload
+            .id_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => value,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "id_token required" })),
+                )
+                    .into_response();
+            }
+        };
+        let response = match central
+            .oidc_exchange(
+                raw_id_token,
+                payload
+                    .access_token
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return (
+                    StatusCode::from_u16(err.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(json!({
+                        "error": err
+                            .payload
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("central_auth_failed"),
+                        "details": err
+                            .payload
+                            .get("details")
+                            .and_then(Value::as_str)
+                            .unwrap_or(err.message.as_str()),
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let fallback_username = preferred_username
+            .clone()
+            .or_else(|| {
+                email
+                    .as_ref()
+                    .and_then(|value| value.split('@').next().map(|part| part.to_string()))
+            })
+            .unwrap_or_else(|| "oidc".to_string());
+        let username = match central_login_username(&response, &fallback_username) {
+            Some(username) => username,
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+                )
+                    .into_response();
+            }
+        };
+        let access_token = match response
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => Some(value.to_string()),
+            None => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return an access token" })),
+                )
+                    .into_response();
+            }
+        };
+        let (jar, session_id) =
+            match store_browser_session(&state, jar, username.clone(), access_token).await {
+                Ok(result) => result,
+                Err(err) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                    )
+                        .into_response();
+                }
+            };
+        chain_sync_identity_best_effort(
+            &state,
+            &username,
+            "oidc",
+            email.clone(),
+            Some(subject.clone()),
+            "oidc_exchange",
+        )
+        .await;
+        chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_exchange")
+            .await;
+        return (jar, Redirect::to(&next_path)).into_response();
+    }
+
     let username = match modify_users(&state, |users| {
         let username = if let Some(rec) = users.find_by_oidc_mut(&oidc.issuer, &subject) {
             if rec.email.is_none() {
@@ -2805,27 +3474,16 @@ async fn oidc_exchange(
         }
     };
 
-    let session_id = new_session_id();
-    let expires_at = now_ts() + state.auth.session_ttl_secs;
-    if let Err(err) = state
-        .session_store
-        .put(
-            &session_id,
-            &SessionRecord {
-                username: username.clone(),
-                expires_at,
-            },
-        )
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to persist session: {}", err) })),
-        )
-            .into_response();
-    }
-    let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
-    let jar = jar.add(cookie);
+    let (jar, session_id) = match store_browser_session(&state, jar, username.clone(), None).await {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist session: {}", err) })),
+            )
+                .into_response();
+        }
+    };
     chain_sync_identity_best_effort(
         &state,
         &username,
@@ -2835,28 +3493,44 @@ async fn oidc_exchange(
         "oidc_exchange",
     )
     .await;
-    chain_record_login_best_effort(
-        &state,
-        &username,
-        "oidc",
-        Some(session_id),
-        "oidc_exchange",
-    )
-    .await;
+    chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_exchange")
+        .await;
     (jar, Redirect::to(&next_path)).into_response()
 }
 
-async fn session_user(state: &AppState, jar: &CookieJar) -> Option<String> {
+async fn session_auth_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser> {
     let session_id = jar.get("nm_session")?.value().to_string();
     let session = match state.session_store.get(&session_id).await {
         Ok(session) => session,
         Err(_) => return None,
     }?;
     if session.expires_at > now_ts() {
-        return Some(session.username);
+        return Some(AuthUser {
+            username: session.username,
+            access_token: session
+                .access_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        });
     }
     let _ = state.session_store.delete(&session_id).await;
     None
+}
+
+async fn bearer_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
+    let central = state.auth.central.as_ref()?;
+    let access_token = extract_bearer_token(headers)?;
+    let session = central.session(&access_token).await.ok()?;
+    if !session.authenticated {
+        return None;
+    }
+    let username = central_session_username(&session)?;
+    Some(AuthUser {
+        username,
+        access_token: Some(access_token),
+    })
 }
 
 async fn status(
@@ -2883,7 +3557,7 @@ async fn status(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3035,7 +3709,7 @@ async fn snapshot(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3117,7 +3791,7 @@ async fn activity(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3198,7 +3872,7 @@ async fn update_network(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3263,7 +3937,7 @@ async fn control_network(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3278,7 +3952,7 @@ async fn control_network(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "invalid action" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3333,7 +4007,7 @@ async fn export_snapshot_payload(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "unsupported format" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3425,7 +4099,7 @@ async fn export(
                 code,
                 Json(json!({ "error": "missing orchestrator address" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3489,7 +4163,7 @@ async fn export_runtime_workspace(
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": err.to_string() })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -3803,7 +4477,7 @@ async fn aer_stream(
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": format!("failed reading stream body: {}", e) })),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
         buffer.extend_from_slice(&chunk);
@@ -3817,7 +4491,7 @@ async fn aer_stream(
                         StatusCode::BAD_REQUEST,
                         Json(json!({ "error": "stream line is not valid UTF-8" })),
                     )
-                        .into_response()
+                        .into_response();
                 }
             };
             if line.is_empty() {
@@ -3896,7 +4570,7 @@ async fn aer_stream(
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": "stream tail is not valid UTF-8" })),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
         if !line.is_empty() {
@@ -3979,7 +4653,7 @@ async fn aer_stream(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing network_id (query or per-frame)" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 

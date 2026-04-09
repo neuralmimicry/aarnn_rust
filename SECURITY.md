@@ -11,6 +11,7 @@ This repository provides security controls that can support ISO 27001 and SOC 2 
 - Web UI supports `auth_mode=none|local|oidc`.
 - OIDC login uses the provider metadata and standard OAuth2/OIDC flows.
 - For cross-project compatibility, the web UI also honors `NM_AUTH_MODE` and `NM_OIDC_*` environment variables when CLI flags are not provided.
+- Browser-origin allowlists for cross-site auth discovery and OIDC handoff can be set with `NM_CORS_ORIGINS` (or `AARNN_CORS_ORIGINS`) as a comma-separated list. Leave it unset to keep those routes same-origin only.
 
 ## Secrets and Tokens
 - Avoid embedding secrets in images or config files.

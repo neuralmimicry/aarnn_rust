@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub struct SessionRecord {
     pub username: String,
     pub expires_at: u64,
+    #[serde(default)]
+    pub access_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
