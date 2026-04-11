@@ -1,7 +1,7 @@
 use anyhow::Context;
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fmt;
 use std::time::Duration;
 
@@ -10,6 +10,14 @@ pub struct CentralSessionResponse {
     pub authenticated: bool,
     pub user: Option<String>,
     pub role: Option<String>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    pub email: Option<String>,
+    #[serde(default)]
+    pub active_team: Option<Value>,
+    pub team_count: Option<i64>,
+    pub pending_invitation_count: Option<i64>,
+    pub is_admin: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -17,6 +25,14 @@ pub struct CentralLoginResponse {
     pub status: Option<String>,
     pub user: Option<String>,
     pub role: Option<String>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    pub email: Option<String>,
+    #[serde(default)]
+    pub active_team: Option<Value>,
+    pub team_count: Option<i64>,
+    pub pending_invitation_count: Option<i64>,
+    pub is_admin: Option<bool>,
     pub sso_token: Option<String>,
     pub sso_expires_in: Option<i64>,
     pub access_token: Option<String>,
@@ -102,7 +118,9 @@ impl CentralApiError {
             .and_then(Value::as_str)
             .or_else(|| payload.get("error").and_then(Value::as_str))
             .map(str::to_string)
-            .unwrap_or_else(|| format!("central auth request failed with HTTP {}", status.as_u16()));
+            .unwrap_or_else(|| {
+                format!("central auth request failed with HTTP {}", status.as_u16())
+            });
         Self {
             status: Some(status.as_u16()),
             message,
@@ -143,9 +161,17 @@ impl CentralAuthClient {
         !self.base_url.is_empty()
     }
 
-    pub async fn session(&self, access_token: &str) -> Result<CentralSessionResponse, CentralApiError> {
-        self.request_json(Method::GET, "/api/session", None::<&Value>, Some(access_token))
-            .await
+    pub async fn session(
+        &self,
+        access_token: &str,
+    ) -> Result<CentralSessionResponse, CentralApiError> {
+        self.request_json(
+            Method::GET,
+            "/api/session",
+            None::<&Value>,
+            Some(access_token),
+        )
+        .await
     }
 
     pub async fn login(
@@ -186,8 +212,13 @@ impl CentralAuthClient {
         &self,
         access_token: &str,
     ) -> Result<CentralTokenSnapshot, CentralApiError> {
-        self.request_json(Method::GET, "/api/tokens", None::<&Value>, Some(access_token))
-            .await
+        self.request_json(
+            Method::GET,
+            "/api/tokens",
+            None::<&Value>,
+            Some(access_token),
+        )
+        .await
     }
 
     pub async fn token_ledger(
@@ -268,7 +299,10 @@ impl CentralAuthClient {
             .client
             .request(method, format!("{}{}", self.base_url, path))
             .header("Accept", "application/json");
-        if let Some(token) = bearer_token.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(token) = bearer_token
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             request = request.bearer_auth(token);
         }
         if let Some(body) = body {
@@ -286,12 +320,10 @@ async fn decode_response<T: for<'de> Deserialize<'de>>(
     response: reqwest::Response,
 ) -> Result<T, CentralApiError> {
     let status = response.status();
-    let payload = response
-        .json::<Value>()
-        .await
-        .unwrap_or_else(|_| json!({}));
+    let payload = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
         return Err(CentralApiError::from_response(status, payload));
     }
-    serde_json::from_value(payload).map_err(|err| CentralApiError::from_client_error(err.to_string()))
+    serde_json::from_value(payload)
+        .map_err(|err| CentralApiError::from_client_error(err.to_string()))
 }

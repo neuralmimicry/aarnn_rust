@@ -164,6 +164,7 @@ const state = {
   authMode: "none",
   allowSignup: false,
   user: null,
+  identity: null,
   userConfigEnabled: false,
   runtime: {
     workspaces: [],
@@ -185,6 +186,71 @@ let runtimeStatusRequestSeq = 0;
 
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
+
+function parseAuthGroups(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function authActiveTeamLabel(value) {
+  if (!value || typeof value !== "object") return "";
+  return String(value.team_name || value.name || value.team_id || value.id || "").trim();
+}
+
+function normalizeAuthIdentity(payload) {
+  if (!payload || payload.authenticated === false) return null;
+  const username = String(payload.username || payload.user || "").trim();
+  if (!username) return null;
+  const role = String(payload.role || "user").trim().toLowerCase() || "user";
+  const groups = parseAuthGroups(payload.groups);
+  if (!groups.includes(role)) {
+    groups.unshift(role);
+  }
+  const activeTeam = payload.active_team && typeof payload.active_team === "object" ? payload.active_team : null;
+  const teamCount = Math.max(0, Number(payload.team_count ?? (activeTeam ? 1 : 0)) || 0);
+  const pendingInvitationCount = Math.max(0, Number(payload.pending_invitation_count ?? 0) || 0);
+  return {
+    username,
+    role,
+    groups,
+    email: payload.email ? String(payload.email).trim() : null,
+    activeTeam,
+    activeTeamLabel: authActiveTeamLabel(activeTeam),
+    teamCount,
+    pendingInvitationCount,
+    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin")),
+  };
+}
+
+function applyAuthIdentity(payload) {
+  state.identity = normalizeAuthIdentity(payload);
+  state.user = state.identity ? state.identity.username : null;
+}
+
+function userStatusLabel(identity) {
+  if (!identity) return "Signed out";
+  const parts = [`Signed in as ${identity.username}`];
+  if (identity.groups.length) {
+    parts.push(`groups: ${identity.groups.join(", ")}`);
+  }
+  if (identity.activeTeamLabel) {
+    parts.push(`team: ${identity.activeTeamLabel}`);
+  }
+  if (identity.teamCount > 1) {
+    parts.push(`teams: ${identity.teamCount}`);
+  }
+  if (identity.pendingInvitationCount > 0) {
+    parts.push(`invites: ${identity.pendingInvitationCount}`);
+  }
+  return parts.join(" | ");
+}
 
 function probeDefaultLabel(targetType, layer, index) {
   if (targetType === "hidden") {
@@ -624,7 +690,8 @@ async function initAuth() {
   }
 
   if (state.authMode === "none") {
-    setUserStatus(null);
+    applyAuthIdentity(null);
+    setUserStatus(state.identity);
     hideAuthOverlay();
     return;
   }
@@ -632,14 +699,14 @@ async function initAuth() {
   const meResp = await fetch("/api/me");
   if (meResp.ok) {
     const data = await meResp.json();
-    state.user = data.username || null;
-    state.userConfigEnabled = true;
-    setUserStatus(state.user);
+    applyAuthIdentity(data);
+    state.userConfigEnabled = Boolean(state.user);
+    setUserStatus(state.identity);
     await loadUserConfig();
     await loadRuntimeStatus();
     hideAuthOverlay();
   } else {
-    state.user = null;
+    applyAuthIdentity(null);
     state.userConfigEnabled = false;
     showAuthOverlay();
   }
@@ -679,15 +746,11 @@ function hideAuthOverlay() {
   authOverlay.classList.add("hidden");
 }
 
-function setUserStatus(username) {
+function setUserStatus(identity) {
   if (!userStatus) return;
-  if (username) {
-    userStatus.textContent = `Signed in as ${username}`;
-  } else {
-    userStatus.textContent = "Signed out";
-  }
+  userStatus.textContent = userStatusLabel(identity);
   if (logoutBtn) {
-    logoutBtn.style.display = username ? "inline-flex" : "none";
+    logoutBtn.style.display = identity ? "inline-flex" : "none";
   }
 }
 
@@ -708,9 +771,9 @@ async function performLogin(username, password) {
       return;
     }
     const data = await resp.json();
-    state.user = data.username || username;
-    state.userConfigEnabled = true;
-    setUserStatus(state.user);
+    applyAuthIdentity(data && typeof data === "object" ? data : { username });
+    state.userConfigEnabled = Boolean(state.user);
+    setUserStatus(state.identity);
     await loadUserConfig();
     await loadRuntimeStatus();
     resetTargetsUi();
@@ -758,7 +821,7 @@ async function performLogout() {
   try {
     await fetch("/api/logout", { method: "POST" });
   } catch (_) {}
-  state.user = null;
+  applyAuthIdentity(null);
   state.userConfigEnabled = false;
   state.targets = [];
   state.active = "";
@@ -776,7 +839,7 @@ async function performLogout() {
   refreshWorkspaceSelect();
   setPlaceholder();
   drawNetwork();
-  setUserStatus(null);
+  setUserStatus(state.identity);
   if (state.authMode !== "none") {
     showAuthOverlay();
   }
