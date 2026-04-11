@@ -3,6 +3,7 @@ const shellState = {
   allowSignup: false,
   defaultOrchestrator: "",
   user: null,
+  identity: null,
 };
 
 function shellEl(id) {
@@ -22,6 +23,71 @@ function renderRuntimeValue(id, value, tone = "muted") {
   el.innerHTML = `<span class="status-badge ${tone}">${value}</span>`;
 }
 
+function parseIdentityGroups(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function activeTeamLabel(value) {
+  if (!value || typeof value !== "object") return "";
+  return String(value.team_name || value.name || value.team_id || value.id || "").trim();
+}
+
+function normalizeIdentity(payload) {
+  if (!payload || payload.authenticated === false) return null;
+  const username = String(payload.username || payload.user || "").trim();
+  if (!username) return null;
+  const role = String(payload.role || "user").trim().toLowerCase() || "user";
+  const groups = parseIdentityGroups(payload.groups);
+  if (!groups.includes(role)) {
+    groups.unshift(role);
+  }
+  const activeTeam = payload.active_team && typeof payload.active_team === "object" ? payload.active_team : null;
+  const teamCount = Math.max(0, Number(payload.team_count ?? (activeTeam ? 1 : 0)) || 0);
+  const pendingInvitationCount = Math.max(0, Number(payload.pending_invitation_count ?? 0) || 0);
+  return {
+    username,
+    role,
+    groups,
+    email: payload.email ? String(payload.email).trim() : null,
+    activeTeam,
+    activeTeamLabel: activeTeamLabel(activeTeam),
+    teamCount,
+    pendingInvitationCount,
+    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin")),
+  };
+}
+
+function applyShellIdentity(payload) {
+  shellState.identity = normalizeIdentity(payload);
+  shellState.user = shellState.identity ? shellState.identity.username : null;
+}
+
+function identitySummary(identity) {
+  if (!identity) return "";
+  const parts = [`Signed in as ${identity.username}`];
+  if (identity.groups.length) {
+    parts.push(`groups: ${identity.groups.join(", ")}`);
+  }
+  if (identity.activeTeamLabel) {
+    parts.push(`team: ${identity.activeTeamLabel}`);
+  }
+  if (identity.teamCount > 1) {
+    parts.push(`teams: ${identity.teamCount}`);
+  }
+  if (identity.pendingInvitationCount > 0) {
+    parts.push(`invites: ${identity.pendingInvitationCount}`);
+  }
+  return parts.join(" | ");
+}
+
 function syncShellUi() {
   const topbarStatus = shellEl("shell-user-status");
   const logoutBtn = shellEl("shell-logout-btn");
@@ -32,8 +98,8 @@ function syncShellUi() {
   const defaultOrchestrator = shellEl("shell-default-orchestrator");
 
   if (topbarStatus) {
-    if (shellState.user) {
-      topbarStatus.textContent = `Signed in as ${shellState.user}`;
+    if (shellState.identity) {
+      topbarStatus.textContent = identitySummary(shellState.identity);
     } else if (shellState.authMode === "none") {
       topbarStatus.textContent = "No auth required";
     } else {
@@ -46,8 +112,8 @@ function syncShellUi() {
   }
 
   if (sessionState) {
-    if (shellState.user) {
-      sessionState.textContent = `Signed in as ${shellState.user}`;
+    if (shellState.identity) {
+      sessionState.textContent = identitySummary(shellState.identity);
     } else if (shellState.authMode === "none") {
       sessionState.textContent = "Anonymous access";
     } else {
@@ -98,13 +164,13 @@ async function loadShellRuntime() {
 
     if (meResp && meResp.ok) {
       const data = await meResp.json();
-      shellState.user = data.username || null;
+      applyShellIdentity(data);
     } else {
-      shellState.user = null;
+      applyShellIdentity(null);
     }
   } catch (_) {
     shellState.authMode = "none";
-    shellState.user = null;
+    applyShellIdentity(null);
   }
 
   syncShellUi();
@@ -128,7 +194,7 @@ async function shellLogin(username, password) {
       return;
     }
     const data = await resp.json();
-    shellState.user = data.username || username;
+    applyShellIdentity(data);
     syncShellUi();
   } catch (_) {
     setShellError("Login failed.");
@@ -163,7 +229,7 @@ async function shellLogout() {
   try {
     await fetch("/api/logout", { method: "POST" });
   } catch (_) {}
-  shellState.user = null;
+  applyShellIdentity(null);
   syncShellUi();
 }
 

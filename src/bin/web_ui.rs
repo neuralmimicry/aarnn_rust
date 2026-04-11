@@ -1,19 +1,19 @@
 #![recursion_limit = "2048"]
 
 use aarnn_rust::auth_store::{
-    FileOidcPendingStore, FileSessionStore, OidcPendingRecord, SessionRecord,
+    FileOidcPendingStore, FileSessionStore, OidcPendingRecord, SessionIdentityRecord, SessionRecord,
 };
 use aarnn_rust::central_auth::{
     CentralApiError, CentralAuthClient, CentralLoginResponse, CentralSessionResponse,
     CentralTokenActionResponse, CentralTokenLedgerResponse, CentralTokenSnapshot,
 };
 use aarnn_rust::config::NetworkConfig;
-use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
-    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
-    NetworkUpdateRequest, SpikeBatch, StatusRequest, control_update,
-    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
+    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
 };
+use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
     NmChainLoginObservedRequest, NmChainTokenMutationRequest,
@@ -25,38 +25,37 @@ use aarnn_rust::runtime_api::{
 };
 use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
 use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
-use aarnn_rust::spike_io::profiles::{SpikeIoConfig, encode_network_inputs_with};
+use aarnn_rust::spike_io::profiles::{encode_network_inputs_with, SpikeIoConfig};
 use aarnn_rust::spike_io::transport::{
     decode_hex_payload as decode_spike_hex_payload, encode_exchange, spikes_from_transport,
 };
 use anyhow::Context;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{
-    Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
 };
 use axum::{
-    Extension, Json, Router,
     extract::{DefaultBodyLimit, Form, Path, Query, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
+    Extension, Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use clap::Parser;
 use futures_util::StreamExt;
 use openidconnect::{
-    AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
-    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    OAuth2TokenResponse, RedirectUrl, Scope, TokenResponse,
     core::{
         CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims,
     },
-    reqwest,
+    reqwest, AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -64,7 +63,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
@@ -349,7 +348,10 @@ fn cors_allowed_origins_from_env() -> HashSet<String> {
 }
 
 fn cors_enabled_path(path: &str) -> bool {
-    matches!(path, "/api/auth/mode" | "/auth/oidc/exchange" | "/auth/access/exchange")
+    matches!(
+        path,
+        "/api/auth/mode" | "/auth/oidc/exchange" | "/auth/access/exchange"
+    )
 }
 
 fn allowed_cors_origin(state: &AppState, headers: &HeaderMap) -> Option<String> {
@@ -452,8 +454,8 @@ fn apply_env_overrides(args: &mut Args) {
         }
     }
     if args.central_auth_api_base.is_none() {
-        args.central_auth_api_base = env_opt("AARNN_CENTRAL_AUTH_API_BASE")
-            .or_else(|| env_opt("NM_CENTRAL_AUTH_API_BASE"));
+        args.central_auth_api_base =
+            env_opt("AARNN_CENTRAL_AUTH_API_BASE").or_else(|| env_opt("NM_CENTRAL_AUTH_API_BASE"));
     }
     if args.central_auth_timeout_secs == 10 {
         if let Some(timeout) = env_opt("AARNN_CENTRAL_AUTH_TIMEOUT_SECS")
@@ -524,10 +526,100 @@ struct UserStore {
     users: Vec<UserRecord>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AuthUser {
     username: String,
     access_token: Option<String>,
+    role: String,
+    groups: Vec<String>,
+    email: Option<String>,
+    active_team: Option<Value>,
+    team_count: i64,
+    pending_invitation_count: i64,
+    is_admin: bool,
+}
+
+impl AuthUser {
+    fn local(username: impl Into<String>) -> Self {
+        Self::local_with_email(username, None)
+    }
+
+    fn local_with_email(username: impl Into<String>, email: Option<String>) -> Self {
+        build_auth_user(
+            username.into(),
+            None,
+            Some("user".to_string()),
+            Vec::new(),
+            email,
+            None,
+            Some(0),
+            Some(0),
+            Some(false),
+        )
+    }
+
+    fn from_central_login(
+        response: &CentralLoginResponse,
+        fallback_username: &str,
+        access_token: Option<String>,
+    ) -> Option<Self> {
+        let username = central_login_username(response, fallback_username)?;
+        Some(build_auth_user(
+            username,
+            access_token,
+            response.role.clone(),
+            response.groups.clone(),
+            response.email.clone(),
+            response.active_team.clone(),
+            response.team_count,
+            response.pending_invitation_count,
+            response.is_admin,
+        ))
+    }
+
+    fn from_central_session(
+        response: &CentralSessionResponse,
+        access_token: Option<String>,
+    ) -> Option<Self> {
+        let username = central_session_username(response)?;
+        Some(build_auth_user(
+            username,
+            access_token,
+            response.role.clone(),
+            response.groups.clone(),
+            response.email.clone(),
+            response.active_team.clone(),
+            response.team_count,
+            response.pending_invitation_count,
+            response.is_admin,
+        ))
+    }
+
+    fn from_session_record(record: SessionRecord) -> Self {
+        build_auth_user(
+            record.username,
+            record.access_token,
+            record.identity.role,
+            record.identity.groups,
+            record.identity.email,
+            record.identity.active_team,
+            record.identity.team_count,
+            record.identity.pending_invitation_count,
+            record.identity.is_admin,
+        )
+    }
+
+    fn session_identity(&self) -> SessionIdentityRecord {
+        SessionIdentityRecord {
+            role: Some(self.role.clone()),
+            groups: self.groups.clone(),
+            email: self.email.clone(),
+            active_team: self.active_team.clone(),
+            team_count: Some(self.team_count),
+            pending_invitation_count: Some(self.pending_invitation_count),
+            is_admin: Some(self.is_admin),
+        }
+    }
 }
 
 impl UserStore {
@@ -684,21 +776,148 @@ fn central_session_username(response: &CentralSessionResponse) -> Option<String>
         .map(str::to_string)
 }
 
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn json_value_to_nonempty_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(value)) => normalize_optional_string(Some(value.as_str())),
+        Some(Value::Number(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_identity_role(value: Option<&str>) -> String {
+    normalize_optional_string(value)
+        .map(|role| role.to_lowercase())
+        .unwrap_or_else(|| "user".to_string())
+}
+
+fn normalize_identity_groups(values: &[String], role: &str) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut seen = HashSet::new();
+    let normalized_role = role.trim().to_lowercase();
+    if !normalized_role.is_empty() && seen.insert(normalized_role.clone()) {
+        groups.push(normalized_role);
+    }
+    for value in values {
+        let normalized = value.trim().to_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        if seen.insert(normalized.clone()) {
+            groups.push(normalized);
+        }
+    }
+    groups
+}
+
+fn normalize_identity_active_team(value: Option<Value>) -> Option<Value> {
+    match value {
+        Some(Value::Object(mut payload)) => {
+            let team_id = json_value_to_nonempty_string(payload.get("team_id"))
+                .or_else(|| json_value_to_nonempty_string(payload.get("id")));
+            let Some(team_id) = team_id else {
+                return None;
+            };
+            payload.insert("team_id".to_string(), Value::String(team_id));
+            Some(Value::Object(payload))
+        }
+        Some(Value::String(team_id)) => {
+            let team_id = team_id.trim();
+            (!team_id.is_empty()).then(|| json!({ "team_id": team_id }))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_identity_count(value: Option<i64>, default: i64) -> i64 {
+    value.unwrap_or(default).max(0)
+}
+
+fn build_auth_user(
+    username: String,
+    access_token: Option<String>,
+    role: Option<String>,
+    groups: Vec<String>,
+    email: Option<String>,
+    active_team: Option<Value>,
+    team_count: Option<i64>,
+    pending_invitation_count: Option<i64>,
+    is_admin: Option<bool>,
+) -> AuthUser {
+    let username = username.trim().to_string();
+    let role = normalize_identity_role(role.as_deref());
+    let groups = normalize_identity_groups(&groups, &role);
+    let active_team = normalize_identity_active_team(active_team);
+    let team_count =
+        normalize_identity_count(team_count, if active_team.is_some() { 1 } else { 0 });
+    let pending_invitation_count = normalize_identity_count(pending_invitation_count, 0);
+    let is_admin =
+        is_admin.unwrap_or_else(|| role == "admin" || groups.iter().any(|group| group == "admin"));
+    AuthUser {
+        username,
+        access_token: normalize_optional_string(access_token.as_deref()),
+        role,
+        groups,
+        email: normalize_optional_string(email.as_deref()),
+        active_team,
+        team_count,
+        pending_invitation_count,
+        is_admin,
+    }
+}
+
+fn auth_identity_payload(user: &AuthUser) -> Value {
+    json!({
+        "user": user.username.clone(),
+        "username": user.username.clone(),
+        "role": user.role.clone(),
+        "groups": user.groups.clone(),
+        "email": user.email.clone(),
+        "active_team": user.active_team.clone(),
+        "team_count": user.team_count,
+        "pending_invitation_count": user.pending_invitation_count,
+        "is_admin": user.is_admin,
+    })
+}
+
+fn authenticated_identity_payload(user: &AuthUser) -> Value {
+    let mut payload = auth_identity_payload(user);
+    if let Value::Object(map) = &mut payload {
+        map.insert("authenticated".to_string(), Value::Bool(true));
+    }
+    payload
+}
+
+fn login_success_payload(user: &AuthUser) -> Value {
+    let mut payload = authenticated_identity_payload(user);
+    if let Value::Object(map) = &mut payload {
+        map.insert("ok".to_string(), Value::Bool(true));
+    }
+    payload
+}
+
 async fn store_browser_session(
     state: &AppState,
     jar: CookieJar,
-    username: String,
-    access_token: Option<String>,
+    user: &AuthUser,
 ) -> anyhow::Result<(CookieJar, String)> {
     let session_id = new_session_id();
     let expires_at = now_ts() + state.auth.session_ttl_secs;
-    state.session_store
+    state
+        .session_store
         .put(
             &session_id,
             &SessionRecord {
-                username,
+                username: user.username.clone(),
                 expires_at,
-                access_token,
+                access_token: user.access_token.clone(),
+                identity: user.session_identity(),
             },
         )
         .await?;
@@ -1208,7 +1427,15 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "properties": {
               "authenticated": { "type": "boolean" },
               "mode": { "type": "string", "nullable": true },
-              "username": { "type": "string", "nullable": true }
+              "user": { "type": "string", "nullable": true },
+              "username": { "type": "string", "nullable": true },
+              "role": { "type": "string", "nullable": true },
+              "groups": { "type": "array", "items": { "type": "string" } },
+              "email": { "type": "string", "nullable": true },
+              "active_team": { "type": "object", "nullable": true, "additionalProperties": true },
+              "team_count": { "type": "integer", "format": "int64" },
+              "pending_invitation_count": { "type": "integer", "format": "int64" },
+              "is_admin": { "type": "boolean" }
             },
             "required": ["authenticated"]
           },
@@ -1232,9 +1459,18 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "type": "object",
             "properties": {
               "ok": { "type": "boolean" },
-              "username": { "type": "string" }
+              "authenticated": { "type": "boolean" },
+              "user": { "type": "string", "nullable": true },
+              "username": { "type": "string", "nullable": true },
+              "role": { "type": "string", "nullable": true },
+              "groups": { "type": "array", "items": { "type": "string" } },
+              "email": { "type": "string", "nullable": true },
+              "active_team": { "type": "object", "nullable": true, "additionalProperties": true },
+              "team_count": { "type": "integer", "format": "int64" },
+              "pending_invitation_count": { "type": "integer", "format": "int64" },
+              "is_admin": { "type": "boolean" }
             },
-            "required": ["ok", "username"]
+            "required": ["ok", "authenticated", "username"]
           },
           "SignupResponse": {
             "type": "object",
@@ -1875,10 +2111,7 @@ async fn api_auth_middleware(
             .filter(|value| !value.is_empty())
             .unwrap_or("anonymous")
             .to_string();
-        req.extensions_mut().insert(AuthUser {
-            username: runtime_user,
-            access_token: None,
-        });
+        req.extensions_mut().insert(AuthUser::local(runtime_user));
         return next.run(req).await;
     }
     let path = req.uri().path();
@@ -1951,13 +2184,26 @@ async fn me(
     jar: CookieJar,
 ) -> axum::response::Response {
     if state.auth.mode == AuthMode::None {
-        return Json(json!({ "authenticated": false, "mode": "none" })).into_response();
+        return Json(json!({
+            "authenticated": false,
+            "mode": "none",
+            "user": Value::Null,
+            "username": Value::Null,
+            "role": Value::Null,
+            "groups": Vec::<String>::new(),
+            "email": Value::Null,
+            "active_team": Value::Null,
+            "team_count": 0,
+            "pending_invitation_count": 0,
+            "is_admin": false,
+        }))
+        .into_response();
     }
     if let Some(user) = session_auth_user(&state, &jar).await {
-        return Json(json!({ "authenticated": true, "username": user.username })).into_response();
+        return Json(authenticated_identity_payload(&user)).into_response();
     }
     if let Some(user) = bearer_auth_user(&state, &headers).await {
-        return Json(json!({ "authenticated": true, "username": user.username })).into_response();
+        return Json(authenticated_identity_payload(&user)).into_response();
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -2012,16 +2258,6 @@ async fn login(
                     .into_response();
             }
         };
-        let session_username = match central_login_username(&response, username) {
-            Some(value) => value,
-            None => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
-                )
-                    .into_response();
-            }
-        };
         let access_token = match response
             .access_token
             .as_deref()
@@ -2037,22 +2273,34 @@ async fn login(
                     .into_response();
             }
         };
-        let (jar, session_id) =
-            match store_browser_session(&state, jar, session_username.clone(), access_token).await {
-                Ok(result) => result,
-                Err(err) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
-                    )
-                        .into_response();
-                }
-            };
-        chain_sync_identity_best_effort(&state, &session_username, "local", None, None, "login")
-            .await;
-        chain_record_login_best_effort(&state, &session_username, "local", Some(session_id), "login")
-            .await;
-        return (jar, Json(json!({ "ok": true, "username": session_username }))).into_response();
+        let Some(auth_user) = AuthUser::from_central_login(&response, username, access_token)
+        else {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+            )
+                .into_response();
+        };
+        let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
+            Ok(result) => result,
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                )
+                    .into_response();
+            }
+        };
+        chain_sync_identity_best_effort(&state, &auth_user, "local", None, "login").await;
+        chain_record_login_best_effort(
+            &state,
+            &auth_user.username,
+            "local",
+            Some(session_id),
+            "login",
+        )
+        .await;
+        return (jar, Json(login_success_payload(&auth_user))).into_response();
     }
 
     let users = load_users_fresh(&state).await;
@@ -2084,7 +2332,8 @@ async fn login(
             .into_response();
     }
 
-    let (jar, session_id) = match store_browser_session(&state, jar, username.to_string(), None).await {
+    let auth_user = AuthUser::local(username.to_string());
+    let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
         Ok(result) => result,
         Err(err) => {
             return (
@@ -2094,9 +2343,9 @@ async fn login(
                 .into_response();
         }
     };
-    chain_sync_identity_best_effort(&state, username, "local", None, None, "login").await;
+    chain_sync_identity_best_effort(&state, &auth_user, "local", None, "login").await;
     chain_record_login_best_effort(&state, username, "local", Some(session_id), "login").await;
-    (jar, Json(json!({ "ok": true, "username": username }))).into_response()
+    (jar, Json(login_success_payload(&auth_user))).into_response()
 }
 
 async fn signup(
@@ -2168,7 +2417,8 @@ async fn signup(
         };
         return (code, Json(json!({ "error": err.to_string() }))).into_response();
     }
-    chain_sync_identity_best_effort(&state, username, "local", None, None, "signup").await;
+    let auth_user = AuthUser::local(username.to_string());
+    chain_sync_identity_best_effort(&state, &auth_user, "local", None, "signup").await;
     Json(json!({ "ok": true })).into_response()
 }
 
@@ -2207,25 +2457,31 @@ async fn access_exchange(
     if !session.authenticated {
         return Redirect::to(&next_path).into_response();
     }
-    let Some(username) = central_session_username(&session) else {
+    let Some(auth_user) = AuthUser::from_central_session(&session, Some(access_token.to_string()))
+    else {
         return Redirect::to(&next_path).into_response();
     };
-    let (jar, session_id) =
-        match store_browser_session(&state, jar, username.clone(), Some(access_token.to_string())).await {
-            Ok(result) => result,
-            Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("failed to persist session: {}", err) })),
-                )
-                    .into_response();
-            }
-        };
-    chain_sync_identity_best_effort(&state, &username, "central_access", None, None, "access_exchange")
-        .await;
+    let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
+        Ok(result) => result,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist session: {}", err) })),
+            )
+                .into_response();
+        }
+    };
+    chain_sync_identity_best_effort(
+        &state,
+        &auth_user,
+        "central_access",
+        None,
+        "access_exchange",
+    )
+    .await;
     chain_record_login_best_effort(
         &state,
-        &username,
+        &auth_user.username,
         "central_access",
         Some(session_id),
         "access_exchange",
@@ -2246,9 +2502,8 @@ fn pricing_payload(pricing: &TokenPricing) -> Value {
 
 async fn chain_sync_identity_best_effort(
     state: &AppState,
-    username: &str,
+    user: &AuthUser,
     provider: &str,
-    email: Option<String>,
     subject: Option<String>,
     source: &str,
 ) {
@@ -2257,17 +2512,24 @@ async fn chain_sync_identity_best_effort(
     };
     let payload = NmChainIdentityUpsertRequest {
         request_id: None,
-        user_id: username.to_string(),
-        role: Some("user".to_string()),
-        email,
+        user_id: user.username.clone(),
+        role: Some(user.role.clone()),
+        email: user.email.clone(),
         provider: Some(provider.to_string()),
         subject,
-        meta: json!({ "source": source }),
+        meta: json!({
+            "source": source,
+            "groups": user.groups.clone(),
+            "active_team": user.active_team.clone(),
+            "team_count": user.team_count,
+            "pending_invitation_count": user.pending_invitation_count,
+            "is_admin": user.is_admin,
+        }),
     };
     if let Err(err) = chain.upsert_identity(&payload).await {
         eprintln!(
             "[warn] nmchain identity upsert failed for {}: {}",
-            username, err
+            user.username, err
         );
     }
 }
@@ -2398,14 +2660,25 @@ async fn debit_tokens(
                 .debit_tokens(access_token, amount, &request_id, meta)
                 .await
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-            let used_total = response
-                .used
-                .unwrap_or_else(|| response.entry.as_ref().map(|entry| entry.delta.abs()).unwrap_or(amount));
-            let shortfall = response
-                .shortfall
-                .unwrap_or_else(|| response.entry.as_ref().map(|entry| entry.shortfall).unwrap_or(0));
+            let used_total = response.used.unwrap_or_else(|| {
+                response
+                    .entry
+                    .as_ref()
+                    .map(|entry| entry.delta.abs())
+                    .unwrap_or(amount)
+            });
+            let shortfall = response.shortfall.unwrap_or_else(|| {
+                response
+                    .entry
+                    .as_ref()
+                    .map(|entry| entry.shortfall)
+                    .unwrap_or(0)
+            });
             if shortfall > 0 || used_total < amount {
-                anyhow::bail!("token debit shortfall: {}", shortfall.max(amount - used_total));
+                anyhow::bail!(
+                    "token debit shortfall: {}",
+                    shortfall.max(amount - used_total)
+                );
             }
             return Ok(());
         }
@@ -2448,7 +2721,10 @@ async fn refund_tokens(
                 .refund_tokens(access_token, amount, &request_id, meta)
                 .await
             {
-                eprintln!("[warn] central refund failed for {}: {}", user.username, err);
+                eprintln!(
+                    "[warn] central refund failed for {}: {}",
+                    user.username, err
+                );
             }
             return;
         }
@@ -2465,7 +2741,10 @@ async fn refund_tokens(
         meta,
     };
     if let Err(err) = chain.apply_token(&payload).await {
-        eprintln!("[warn] nmchain refund failed for {}: {}", user.username, err);
+        eprintln!(
+            "[warn] nmchain refund failed for {}: {}",
+            user.username, err
+        );
     }
 }
 
@@ -3104,7 +3383,8 @@ async fn oidc_callback(
             Ok(response) => response,
             Err(err) => {
                 return (
-                    StatusCode::from_u16(err.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY),
+                    StatusCode::from_u16(err.status.unwrap_or(502))
+                        .unwrap_or(StatusCode::BAD_GATEWAY),
                     Json(json!({
                         "error": err
                             .payload
@@ -3125,16 +3405,6 @@ async fn oidc_callback(
             .as_deref()
             .and_then(|value| value.split('@').next())
             .unwrap_or("oidc");
-        let username = match central_login_username(&response, fallback_username) {
-            Some(username) => username,
-            None => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
-                )
-                    .into_response();
-            }
-        };
         let access_token = match response
             .access_token
             .as_deref()
@@ -3150,28 +3420,41 @@ async fn oidc_callback(
                     .into_response();
             }
         };
-        let (jar, session_id) =
-            match store_browser_session(&state, jar, username.clone(), access_token).await {
-                Ok(result) => result,
-                Err(err) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
-                    )
-                        .into_response();
-                }
-            };
+        let Some(auth_user) =
+            AuthUser::from_central_login(&response, fallback_username, access_token)
+        else {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+            )
+                .into_response();
+        };
+        let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
+            Ok(result) => result,
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                )
+                    .into_response();
+            }
+        };
         chain_sync_identity_best_effort(
             &state,
-            &username,
+            &auth_user,
             "oidc",
-            email.clone(),
             Some(subject.clone()),
             "oidc_callback",
         )
         .await;
-        chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_callback")
-            .await;
+        chain_record_login_best_effort(
+            &state,
+            &auth_user.username,
+            "oidc",
+            Some(session_id),
+            "oidc_callback",
+        )
+        .await;
         return (jar, Redirect::to("/")).into_response();
     }
 
@@ -3212,7 +3495,8 @@ async fn oidc_callback(
         }
     };
 
-    let (jar, session_id) = match store_browser_session(&state, jar, username.clone(), None).await {
+    let auth_user = AuthUser::local_with_email(username.clone(), email.clone());
+    let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
         Ok(result) => result,
         Err(err) => {
             return (
@@ -3224,15 +3508,20 @@ async fn oidc_callback(
     };
     chain_sync_identity_best_effort(
         &state,
-        &username,
+        &auth_user,
         "oidc",
-        email.clone(),
         Some(subject.clone()),
         "oidc_callback",
     )
     .await;
-    chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_callback")
-        .await;
+    chain_record_login_best_effort(
+        &state,
+        &auth_user.username,
+        "oidc",
+        Some(session_id),
+        "oidc_callback",
+    )
+    .await;
     (jar, Redirect::to("/")).into_response()
 }
 
@@ -3358,7 +3647,8 @@ async fn oidc_exchange(
             Ok(response) => response,
             Err(err) => {
                 return (
-                    StatusCode::from_u16(err.status.unwrap_or(502)).unwrap_or(StatusCode::BAD_GATEWAY),
+                    StatusCode::from_u16(err.status.unwrap_or(502))
+                        .unwrap_or(StatusCode::BAD_GATEWAY),
                     Json(json!({
                         "error": err
                             .payload
@@ -3383,16 +3673,6 @@ async fn oidc_exchange(
                     .and_then(|value| value.split('@').next().map(|part| part.to_string()))
             })
             .unwrap_or_else(|| "oidc".to_string());
-        let username = match central_login_username(&response, &fallback_username) {
-            Some(username) => username,
-            None => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
-                )
-                    .into_response();
-            }
-        };
         let access_token = match response
             .access_token
             .as_deref()
@@ -3408,28 +3688,41 @@ async fn oidc_exchange(
                     .into_response();
             }
         };
-        let (jar, session_id) =
-            match store_browser_session(&state, jar, username.clone(), access_token).await {
-                Ok(result) => result,
-                Err(err) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("failed to persist session: {}", err) })),
-                    )
-                        .into_response();
-                }
-            };
+        let Some(auth_user) =
+            AuthUser::from_central_login(&response, &fallback_username, access_token)
+        else {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "central_auth_invalid", "details": "central auth did not return a username" })),
+            )
+                .into_response();
+        };
+        let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
+            Ok(result) => result,
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to persist session: {}", err) })),
+                )
+                    .into_response();
+            }
+        };
         chain_sync_identity_best_effort(
             &state,
-            &username,
+            &auth_user,
             "oidc",
-            email.clone(),
             Some(subject.clone()),
             "oidc_exchange",
         )
         .await;
-        chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_exchange")
-            .await;
+        chain_record_login_best_effort(
+            &state,
+            &auth_user.username,
+            "oidc",
+            Some(session_id),
+            "oidc_exchange",
+        )
+        .await;
         return (jar, Redirect::to(&next_path)).into_response();
     }
 
@@ -3474,7 +3767,8 @@ async fn oidc_exchange(
         }
     };
 
-    let (jar, session_id) = match store_browser_session(&state, jar, username.clone(), None).await {
+    let auth_user = AuthUser::local_with_email(username.clone(), email.clone());
+    let (jar, session_id) = match store_browser_session(&state, jar, &auth_user).await {
         Ok(result) => result,
         Err(err) => {
             return (
@@ -3486,15 +3780,20 @@ async fn oidc_exchange(
     };
     chain_sync_identity_best_effort(
         &state,
-        &username,
+        &auth_user,
         "oidc",
-        email.clone(),
         Some(subject.clone()),
         "oidc_exchange",
     )
     .await;
-    chain_record_login_best_effort(&state, &username, "oidc", Some(session_id), "oidc_exchange")
-        .await;
+    chain_record_login_best_effort(
+        &state,
+        &auth_user.username,
+        "oidc",
+        Some(session_id),
+        "oidc_exchange",
+    )
+    .await;
     (jar, Redirect::to(&next_path)).into_response()
 }
 
@@ -3505,15 +3804,7 @@ async fn session_auth_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser
         Err(_) => return None,
     }?;
     if session.expires_at > now_ts() {
-        return Some(AuthUser {
-            username: session.username,
-            access_token: session
-                .access_token
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string),
-        });
+        return Some(AuthUser::from_session_record(session));
     }
     let _ = state.session_store.delete(&session_id).await;
     None
@@ -3526,11 +3817,7 @@ async fn bearer_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthU
     if !session.authenticated {
         return None;
     }
-    let username = central_session_username(&session)?;
-    Some(AuthUser {
-        username,
-        access_token: Some(access_token),
-    })
+    AuthUser::from_central_session(&session, Some(access_token))
 }
 
 async fn status(

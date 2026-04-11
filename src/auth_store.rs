@@ -1,7 +1,26 @@
 use crate::shared_fs::{read_json_if_exists, write_json_pretty};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionIdentityRecord {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub active_team: Option<Value>,
+    #[serde(default)]
+    pub team_count: Option<i64>,
+    #[serde(default)]
+    pub pending_invitation_count: Option<i64>,
+    #[serde(default)]
+    pub is_admin: Option<bool>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -9,6 +28,8 @@ pub struct SessionRecord {
     pub expires_at: u64,
     #[serde(default)]
     pub access_token: Option<String>,
+    #[serde(default)]
+    pub identity: SessionIdentityRecord,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
