@@ -127,6 +127,8 @@ pub struct WorkspaceDetailResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct WorkspaceSnapshotResponse {
     pub workspace_id: String,
+    #[serde(default)]
+    pub saved_at_ms: Option<u64>,
     pub snapshot_json: String,
 }
 

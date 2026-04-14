@@ -898,6 +898,12 @@ fn login_success_payload(user: &AuthUser) -> Value {
     let mut payload = authenticated_identity_payload(user);
     if let Value::Object(map) = &mut payload {
         map.insert("ok".to_string(), Value::Bool(true));
+        if let Some(access_token) = user.access_token.as_ref() {
+            map.insert(
+                "access_token".to_string(),
+                Value::String(access_token.clone()),
+            );
+        }
     }
     payload
 }
@@ -940,6 +946,11 @@ struct SnapshotQuery {
     addr: Option<String>,
     network_id: Option<String>,
     node_id: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RuntimeWorkspaceSnapshotQuery {
+    if_saved_after_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1299,6 +1310,10 @@ async fn index() -> impl IntoResponse {
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
     (headers, include_str!("../../web_ui/index.html"))
 }
 
@@ -1307,6 +1322,10 @@ async fn app_js() -> impl IntoResponse {
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/app.js"))
 }
@@ -1317,6 +1336,10 @@ async fn shell_js() -> impl IntoResponse {
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/javascript; charset=utf-8"),
     );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
     (headers, include_str!("../../web_ui/shell.js"))
 }
 
@@ -1325,6 +1348,10 @@ async fn style_css() -> impl IntoResponse {
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/css; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/style.css"))
 }
@@ -1335,6 +1362,10 @@ async fn docs_page() -> impl IntoResponse {
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
     (headers, include_str!("../../web_ui/docs.html"))
 }
 
@@ -1343,6 +1374,10 @@ async fn swagger_page() -> impl IntoResponse {
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/swagger.html"))
 }
@@ -1468,7 +1503,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "active_team": { "type": "object", "nullable": true, "additionalProperties": true },
               "team_count": { "type": "integer", "format": "int64" },
               "pending_invitation_count": { "type": "integer", "format": "int64" },
-              "is_admin": { "type": "boolean" }
+              "is_admin": { "type": "boolean" },
+              "access_token": { "type": "string", "nullable": true }
             },
             "required": ["ok", "authenticated", "username"]
           },
@@ -3069,13 +3105,15 @@ async fn runtime_workspace_snapshot(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceSnapshotQuery>,
 ) -> axum::response::Response {
     match state
         .runtime
-        .workspace_snapshot(&user.username, &workspace_id)
+        .workspace_saved_snapshot(&user.username, &workspace_id, query.if_saved_after_ms)
         .await
     {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(Some(snapshot)) => Json(snapshot).into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": err.to_string() })),
