@@ -702,6 +702,9 @@ body {
   height: 100%;
   pointer-events: auto;
   cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .bottom-panels {
@@ -1569,5 +1572,40 @@ pre {
   .matrix-table td {
     border: none;
     padding: 4px 0;
+  }
+
+  .sidebar {
+    order: 2;
+  }
+
+  .panel-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .panel-actions .panel-select {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .bottom-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar-right {
+    gap: 6px;
+    width: 100%;
+  }
+
+  .network-view {
+    min-height: 320px;
+  }
+
+  .footer {
+    padding-left: 10px;
+    padding-right: 10px;
+    font-size: 10px;
   }
 }

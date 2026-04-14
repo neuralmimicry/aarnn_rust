@@ -1,0 +1,45 @@
+[
+  {
+    "id": "celegans",
+    "title": "C. elegans",
+    "summary": "Worm embodiment with aligned sensory and motor channels.",
+    "description": "Launch the C. elegans Webots world with the alignment profile generated from the AARNN worm assets.",
+    "aliases": ["worm", "celegans", "c_elegans"],
+    "world_path": "webots_world/worlds/celegans_neuroworld.wbt",
+    "config_path": "webots_world/configs/config_celegans_webots.json",
+    "io_alignment_path": "webots_world/configs/config_celegans_webots.io_alignment.json",
+    "workspace_hint": "celegans-lab"
+  },
+  {
+    "id": "drosophila-banc",
+    "title": "Drosophila (BANC)",
+    "summary": "Fruit-fly embodiment based on the BANC v626 projection.",
+    "description": "Launch the BANC-derived Drosophila world profile with its generated I/O alignment map.",
+    "aliases": ["fly", "drosophila", "drosophila_banc", "banc"],
+    "world_path": "webots_world/worlds/drosophila_neuroworld.wbt",
+    "config_path": "webots_world/configs/config_drosophila_banc_webots.json",
+    "io_alignment_path": "webots_world/configs/config_drosophila_banc_webots.io_alignment.json",
+    "workspace_hint": "drosophila-banc-lab"
+  },
+  {
+    "id": "drosophila-fafb",
+    "title": "Drosophila (FAFB)",
+    "summary": "Fruit-fly embodiment based on the FAFB v783 projection.",
+    "description": "Launch the FAFB-derived Drosophila world profile with its generated I/O alignment map.",
+    "aliases": ["fly-fafb", "drosophila_fafb", "fafb"],
+    "world_path": "webots_world/worlds/drosophila_neuroworld.wbt",
+    "config_path": "webots_world/configs/config_drosophila_fafb_webots.json",
+    "io_alignment_path": "webots_world/configs/config_drosophila_fafb_webots.io_alignment.json",
+    "workspace_hint": "drosophila-fafb-lab"
+  },
+  {
+    "id": "nao",
+    "title": "NAO Robot",
+    "summary": "Humanoid embodiment with dense visual sensory ingress.",
+    "description": "Launch the NAO Webots world and inspect the high-bandwidth sensory and actuator profile exported from AARNN.",
+    "aliases": ["nao", "humanoid"],
+    "world_path": "webots_world/worlds/neuroworld.wbt",
+    "config_path": "webots_world/configs/config_nao_webots.json",
+    "workspace_hint": "nao-lab"
+  }
+]

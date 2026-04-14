@@ -1152,6 +1152,10 @@ impl RuntimeManager {
         let handle = self.workspace_handle(user_id, workspace_id).await?;
         self.maybe_refresh_workspace_from_disk(&handle).await?;
         let workspace_id = handle.key.workspace_id.clone();
+        let saved_at_ms = {
+            let manifest = handle.manifest.read().await;
+            manifest.last_saved_at_ms.or(Some(manifest.updated_at_ms))
+        };
         let handle_for_export = handle.clone();
         let snapshot_json = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
             let engine = handle_for_export
@@ -1165,8 +1169,47 @@ impl RuntimeManager {
 
         Ok(WorkspaceSnapshotResponse {
             workspace_id,
+            saved_at_ms,
             snapshot_json,
         })
+    }
+
+    pub async fn workspace_saved_snapshot(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        if_saved_after_ms: Option<u64>,
+    ) -> anyhow::Result<Option<WorkspaceSnapshotResponse>> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let workspace_id = handle.key.workspace_id.clone();
+        let saved_at_ms = {
+            let manifest = handle.manifest.read().await;
+            manifest.last_saved_at_ms.or(Some(manifest.updated_at_ms))
+        };
+
+        if let (Some(if_saved_after_ms), Some(saved_at_ms)) = (if_saved_after_ms, saved_at_ms) {
+            if saved_at_ms <= if_saved_after_ms {
+                return Ok(None);
+            }
+        }
+
+        let snapshot_path = handle.latest_snapshot_path();
+        let snapshot_json = tokio::task::spawn_blocking(move || read_if_exists(&snapshot_path))
+            .await
+            .context("workspace saved snapshot task failed")??;
+
+        if let Some(snapshot_json) = snapshot_json {
+            return Ok(Some(WorkspaceSnapshotResponse {
+                workspace_id,
+                saved_at_ms,
+                snapshot_json,
+            }));
+        }
+
+        self.workspace_snapshot(user_id, workspace_id.as_str())
+            .await
+            .map(Some)
     }
 
     pub async fn workspace_activity(

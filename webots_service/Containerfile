@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+ARG BUILD_NUMBER=0
+ARG GIT_COMMIT=unknown
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+LABEL org.opencontainers.image.title="NeuralMimicry Webots Broker" \
+      org.opencontainers.image.version="${BUILD_NUMBER}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}"
+
+WORKDIR /app
+
+COPY webots_service/requirements.txt /tmp/webots-service-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/webots-service-requirements.txt
+
+COPY webots_service /app/webots_service
+COPY webots_world /app/webots_world
+
+EXPOSE 8080
+
+ENTRYPOINT ["python", "-m", "webots_service"]
