@@ -8,6 +8,7 @@ use aarnn_rust::central_auth::{
     CentralTokenActionResponse, CentralTokenLedgerResponse, CentralTokenSnapshot,
 };
 use aarnn_rust::config::NetworkConfig;
+use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure};
 use aarnn_rust::distributed::proto::{
     control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
@@ -94,6 +95,17 @@ async fn connect_cluster_client(
     Ok(client
         .max_decoding_message_size(grpc_max_msg_bytes)
         .max_encoding_message_size(grpc_max_msg_bytes))
+}
+
+fn grpc_status_to_http(status: &tonic::Status) -> StatusCode {
+    match status.code() {
+        tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
+        tonic::Code::NotFound => StatusCode::NOT_FOUND,
+        tonic::Code::PermissionDenied => StatusCode::FORBIDDEN,
+        tonic::Code::FailedPrecondition => StatusCode::CONFLICT,
+        tonic::Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -471,6 +483,22 @@ fn apply_env_overrides(args: &mut Args) {
             args.auth_mode = mode;
         } else if args.oidc_issuer.is_some() {
             args.auth_mode = "oidc".to_string();
+        }
+    }
+
+    if args.orchestrator.is_none() || args.runtime_root.trim() == "data/runtime" {
+        let roots = default_infrastructure_roots();
+        if !roots.is_empty() {
+            if let Ok(infra) = detect_infrastructure(&roots) {
+                if args.orchestrator.is_none() {
+                    args.orchestrator = infra.recommended_orchestrator_addr();
+                }
+                if args.runtime_root.trim() == "data/runtime" {
+                    if let Some(runtime_root) = infra.runtime_root {
+                        args.runtime_root = runtime_root;
+                    }
+                }
+            }
         }
     }
 }
@@ -1581,6 +1609,20 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "ga_ramp_eval_neurons": { "type": "integer", "format": "uint64" },
               "ga_ramp_eval_conns": { "type": "integer", "format": "uint64" },
               "comm_protocol": { "type": "string" },
+              "telemetry_source": { "type": "string" },
+              "telemetry_ts_ms": { "type": "integer", "format": "uint64" },
+              "telemetry_cpu_usage_pct": { "type": "number" },
+              "telemetry_mem_used_pct": { "type": "number" },
+              "telemetry_net_rx_bps": { "type": "number" },
+              "telemetry_net_tx_bps": { "type": "number" },
+              "telemetry_disk_used_pct": { "type": "number" },
+              "telemetry_disk_read_bps": { "type": "number" },
+              "telemetry_disk_write_bps": { "type": "number" },
+              "telemetry_gpu_util_pct": { "type": "number" },
+              "telemetry_gpu_temp_c": { "type": "number" },
+              "telemetry_gpu_power_w": { "type": "number" },
+              "telemetry_gpu_mem_used_pct": { "type": "number" },
+              "telemetry_recent_action_count": { "type": "integer", "format": "uint32" },
               "peer_comm_protocols": {
                 "type": "object",
                 "additionalProperties": { "type": "string" }
@@ -1611,6 +1653,13 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "playing": { "type": "boolean" },
               "neuron_model": { "type": "string" },
               "learning_rule": { "type": "string" },
+              "deployment_modes": { "type": "array", "items": { "type": "string" } },
+              "deployment_scope": { "type": "string" },
+              "live_transition_allowed": { "type": "boolean" },
+              "autonomous_transition_enabled": { "type": "boolean" },
+              "last_transition_reason": { "type": "string" },
+              "last_transition_ts_ms": { "type": "integer", "format": "uint64" },
+              "last_transition_source": { "type": "string" },
               "distribution": { "type": "array", "items": { "$ref": "#/components/schemas/NetworkDistributionEntry" } }
             },
             "required": ["network_id", "distribution"]
@@ -1938,8 +1987,11 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             },
             "responses": {
               "200": { "description": "Update result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
-              "400": { "description": "Missing orchestrator address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "400": { "description": "Missing orchestrator address or invalid update payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Cluster policy denied the requested live transition.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "404": { "description": "Target network was not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "409": { "description": "Live deployment transition requires explicit permission.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "500": { "description": "Update failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Connect failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
@@ -3952,6 +4004,20 @@ async fn status(
                 "ga_ramp_eval_neurons": res.map(|r| r.ga_ramp_eval_neurons).unwrap_or(0),
                 "ga_ramp_eval_conns": res.map(|r| r.ga_ramp_eval_conns).unwrap_or(0),
                 "comm_protocol": res.map(|r| r.comm_protocol.clone()).unwrap_or_else(|| "unknown".to_string()),
+                "telemetry_source": res.map(|r| r.telemetry_source.clone()).unwrap_or_default(),
+                "telemetry_ts_ms": res.map(|r| r.telemetry_ts_ms).unwrap_or(0),
+                "telemetry_cpu_usage_pct": res.map(|r| r.telemetry_cpu_usage_pct).unwrap_or(0.0),
+                "telemetry_mem_used_pct": res.map(|r| r.telemetry_mem_used_pct).unwrap_or(0.0),
+                "telemetry_net_rx_bps": res.map(|r| r.telemetry_net_rx_bps).unwrap_or(0.0),
+                "telemetry_net_tx_bps": res.map(|r| r.telemetry_net_tx_bps).unwrap_or(0.0),
+                "telemetry_disk_used_pct": res.map(|r| r.telemetry_disk_used_pct).unwrap_or(0.0),
+                "telemetry_disk_read_bps": res.map(|r| r.telemetry_disk_read_bps).unwrap_or(0.0),
+                "telemetry_disk_write_bps": res.map(|r| r.telemetry_disk_write_bps).unwrap_or(0.0),
+                "telemetry_gpu_util_pct": res.map(|r| r.telemetry_gpu_util_pct).unwrap_or(0.0),
+                "telemetry_gpu_temp_c": res.map(|r| r.telemetry_gpu_temp_c).unwrap_or(0.0),
+                "telemetry_gpu_power_w": res.map(|r| r.telemetry_gpu_power_w).unwrap_or(0.0),
+                "telemetry_gpu_mem_used_pct": res.map(|r| r.telemetry_gpu_mem_used_pct).unwrap_or(0.0),
+                "telemetry_recent_action_count": res.map(|r| r.telemetry_recent_action_count).unwrap_or(0),
                 "peer_comm_protocols": res.map(|r| r.peer_comm_protocols.clone()).unwrap_or_default(),
             })
         })
@@ -3981,6 +4047,13 @@ async fn status(
                 "playing": n.playing,
                 "neuron_model": n.neuron_model,
                 "learning_rule": n.learning_rule,
+                "deployment_modes": n.deployment_modes,
+                "deployment_scope": n.deployment_scope,
+                "live_transition_allowed": n.live_transition_allowed,
+                "autonomous_transition_enabled": n.autonomous_transition_enabled,
+                "last_transition_reason": n.last_transition_reason,
+                "last_transition_ts_ms": n.last_transition_ts_ms,
+                "last_transition_source": n.last_transition_source,
                 "distribution": distribution,
             })
         })
@@ -4228,7 +4301,7 @@ async fn update_network(
         Ok(resp) => resp.into_inner(),
         Err(e) => {
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                grpc_status_to_http(&e),
                 Json(json!({ "error": format!("update failed: {}", e) })),
             )
                 .into_response();

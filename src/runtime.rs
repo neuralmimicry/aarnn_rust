@@ -1,5 +1,5 @@
 use crate::distributed::proto::{
-    StatusRequest, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    distributed_neuromorphic_client::DistributedNeuromorphicClient, StatusRequest,
 };
 use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
 use crate::runtime_api::{
@@ -7,8 +7,8 @@ use crate::runtime_api::{
     WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
     WorkspaceSnapshotResponse, WorkspaceSummary,
 };
-use crate::shared_fs::{FileLease, acquire_lease_with_timeout, try_acquire_lease};
-use anyhow::{Context, anyhow};
+use crate::shared_fs::{acquire_lease_with_timeout, try_acquire_lease, FileLease};
+use anyhow::{anyhow, Context};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{RwLock, Semaphore, watch};
+use tokio::sync::{watch, RwLock, Semaphore};
 use tokio::time::{Duration, MissedTickBehavior};
 use tonic::Request;
 
@@ -2052,6 +2052,7 @@ mod tests {
             root_dir: root.clone(),
             tick_interval_ms: 5,
             local_worker_limit: 1,
+            resume_existing_workspaces: true,
             autosave_steps: 1,
             continuum: None,
             reconcile_interval_ms: 5,
@@ -2089,6 +2090,7 @@ mod tests {
             root_dir: root.clone(),
             tick_interval_ms: 5,
             local_worker_limit: 1,
+            resume_existing_workspaces: true,
             autosave_steps: 1,
             continuum: None,
             reconcile_interval_ms: 5,
@@ -2110,6 +2112,7 @@ mod tests {
             root_dir: root.clone(),
             tick_interval_ms: 10,
             local_worker_limit: 1,
+            resume_existing_workspaces: true,
             autosave_steps: 10,
             continuum: None,
             reconcile_interval_ms: 10,

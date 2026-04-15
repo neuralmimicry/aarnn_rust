@@ -22,6 +22,7 @@ mod bridge;
 #[cfg(feature = "opencl")]
 mod cl_compute;
 mod config;
+mod deployment;
 mod distributed;
 mod engine;
 mod fpaa;
@@ -60,6 +61,10 @@ use serde::Deserialize;
 use crate::config::{
     apply_clumping_layer_defaults, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference,
     IzhikevichParams, LIFParams, NetworkConfig, STDPParams,
+};
+use crate::deployment::{
+    default_infrastructure_roots, detect_infrastructure, DeploymentConfig, ExecutionMode,
+    ExecutionScope,
 };
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
@@ -150,6 +155,52 @@ impl RuntimePayloadKindArg {
             Self::Auto => crate::engine::EnginePayloadKind::Auto,
             Self::Config => crate::engine::EnginePayloadKind::Config,
             Self::Snapshot => crate::engine::EnginePayloadKind::Snapshot,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum DeploymentModeArg {
+    Individual,
+    Distributed,
+    Sharded,
+    Grouped,
+    Combined,
+    Federated,
+}
+
+impl From<DeploymentModeArg> for ExecutionMode {
+    fn from(value: DeploymentModeArg) -> Self {
+        match value {
+            DeploymentModeArg::Individual => ExecutionMode::Individual,
+            DeploymentModeArg::Distributed => ExecutionMode::Distributed,
+            DeploymentModeArg::Sharded => ExecutionMode::Sharded,
+            DeploymentModeArg::Grouped => ExecutionMode::Grouped,
+            DeploymentModeArg::Combined => ExecutionMode::Combined,
+            DeploymentModeArg::Federated => ExecutionMode::Federated,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum DeploymentScopeArg {
+    Auto,
+    Node,
+    Container,
+    System,
+    Cluster,
+    FederatedCluster,
+}
+
+impl From<DeploymentScopeArg> for ExecutionScope {
+    fn from(value: DeploymentScopeArg) -> Self {
+        match value {
+            DeploymentScopeArg::Auto => ExecutionScope::Auto,
+            DeploymentScopeArg::Node => ExecutionScope::Node,
+            DeploymentScopeArg::Container => ExecutionScope::Container,
+            DeploymentScopeArg::System => ExecutionScope::System,
+            DeploymentScopeArg::Cluster => ExecutionScope::Cluster,
+            DeploymentScopeArg::FederatedCluster => ExecutionScope::FederatedCluster,
         }
     }
 }
@@ -271,6 +322,83 @@ struct Cli {
     /// Address of the orchestrator (if running as a node)
     #[arg(long)]
     orchestrator_addr: Option<String>,
+
+    /// Execution modes for this network or network set.
+    #[arg(long = "execution-mode", value_enum, value_delimiter = ',', num_args = 1..)]
+    execution_modes: Vec<DeploymentModeArg>,
+
+    /// Placement scope for execution planning.
+    #[arg(long = "execution-scope", value_enum, default_value_t = DeploymentScopeArg::Auto)]
+    execution_scope: DeploymentScopeArg,
+
+    /// Related network id for grouped, combined, or federated placement.
+    #[arg(long = "execution-related-network")]
+    execution_related_networks: Vec<String>,
+
+    /// Combined placement group identifier.
+    #[arg(long = "execution-combined-group")]
+    execution_combined_group: Option<String>,
+
+    /// Federated placement group identifier.
+    #[arg(long = "execution-federation-group")]
+    execution_federation_group: Option<String>,
+
+    /// Enable infrastructure autodetection when resolving execution modes.
+    #[arg(long = "execution-autodetect", default_value_t = true)]
+    execution_autodetect: bool,
+
+    /// Allow live deployment transitions without stopping or restarting the network.
+    #[arg(
+        long = "execution-live-transition",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_live_transition: Option<bool>,
+
+    /// Allow the orchestrator to transition deployment modes autonomously.
+    #[arg(
+        long = "execution-autonomous-transition",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_autonomous_transition: Option<bool>,
+
+    /// Modes the live transition controller may enter autonomously.
+    #[arg(
+        long = "execution-transition-mode",
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..
+    )]
+    execution_transition_modes: Vec<DeploymentModeArg>,
+
+    /// Preferred per-network target step time in milliseconds for autonomous transitions.
+    #[arg(long = "execution-target-step-ms")]
+    execution_target_step_ms: Option<f32>,
+
+    /// Minimum cooldown in milliseconds between autonomous deployment transitions.
+    #[arg(long = "execution-transition-cooldown-ms")]
+    execution_transition_cooldown_ms: Option<u64>,
+
+    /// Allow this network to share execution infrastructure with multiple users.
+    #[arg(
+        long = "execution-allow-multi-user",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_allow_multi_user: Option<bool>,
+
+    /// Maximum concurrent networks an engine target should host for this deployment.
+    #[arg(long = "execution-max-concurrent-networks")]
+    execution_max_concurrent_networks: Option<usize>,
+
+    /// Preferred shard fan-out when cross-node sharding is enabled.
+    #[arg(long = "execution-desired-shards")]
+    execution_desired_shards: Option<usize>,
+
+    /// Optional infrastructure root to scan for deployment hints.
+    #[arg(long)]
+    infrastructure_root: Option<String>,
 
     /// Listen address for gRPC
     #[arg(long, default_value = "0.0.0.0:50051")]
@@ -437,6 +565,36 @@ struct OrchestratorNetworkSpec {
     neuron_model: Option<String>,
     #[serde(default)]
     learning_rule: Option<String>,
+    #[serde(default)]
+    execution_modes: Vec<ExecutionMode>,
+    #[serde(default)]
+    execution_scope: Option<ExecutionScope>,
+    #[serde(default)]
+    related_network_ids: Vec<String>,
+    #[serde(default)]
+    combined_group: Option<String>,
+    #[serde(default)]
+    federation_group: Option<String>,
+    #[serde(default)]
+    autodetect_infrastructure: Option<bool>,
+    #[serde(default)]
+    allow_live_transition: Option<bool>,
+    #[serde(default)]
+    autonomous_transition: Option<bool>,
+    #[serde(default)]
+    permitted_transition_modes: Vec<ExecutionMode>,
+    #[serde(default)]
+    target_step_time_ms: Option<f32>,
+    #[serde(default)]
+    transition_cooldown_ms: Option<u64>,
+    #[serde(default)]
+    allow_multi_user: Option<bool>,
+    #[serde(default)]
+    max_concurrent_networks: Option<usize>,
+    #[serde(default)]
+    desired_shards: Option<usize>,
+    #[serde(default)]
+    infrastructure_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -448,6 +606,179 @@ struct OrchestratorStartupNetwork {
     snapshot_json: Option<String>,
     neuron_model: String,
     learning_rule: String,
+}
+
+fn selected_infrastructure_roots(
+    args: &Cli,
+    deployment: &DeploymentConfig,
+) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = deployment
+        .infrastructure_roots
+        .iter()
+        .filter_map(|root| {
+            let trimmed = root.trim();
+            (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed))
+        })
+        .collect();
+    if roots.is_empty() {
+        if let Some(root) = args.infrastructure_root.as_deref() {
+            let trimmed = root.trim();
+            if !trimmed.is_empty() {
+                roots.push(std::path::PathBuf::from(trimmed));
+            }
+        }
+    }
+    if roots.is_empty() {
+        roots = default_infrastructure_roots();
+    }
+    roots
+}
+
+fn apply_cli_deployment_overrides(net_cfg: &mut NetworkConfig, args: &Cli) {
+    let deployment = &mut net_cfg.deployment;
+    if !args.execution_modes.is_empty() {
+        deployment.modes = args
+            .execution_modes
+            .iter()
+            .copied()
+            .map(ExecutionMode::from)
+            .collect();
+    }
+    if args.execution_scope != DeploymentScopeArg::Auto {
+        deployment.scope = args.execution_scope.into();
+    }
+    if !args.execution_related_networks.is_empty() {
+        deployment.related_network_ids = args.execution_related_networks.clone();
+    }
+    if let Some(group) = args.execution_combined_group.as_deref() {
+        deployment.combined_group = Some(group.to_string());
+    }
+    if let Some(group) = args.execution_federation_group.as_deref() {
+        deployment.federation_group = Some(group.to_string());
+    }
+    deployment.autodetect_infrastructure = args.execution_autodetect;
+    if let Some(allow_live_transition) = args.execution_live_transition {
+        deployment.transition_policy.allow_live_transition = allow_live_transition;
+    }
+    if let Some(autonomous_transition) = args.execution_autonomous_transition {
+        deployment.transition_policy.autonomous = autonomous_transition;
+    }
+    if !args.execution_transition_modes.is_empty() {
+        deployment.transition_policy.permitted_modes = args
+            .execution_transition_modes
+            .iter()
+            .copied()
+            .map(ExecutionMode::from)
+            .collect();
+    }
+    if let Some(target_step_time_ms) = args.execution_target_step_ms {
+        deployment.transition_policy.target_step_time_ms = Some(target_step_time_ms);
+    }
+    if let Some(transition_cooldown_ms) = args.execution_transition_cooldown_ms {
+        deployment.transition_policy.cooldown_ms = transition_cooldown_ms;
+    }
+    if let Some(allow_multi_user) = args.execution_allow_multi_user {
+        deployment.allow_multi_user = allow_multi_user;
+    }
+    if let Some(max_concurrent_networks) = args.execution_max_concurrent_networks {
+        deployment.max_concurrent_networks = max_concurrent_networks;
+    }
+    if let Some(desired_shards) = args.execution_desired_shards {
+        deployment.desired_shards = desired_shards;
+    }
+    if let Some(root) = args.infrastructure_root.as_deref() {
+        let trimmed = root.trim();
+        if !trimmed.is_empty() {
+            deployment.infrastructure_roots = vec![trimmed.to_string()];
+        }
+    }
+    if args.orchestrator || args.node {
+        deployment.add_mode(ExecutionMode::Distributed);
+    }
+    if args.orchestrator {
+        deployment.add_mode(ExecutionMode::Sharded);
+    }
+    deployment.normalize();
+}
+
+fn apply_spec_deployment_overrides(net_cfg: &mut NetworkConfig, spec: &OrchestratorNetworkSpec) {
+    let deployment = &mut net_cfg.deployment;
+    if !spec.execution_modes.is_empty() {
+        deployment.modes = spec.execution_modes.clone();
+    }
+    if let Some(scope) = spec.execution_scope {
+        deployment.scope = scope;
+    }
+    if !spec.related_network_ids.is_empty() {
+        deployment.related_network_ids = spec.related_network_ids.clone();
+    }
+    if let Some(group) = spec.combined_group.as_deref() {
+        deployment.combined_group = Some(group.to_string());
+    }
+    if let Some(group) = spec.federation_group.as_deref() {
+        deployment.federation_group = Some(group.to_string());
+    }
+    if let Some(autodetect) = spec.autodetect_infrastructure {
+        deployment.autodetect_infrastructure = autodetect;
+    }
+    if let Some(allow_live_transition) = spec.allow_live_transition {
+        deployment.transition_policy.allow_live_transition = allow_live_transition;
+    }
+    if let Some(autonomous_transition) = spec.autonomous_transition {
+        deployment.transition_policy.autonomous = autonomous_transition;
+    }
+    if !spec.permitted_transition_modes.is_empty() {
+        deployment.transition_policy.permitted_modes = spec.permitted_transition_modes.clone();
+    }
+    if let Some(target_step_time_ms) = spec.target_step_time_ms {
+        deployment.transition_policy.target_step_time_ms = Some(target_step_time_ms);
+    }
+    if let Some(transition_cooldown_ms) = spec.transition_cooldown_ms {
+        deployment.transition_policy.cooldown_ms = transition_cooldown_ms;
+    }
+    if let Some(allow_multi_user) = spec.allow_multi_user {
+        deployment.allow_multi_user = allow_multi_user;
+    }
+    if let Some(max_concurrent_networks) = spec.max_concurrent_networks {
+        deployment.max_concurrent_networks = max_concurrent_networks;
+    }
+    if let Some(desired_shards) = spec.desired_shards {
+        deployment.desired_shards = desired_shards;
+    }
+    if !spec.infrastructure_roots.is_empty() {
+        deployment.infrastructure_roots = spec.infrastructure_roots.clone();
+    }
+    deployment.normalize();
+}
+
+fn apply_deployment_autodetect(net_cfg: &mut NetworkConfig, args: &Cli) {
+    let roots = selected_infrastructure_roots(args, &net_cfg.deployment);
+    if !net_cfg.deployment.autodetect_infrastructure || roots.is_empty() {
+        net_cfg.deployment.normalize();
+        return;
+    }
+
+    match detect_infrastructure(&roots) {
+        Ok(infra) => {
+            net_cfg.deployment.apply_infrastructure_hint(&infra);
+            if args.trace {
+                nm_log!("[trace] Infrastructure fingerprint: {:?}", infra);
+            }
+        }
+        Err(err) => {
+            nm_err!(
+                "[warn] failed to autodetect infrastructure from {:?}: {}",
+                roots,
+                err
+            );
+            net_cfg.deployment.normalize();
+        }
+    }
+}
+
+fn resolve_deployment(net_cfg: &mut NetworkConfig, args: &Cli) {
+    apply_cli_deployment_overrides(net_cfg, args);
+    apply_deployment_autodetect(net_cfg, args);
 }
 
 fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig, Option<String>)> {
@@ -520,7 +851,7 @@ fn build_orchestrator_startup_networks(
                     }
                 }
 
-                let (cfg, snapshot_json) = if let Some((cfg, snapshot_json)) = loaded {
+                let (mut cfg, snapshot_json) = if let Some((cfg, snapshot_json)) = loaded {
                     (cfg, snapshot_json)
                 } else {
                     (
@@ -528,6 +859,9 @@ fn build_orchestrator_startup_networks(
                         fallback_snapshot_json.map(ToOwned::to_owned),
                     )
                 };
+                apply_cli_deployment_overrides(&mut cfg, args);
+                apply_spec_deployment_overrides(&mut cfg, &spec);
+                apply_deployment_autodetect(&mut cfg, args);
 
                 let cfg_json = serde_json::to_string(&cfg).unwrap_or_default();
                 startup_networks.push(OrchestratorStartupNetwork {
@@ -546,13 +880,17 @@ fn build_orchestrator_startup_networks(
     }
 
     if startup_networks.is_empty() {
+        let mut cfg = fallback_cfg.clone();
+        apply_cli_deployment_overrides(&mut cfg, args);
+        apply_deployment_autodetect(&mut cfg, args);
         startup_networks.push(OrchestratorStartupNetwork {
             network_id: args.brain_id.clone(),
-            num_layers: (fallback_cfg.num_hidden_layers + 1) as u32,
-            desired_aarnn_depth: fallback_cfg.aarnn_layer_depth as u32,
+            num_layers: (cfg.num_hidden_layers + 1) as u32,
+            desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
             config_json: fallback_config_json
+                .filter(|_| cfg == *fallback_cfg)
                 .map(ToOwned::to_owned)
-                .or_else(|| serde_json::to_string(fallback_cfg).ok())
+                .or_else(|| serde_json::to_string(&cfg).ok())
                 .unwrap_or_default(),
             snapshot_json: fallback_snapshot_json.map(ToOwned::to_owned),
             neuron_model: default_model,
@@ -569,6 +907,25 @@ fn normalize_runtime_url(raw: &str) -> String {
     } else {
         format!("http://{}", raw)
     }
+}
+
+fn autodetected_orchestrator_addr(args: &Cli) -> Option<String> {
+    let roots = if let Some(root) = args.infrastructure_root.as_deref() {
+        let trimmed = root.trim();
+        if trimmed.is_empty() {
+            default_infrastructure_roots()
+        } else {
+            vec![std::path::PathBuf::from(trimmed)]
+        }
+    } else {
+        default_infrastructure_roots()
+    };
+    if roots.is_empty() {
+        return None;
+    }
+    detect_infrastructure(&roots)
+        .ok()
+        .and_then(|infra| infra.recommended_orchestrator_addr())
 }
 
 fn build_runtime_client(args: &Cli) -> anyhow::Result<BlockingRuntimeClient> {
@@ -721,10 +1078,15 @@ fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_fpaa_route_assignment(raw: &str) -> anyhow::Result<(crate::fpaa::FpaaKernel, FpaaKernelRoute)> {
-    let (kernel_raw, route_raw) = raw
-        .split_once('=')
-        .ok_or_else(|| anyhow::anyhow!("invalid --fpaa-route '{}', expected kernel=software|fpaa", raw))?;
+fn parse_fpaa_route_assignment(
+    raw: &str,
+) -> anyhow::Result<(crate::fpaa::FpaaKernel, FpaaKernelRoute)> {
+    let (kernel_raw, route_raw) = raw.split_once('=').ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --fpaa-route '{}', expected kernel=software|fpaa",
+            raw
+        )
+    })?;
     let kernel = crate::fpaa::FpaaKernel::parse_id(kernel_raw)
         .ok_or_else(|| anyhow::anyhow!("unknown FPAA kernel '{}'", kernel_raw))?;
     let route = match route_raw.trim().to_ascii_lowercase().as_str() {
@@ -960,6 +1322,7 @@ fn main() -> anyhow::Result<()> {
         net_cfg.use_morphology = true;
         net_cfg.aarnn_layer_depth = 5;
     }
+    resolve_deployment(&mut net_cfg, &args);
     apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
     startup_config_json = serde_json::to_string(&net_cfg).ok();
 
@@ -997,6 +1360,7 @@ fn main() -> anyhow::Result<()> {
         })?;
         let snap = crate::runner::decode_snapshot_with_profile_backfill(&snapshot.snapshot_json)?;
         net_cfg = snap.net;
+        resolve_deployment(&mut net_cfg, &args);
         apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
         startup_snapshot_json = Some(snapshot.snapshot_json);
         startup_config_json = serde_json::to_string(&net_cfg).ok();
@@ -1054,21 +1418,32 @@ fn main() -> anyhow::Result<()> {
                         state.network_snapshots.clear();
                         for startup in startup_networks {
                             let network_id = startup.network_id.clone();
-                            state.network_registry.insert(
-                                network_id.clone(),
-                                crate::distributed::proto::NetworkStatus {
-                                    network_id: network_id.clone(),
-                                    distribution: std::collections::HashMap::new(),
-                                    current_dt: args.dt_ms,
-                                    total_neurons: 0,
-                                    num_layers: startup.num_layers,
-                                    desired_aarnn_depth: startup.desired_aarnn_depth,
-                                    config_json: startup.config_json,
-                                    neuron_model: startup.neuron_model,
-                                    learning_rule: startup.learning_rule,
-                                    playing: default_playing,
-                                },
-                            );
+                            let mut status = crate::distributed::proto::NetworkStatus {
+                                network_id: network_id.clone(),
+                                distribution: std::collections::HashMap::new(),
+                                current_dt: args.dt_ms,
+                                total_neurons: 0,
+                                num_layers: startup.num_layers,
+                                desired_aarnn_depth: startup.desired_aarnn_depth,
+                                config_json: startup.config_json,
+                                neuron_model: startup.neuron_model,
+                                learning_rule: startup.learning_rule,
+                                playing: default_playing,
+                                ..Default::default()
+                            };
+                            if let Some(snapshot_json) = startup.snapshot_json.as_deref() {
+                                crate::distributed::sync_network_status_deployment_from_payload(
+                                    &mut status,
+                                    snapshot_json,
+                                );
+                            } else {
+                                let deployment_payload = status.config_json.clone();
+                                crate::distributed::sync_network_status_deployment_from_payload(
+                                    &mut status,
+                                    &deployment_payload,
+                                );
+                            }
+                            state.network_registry.insert(network_id.clone(), status);
                             if distribute_startup_snapshot {
                                 if let Some(snapshot_json) = startup.snapshot_json {
                                     state.network_snapshots.insert(network_id, snapshot_json);
@@ -1693,6 +2068,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     cfg.use_morphology = true;
                     cfg.aarnn_layer_depth = 5;
                 }
+                resolve_deployment(&mut cfg, args);
 
                 let model = match args.neuron_model {
                     NeuronModel::Lif => sim::NeuronModel::Lif,
@@ -1794,21 +2170,21 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         // Register the brain network if we are an orchestrator
         let default_playing = distributed_autostart_enabled();
         let mut state = node.state.write().await;
-        state.network_registry.insert(
-            args.brain_id.clone(),
-            crate::distributed::proto::NetworkStatus {
-                network_id: args.brain_id.clone(),
-                distribution: std::collections::HashMap::new(),
-                current_dt: args.dt_ms,
-                total_neurons: 0,
-                num_layers: (args.num_hidden_layers + 1) as u32,
-                desired_aarnn_depth: 5, // Default to max realism depth
-                config_json: String::new(),
-                neuron_model: NeuronModel::Aarnn.to_str().to_string(),
-                learning_rule: LearningRule::Aarnn.to_str().to_string(),
-                playing: default_playing,
-            },
-        );
+        let mut status = crate::distributed::proto::NetworkStatus {
+            network_id: args.brain_id.clone(),
+            distribution: std::collections::HashMap::new(),
+            current_dt: args.dt_ms,
+            total_neurons: 0,
+            num_layers: (args.num_hidden_layers + 1) as u32,
+            desired_aarnn_depth: 5, // Default to max realism depth
+            config_json: String::new(),
+            neuron_model: NeuronModel::Aarnn.to_str().to_string(),
+            learning_rule: LearningRule::Aarnn.to_str().to_string(),
+            playing: default_playing,
+            ..Default::default()
+        };
+        crate::distributed::sync_network_status_deployment_from_payload(&mut status, "");
+        state.network_registry.insert(args.brain_id.clone(), status);
     }
 
     let addr: std::net::SocketAddr = args.grpc_addr.parse()?;
@@ -1865,6 +2241,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         let node_inner = node.clone();
         let grpc_addr = args.grpc_addr.clone();
         let orchestrator_addr_arg = args.orchestrator_addr.clone();
+        let orchestrator_addr_detected = autodetected_orchestrator_addr(args);
         let shutdown_tx_node = shutdown_tx.clone();
 
         tokio::spawn(async move {
@@ -1872,6 +2249,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             let reconnect_interval = std::time::Duration::from_secs(2);
             let heartbeat_interval = std::time::Duration::from_secs(5);
             let orchestrator_addr = if let Some(addr) = orchestrator_addr_arg {
+                normalize_runtime_url(&addr)
+            } else if let Some(addr) = orchestrator_addr_detected {
                 addr
             } else {
                 match DistributedNode::discover_orchestrator().await {

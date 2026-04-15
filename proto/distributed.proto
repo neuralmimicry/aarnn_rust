@@ -123,6 +123,20 @@ message Resources {
   uint64 ga_ramp_eval_conns = 31;
   string comm_protocol = 32;
   map<string, string> peer_comm_protocols = 33;
+  string telemetry_source = 34;
+  uint64 telemetry_ts_ms = 35;
+  float telemetry_cpu_usage_pct = 36;
+  float telemetry_mem_used_pct = 37;
+  double telemetry_net_rx_bps = 38;
+  double telemetry_net_tx_bps = 39;
+  float telemetry_disk_used_pct = 40;
+  double telemetry_disk_read_bps = 41;
+  double telemetry_disk_write_bps = 42;
+  float telemetry_gpu_util_pct = 43;
+  float telemetry_gpu_temp_c = 44;
+  float telemetry_gpu_power_w = 45;
+  float telemetry_gpu_mem_used_pct = 46;
+  uint32 telemetry_recent_action_count = 47;
 }
 message HeartbeatRequest {
   string node_id = 1;
@@ -242,6 +256,13 @@ message NetworkStatus {
   string neuron_model = 8;
   string learning_rule = 9;
   bool playing = 10;
+  repeated string deployment_modes = 11;
+  string deployment_scope = 12;
+  bool live_transition_allowed = 13;
+  bool autonomous_transition_enabled = 14;
+  string last_transition_reason = 15;
+  uint64 last_transition_ts_ms = 16;
+  string last_transition_source = 17;
 }
 
 message LayerRange {

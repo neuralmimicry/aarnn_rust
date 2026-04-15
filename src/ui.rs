@@ -27,8 +27,8 @@ use crate::aer::decode_events;
 #[cfg(feature = "ui")]
 use crate::config::{
     apply_aarnn_human_biomimicry_defaults, apply_clumping_design, apply_clumping_layer_defaults,
-    ClumpingDesign, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference,
-    IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
+    ClumpingDesign, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference, IzhikevichParams,
+    LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
 };
 #[cfg(feature = "ui")]
 use crate::distributed::{
@@ -3283,11 +3283,7 @@ impl App {
                         .selected_text(Self::fpaa_route_label(*requested))
                         .show_ui(ui, |ui| {
                             changed |= ui
-                                .selectable_value(
-                                    requested,
-                                    FpaaKernelRoute::Software,
-                                    "Software",
-                                )
+                                .selectable_value(requested, FpaaKernelRoute::Software, "Software")
                                 .changed();
                             changed |= ui
                                 .selectable_value(requested, FpaaKernelRoute::Fpaa, "FPAA")
@@ -4497,6 +4493,10 @@ impl App {
                             net_status.num_layers = imported_layers;
                             net_status.neuron_model = imported_model;
                             net_status.learning_rule = imported_learning;
+                            crate::distributed::sync_network_status_deployment_from_payload(
+                                net_status,
+                                &imported_snapshot_json,
+                            );
                         }
                         state
                             .network_snapshots
@@ -5940,9 +5940,8 @@ impl eframe::App for App {
                     if state.is_orchestrator && sync_standalone_registry {
                         if !state.network_registry.contains_key(&self.brain_id) {
                             if state.network_registry.is_empty() {
-                                state.network_registry.insert(
-                                    self.brain_id.clone(),
-                                    crate::distributed::proto::NetworkStatus {
+                                state.network_registry.insert(self.brain_id.clone(), {
+                                    let mut status = crate::distributed::proto::NetworkStatus {
                                         network_id: self.brain_id.clone(),
                                         distribution: std::collections::HashMap::new(),
                                         current_dt: lif_cloned.dt,
@@ -5954,8 +5953,15 @@ impl eframe::App for App {
                                         neuron_model: model_cloned.to_str().to_string(),
                                         learning_rule: learning_cloned.to_str().to_string(),
                                         playing: self.playing,
-                                    },
-                                );
+                                        ..Default::default()
+                                    };
+                                    let deployment_payload = status.config_json.clone();
+                                    crate::distributed::sync_network_status_deployment_from_payload(
+                                        &mut status,
+                                        &deployment_payload,
+                                    );
+                                    status
+                                });
                             }
                         } else {
                             let nodes_empty = state.nodes.is_empty();
@@ -5982,6 +5988,11 @@ impl eframe::App for App {
                                         self.last_synced_config = Some(net_cloned.clone());
                                     }
                                     net_status.config_json = self.last_config_json.clone();
+                                    let deployment_payload = net_status.config_json.clone();
+                                    crate::distributed::sync_network_status_deployment_from_payload(
+                                        net_status,
+                                        &deployment_payload,
+                                    );
                                     if nodes_empty {
                                         net_status.playing = self.playing;
                                     }
@@ -7829,8 +7840,37 @@ impl eframe::App for App {
                             ui.label(format!("Active Networks: {}", network_registry.len()));
                             for (id, net) in &network_registry {
                                 ui.collapsing(format!("Network: {}", id), |ui| {
+                                    let deployment_modes = if net.deployment_modes.is_empty() {
+                                        "auto".to_string()
+                                    } else {
+                                        net.deployment_modes.join(", ")
+                                    };
                                     ui.label(format!("dt: {:.3} ms", net.current_dt));
                                     ui.label(format!("Total Neurons: {}", net.total_neurons));
+                                    ui.label(format!(
+                                        "Deployment: {} [{}]",
+                                        deployment_modes, net.deployment_scope
+                                    ));
+                                    ui.label(format!(
+                                        "Live Transition: {} | Autonomous: {}",
+                                        if net.live_transition_allowed { "yes" } else { "no" },
+                                        if net.autonomous_transition_enabled {
+                                            "yes"
+                                        } else {
+                                            "no"
+                                        }
+                                    ));
+                                    if !net.last_transition_reason.is_empty() {
+                                        let source = if net.last_transition_source.is_empty() {
+                                            "unknown"
+                                        } else {
+                                            &net.last_transition_source
+                                        };
+                                        ui.label(format!(
+                                            "Last Transition: {} at {} ms ({})",
+                                            source, net.last_transition_ts_ms, net.last_transition_reason
+                                        ));
+                                    }
                                     
                                     // Calculate estimated nodes for 1ms cycle
                                     let mut total_workload_ms = 0.0;
@@ -7910,6 +7950,40 @@ impl eframe::App for App {
                                         ui.label(format!("Redundant: {}", res.redundant_neurons));
                                         ui.label(format!("AARNN Depth: {}/{}", res.current_aarnn_depth, res.desired_aarnn_depth));
                                         ui.label(format!("Capacity Score: {:.2}", res.capacity_score));
+                                        if !res.telemetry_source.is_empty() {
+                                            ui.separator();
+                                            ui.label(format!(
+                                                "External Telemetry: {}",
+                                                res.telemetry_source
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry CPU/Mem: {:.1}% / {:.1}%",
+                                                res.telemetry_cpu_usage_pct,
+                                                res.telemetry_mem_used_pct
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry Net RX/TX: {:.0} / {:.0} Bps",
+                                                res.telemetry_net_rx_bps,
+                                                res.telemetry_net_tx_bps
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry Disk Used: {:.1}% | Actions: {}",
+                                                res.telemetry_disk_used_pct,
+                                                res.telemetry_recent_action_count
+                                            ));
+                                            if res.num_gpus > 0
+                                                || res.telemetry_gpu_util_pct > 0.0
+                                                || res.telemetry_gpu_temp_c > 0.0
+                                                || res.telemetry_gpu_power_w > 0.0
+                                            {
+                                                ui.label(format!(
+                                                    "Telemetry GPU Util/Temp/Power: {:.1}% / {:.1} C / {:.1} W",
+                                                    res.telemetry_gpu_util_pct,
+                                                    res.telemetry_gpu_temp_c,
+                                                    res.telemetry_gpu_power_w
+                                                ));
+                                            }
+                                        }
                                         
                                         if res.ga_running {
                                             ui.separator();

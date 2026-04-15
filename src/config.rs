@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::deployment::DeploymentConfig;
 use crate::spike_io::profiles::{NetworkIoProfileSelector, SpikeIoConfig};
 
 /// Startup policy for optional FPAA offload.
@@ -2144,6 +2145,10 @@ pub struct NetworkConfig {
     /// Host-side FPAA detection, verification, and kernel-routing policy.
     pub fpaa: FpaaConfig,
 
+    // --- Deployment Topology ---
+    /// Execution placement, sharding, grouping, and federation intent for this network.
+    pub deployment: DeploymentConfig,
+
     // --- UI Configuration ---
     /// Target frame rate for the visualization engine.
     pub ui_target_fps: f32,
@@ -2306,6 +2311,7 @@ impl Default for NetworkConfig {
             aarnn_bio: AarnnBioParams::default(),
             spike_io: SpikeIoConfig::default(),
             fpaa: FpaaConfig::default(),
+            deployment: DeploymentConfig::default(),
             ui_target_fps: 60.0,
         };
         apply_aarnn_human_biomimicry_defaults(&mut cfg);

@@ -120,6 +120,85 @@ When enabled, the web UI:
 - exposes `GET /api/tokens` and `GET /api/tokens/ledger`
 - debits shared user tokens for workspace create/import/start/repeat/step operations
 
+## Multi-Network Deployment Modes
+
+The runtime and distributed engine now carry an explicit deployment intent in
+`NetworkConfig.deployment`. This lets the same network or network set be marked as:
+
+- `individual`
+- `distributed`
+- `sharded`
+- `grouped`
+- `combined`
+- `federated`
+
+These modes can be selected from the CLI and are persisted through config JSON,
+snapshot JSON, runtime workspaces, and orchestrator startup payloads.
+
+Useful CLI flags:
+
+```bash
+--execution-mode individual
+--execution-mode distributed,sharded
+--execution-mode grouped,combined --execution-combined-group ensemble-a
+--execution-mode grouped,federated --execution-federation-group tenant-a
+--execution-related-network vision --execution-related-network motor
+--execution-scope cluster
+--execution-live-transition
+--execution-autonomous-transition
+--execution-transition-mode individual,sharded,combined,federated
+--execution-target-step-ms 8
+--execution-transition-cooldown-ms 5000
+--execution-allow-multi-user
+--execution-max-concurrent-networks 8
+--execution-desired-shards 4
+--execution-autodetect=true
+--infrastructure-root /home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible
+```
+
+Scheduling behavior:
+
+- `individual` keeps a network on one engine node.
+- `sharded` allows the existing layer-partitioning rebalance logic to split it across nodes.
+- `combined` prefers co-location with related networks.
+- `federated` prefers separation from related networks when capacity allows.
+- `grouped` means multiple related networks can be carried and scheduled concurrently.
+- `node`, `container`, and `system` scopes pin execution to one engine target even when a sharded mode is requested.
+- `cluster` and `federated_cluster` scopes allow cross-node shard placement, and `--execution-desired-shards` caps shard fan-out.
+- `--execution-max-concurrent-networks` limits how many active networks a target should host before the rebalancer prefers other capacity.
+- `--execution-live-transition` lets the orchestrator move a running network between isolated, combined, distributed, sharded, and federated placements without stopping it.
+- `--execution-autonomous-transition` lets the orchestrator switch between those permitted modes based on runtime step latency, node saturation, and related-network pressure.
+- `--execution-transition-mode` constrains the autonomous controller to the mode permutations you allow for that network.
+- Autonomous transitions and deployment-only manual mode changes now best-effort refresh the latest live snapshot from the current primary shard before hot reassignment, reducing stale-state drift during seamless moves.
+- Manual live deployment changes are rejected unless the running deployment or the requested deployment explicitly grants `deployment.transition_policy.allow_live_transition=true`.
+- Nodes that leave a live distribution now receive `UNLOAD_NETWORK`, so old shards are retired instead of lingering after a mode transition.
+- Cluster status APIs and the desktop cluster dashboard now expose each network's deployment modes, scope, live/autonomous transition flags, and the last transition source/reason/timestamp.
+- When a local Tracey agent is reachable, node capacity scoring and autonomous transitions also factor in external CPU, memory, network, disk, and GPU pressure from `GET /status`.
+
+Optional Tracey integration knobs:
+
+```bash
+NM_TRACEY_STATUS_URL=http://127.0.0.1:48000/status
+NM_TRACEY_STATUS_TIMEOUT_MS=80
+NM_TRACEY_STATUS_CACHE_TTL_MS=1000
+NM_TRACEY_STATUS_FAILURE_BACKOFF_MS=2000
+```
+
+If no explicit deployment modes are set, the distributed engine keeps its existing
+backward-compatible behavior and shards across worker nodes when orchestrated.
+
+Infrastructure autodetection:
+
+- `aarnn_rust` and `web_ui` will scan `NM_INFRASTRUCTURE_ROOT` or, by default,
+  `/home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible` when it exists.
+- The detector looks for SwarmHPC/Continuum tenant signals such as Kubernetes,
+  DaemonSet worker mode, Continuum autoscaling, orchestrator service naming, and
+  runtime root hints.
+- In node mode, this can pre-resolve the orchestrator address from the tenant
+  configuration instead of relying only on UDP discovery.
+- In `web_ui`, the same detector can fill in the default orchestrator address and
+  runtime root when they are not provided explicitly.
+
 ### Deploy manifests
 
 ```bash
