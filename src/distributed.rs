@@ -28,6 +28,7 @@
 use self::sysinfo_dummy::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 #[cfg(feature = "openmpi")]
 use prost::Message;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -81,12 +82,14 @@ mod sysinfo_dummy {
     }
 }
 use crate::config::{LIFParams, NetworkConfig, STDPParams};
+use crate::deployment::{DeploymentConfig, ExecutionMode};
 use crate::runner::Runner;
 use crate::sim::{Learning, NeuronModel};
 use crate::spike_io::transport::{encode_exchange, spikes_from_transport};
 use anyhow::Context;
+use serde::Deserialize;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
 
@@ -523,6 +526,1110 @@ fn env_flag(name: &str) -> Option<bool> {
     }
 }
 
+fn unix_timestamp_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[derive(Clone, Debug)]
+struct DeploymentTransitionRecord {
+    observed_at: std::time::Instant,
+    ts_ms: u64,
+    reason: String,
+    source: String,
+}
+
+fn sync_network_status_transition(
+    status: &mut proto::NetworkStatus,
+    transition: Option<&DeploymentTransitionRecord>,
+) {
+    if let Some(transition) = transition {
+        status.last_transition_reason = transition.reason.clone();
+        status.last_transition_ts_ms = transition.ts_ms;
+        status.last_transition_source = transition.source.clone();
+    } else {
+        status.last_transition_reason.clear();
+        status.last_transition_ts_ms = 0;
+        status.last_transition_source.clear();
+    }
+}
+
+pub(crate) fn sync_network_status_deployment(
+    status: &mut proto::NetworkStatus,
+    deployment: &DeploymentConfig,
+) {
+    status.deployment_modes = deployment
+        .modes
+        .iter()
+        .map(|mode| mode.as_str().to_string())
+        .collect();
+    status.deployment_scope = deployment.scope.as_str().to_string();
+    status.live_transition_allowed = deployment.allows_live_transition();
+    status.autonomous_transition_enabled = deployment.allows_autonomous_transition();
+}
+
+fn deployment_modes_label(deployment: &DeploymentConfig) -> String {
+    if deployment.modes.is_empty() {
+        "auto".to_string()
+    } else {
+        deployment
+            .modes
+            .iter()
+            .map(|mode| mode.as_str())
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn sync_network_status_deployment_from_payload(
+    status: &mut proto::NetworkStatus,
+    payload: &str,
+) {
+    sync_network_status_deployment_from_payload_with_transition(status, payload, None);
+}
+
+fn sync_network_status_deployment_from_payload_with_transition(
+    status: &mut proto::NetworkStatus,
+    payload: &str,
+    transition: Option<&DeploymentTransitionRecord>,
+) {
+    let deployment = network_deployment_from_payload(payload).unwrap_or_default();
+    sync_network_status_deployment(status, &deployment);
+    sync_network_status_transition(status, transition);
+}
+
+fn network_deployment_from_payload(payload: &str) -> Option<DeploymentConfig> {
+    if payload.trim().is_empty() {
+        return None;
+    }
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+        let mut deployment = snapshot.net.deployment;
+        deployment.normalize();
+        return Some(deployment);
+    }
+    serde_json::from_str::<NetworkConfig>(payload)
+        .ok()
+        .map(|cfg| {
+            let mut deployment = cfg.deployment;
+            deployment.normalize();
+            deployment
+        })
+}
+
+fn payload_with_updated_deployment(payload: &str, deployment: &DeploymentConfig) -> Option<String> {
+    if payload.trim().is_empty() {
+        return None;
+    }
+    if let Ok(mut snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+        snapshot.net.deployment = deployment.clone();
+        return serde_json::to_string(&snapshot).ok();
+    }
+    if let Ok(mut cfg) = serde_json::from_str::<NetworkConfig>(payload) {
+        cfg.deployment = deployment.clone();
+        return serde_json::to_string(&cfg).ok();
+    }
+    None
+}
+
+fn network_config_from_config_payload(payload: &str) -> Option<NetworkConfig> {
+    if payload.trim().is_empty() {
+        return None;
+    }
+    if crate::runner::decode_snapshot_with_profile_backfill(payload).is_ok() {
+        return None;
+    }
+    serde_json::from_str::<NetworkConfig>(payload).ok()
+}
+
+fn network_config_from_payload(payload: &str) -> Option<NetworkConfig> {
+    if payload.trim().is_empty() {
+        return None;
+    }
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+        return Some(snapshot.net);
+    }
+    serde_json::from_str::<NetworkConfig>(payload).ok()
+}
+
+fn network_config_shape_compatible(
+    current_cfg: &NetworkConfig,
+    requested_cfg: &NetworkConfig,
+) -> bool {
+    current_cfg.num_sensory_neurons == requested_cfg.num_sensory_neurons
+        && current_cfg.num_hidden_layers == requested_cfg.num_hidden_layers
+        && current_cfg.num_hidden_per_layer_initial == requested_cfg.num_hidden_per_layer_initial
+        && current_cfg.num_output_neurons == requested_cfg.num_output_neurons
+}
+
+fn snapshot_with_network_config(snapshot_payload: &str, net_cfg: &NetworkConfig) -> Option<String> {
+    let mut snapshot =
+        crate::runner::decode_snapshot_with_profile_backfill(snapshot_payload).ok()?;
+    snapshot.net = net_cfg.clone();
+    serde_json::to_string(&snapshot).ok()
+}
+
+#[derive(Clone, Debug)]
+struct LiveSnapshotSource {
+    network_id: String,
+    primary_node_id: Option<String>,
+    peer_addr: Option<String>,
+    local: bool,
+}
+
+fn connect_addr_for_node(state: &NodeState, node_id: &str) -> Option<String> {
+    if let Some(addr) = state.peers.get(node_id) {
+        return Some(addr.clone());
+    }
+    let advertised = state.nodes.get(node_id)?.address.trim();
+    if advertised.is_empty() {
+        return None;
+    }
+    if advertised.starts_with("http://") || advertised.starts_with("https://") {
+        Some(advertised.to_string())
+    } else {
+        Some(format!("http://{}", advertised))
+    }
+}
+
+fn live_snapshot_source_for(
+    state: &NodeState,
+    network_id: &str,
+    distribution: &HashMap<String, LayerRange>,
+) -> Option<LiveSnapshotSource> {
+    let hosted_locally = state.networks.contains_key(network_id);
+    let primary_node_id = primary_node_for_distribution(distribution)
+        .or_else(|| hosted_locally.then(|| state.node_id.clone()));
+
+    let local = primary_node_id
+        .as_deref()
+        .map(|node_id| node_id == state.node_id && hosted_locally)
+        .unwrap_or(hosted_locally);
+    let peer_addr = primary_node_id.as_ref().and_then(|node_id| {
+        if node_id == &state.node_id {
+            None
+        } else {
+            connect_addr_for_node(state, node_id)
+        }
+    });
+
+    if !local && peer_addr.is_none() {
+        return None;
+    }
+
+    Some(LiveSnapshotSource {
+        network_id: network_id.to_string(),
+        primary_node_id,
+        peer_addr,
+        local,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct AutonomousTransitionPlan {
+    network_id: String,
+    next_deployment: DeploymentConfig,
+    fallback_payload: String,
+    reason: String,
+    snapshot_source: Option<LiveSnapshotSource>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ExternalTelemetrySnapshot {
+    source: String,
+    ts_ms: u64,
+    cpu_usage_pct: Option<f32>,
+    mem_used_pct: Option<f32>,
+    net_rx_bps: Option<f64>,
+    net_tx_bps: Option<f64>,
+    disk_used_pct: Option<f32>,
+    disk_read_bps: Option<f64>,
+    disk_write_bps: Option<f64>,
+    gpu_count: u32,
+    gpu_util_pct: Option<f32>,
+    gpu_temp_c: Option<f32>,
+    gpu_power_w: Option<f32>,
+    gpu_mem_used_pct: Option<f32>,
+    recent_action_count: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TraceyStatusEnvelope {
+    ts_ms: u64,
+    continuum_telemetry: Option<TraceyContinuumTelemetry>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TraceyContinuumTelemetry {
+    ts_ms: u64,
+    server: TraceyContinuumServer,
+    gpus: Vec<TraceyContinuumGpu>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TraceyContinuumServer {
+    cpu_usage_pct: Option<f64>,
+    mem_used_pct: Option<f64>,
+    net_rx_bps: Option<f64>,
+    net_tx_bps: Option<f64>,
+    recent_action_count: usize,
+    disks: Vec<TraceyContinuumDisk>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TraceyContinuumDisk {
+    used_ratio: Option<f64>,
+    read_bps: Option<f64>,
+    write_bps: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct TraceyContinuumGpu {
+    util_pct: Option<f64>,
+    temp_c: Option<f64>,
+    power_w: Option<f64>,
+    mem_used_pct: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TraceyProbeCache {
+    last_attempt: Option<std::time::Instant>,
+    last_success: Option<std::time::Instant>,
+    snapshot: Option<ExternalTelemetrySnapshot>,
+}
+
+#[derive(Clone)]
+struct TraceyStatusProbe {
+    client: reqwest::Client,
+    url: String,
+    cache_ttl: Duration,
+    failure_backoff: Duration,
+    cache: Arc<RwLock<TraceyProbeCache>>,
+}
+
+impl TraceyStatusProbe {
+    fn from_env() -> Option<Self> {
+        #[cfg(test)]
+        if std::env::var("NM_TRACEY_STATUS_URL").is_err() {
+            return None;
+        }
+
+        let url = tracey_status_url_from_env()?;
+        let timeout = tracey_status_timeout();
+        let client = reqwest::Client::builder()
+            .connect_timeout(timeout)
+            .timeout(timeout)
+            .build()
+            .ok()?;
+        Some(Self {
+            client,
+            url,
+            cache_ttl: tracey_status_cache_ttl(),
+            failure_backoff: tracey_status_failure_backoff(),
+            cache: Arc::new(RwLock::new(TraceyProbeCache::default())),
+        })
+    }
+
+    async fn snapshot(&self) -> Option<ExternalTelemetrySnapshot> {
+        {
+            let cache = self.cache.read().await;
+            if let (Some(snapshot), Some(last_success)) = (&cache.snapshot, cache.last_success) {
+                if last_success.elapsed() <= self.cache_ttl {
+                    return Some(snapshot.clone());
+                }
+            }
+            if cache.snapshot.is_none()
+                && cache
+                    .last_attempt
+                    .map(|last_attempt| last_attempt.elapsed() <= self.failure_backoff)
+                    .unwrap_or(false)
+            {
+                return None;
+            }
+        }
+
+        {
+            let mut cache = self.cache.write().await;
+            if let (Some(snapshot), Some(last_success)) = (&cache.snapshot, cache.last_success) {
+                if last_success.elapsed() <= self.cache_ttl {
+                    return Some(snapshot.clone());
+                }
+            }
+            if cache
+                .last_attempt
+                .map(|last_attempt| last_attempt.elapsed() <= self.failure_backoff)
+                .unwrap_or(false)
+                && cache.snapshot.is_none()
+            {
+                return None;
+            }
+            cache.last_attempt = Some(std::time::Instant::now());
+        }
+
+        let stale_snapshot = self.cache.read().await.snapshot.clone();
+        let response = match self.client.get(&self.url).send().await {
+            Ok(response) => response,
+            Err(_) => return stale_snapshot,
+        };
+        let envelope = match response.json::<TraceyStatusEnvelope>().await {
+            Ok(envelope) => envelope,
+            Err(_) => return stale_snapshot,
+        };
+        let Some(snapshot) = external_telemetry_from_tracey(&self.url, envelope) else {
+            return stale_snapshot;
+        };
+        let mut cache = self.cache.write().await;
+        cache.last_success = Some(std::time::Instant::now());
+        cache.snapshot = Some(snapshot.clone());
+        Some(snapshot)
+    }
+}
+
+fn normalize_tracey_status_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let disabled = trimmed.to_ascii_lowercase();
+    if matches!(
+        disabled.as_str(),
+        "0" | "false" | "off" | "disable" | "disabled"
+    ) {
+        return None;
+    }
+
+    let mut url = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    };
+    if !url.trim_end_matches('/').ends_with("/status") {
+        url = format!("{}/status", url.trim_end_matches('/'));
+    }
+    Some(url)
+}
+
+fn tracey_status_url_from_env() -> Option<String> {
+    if let Ok(raw) = std::env::var("NM_TRACEY_STATUS_URL") {
+        return normalize_tracey_status_url(&raw);
+    }
+    normalize_tracey_status_url("http://127.0.0.1:48000")
+}
+
+fn tracey_duration_env(name: &str, default_ms: u64) -> Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_millis(default_ms))
+}
+
+fn tracey_status_timeout() -> Duration {
+    tracey_duration_env("NM_TRACEY_STATUS_TIMEOUT_MS", 80)
+}
+
+fn tracey_status_cache_ttl() -> Duration {
+    tracey_duration_env("NM_TRACEY_STATUS_CACHE_TTL_MS", 1_000)
+}
+
+fn tracey_status_failure_backoff() -> Duration {
+    tracey_duration_env("NM_TRACEY_STATUS_FAILURE_BACKOFF_MS", 2_000)
+}
+
+fn external_telemetry_from_tracey(
+    url: &str,
+    envelope: TraceyStatusEnvelope,
+) -> Option<ExternalTelemetrySnapshot> {
+    let continuum = envelope.continuum_telemetry?;
+    let disk_used_pct = continuum
+        .server
+        .disks
+        .iter()
+        .filter_map(|disk| disk.used_ratio)
+        .map(|ratio| (ratio * 100.0).clamp(0.0, 100.0) as f32)
+        .max_by(f32::total_cmp);
+    let disk_read_bps = continuum
+        .server
+        .disks
+        .iter()
+        .filter_map(|disk| disk.read_bps)
+        .max_by(f64::total_cmp);
+    let disk_write_bps = continuum
+        .server
+        .disks
+        .iter()
+        .filter_map(|disk| disk.write_bps)
+        .max_by(f64::total_cmp);
+    let gpu_count = continuum.gpus.len().min(u32::MAX as usize) as u32;
+    let gpu_util_pct = if continuum.gpus.is_empty() {
+        None
+    } else {
+        let mut samples = 0usize;
+        let mut total = 0.0f64;
+        for gpu in &continuum.gpus {
+            if let Some(util_pct) = gpu.util_pct {
+                total += util_pct.clamp(0.0, 100.0);
+                samples += 1;
+            }
+        }
+        (samples > 0).then_some((total / samples as f64) as f32)
+    };
+    let gpu_temp_c = continuum
+        .gpus
+        .iter()
+        .filter_map(|gpu| gpu.temp_c)
+        .max_by(f64::total_cmp)
+        .map(|value| value as f32);
+    let gpu_power_total = continuum
+        .gpus
+        .iter()
+        .filter_map(|gpu| gpu.power_w)
+        .sum::<f64>();
+    let gpu_power_w = (gpu_power_total > 0.0).then_some(gpu_power_total as f32);
+    let gpu_mem_used_pct = continuum
+        .gpus
+        .iter()
+        .filter_map(|gpu| gpu.mem_used_pct)
+        .max_by(f64::total_cmp)
+        .map(|value| value as f32);
+
+    Some(ExternalTelemetrySnapshot {
+        source: url.to_string(),
+        ts_ms: continuum.ts_ms.max(envelope.ts_ms),
+        cpu_usage_pct: continuum.server.cpu_usage_pct.map(|value| value as f32),
+        mem_used_pct: continuum.server.mem_used_pct.map(|value| value as f32),
+        net_rx_bps: continuum.server.net_rx_bps,
+        net_tx_bps: continuum.server.net_tx_bps,
+        disk_used_pct,
+        disk_read_bps,
+        disk_write_bps,
+        gpu_count,
+        gpu_util_pct,
+        gpu_temp_c,
+        gpu_power_w,
+        gpu_mem_used_pct,
+        recent_action_count: continuum.server.recent_action_count.min(u32::MAX as usize) as u32,
+    })
+}
+
+fn resource_memory_pressure(resources: &Resources) -> f32 {
+    if !resources.telemetry_source.is_empty() && resources.telemetry_mem_used_pct > 0.0 {
+        return (resources.telemetry_mem_used_pct / 100.0).clamp(0.0, 1.0);
+    }
+    if resources.total_ram == 0 {
+        return 0.0;
+    }
+    let used = resources.total_ram.saturating_sub(resources.available_ram);
+    (used as f32 / resources.total_ram as f32).clamp(0.0, 1.0)
+}
+
+fn external_telemetry_network_pressure(snapshot: &ExternalTelemetrySnapshot) -> f32 {
+    let rx = snapshot.net_rx_bps.unwrap_or_default().max(0.0);
+    let tx = snapshot.net_tx_bps.unwrap_or_default().max(0.0);
+    ((rx.max(tx) / 125_000_000.0) as f32).clamp(0.0, 1.0)
+}
+
+fn external_telemetry_disk_pressure(snapshot: &ExternalTelemetrySnapshot) -> f32 {
+    let usage = snapshot
+        .disk_used_pct
+        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let throughput = ((snapshot
+        .disk_read_bps
+        .unwrap_or_default()
+        .max(snapshot.disk_write_bps.unwrap_or_default())
+        / 200_000_000.0) as f32)
+        .clamp(0.0, 1.0);
+    usage.max(throughput)
+}
+
+fn external_telemetry_gpu_pressure(snapshot: &ExternalTelemetrySnapshot) -> f32 {
+    let util = snapshot
+        .gpu_util_pct
+        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let mem = snapshot
+        .gpu_mem_used_pct
+        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let temp = snapshot
+        .gpu_temp_c
+        .map(|value| (value / 85.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let power = if snapshot.gpu_count > 0 {
+        snapshot
+            .gpu_power_w
+            .map(|value| (value / (snapshot.gpu_count as f32 * 300.0)).clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    util.max(mem).max(temp).max(power)
+}
+
+fn external_telemetry_pressure(snapshot: &ExternalTelemetrySnapshot) -> f32 {
+    let network = external_telemetry_network_pressure(snapshot);
+    let disk = external_telemetry_disk_pressure(snapshot);
+    let gpu = external_telemetry_gpu_pressure(snapshot);
+    let actions = (snapshot.recent_action_count as f32 / 16.0).clamp(0.0, 1.0);
+    ((network * 0.20) + (disk * 0.20) + (gpu * 0.45) + (actions * 0.15)).clamp(0.0, 1.0)
+}
+
+fn resource_network_pressure(resources: &Resources) -> f32 {
+    if resources.telemetry_source.is_empty() {
+        return 0.0;
+    }
+    external_telemetry_network_pressure(&ExternalTelemetrySnapshot {
+        net_rx_bps: Some(resources.telemetry_net_rx_bps),
+        net_tx_bps: Some(resources.telemetry_net_tx_bps),
+        ..ExternalTelemetrySnapshot::default()
+    })
+}
+
+fn resource_disk_pressure(resources: &Resources) -> f32 {
+    if resources.telemetry_source.is_empty() {
+        return 0.0;
+    }
+    external_telemetry_disk_pressure(&ExternalTelemetrySnapshot {
+        disk_used_pct: Some(resources.telemetry_disk_used_pct),
+        disk_read_bps: Some(resources.telemetry_disk_read_bps),
+        disk_write_bps: Some(resources.telemetry_disk_write_bps),
+        ..ExternalTelemetrySnapshot::default()
+    })
+}
+
+fn resource_gpu_pressure(resources: &Resources) -> f32 {
+    if resources.telemetry_source.is_empty() {
+        return 0.0;
+    }
+    external_telemetry_gpu_pressure(&ExternalTelemetrySnapshot {
+        gpu_count: resources.num_gpus,
+        gpu_util_pct: Some(resources.telemetry_gpu_util_pct),
+        gpu_temp_c: Some(resources.telemetry_gpu_temp_c),
+        gpu_power_w: Some(resources.telemetry_gpu_power_w),
+        gpu_mem_used_pct: Some(resources.telemetry_gpu_mem_used_pct),
+        ..ExternalTelemetrySnapshot::default()
+    })
+}
+
+fn resource_external_pressure(resources: &Resources) -> f32 {
+    if resources.telemetry_source.is_empty() {
+        return 0.0;
+    }
+    external_telemetry_pressure(&ExternalTelemetrySnapshot {
+        source: resources.telemetry_source.clone(),
+        net_rx_bps: Some(resources.telemetry_net_rx_bps),
+        net_tx_bps: Some(resources.telemetry_net_tx_bps),
+        disk_used_pct: Some(resources.telemetry_disk_used_pct),
+        disk_read_bps: Some(resources.telemetry_disk_read_bps),
+        disk_write_bps: Some(resources.telemetry_disk_write_bps),
+        gpu_count: resources.num_gpus,
+        gpu_util_pct: Some(resources.telemetry_gpu_util_pct),
+        gpu_temp_c: Some(resources.telemetry_gpu_temp_c),
+        gpu_power_w: Some(resources.telemetry_gpu_power_w),
+        gpu_mem_used_pct: Some(resources.telemetry_gpu_mem_used_pct),
+        recent_action_count: resources.telemetry_recent_action_count,
+        ..ExternalTelemetrySnapshot::default()
+    })
+}
+
+fn effective_capacity_score(resources: &Resources, rebalance_target_step_ms: f32) -> f32 {
+    let mut effective = resources.capacity_score.max(0.1);
+    let latency_ms = resources.avg_step_time_ms.max(0.0);
+    if latency_ms > 0.0 {
+        let latency_scale = (rebalance_target_step_ms / latency_ms).clamp(0.25, 2.0);
+        effective *= latency_scale;
+    }
+    let external_pressure = resource_external_pressure(resources);
+    if external_pressure > 0.0 {
+        effective *= (1.0 - (external_pressure * 0.55)).clamp(0.35, 1.0);
+    }
+    effective.max(0.05)
+}
+
+fn node_memory_pressure(resources: &Resources) -> f32 {
+    resource_memory_pressure(resources)
+}
+
+#[derive(Clone, Debug, Default)]
+struct DeploymentTelemetry {
+    avg_step_time_ms: f32,
+    max_step_time_ms: f32,
+    active_nodes: usize,
+    avg_cpu_utilization: f32,
+    max_cpu_utilization: f32,
+    avg_memory_pressure: f32,
+    avg_network_pressure: f32,
+    avg_disk_pressure: f32,
+    avg_gpu_pressure: f32,
+    shared_with_related: bool,
+    related_hotspot: bool,
+}
+
+fn maybe_autonomous_transition(
+    deployment: &DeploymentConfig,
+    telemetry: &DeploymentTelemetry,
+    available_nodes: usize,
+) -> Option<(DeploymentConfig, String)> {
+    if !deployment.allows_autonomous_transition() || available_nodes == 0 {
+        return None;
+    }
+
+    let target_step_time_ms = deployment.transition_policy.target_step_time_ms();
+    let has_related_networks = !deployment.related_network_ids.is_empty()
+        || deployment.combined_group.is_some()
+        || deployment.federation_group.is_some();
+    let can_shard =
+        deployment.transition_mode_allowed(ExecutionMode::Sharded) && available_nodes > 1;
+    let can_individual = deployment.transition_mode_allowed(ExecutionMode::Individual);
+    let can_combined =
+        has_related_networks && deployment.transition_mode_allowed(ExecutionMode::Combined);
+    let can_federated =
+        has_related_networks && deployment.transition_mode_allowed(ExecutionMode::Federated);
+
+    let hot_network = telemetry.avg_step_time_ms > target_step_time_ms
+        || telemetry.max_step_time_ms > target_step_time_ms * 1.15;
+    let cluster_busy = telemetry.avg_cpu_utilization > 0.80
+        || telemetry.max_cpu_utilization > 0.92
+        || telemetry.avg_memory_pressure > 0.82
+        || telemetry.avg_network_pressure > 0.80
+        || telemetry.avg_disk_pressure > 0.82
+        || telemetry.avg_gpu_pressure > 0.85;
+    let underutilized =
+        telemetry.avg_step_time_ms > 0.0 && telemetry.avg_step_time_ms < target_step_time_ms * 0.55;
+    let current_shards = telemetry
+        .active_nodes
+        .max(if deployment.prefers_sharding() { 2 } else { 1 })
+        .min(available_nodes.max(1));
+
+    let mut next = deployment.clone();
+    let mut reasons = Vec::new();
+
+    if (hot_network || cluster_busy) && can_shard {
+        let desired_shards = current_shards.saturating_add(1).clamp(2, available_nodes);
+        if !next.prefers_sharding() || next.desired_shards != desired_shards {
+            next.set_mode(ExecutionMode::Individual, false);
+            next.add_mode(ExecutionMode::Distributed);
+            next.add_mode(ExecutionMode::Sharded);
+            next.desired_shards = desired_shards;
+            reasons.push(format!("scale out to {} shard targets", desired_shards));
+        }
+    } else if underutilized && (next.prefers_sharding() || telemetry.active_nodes > 1) {
+        if current_shards > 2 {
+            let desired_shards = current_shards.saturating_sub(1).clamp(2, available_nodes);
+            if next.desired_shards != desired_shards {
+                next.desired_shards = desired_shards;
+                reasons.push(format!("scale in to {} shard targets", desired_shards));
+            }
+        } else if can_individual {
+            if next.prefers_sharding() || !next.has_mode(ExecutionMode::Individual) {
+                next.set_mode(ExecutionMode::Sharded, false);
+                next.set_mode(ExecutionMode::Individual, true);
+                next.desired_shards = 1;
+                reasons.push("collapse to isolated single-target execution".to_string());
+            }
+        }
+    }
+
+    if telemetry.shared_with_related && (hot_network || cluster_busy || telemetry.related_hotspot) {
+        if can_federated && !next.has_mode(ExecutionMode::Federated) {
+            next.set_mode(ExecutionMode::Federated, true);
+            next.set_mode(ExecutionMode::Combined, false);
+            reasons.push("spread related networks across different targets".to_string());
+        }
+    } else if can_combined && underutilized && !cluster_busy && !telemetry.shared_with_related {
+        if !next.has_mode(ExecutionMode::Combined) || next.has_mode(ExecutionMode::Federated) {
+            next.set_mode(ExecutionMode::Combined, true);
+            next.set_mode(ExecutionMode::Federated, false);
+            reasons.push("co-locate related networks to reduce coordination latency".to_string());
+        }
+    }
+
+    if !next.prefers_sharding() && can_individual && !next.constrains_to_single_target() {
+        next.set_mode(ExecutionMode::Individual, true);
+    }
+    if next.prefers_sharding() {
+        next.set_mode(ExecutionMode::Individual, false);
+    }
+
+    next.normalize();
+    (next != *deployment).then(|| (next, reasons.join("; ")))
+}
+
+fn collect_autonomous_transition_plans(
+    state: &NodeState,
+    transition_now: std::time::Instant,
+) -> Vec<AutonomousTransitionPlan> {
+    let node_ids: Vec<String> = state.nodes.keys().cloned().collect();
+    if node_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let active_network_counts: HashMap<String, usize> = state
+        .nodes
+        .iter()
+        .map(|(node_id, status)| (node_id.clone(), status.active_networks.len()))
+        .collect();
+    let existing_primary_nodes: HashMap<String, String> = state
+        .network_registry
+        .iter()
+        .filter_map(|(net_id, status)| {
+            primary_node_for_distribution(&status.distribution)
+                .map(|node_id| (net_id.clone(), node_id))
+        })
+        .collect();
+    let deployment_by_network: HashMap<String, DeploymentConfig> = state
+        .network_registry
+        .iter()
+        .map(|(net_id, status)| {
+            let payload = state
+                .network_snapshots
+                .get(net_id)
+                .filter(|payload| !payload.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or(status.config_json.as_str());
+            let deployment = network_deployment_from_payload(payload).unwrap_or_default();
+            (net_id.clone(), deployment)
+        })
+        .collect();
+
+    let mut plans = Vec::new();
+    for (net_id, deployment) in &deployment_by_network {
+        if !deployment.allows_autonomous_transition() {
+            continue;
+        }
+        let cooldown_ms = deployment.transition_policy.cooldown_ms;
+        if cooldown_ms > 0
+            && state
+                .last_deployment_transition
+                .get(net_id)
+                .map(|last| {
+                    transition_now.duration_since(last.observed_at).as_millis()
+                        < cooldown_ms as u128
+                })
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let Some(net_status) = state.network_registry.get(net_id) else {
+            continue;
+        };
+        let related_ids = related_network_ids_for(net_id, deployment, &deployment_by_network);
+        let primary_node = existing_primary_nodes.get(net_id);
+        let shared_with_related = primary_node
+            .map(|node_id| {
+                related_ids
+                    .iter()
+                    .filter_map(|related_id| existing_primary_nodes.get(related_id))
+                    .any(|other_node| other_node == node_id)
+            })
+            .unwrap_or(false);
+        let related_hotspot = related_ids.iter().any(|related_id| {
+            let Some(node_id) = existing_primary_nodes.get(related_id) else {
+                return false;
+            };
+            let active_networks = active_network_counts.get(node_id).copied().unwrap_or(0);
+            let node_resources = state
+                .nodes
+                .get(node_id)
+                .and_then(|node| node.resources.as_ref());
+            let cpu_ratio = node_resources
+                .map(|resources| (resources.cpu_usage / 100.0).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let memory_pressure = node_resources.map(node_memory_pressure).unwrap_or(0.0);
+            let external_pressure = node_resources
+                .map(resource_external_pressure)
+                .unwrap_or(0.0);
+            active_networks > deployment.max_concurrent_networks.max(1)
+                || cpu_ratio > 0.80
+                || memory_pressure > 0.82
+                || external_pressure > 0.82
+        });
+
+        let mut telemetry = DeploymentTelemetry {
+            active_nodes: net_status.distribution.len(),
+            shared_with_related,
+            related_hotspot,
+            ..DeploymentTelemetry::default()
+        };
+
+        if let Some(per_node_metrics) = state.network_runtime_metrics.get(net_id) {
+            telemetry.active_nodes = telemetry.active_nodes.max(per_node_metrics.len());
+            let metric_count = per_node_metrics.len() as f32;
+            if metric_count > 0.0 {
+                telemetry.avg_step_time_ms = per_node_metrics
+                    .values()
+                    .map(|metrics| metrics.avg_step_time_ms.max(0.0))
+                    .sum::<f32>()
+                    / metric_count;
+                telemetry.max_step_time_ms = per_node_metrics
+                    .values()
+                    .map(|metrics| metrics.avg_step_time_ms.max(0.0))
+                    .fold(0.0, f32::max);
+            }
+        }
+
+        let mut cpu_sum = 0.0f32;
+        let mut mem_sum = 0.0f32;
+        let mut net_sum = 0.0f32;
+        let mut disk_sum = 0.0f32;
+        let mut gpu_sum = 0.0f32;
+        let mut util_samples = 0usize;
+        let mut max_cpu = 0.0f32;
+        let mut assignment_nodes: HashSet<String> =
+            net_status.distribution.keys().cloned().collect();
+        if assignment_nodes.is_empty() {
+            if let Some(metric_nodes) = state.network_runtime_metrics.get(net_id) {
+                assignment_nodes.extend(metric_nodes.keys().cloned());
+            }
+        }
+        for node_id in assignment_nodes {
+            if let Some(resources) = state
+                .nodes
+                .get(&node_id)
+                .and_then(|node| node.resources.as_ref())
+            {
+                let cpu_ratio = (resources.cpu_usage / 100.0).clamp(0.0, 1.0);
+                let memory_pressure = node_memory_pressure(resources);
+                let network_pressure = resource_network_pressure(resources);
+                let disk_pressure = resource_disk_pressure(resources);
+                let gpu_pressure = resource_gpu_pressure(resources);
+                cpu_sum += cpu_ratio;
+                mem_sum += memory_pressure;
+                net_sum += network_pressure;
+                disk_sum += disk_pressure;
+                gpu_sum += gpu_pressure;
+                max_cpu = max_cpu.max(cpu_ratio);
+                util_samples += 1;
+            }
+        }
+        if util_samples > 0 {
+            telemetry.avg_cpu_utilization = cpu_sum / util_samples as f32;
+            telemetry.avg_memory_pressure = mem_sum / util_samples as f32;
+            telemetry.avg_network_pressure = net_sum / util_samples as f32;
+            telemetry.avg_disk_pressure = disk_sum / util_samples as f32;
+            telemetry.avg_gpu_pressure = gpu_sum / util_samples as f32;
+            telemetry.max_cpu_utilization = max_cpu;
+        }
+
+        let Some((next_deployment, reason)) =
+            maybe_autonomous_transition(deployment, &telemetry, node_ids.len())
+        else {
+            continue;
+        };
+
+        let fallback_payload = state
+            .network_snapshots
+            .get(net_id)
+            .filter(|payload| !payload.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| net_status.config_json.clone());
+
+        plans.push(AutonomousTransitionPlan {
+            network_id: net_id.clone(),
+            next_deployment,
+            fallback_payload,
+            reason,
+            snapshot_source: live_snapshot_source_for(state, net_id, &net_status.distribution),
+        });
+    }
+
+    plans
+}
+
+fn primary_node_for_distribution(distribution: &HashMap<String, LayerRange>) -> Option<String> {
+    distribution
+        .iter()
+        .max_by(|lhs, rhs| {
+            let lhs_len = lhs.1.layers.len();
+            let rhs_len = rhs.1.layers.len();
+            lhs_len
+                .cmp(&rhs_len)
+                .then_with(|| {
+                    let lhs_min = lhs.1.layers.iter().min().copied().unwrap_or(u32::MAX);
+                    let rhs_min = rhs.1.layers.iter().min().copied().unwrap_or(u32::MAX);
+                    rhs_min.cmp(&lhs_min)
+                })
+                .then_with(|| lhs.0.cmp(rhs.0))
+        })
+        .map(|(node_id, _)| node_id.clone())
+}
+
+fn related_network_ids_for(
+    network_id: &str,
+    deployment: &DeploymentConfig,
+    deployments: &HashMap<String, DeploymentConfig>,
+) -> Vec<String> {
+    let mut related: Vec<String> = deployment.related_network_ids.clone();
+    if let Some(group) = deployment.combined_group.as_deref() {
+        for (other_id, other) in deployments {
+            if other_id != network_id && other.combined_group.as_deref() == Some(group) {
+                related.push(other_id.clone());
+            }
+        }
+    }
+    if let Some(group) = deployment.federation_group.as_deref() {
+        for (other_id, other) in deployments {
+            if other_id != network_id && other.federation_group.as_deref() == Some(group) {
+                related.push(other_id.clone());
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    related.retain(|item| seen.insert(item.clone()));
+    related
+}
+
+fn choose_single_node_target(
+    network_id: &str,
+    candidates: &[(String, f32)],
+    deployment: &DeploymentConfig,
+    deployments: &HashMap<String, DeploymentConfig>,
+    primary_nodes: &HashMap<String, String>,
+) -> Option<String> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let related = related_network_ids_for(network_id, deployment, deployments);
+    let related_nodes: HashSet<String> = related
+        .iter()
+        .filter_map(|related_id| primary_nodes.get(related_id).cloned())
+        .collect();
+
+    if deployment.combined_group.is_some()
+        || deployment.has_mode(crate::deployment::ExecutionMode::Combined)
+    {
+        if let Some(best) = candidates
+            .iter()
+            .filter(|(node_id, _)| related_nodes.contains(node_id))
+            .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+        {
+            return Some(best.0.clone());
+        }
+    }
+
+    if deployment.federation_group.is_some()
+        || deployment.has_mode(crate::deployment::ExecutionMode::Federated)
+    {
+        if let Some(best) = candidates
+            .iter()
+            .filter(|(node_id, _)| !related_nodes.contains(node_id))
+            .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+        {
+            return Some(best.0.clone());
+        }
+    }
+
+    candidates
+        .iter()
+        .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+        .map(|(node_id, _)| node_id.clone())
+}
+
+fn deployment_prefers_combined(deployment: &DeploymentConfig) -> bool {
+    deployment.combined_group.is_some()
+        || deployment.has_mode(crate::deployment::ExecutionMode::Combined)
+}
+
+fn deployment_prefers_federated(deployment: &DeploymentConfig) -> bool {
+    deployment.federation_group.is_some()
+        || deployment.has_mode(crate::deployment::ExecutionMode::Federated)
+}
+
+fn should_shard_across_nodes(deployment: &DeploymentConfig) -> bool {
+    if deployment.constrains_to_single_target() {
+        return false;
+    }
+    deployment.modes.is_empty() || deployment.prefers_sharding()
+}
+
+fn limit_target_nodes_for_deployment(
+    network_id: &str,
+    candidates: &[(String, f32)],
+    deployment: &DeploymentConfig,
+    deployments: &HashMap<String, DeploymentConfig>,
+    primary_nodes: &HashMap<String, String>,
+    active_network_counts: &HashMap<String, usize>,
+    existing_affinity_nodes: &HashSet<String>,
+) -> Vec<(String, f32)> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut filtered: Vec<(String, f32)> = candidates.to_vec();
+
+    if deployment.max_concurrent_networks > 0 {
+        let concurrency_limit = deployment.max_concurrent_networks.max(1);
+        let under_limit: Vec<(String, f32)> = filtered
+            .iter()
+            .filter(|(node_id, _)| {
+                active_network_counts.get(node_id).copied().unwrap_or(0) < concurrency_limit
+                    || existing_affinity_nodes.contains(node_id)
+            })
+            .cloned()
+            .collect();
+        if !under_limit.is_empty() {
+            filtered = under_limit;
+        }
+    }
+
+    if !should_shard_across_nodes(deployment) {
+        return filtered;
+    }
+
+    let target_count = deployment.requested_shard_count(filtered.len());
+    if target_count == 0 || filtered.len() <= target_count {
+        return filtered;
+    }
+
+    let related_nodes: HashSet<String> =
+        related_network_ids_for(network_id, deployment, deployments)
+            .iter()
+            .filter_map(|related_id| primary_nodes.get(related_id).cloned())
+            .collect();
+    let prefers_combined = deployment_prefers_combined(deployment);
+    let prefers_federated = deployment_prefers_federated(deployment);
+
+    filtered.sort_by(|lhs, rhs| {
+        let lhs_affinity = existing_affinity_nodes.contains(&lhs.0);
+        let rhs_affinity = existing_affinity_nodes.contains(&rhs.0);
+        rhs_affinity
+            .cmp(&lhs_affinity)
+            .then_with(|| {
+                if prefers_combined {
+                    let lhs_related = related_nodes.contains(&lhs.0);
+                    let rhs_related = related_nodes.contains(&rhs.0);
+                    rhs_related.cmp(&lhs_related)
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .then_with(|| {
+                if prefers_federated {
+                    let lhs_separate = !related_nodes.contains(&lhs.0);
+                    let rhs_separate = !related_nodes.contains(&rhs.0);
+                    rhs_separate.cmp(&lhs_separate)
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .then_with(|| rhs.1.total_cmp(&lhs.1))
+            .then_with(|| lhs.0.cmp(&rhs.0))
+    });
+    filtered.truncate(target_count);
+    filtered
+}
+
 /// Represents a partial or whole neural network running on this node.
 pub struct ManagedNetwork {
     pub id: String,
@@ -616,8 +1723,10 @@ pub struct NodeState {
     pub nodes: HashMap<String, NodeStatus>,
     pub network_registry: HashMap<String, NetworkStatus>,
     pub network_snapshots: HashMap<String, String>,
+    pub network_runtime_metrics: HashMap<String, HashMap<String, NetworkResources>>,
     pub last_heartbeat: HashMap<String, std::time::Instant>,
     pub pending_commands: HashMap<String, Vec<NetworkCommand>>, // node_id -> commands
+    last_deployment_transition: HashMap<String, DeploymentTransitionRecord>,
 
     // Local GA status (for reporting to orchestrator)
     pub ga_running: bool,
@@ -835,6 +1944,7 @@ impl NodeState {
 pub struct DistributedNode {
     pub state: Arc<RwLock<NodeState>>,
     pub system: Arc<RwLock<System>>,
+    tracey_probe: Option<TraceyStatusProbe>,
 }
 
 impl DistributedNode {
@@ -859,8 +1969,10 @@ impl DistributedNode {
                 nodes: HashMap::new(),
                 network_registry: HashMap::new(),
                 network_snapshots: HashMap::new(),
+                network_runtime_metrics: HashMap::new(),
                 last_heartbeat: HashMap::new(),
                 pending_commands: HashMap::new(),
+                last_deployment_transition: HashMap::new(),
                 ga_running: false,
                 ga_generation: 0,
                 ga_best_fitness: 0.0,
@@ -876,7 +1988,185 @@ impl DistributedNode {
                     .with_cpu(CpuRefreshKind::everything())
                     .with_memory(MemoryRefreshKind::everything()),
             ))),
+            tracey_probe: TraceyStatusProbe::from_env(),
         }
+    }
+
+    async fn fetch_live_network_snapshot(&self, source: &LiveSnapshotSource) -> Option<String> {
+        if source.local {
+            let net_arc = {
+                let state = self.state.read().await;
+                state.networks.get(&source.network_id).cloned()
+            };
+            if let Some(net_arc) = net_arc {
+                match tokio::task::spawn_blocking(move || {
+                    let net = net_arc.blocking_read();
+                    net.runner.export_network_json()
+                })
+                .await
+                {
+                    Ok(Ok(snapshot_json)) => return Some(snapshot_json),
+                    Ok(Err(err)) => nm_err!(
+                        "[warn] Failed to export live snapshot for network {}: {}",
+                        source.network_id,
+                        err
+                    ),
+                    Err(err) => nm_err!(
+                        "[warn] Snapshot export task failed for network {}: {}",
+                        source.network_id,
+                        err
+                    ),
+                }
+            }
+        }
+
+        let mut client = {
+            let state = self.state.read().await;
+            source
+                .primary_node_id
+                .as_ref()
+                .and_then(|node_id| state.clients.get(node_id).cloned())
+        };
+
+        if client.is_none() {
+            let addr = source.peer_addr.as_deref()?;
+            match connect_peer_with_timeout(addr, Duration::from_millis(750)).await {
+                Ok(connected) => {
+                    client = Some(connected);
+                }
+                Err(err) => {
+                    nm_err!(
+                        "[warn] Failed to connect to live snapshot source for network {} at {}: {}",
+                        source.network_id,
+                        addr,
+                        err
+                    );
+                    return None;
+                }
+            }
+        }
+
+        let mut client = client?;
+        let snapshot_result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.get_network_snapshot(Request::new(NetworkSnapshotRequest {
+                network_id: source.network_id.clone(),
+            })),
+        )
+        .await;
+
+        match snapshot_result {
+            Ok(Ok(response)) => {
+                if let Some(node_id) = source.primary_node_id.as_ref() {
+                    let mut state = self.state.write().await;
+                    state.clients.insert(node_id.clone(), client);
+                }
+                Some(response.into_inner().snapshot_json)
+            }
+            Ok(Err(err)) => {
+                nm_err!(
+                    "[warn] Live snapshot RPC failed for network {}{}: {}",
+                    source.network_id,
+                    source
+                        .primary_node_id
+                        .as_deref()
+                        .map(|node_id| format!(" on {}", node_id))
+                        .unwrap_or_default(),
+                    err
+                );
+                None
+            }
+            Err(_) => {
+                nm_err!(
+                    "[warn] Live snapshot RPC timed out for network {}{}",
+                    source.network_id,
+                    source
+                        .primary_node_id
+                        .as_deref()
+                        .map(|node_id| format!(" on {}", node_id))
+                        .unwrap_or_default()
+                );
+                None
+            }
+        }
+    }
+
+    async fn resolve_autonomous_transition_payloads(
+        &self,
+        plans: &[AutonomousTransitionPlan],
+    ) -> HashMap<String, String> {
+        let mut join_set = tokio::task::JoinSet::new();
+        for plan in plans.iter().cloned() {
+            let node = self.clone();
+            join_set.spawn(async move {
+                let refreshed_payload = if let Some(source) = plan.snapshot_source.as_ref() {
+                    node.fetch_live_network_snapshot(source)
+                        .await
+                        .and_then(|snapshot_json| {
+                            payload_with_updated_deployment(&snapshot_json, &plan.next_deployment)
+                        })
+                } else {
+                    None
+                };
+                let fallback_payload =
+                    payload_with_updated_deployment(&plan.fallback_payload, &plan.next_deployment)
+                        .unwrap_or_else(|| plan.fallback_payload.clone());
+                (
+                    plan.network_id,
+                    refreshed_payload.unwrap_or(fallback_payload),
+                )
+            });
+        }
+
+        let mut payloads = HashMap::new();
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((network_id, payload)) => {
+                    payloads.insert(network_id, payload);
+                }
+                Err(err) => {
+                    nm_err!("[warn] Autonomous deployment refresh task failed: {}", err);
+                }
+            }
+        }
+        payloads
+    }
+
+    async fn maybe_refresh_manual_transition_payload(
+        &self,
+        network_id: &str,
+        requested_payload: &str,
+    ) -> Option<String> {
+        let requested_cfg = network_config_from_config_payload(requested_payload)?;
+        let snapshot_source = {
+            let state = self.state.read().await;
+            if !state.is_orchestrator {
+                return None;
+            }
+            let net_status = state.network_registry.get(network_id)?;
+            let previous_payload = state
+                .network_snapshots
+                .get(network_id)
+                .filter(|payload| !payload.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or(net_status.config_json.as_str());
+            let current_cfg = network_config_from_payload(previous_payload)?;
+            let previous_deployment =
+                network_deployment_from_payload(previous_payload).unwrap_or_default();
+            let next_deployment =
+                network_deployment_from_payload(requested_payload).unwrap_or_default();
+            if previous_deployment == next_deployment {
+                return None;
+            }
+            if !network_config_shape_compatible(&current_cfg, &requested_cfg) {
+                return None;
+            }
+            live_snapshot_source_for(&state, network_id, &net_status.distribution)
+        }?;
+
+        self.fetch_live_network_snapshot(&snapshot_source)
+            .await
+            .and_then(|snapshot_json| snapshot_with_network_config(&snapshot_json, &requested_cfg))
     }
 
     #[allow(dead_code)]
@@ -909,12 +2199,13 @@ impl DistributedNode {
             }
         }
 
-        let (network_registry, network_snapshots, pending_commands) = {
+        let (network_registry, network_snapshots, pending_commands, last_deployment_transition) = {
             let state = &mut *state;
             (
                 &mut state.network_registry,
                 &mut state.network_snapshots,
                 &mut state.pending_commands,
+                &mut state.last_deployment_transition,
             )
         };
 
@@ -946,6 +2237,9 @@ impl DistributedNode {
                     net_status.learning_rule = learning.to_str().to_string();
                 }
                 network_snapshots.insert(network_id.to_string(), fresh_json.clone());
+                sync_network_status_deployment(net_status, &fresh_cfg.deployment);
+                sync_network_status_transition(net_status, None);
+                last_deployment_transition.remove(network_id);
                 config_payload = Some(fresh_json.into_bytes());
                 use_distribution_layers = true;
                 cmd_type = proto::network_command::CommandType::LoadNetwork;
@@ -1062,10 +2356,22 @@ impl DistributedNode {
         }
     }
 
+    async fn external_telemetry_snapshot(&self) -> Option<ExternalTelemetrySnapshot> {
+        let Some(probe) = self.tracey_probe.as_ref() else {
+            return None;
+        };
+        probe.snapshot().await
+    }
+
     pub async fn get_resources(&self) -> Resources {
+        let external_telemetry = self.external_telemetry_snapshot().await;
+
         let mut sys = self.system.write().await;
         sys.refresh_cpu_usage();
         sys.refresh_memory();
+        let local_cpu_usage = sys.global_cpu_usage();
+        let total_ram = sys.total_memory();
+        let available_ram = sys.available_memory();
 
         let state = self.state.read().await;
         let mut total_node_neurons = 0u64;
@@ -1107,13 +2413,24 @@ impl DistributedNode {
             1.0
         };
 
+        let cpu_usage = external_telemetry
+            .as_ref()
+            .and_then(|snapshot| snapshot.cpu_usage_pct)
+            .unwrap_or(local_cpu_usage);
+        let mem_ratio = external_telemetry
+            .as_ref()
+            .and_then(|snapshot| snapshot.mem_used_pct)
+            .map(|used_pct| (1.0 - (used_pct / 100.0)).clamp(0.0, 1.0))
+            .unwrap_or_else(|| {
+                if total_ram > 0 {
+                    available_ram as f32 / total_ram as f32
+                } else {
+                    0.0
+                }
+            });
+
         let mut capacity = 1.0;
-        capacity += (1.0 - sys.global_cpu_usage() / 100.0) * 10.0;
-        let mem_ratio = if sys.total_memory() > 0 {
-            sys.available_memory() as f32 / sys.total_memory() as f32
-        } else {
-            0.0
-        };
+        capacity += (1.0 - (cpu_usage / 100.0).clamp(0.0, 1.0)) * 10.0;
         capacity += mem_ratio * 10.0;
         // Bias node capacity by parallelism so stronger hosts naturally receive
         // more layer assignments during orchestrator rebalancing.
@@ -1122,6 +2439,19 @@ impl DistributedNode {
             .unwrap_or(1.0)
             .max(1.0);
         capacity += (cpu_cores / 4.0).min(8.0);
+        let num_gpus = external_telemetry
+            .as_ref()
+            .map(|snapshot| snapshot.gpu_count)
+            .unwrap_or(0);
+        if num_gpus > 0 {
+            capacity += (num_gpus as f32 * 2.0).min(8.0);
+        }
+        if let Some(snapshot) = external_telemetry.as_ref() {
+            let telemetry_pressure = external_telemetry_pressure(snapshot);
+            if telemetry_pressure > 0.0 {
+                capacity *= (1.0 - (telemetry_pressure * 0.55)).clamp(0.35, 1.0);
+            }
+        }
         if let Ok(mult_raw) = std::env::var("NM_CAPACITY_MULTIPLIER") {
             if let Ok(mult) = mult_raw.parse::<f32>() {
                 if mult.is_finite() && mult > 0.0 {
@@ -1219,10 +2549,10 @@ impl DistributedNode {
         };
 
         Resources {
-            cpu_usage: sys.global_cpu_usage(),
-            total_ram: sys.total_memory(),
-            available_ram: sys.available_memory(),
-            num_gpus: 0,
+            cpu_usage,
+            total_ram,
+            available_ram,
+            num_gpus,
             num_tpus: 0,
             num_fpgas: 0,
             capacity_score: capacity,
@@ -1252,6 +2582,62 @@ impl DistributedNode {
             ga_ramp_eval_conns,
             comm_protocol,
             peer_comm_protocols,
+            telemetry_source: external_telemetry
+                .as_ref()
+                .map(|snapshot| snapshot.source.clone())
+                .unwrap_or_default(),
+            telemetry_ts_ms: external_telemetry
+                .as_ref()
+                .map(|snapshot| snapshot.ts_ms)
+                .unwrap_or(0),
+            telemetry_cpu_usage_pct: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.cpu_usage_pct)
+                .unwrap_or(0.0),
+            telemetry_mem_used_pct: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.mem_used_pct)
+                .unwrap_or(0.0),
+            telemetry_net_rx_bps: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.net_rx_bps)
+                .unwrap_or(0.0),
+            telemetry_net_tx_bps: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.net_tx_bps)
+                .unwrap_or(0.0),
+            telemetry_disk_used_pct: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.disk_used_pct)
+                .unwrap_or(0.0),
+            telemetry_disk_read_bps: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.disk_read_bps)
+                .unwrap_or(0.0),
+            telemetry_disk_write_bps: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.disk_write_bps)
+                .unwrap_or(0.0),
+            telemetry_gpu_util_pct: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.gpu_util_pct)
+                .unwrap_or(0.0),
+            telemetry_gpu_temp_c: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.gpu_temp_c)
+                .unwrap_or(0.0),
+            telemetry_gpu_power_w: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.gpu_power_w)
+                .unwrap_or(0.0),
+            telemetry_gpu_mem_used_pct: external_telemetry
+                .as_ref()
+                .and_then(|snapshot| snapshot.gpu_mem_used_pct)
+                .unwrap_or(0.0),
+            telemetry_recent_action_count: external_telemetry
+                .as_ref()
+                .map(|snapshot| snapshot.recent_action_count)
+                .unwrap_or(0),
         }
     }
 
@@ -1763,6 +3149,24 @@ impl DistributedNode {
     }
 
     pub async fn rebalance_networks(&self) {
+        let transition_now = std::time::Instant::now();
+        let autonomous_transition_plans = {
+            let state = self.state.read().await;
+            if !state.is_orchestrator {
+                return;
+            }
+            if state.nodes.is_empty() {
+                return;
+            }
+            collect_autonomous_transition_plans(&state, transition_now)
+        };
+        let autonomous_transition_payloads = if autonomous_transition_plans.is_empty() {
+            HashMap::new()
+        } else {
+            self.resolve_autonomous_transition_payloads(&autonomous_transition_plans)
+                .await
+        };
+
         let mut state = self.state.write().await;
         if !state.is_orchestrator {
             return;
@@ -1771,6 +3175,44 @@ impl DistributedNode {
         let node_ids: Vec<String> = state.nodes.keys().cloned().collect();
         if node_ids.is_empty() {
             return;
+        }
+
+        for plan in autonomous_transition_plans {
+            let updated_payload = autonomous_transition_payloads
+                .get(&plan.network_id)
+                .cloned()
+                .or_else(|| {
+                    payload_with_updated_deployment(&plan.fallback_payload, &plan.next_deployment)
+                })
+                .unwrap_or_else(|| plan.fallback_payload.clone());
+            let transition_record = DeploymentTransitionRecord {
+                observed_at: transition_now,
+                ts_ms: unix_timestamp_ms_now(),
+                reason: plan.reason.clone(),
+                source: "autonomous".to_string(),
+            };
+
+            if let Some(net_status) = state.network_registry.get_mut(&plan.network_id) {
+                net_status.config_json = updated_payload.clone();
+                sync_network_status_deployment(net_status, &plan.next_deployment);
+                sync_network_status_transition(net_status, Some(&transition_record));
+            }
+            if crate::runner::decode_snapshot_with_profile_backfill(&updated_payload).is_ok() {
+                state
+                    .network_snapshots
+                    .insert(plan.network_id.clone(), updated_payload.clone());
+            } else {
+                state.network_snapshots.remove(&plan.network_id);
+            }
+            state
+                .last_deployment_transition
+                .insert(plan.network_id.clone(), transition_record);
+            nm_log!(
+                "[info] Autonomous deployment transition for network {} -> {:?} ({})",
+                plan.network_id,
+                plan.next_deployment.modes,
+                plan.reason
+            );
         }
 
         // Collect per-node capacity estimates used for layer assignment.
@@ -1787,19 +3229,7 @@ impl DistributedNode {
                 .nodes
                 .get(node_id)
                 .and_then(|n| n.resources.as_ref())
-                .map(|r| {
-                    let mut effective = r.capacity_score.max(0.1);
-                    // Convert measured step latency into a bounded scale factor.
-                    // Faster-than-target nodes can absorb moderately more layers;
-                    // slower nodes are proportionally de-emphasized.
-                    let latency_ms = r.avg_step_time_ms.max(0.0);
-                    if latency_ms > 0.0 {
-                        let latency_scale =
-                            (rebalance_target_step_ms / latency_ms).clamp(0.25, 2.0);
-                        effective *= latency_scale;
-                    }
-                    effective.max(0.05)
-                })
+                .map(|resources| effective_capacity_score(resources, rebalance_target_step_ms))
                 .unwrap_or(1.0);
             node_capacities.push((node_id.clone(), cap));
         }
@@ -1813,6 +3243,11 @@ impl DistributedNode {
                     .push(node_id.clone());
             }
         }
+        let active_network_counts: HashMap<String, usize> = state
+            .nodes
+            .iter()
+            .map(|(node_id, status)| (node_id.clone(), status.active_networks.len()))
+            .collect();
 
         // Calculate network neurons first to avoid double borrow
         let mut network_neurons = 0u64;
@@ -1821,6 +3256,29 @@ impl DistributedNode {
                 network_neurons += res.num_neurons;
             }
         }
+
+        let existing_primary_nodes: HashMap<String, String> = state
+            .network_registry
+            .iter()
+            .filter_map(|(net_id, status)| {
+                primary_node_for_distribution(&status.distribution)
+                    .map(|node_id| (net_id.clone(), node_id))
+            })
+            .collect();
+        let deployment_by_network: HashMap<String, DeploymentConfig> = state
+            .network_registry
+            .iter()
+            .map(|(net_id, status)| {
+                let payload = state
+                    .network_snapshots
+                    .get(net_id)
+                    .filter(|payload| !payload.trim().is_empty())
+                    .map(String::as_str)
+                    .unwrap_or(status.config_json.as_str());
+                let deployment = network_deployment_from_payload(payload).unwrap_or_default();
+                (net_id.clone(), deployment)
+            })
+            .collect();
 
         let mut all_pending = Vec::new();
         let (network_registry, network_snapshots) = {
@@ -1856,6 +3314,11 @@ impl DistributedNode {
             } else {
                 7
             };
+            let deployment = deployment_by_network
+                .get(net_id)
+                .cloned()
+                .unwrap_or_default();
+            let shard_across_nodes = should_shard_across_nodes(&deployment);
             let config_json = config_payload.unwrap_or_else(|| net_status.config_json.clone());
             let mut target_node_capacities: Vec<(String, f32)> = network_affinity
                 .get(net_id)
@@ -1879,6 +3342,24 @@ impl DistributedNode {
                 }
                 target_node_capacities = node_capacities.clone();
             }
+            let existing_affinity_nodes: HashSet<String> = network_affinity
+                .get(net_id)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            target_node_capacities = limit_target_nodes_for_deployment(
+                net_id,
+                &target_node_capacities,
+                &deployment,
+                &deployment_by_network,
+                &existing_primary_nodes,
+                &active_network_counts,
+                &existing_affinity_nodes,
+            );
+            if target_node_capacities.is_empty() {
+                continue;
+            }
             let mut target_capacity_sum: f32 =
                 target_node_capacities.iter().map(|(_, cap)| *cap).sum();
             if target_capacity_sum <= 0.0 {
@@ -1886,6 +3367,7 @@ impl DistributedNode {
             }
 
             // Preserve existing layer neuron counts to avoid UI flicker during rebalance
+            let previous_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
             let mut old_counts = HashMap::new();
             for (nid, range) in &net_status.distribution {
                 old_counts.insert(nid.clone(), range.layer_neuron_counts.clone());
@@ -1893,39 +3375,18 @@ impl DistributedNode {
 
             net_status.distribution.clear();
 
-            let mut layer_counts = vec![0u32; total_layers as usize];
-            let mut node_assignments = Vec::new();
-
-            let mut current_cap_sum = 0.0;
-            for (node_id, cap) in &target_node_capacities {
-                let start_ratio = current_cap_sum / target_capacity_sum;
-                current_cap_sum += cap;
-                let end_ratio = current_cap_sum / target_capacity_sum;
-
-                let start = (start_ratio * total_layers as f32).round() as u32;
-                let end = (end_ratio * total_layers as f32).round() as u32;
-
-                // Ensure at least one layer if there's any capacity
-                let end = if start == end && end < total_layers {
-                    end + 1
-                } else {
-                    end
+            if !shard_across_nodes {
+                let Some(node_id) = choose_single_node_target(
+                    net_id,
+                    &target_node_capacities,
+                    &deployment,
+                    &deployment_by_network,
+                    &existing_primary_nodes,
+                ) else {
+                    continue;
                 };
 
-                // Add overlap for boundary synchronization/redundancy
-                let r_start = start.saturating_sub(1);
-                let r_end = (end + 1).min(total_layers);
-
-                let layers: Vec<u32> = (r_start..r_end).collect();
-                for &l in &layers {
-                    if (l as usize) < layer_counts.len() {
-                        layer_counts[l as usize] += 1;
-                    }
-                }
-                node_assignments.push((node_id.clone(), layers));
-            }
-
-            for (node_id, layers) in node_assignments {
+                let layers: Vec<u32> = (0..total_layers).collect();
                 net_status.distribution.insert(
                     node_id.clone(),
                     LayerRange {
@@ -1934,18 +3395,12 @@ impl DistributedNode {
                     },
                 );
 
-                let redundant: Vec<u32> = layers
-                    .iter()
-                    .filter(|&&l| (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1)
-                    .copied()
-                    .collect();
-
                 let cmd = NetworkCommand {
                     r#type: proto::network_command::CommandType::LoadNetwork as i32,
                     network_id: net_id.clone(),
                     config_json: config_json.as_bytes().to_vec(),
-                    layers: layers.clone(),
-                    redundant_layers: redundant,
+                    layers,
+                    redundant_layers: Vec::new(),
                     desired_aarnn_depth: net_status.desired_aarnn_depth,
                     neuron_model: net_status.neuron_model.clone(),
                     learning_rule: net_status.learning_rule.clone(),
@@ -1965,6 +3420,97 @@ impl DistributedNode {
                     };
                     all_pending.push((node_id_clone, stop_cmd));
                 }
+            } else {
+                let mut layer_counts = vec![0u32; total_layers as usize];
+                let mut node_assignments = Vec::new();
+
+                let mut current_cap_sum = 0.0;
+                for (node_id, cap) in &target_node_capacities {
+                    let start_ratio = current_cap_sum / target_capacity_sum;
+                    current_cap_sum += cap;
+                    let end_ratio = current_cap_sum / target_capacity_sum;
+
+                    let start = (start_ratio * total_layers as f32).round() as u32;
+                    let end = (end_ratio * total_layers as f32).round() as u32;
+
+                    // Ensure at least one layer if there's any capacity
+                    let end = if start == end && end < total_layers {
+                        end + 1
+                    } else {
+                        end
+                    };
+
+                    // Add overlap for boundary synchronization/redundancy
+                    let r_start = start.saturating_sub(1);
+                    let r_end = (end + 1).min(total_layers);
+
+                    let layers: Vec<u32> = (r_start..r_end).collect();
+                    for &l in &layers {
+                        if (l as usize) < layer_counts.len() {
+                            layer_counts[l as usize] += 1;
+                        }
+                    }
+                    node_assignments.push((node_id.clone(), layers));
+                }
+
+                for (node_id, layers) in node_assignments {
+                    net_status.distribution.insert(
+                        node_id.clone(),
+                        LayerRange {
+                            layers: layers.clone(),
+                            layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                        },
+                    );
+
+                    let redundant: Vec<u32> = layers
+                        .iter()
+                        .filter(|&&l| {
+                            (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1
+                        })
+                        .copied()
+                        .collect();
+
+                    let cmd = NetworkCommand {
+                        r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                        network_id: net_id.clone(),
+                        config_json: config_json.as_bytes().to_vec(),
+                        layers: layers.clone(),
+                        redundant_layers: redundant,
+                        desired_aarnn_depth: net_status.desired_aarnn_depth,
+                        neuron_model: net_status.neuron_model.clone(),
+                        learning_rule: net_status.learning_rule.clone(),
+                    };
+                    let node_id_clone = node_id.clone();
+                    all_pending.push((node_id, cmd));
+                    if !net_status.playing {
+                        let stop_cmd = NetworkCommand {
+                            r#type: proto::network_command::CommandType::Stop as i32,
+                            network_id: net_id.clone(),
+                            config_json: Vec::new(),
+                            layers: Vec::new(),
+                            redundant_layers: Vec::new(),
+                            desired_aarnn_depth: net_status.desired_aarnn_depth,
+                            neuron_model: String::new(),
+                            learning_rule: String::new(),
+                        };
+                        all_pending.push((node_id_clone, stop_cmd));
+                    }
+                }
+            }
+
+            let new_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
+            for removed_node in previous_nodes.difference(&new_nodes) {
+                let unload_cmd = NetworkCommand {
+                    r#type: proto::network_command::CommandType::UnloadNetwork as i32,
+                    network_id: net_id.clone(),
+                    config_json: Vec::new(),
+                    layers: Vec::new(),
+                    redundant_layers: Vec::new(),
+                    desired_aarnn_depth: net_status.desired_aarnn_depth,
+                    neuron_model: String::new(),
+                    learning_rule: String::new(),
+                };
+                all_pending.push((removed_node.clone(), unload_cmd));
             }
 
             // Update total neurons from distribution reports if available
@@ -2219,6 +3765,11 @@ impl DistributedNode {
                     );
                 }
             }
+            CommandType::UnloadNetwork => {
+                if state.networks.remove(&cmd.network_id).is_some() {
+                    nm_log!("[info] Unloaded network {} from local node", cmd.network_id);
+                }
+            }
             CommandType::Start | CommandType::Stop | CommandType::Repeat | CommandType::Reset => {
                 if let Some(net_arc) = state.networks.get(&cmd.network_id) {
                     let mut net = net_arc.write().await;
@@ -2430,15 +3981,23 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::permission_denied("Not an orchestrator"));
         }
 
+        let active_networks: Vec<String> = req.network_resources.keys().cloned().collect();
         let node_status = NodeStatus {
             node_id: node_id.clone(),
             address: display_addr.clone(),
             resources: req.resources,
-            active_networks: req.network_resources.keys().cloned().collect(),
+            active_networks,
         };
 
         state.nodes.insert(node_id.clone(), node_status);
         state.peers.insert(node_id.clone(), connect_addr.clone());
+        for (net_id, net_res) in req.network_resources {
+            state
+                .network_runtime_metrics
+                .entry(net_id)
+                .or_default()
+                .insert(node_id.clone(), net_res);
+        }
 
         // Trigger rebalance when new node joins
         drop(state);
@@ -2503,12 +4062,20 @@ impl DistributedNeuromorphic for DistributedNode {
                     state.clients.remove(&node_id);
                     state.pending_commands.remove(&node_id);
                     state.ga_inflight_by_peer.remove(&node_id);
+                    for metrics in state.network_runtime_metrics.values_mut() {
+                        metrics.remove(&node_id);
+                    }
+                    state
+                        .network_runtime_metrics
+                        .retain(|_, metrics| !metrics.is_empty());
                     for net in state.network_registry.values_mut() {
                         net.distribution.remove(&node_id);
                     }
                 }
             }
 
+            let reported_network_ids: HashSet<String> =
+                req.network_resources.keys().cloned().collect();
             if let Some(node) = state.nodes.get_mut(&req.node_id) {
                 node.resources = req.resources;
                 node.active_networks = req.network_resources.keys().cloned().collect();
@@ -2526,14 +4093,28 @@ impl DistributedNeuromorphic for DistributedNode {
                 }
             }
 
+            for metrics in state.network_runtime_metrics.values_mut() {
+                metrics.remove(&req.node_id);
+            }
             // Update network distribution info with current neuron counts
             for (net_id, net_res) in req.network_resources {
+                state
+                    .network_runtime_metrics
+                    .entry(net_id.clone())
+                    .or_default()
+                    .insert(req.node_id.clone(), net_res.clone());
                 if let Some(net_status) = state.network_registry.get_mut(&net_id) {
                     if let Some(range) = net_status.distribution.get_mut(&req.node_id) {
                         range.layer_neuron_counts = net_res.layer_neuron_counts;
                     }
                 }
             }
+            state.network_runtime_metrics.retain(|net_id, metrics| {
+                !metrics.is_empty() || reported_network_ids.contains(net_id)
+            });
+            state
+                .network_runtime_metrics
+                .retain(|_, metrics| !metrics.is_empty());
 
             if let Some(pending) = state.pending_commands.get_mut(&req.node_id) {
                 commands = std::mem::take(pending);
@@ -2625,13 +4206,28 @@ impl DistributedNeuromorphic for DistributedNode {
         request: Request<NetworkUpdateRequest>,
     ) -> Result<Response<NetworkUpdateResponse>, Status> {
         let req = request.into_inner();
+        let network_id = req.network_id.clone();
+        let refreshed_transition_payload =
+            if let Some(proto::network_update_request::Update::Config(config_update)) =
+                req.update.as_ref()
+            {
+                if config_update.config_json.is_empty() {
+                    None
+                } else {
+                    let requested_payload =
+                        String::from_utf8_lossy(&config_update.config_json).to_string();
+                    self.maybe_refresh_manual_transition_payload(&network_id, &requested_payload)
+                        .await
+                }
+            } else {
+                None
+            };
         let mut state = self.state.write().await;
 
         if !state.is_orchestrator {
             return Err(Status::permission_denied("Not an orchestrator"));
         }
 
-        let network_id = req.network_id.clone();
         let mut commands_to_send = Vec::new();
         let mut local_control: Option<proto::control_update::Action> = None;
         let mut local_net_arc: Option<Arc<RwLock<ManagedNetwork>>> = None;
@@ -2639,25 +4235,62 @@ impl DistributedNeuromorphic for DistributedNode {
         let local_net_arc_candidate = state.networks.get(&network_id).cloned();
 
         let response = {
-            let (network_registry, network_snapshots, pending_commands) = {
+            let (network_registry, network_snapshots, pending_commands, last_deployment_transition) = {
                 let state = &mut *state;
                 (
                     &mut state.network_registry,
                     &mut state.network_snapshots,
                     &mut state.pending_commands,
+                    &mut state.last_deployment_transition,
                 )
             };
             if let Some(net_status) = network_registry.get_mut(&network_id) {
                 if let Some(update) = req.update {
                     match update {
                         proto::network_update_request::Update::Config(c) => {
+                            let mut effective_cfg_bytes = c.config_json.clone();
                             if !c.config_json.is_empty() {
-                                let cfg_str = String::from_utf8_lossy(&c.config_json).to_string();
-                                net_status.config_json = cfg_str.clone();
-                                if let Ok(snap) =
-                                    crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
+                                let effective_cfg_json =
+                                    refreshed_transition_payload.clone().unwrap_or_else(|| {
+                                        String::from_utf8_lossy(&c.config_json).to_string()
+                                    });
+                                effective_cfg_bytes = effective_cfg_json.as_bytes().to_vec();
+                                let previous_payload = network_snapshots
+                                    .get(&network_id)
+                                    .filter(|payload| !payload.trim().is_empty())
+                                    .map(String::as_str)
+                                    .unwrap_or(net_status.config_json.as_str());
+                                let previous_deployment =
+                                    network_deployment_from_payload(previous_payload)
+                                        .unwrap_or_default();
+                                let next_deployment =
+                                    network_deployment_from_payload(&effective_cfg_json)
+                                        .unwrap_or_default();
+                                let live_transition_requested =
+                                    previous_deployment != next_deployment;
+                                let network_is_live = local_net_arc_candidate.is_some()
+                                    || !net_status.distribution.is_empty();
+                                let manual_transition_allowed = previous_deployment
+                                    .allows_live_transition()
+                                    || next_deployment.allows_live_transition();
+                                if live_transition_requested
+                                    && network_is_live
+                                    && !manual_transition_allowed
                                 {
-                                    network_snapshots.insert(network_id.clone(), cfg_str);
+                                    return Err(Status::failed_precondition(format!(
+                                        "live deployment transition for '{}' requires deployment.transition_policy.allow_live_transition=true",
+                                        network_id
+                                    )));
+                                }
+                                net_status.config_json = effective_cfg_json.clone();
+                                sync_network_status_deployment(net_status, &next_deployment);
+                                if let Ok(snap) =
+                                    crate::runner::decode_snapshot_with_profile_backfill(
+                                        &effective_cfg_json,
+                                    )
+                                {
+                                    network_snapshots
+                                        .insert(network_id.clone(), effective_cfg_json.clone());
                                     net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
                                     // Snapshot imports should be redistributed across all active nodes.
                                     needs_rebalance = true;
@@ -2677,6 +4310,25 @@ impl DistributedNeuromorphic for DistributedNode {
                                     // Unknown payload shape: clear stale snapshots to avoid replaying old topology.
                                     network_snapshots.remove(&network_id);
                                 }
+                                if live_transition_requested {
+                                    needs_rebalance = true;
+                                    let transition_record = DeploymentTransitionRecord {
+                                        observed_at: std::time::Instant::now(),
+                                        ts_ms: unix_timestamp_ms_now(),
+                                        reason: format!(
+                                            "manual deployment transition: {} -> {}",
+                                            deployment_modes_label(&previous_deployment),
+                                            deployment_modes_label(&next_deployment)
+                                        ),
+                                        source: "manual".to_string(),
+                                    };
+                                    sync_network_status_transition(
+                                        net_status,
+                                        Some(&transition_record),
+                                    );
+                                    last_deployment_transition
+                                        .insert(network_id.clone(), transition_record);
+                                }
                             }
                             if !c.neuron_model.is_empty() {
                                 net_status.neuron_model = c.neuron_model.clone();
@@ -2692,7 +4344,7 @@ impl DistributedNeuromorphic for DistributedNode {
                                 let cmd = NetworkCommand {
                                     r#type: proto::network_command::CommandType::LoadNetwork as i32,
                                     network_id: network_id.clone(),
-                                    config_json: c.config_json.clone(),
+                                    config_json: effective_cfg_bytes.clone(),
                                     layers: range.layers.clone(),
                                     redundant_layers: redundant,
                                     desired_aarnn_depth: net_status.desired_aarnn_depth,
@@ -2744,6 +4396,9 @@ impl DistributedNeuromorphic for DistributedNode {
                                     net_status.learning_rule = learning.to_str().to_string();
                                 }
                                 network_snapshots.insert(network_id.clone(), fresh_json);
+                                sync_network_status_deployment(net_status, &fresh_cfg.deployment);
+                                sync_network_status_transition(net_status, None);
+                                last_deployment_transition.remove(&network_id);
                                 needs_rebalance = true;
                             } else {
                                 for (node_id, _range) in &net_status.distribution {
@@ -2795,9 +4450,24 @@ impl DistributedNeuromorphic for DistributedNode {
         _request: Request<StatusRequest>,
     ) -> Result<Response<StatusResponse>, Status> {
         let state = self.state.read().await;
+        let mut networks = state.network_registry.values().cloned().collect::<Vec<_>>();
+        for status in &mut networks {
+            let network_id = status.network_id.clone();
+            let payload = state
+                .network_snapshots
+                .get(&network_id)
+                .filter(|payload| !payload.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| status.config_json.clone());
+            sync_network_status_deployment_from_payload_with_transition(
+                status,
+                &payload,
+                state.last_deployment_transition.get(&network_id),
+            );
+        }
         Ok(Response::new(StatusResponse {
             nodes: state.nodes.values().cloned().collect(),
-            networks: state.network_registry.values().cloned().collect(),
+            networks,
         }))
     }
 
@@ -3031,6 +4701,610 @@ impl DistributedNeuromorphic for DistributedNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_networks_prefer_related_primary_node() {
+        let mut deployments = HashMap::new();
+        deployments.insert(
+            "vision".to_string(),
+            DeploymentConfig {
+                combined_group: Some("ensemble-a".to_string()),
+                ..DeploymentConfig::default()
+            },
+        );
+        deployments.insert(
+            "motor".to_string(),
+            DeploymentConfig {
+                combined_group: Some("ensemble-a".to_string()),
+                ..DeploymentConfig::default()
+            },
+        );
+        let primary_nodes = HashMap::from([("vision".to_string(), "node-b".to_string())]);
+        let chosen = choose_single_node_target(
+            "motor",
+            &[("node-a".to_string(), 2.0), ("node-b".to_string(), 1.0)],
+            deployments.get("motor").unwrap(),
+            &deployments,
+            &primary_nodes,
+        );
+        assert_eq!(chosen.as_deref(), Some("node-b"));
+    }
+
+    #[test]
+    fn federated_networks_avoid_related_primary_node_when_possible() {
+        let mut deployments = HashMap::new();
+        deployments.insert(
+            "client-a".to_string(),
+            DeploymentConfig {
+                federation_group: Some("fed-a".to_string()),
+                ..DeploymentConfig::default()
+            },
+        );
+        deployments.insert(
+            "client-b".to_string(),
+            DeploymentConfig {
+                federation_group: Some("fed-a".to_string()),
+                ..DeploymentConfig::default()
+            },
+        );
+        let primary_nodes = HashMap::from([("client-a".to_string(), "node-a".to_string())]);
+        let chosen = choose_single_node_target(
+            "client-b",
+            &[("node-a".to_string(), 4.0), ("node-b".to_string(), 2.0)],
+            deployments.get("client-b").unwrap(),
+            &deployments,
+            &primary_nodes,
+        );
+        assert_eq!(chosen.as_deref(), Some("node-b"));
+    }
+
+    #[test]
+    fn node_scope_disables_cross_node_sharding() {
+        let deployment = DeploymentConfig {
+            modes: vec![
+                crate::deployment::ExecutionMode::Distributed,
+                crate::deployment::ExecutionMode::Sharded,
+            ],
+            scope: crate::deployment::ExecutionScope::Node,
+            ..DeploymentConfig::default()
+        };
+
+        assert!(!should_shard_across_nodes(&deployment));
+    }
+
+    #[test]
+    fn desired_shards_limits_target_nodes() {
+        let deployments = HashMap::from([(
+            "vision".to_string(),
+            DeploymentConfig {
+                modes: vec![
+                    crate::deployment::ExecutionMode::Distributed,
+                    crate::deployment::ExecutionMode::Sharded,
+                ],
+                desired_shards: 2,
+                ..DeploymentConfig::default()
+            },
+        )]);
+
+        let selected = limit_target_nodes_for_deployment(
+            "vision",
+            &[
+                ("node-a".to_string(), 1.0),
+                ("node-b".to_string(), 2.0),
+                ("node-c".to_string(), 3.0),
+            ],
+            deployments.get("vision").unwrap(),
+            &deployments,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(
+            selected,
+            vec![("node-c".to_string(), 3.0), ("node-b".to_string(), 2.0),]
+        );
+    }
+
+    #[test]
+    fn saturated_nodes_are_skipped_when_concurrency_limit_is_hit() {
+        let deployment = DeploymentConfig {
+            max_concurrent_networks: 1,
+            ..DeploymentConfig::default()
+        };
+
+        let selected = limit_target_nodes_for_deployment(
+            "alpha",
+            &[("node-a".to_string(), 4.0), ("node-b".to_string(), 2.0)],
+            &deployment,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::from([
+                ("node-a".to_string(), 1usize),
+                ("node-b".to_string(), 0usize),
+            ]),
+            &HashSet::new(),
+        );
+
+        assert_eq!(selected, vec![("node-b".to_string(), 2.0)]);
+    }
+
+    #[test]
+    fn autonomous_transition_scales_out_hot_networks() {
+        let deployment = DeploymentConfig {
+            modes: vec![crate::deployment::ExecutionMode::Individual],
+            transition_policy: crate::deployment::DeploymentTransitionPolicy {
+                allow_live_transition: true,
+                autonomous: true,
+                permitted_modes: vec![
+                    crate::deployment::ExecutionMode::Individual,
+                    crate::deployment::ExecutionMode::Sharded,
+                ],
+                target_step_time_ms: Some(5.0),
+                ..crate::deployment::DeploymentTransitionPolicy::default()
+            },
+            ..DeploymentConfig::default()
+        };
+        let telemetry = DeploymentTelemetry {
+            avg_step_time_ms: 8.5,
+            max_step_time_ms: 9.0,
+            active_nodes: 1,
+            ..DeploymentTelemetry::default()
+        };
+
+        let (next, _reason) = maybe_autonomous_transition(&deployment, &telemetry, 4)
+            .expect("hot network should scale out");
+
+        assert!(next.has_mode(crate::deployment::ExecutionMode::Sharded));
+        assert!(!next.has_mode(crate::deployment::ExecutionMode::Individual));
+        assert_eq!(next.desired_shards, 2);
+    }
+
+    #[test]
+    fn autonomous_transition_collapses_idle_networks() {
+        let deployment = DeploymentConfig {
+            modes: vec![
+                crate::deployment::ExecutionMode::Distributed,
+                crate::deployment::ExecutionMode::Sharded,
+            ],
+            desired_shards: 2,
+            transition_policy: crate::deployment::DeploymentTransitionPolicy {
+                allow_live_transition: true,
+                autonomous: true,
+                permitted_modes: vec![
+                    crate::deployment::ExecutionMode::Individual,
+                    crate::deployment::ExecutionMode::Sharded,
+                ],
+                target_step_time_ms: Some(10.0),
+                ..crate::deployment::DeploymentTransitionPolicy::default()
+            },
+            ..DeploymentConfig::default()
+        };
+        let telemetry = DeploymentTelemetry {
+            avg_step_time_ms: 2.0,
+            max_step_time_ms: 2.5,
+            active_nodes: 2,
+            ..DeploymentTelemetry::default()
+        };
+
+        let (next, _reason) = maybe_autonomous_transition(&deployment, &telemetry, 4)
+            .expect("idle network should scale in");
+
+        assert!(!next.has_mode(crate::deployment::ExecutionMode::Sharded));
+        assert!(next.has_mode(crate::deployment::ExecutionMode::Individual));
+        assert_eq!(next.desired_shards, 1);
+    }
+
+    #[test]
+    fn snapshot_with_network_config_replaces_config_without_losing_state() {
+        let (current_cfg, snapshot_json) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn)
+                .expect("fresh snapshot");
+        let original = crate::runner::decode_snapshot_with_profile_backfill(&snapshot_json)
+            .expect("decode original snapshot");
+
+        let mut requested_cfg = current_cfg.clone();
+        requested_cfg
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Sharded);
+        requested_cfg.deployment.desired_shards = 2;
+        requested_cfg.deployment.normalize();
+
+        let refreshed =
+            snapshot_with_network_config(&snapshot_json, &requested_cfg).expect("refresh snapshot");
+        let updated = crate::runner::decode_snapshot_with_profile_backfill(&refreshed)
+            .expect("decode updated snapshot");
+
+        assert_eq!(updated.net.deployment, requested_cfg.deployment);
+        assert_eq!(updated.w_in.data, original.w_in.data);
+        assert_eq!(updated.w_out.data, original.w_out.data);
+        assert_eq!(updated.t, original.t);
+        assert_eq!(updated.t_ms, original.t_ms);
+    }
+
+    #[tokio::test]
+    async fn manual_transition_payload_refresh_uses_live_snapshot_for_deployment_only_updates() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        let (_, snapshot_json) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn)
+                .expect("fresh snapshot");
+        let original = crate::runner::decode_snapshot_with_profile_backfill(&snapshot_json)
+            .expect("decode original snapshot");
+        let current_from_payload =
+            network_config_from_payload(&snapshot_json).expect("current config from snapshot");
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: snapshot_json.as_bytes().to_vec(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        {
+            let mut state = node.state.write().await;
+            state.network_registry.insert(
+                "alpha".to_string(),
+                NetworkStatus {
+                    network_id: "alpha".to_string(),
+                    distribution: HashMap::from([(
+                        "orch".to_string(),
+                        LayerRange {
+                            layers: vec![0],
+                            layer_neuron_counts: HashMap::new(),
+                        },
+                    )]),
+                    num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
+                    desired_aarnn_depth: 1,
+                    config_json: snapshot_json.clone(),
+                    neuron_model: "aarnn".to_string(),
+                    learning_rule: "aarnn".to_string(),
+                    playing: true,
+                    ..Default::default()
+                },
+            );
+            state
+                .network_snapshots
+                .insert("alpha".to_string(), snapshot_json.clone());
+        }
+
+        let mut requested_cfg = current_from_payload.clone();
+        requested_cfg
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Combined);
+        requested_cfg.deployment.combined_group = Some("ensemble-a".to_string());
+        requested_cfg.deployment.normalize();
+        let requested_payload =
+            serde_json::to_string(&requested_cfg).expect("serialize requested config");
+
+        assert!(network_config_shape_compatible(
+            &current_from_payload,
+            &requested_cfg
+        ));
+        let live_source = {
+            let state = node.state.read().await;
+            let net_status = state.network_registry.get("alpha").expect("network status");
+            live_snapshot_source_for(&state, "alpha", &net_status.distribution)
+                .expect("live snapshot source")
+        };
+        let live_snapshot = node
+            .fetch_live_network_snapshot(&live_source)
+            .await
+            .expect("fetched live snapshot");
+        assert!(snapshot_with_network_config(&live_snapshot, &requested_cfg).is_some());
+
+        let refreshed = node
+            .maybe_refresh_manual_transition_payload("alpha", &requested_payload)
+            .await
+            .expect("live deployment refresh");
+        let updated = crate::runner::decode_snapshot_with_profile_backfill(&refreshed)
+            .expect("decode refreshed snapshot");
+
+        assert_eq!(updated.net.deployment, requested_cfg.deployment);
+        assert_eq!(updated.w_in.data, original.w_in.data);
+        assert_eq!(updated.w_out.data, original.w_out.data);
+        assert_eq!(updated.t, original.t);
+    }
+
+    #[tokio::test]
+    async fn manual_transition_payload_refresh_skips_structural_config_changes() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        let (_, snapshot_json) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn)
+                .expect("fresh snapshot");
+        let current_from_payload =
+            network_config_from_payload(&snapshot_json).expect("current config from snapshot");
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: snapshot_json.as_bytes().to_vec(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        {
+            let mut state = node.state.write().await;
+            state.network_registry.insert(
+                "alpha".to_string(),
+                NetworkStatus {
+                    network_id: "alpha".to_string(),
+                    distribution: HashMap::from([(
+                        "orch".to_string(),
+                        LayerRange {
+                            layers: vec![0],
+                            layer_neuron_counts: HashMap::new(),
+                        },
+                    )]),
+                    num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
+                    desired_aarnn_depth: 1,
+                    config_json: snapshot_json.clone(),
+                    neuron_model: "aarnn".to_string(),
+                    learning_rule: "aarnn".to_string(),
+                    playing: true,
+                    ..Default::default()
+                },
+            );
+            state
+                .network_snapshots
+                .insert("alpha".to_string(), snapshot_json.clone());
+        }
+
+        let mut requested_cfg = current_from_payload.clone();
+        requested_cfg.num_hidden_layers = requested_cfg.num_hidden_layers.saturating_add(1);
+        requested_cfg
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Combined);
+        requested_cfg.deployment.combined_group = Some("ensemble-a".to_string());
+        requested_cfg.deployment.normalize();
+        let requested_payload =
+            serde_json::to_string(&requested_cfg).expect("serialize requested config");
+
+        assert!(node
+            .maybe_refresh_manual_transition_payload("alpha", &requested_payload)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_live_transition_requires_explicit_permission() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        let (_, snapshot_json) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn)
+                .expect("fresh snapshot");
+        let current_cfg =
+            network_config_from_payload(&snapshot_json).expect("current config from snapshot");
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: snapshot_json.as_bytes().to_vec(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        {
+            let mut state = node.state.write().await;
+            let mut status = NetworkStatus {
+                network_id: "alpha".to_string(),
+                distribution: HashMap::from([(
+                    "orch".to_string(),
+                    LayerRange {
+                        layers: vec![0],
+                        layer_neuron_counts: HashMap::new(),
+                    },
+                )]),
+                num_layers: (current_cfg.num_hidden_layers + 1) as u32,
+                desired_aarnn_depth: 1,
+                config_json: snapshot_json.clone(),
+                neuron_model: "aarnn".to_string(),
+                learning_rule: "aarnn".to_string(),
+                playing: true,
+                ..Default::default()
+            };
+            sync_network_status_deployment_from_payload(&mut status, &snapshot_json);
+            state.network_registry.insert("alpha".to_string(), status);
+            state
+                .network_snapshots
+                .insert("alpha".to_string(), snapshot_json.clone());
+        }
+
+        let mut requested_cfg = current_cfg.clone();
+        requested_cfg
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Combined);
+        requested_cfg.deployment.combined_group = Some("ensemble-a".to_string());
+        requested_cfg.deployment.normalize();
+        let requested_payload =
+            serde_json::to_string(&requested_cfg).expect("serialize requested config");
+
+        let err = node
+            .update_network(Request::new(NetworkUpdateRequest {
+                network_id: "alpha".to_string(),
+                update: Some(proto::network_update_request::Update::Config(
+                    ConfigUpdate {
+                        config_json: requested_payload.into_bytes(),
+                        neuron_model: "aarnn".to_string(),
+                        learning_rule: "aarnn".to_string(),
+                    },
+                )),
+            }))
+            .await
+            .expect_err("live transition should be rejected without permission");
+
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        let state = node.state.read().await;
+        let status = state.network_registry.get("alpha").expect("status");
+        assert!(status.last_transition_reason.is_empty());
+        assert!(state.last_deployment_transition.get("alpha").is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_live_transition_updates_status_when_permission_is_granted() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        let (_, snapshot_json) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn)
+                .expect("fresh snapshot");
+        let current_cfg =
+            network_config_from_payload(&snapshot_json).expect("current config from snapshot");
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: snapshot_json.as_bytes().to_vec(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        {
+            let mut state = node.state.write().await;
+            let mut status = NetworkStatus {
+                network_id: "alpha".to_string(),
+                distribution: HashMap::from([(
+                    "orch".to_string(),
+                    LayerRange {
+                        layers: vec![0],
+                        layer_neuron_counts: HashMap::new(),
+                    },
+                )]),
+                num_layers: (current_cfg.num_hidden_layers + 1) as u32,
+                desired_aarnn_depth: 1,
+                config_json: snapshot_json.clone(),
+                neuron_model: "aarnn".to_string(),
+                learning_rule: "aarnn".to_string(),
+                playing: true,
+                ..Default::default()
+            };
+            sync_network_status_deployment_from_payload(&mut status, &snapshot_json);
+            state.network_registry.insert("alpha".to_string(), status);
+            state
+                .network_snapshots
+                .insert("alpha".to_string(), snapshot_json.clone());
+        }
+
+        let mut requested_cfg = current_cfg.clone();
+        requested_cfg
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Combined);
+        requested_cfg.deployment.combined_group = Some("ensemble-a".to_string());
+        requested_cfg
+            .deployment
+            .transition_policy
+            .allow_live_transition = true;
+        requested_cfg.deployment.normalize();
+        let requested_payload =
+            serde_json::to_string(&requested_cfg).expect("serialize requested config");
+
+        let response = node
+            .update_network(Request::new(NetworkUpdateRequest {
+                network_id: "alpha".to_string(),
+                update: Some(proto::network_update_request::Update::Config(
+                    ConfigUpdate {
+                        config_json: requested_payload.into_bytes(),
+                        neuron_model: "aarnn".to_string(),
+                        learning_rule: "aarnn".to_string(),
+                    },
+                )),
+            }))
+            .await
+            .expect("live transition should succeed with permission")
+            .into_inner();
+
+        assert!(response.success);
+        let state = node.state.read().await;
+        let status = state.network_registry.get("alpha").expect("status");
+        assert!(status.live_transition_allowed);
+        assert_eq!(status.last_transition_source, "manual");
+        assert!(status.last_transition_ts_ms > 0);
+        assert!(status
+            .last_transition_reason
+            .contains("manual deployment transition"));
+        assert!(status
+            .deployment_modes
+            .iter()
+            .any(|mode| mode == "combined"));
+        assert!(state.last_deployment_transition.contains_key("alpha"));
+    }
+
+    #[test]
+    fn external_telemetry_pressure_reduces_effective_capacity() {
+        let baseline = Resources {
+            capacity_score: 20.0,
+            avg_step_time_ms: 5.0,
+            ..Default::default()
+        };
+        let pressured = Resources {
+            capacity_score: 20.0,
+            avg_step_time_ms: 5.0,
+            num_gpus: 2,
+            telemetry_source: "http://127.0.0.1:48000/status".to_string(),
+            telemetry_cpu_usage_pct: 91.0,
+            telemetry_mem_used_pct: 88.0,
+            telemetry_net_rx_bps: 125_000_000.0,
+            telemetry_net_tx_bps: 110_000_000.0,
+            telemetry_disk_used_pct: 93.0,
+            telemetry_disk_read_bps: 180_000_000.0,
+            telemetry_disk_write_bps: 175_000_000.0,
+            telemetry_gpu_util_pct: 97.0,
+            telemetry_gpu_temp_c: 84.0,
+            telemetry_gpu_power_w: 540.0,
+            telemetry_gpu_mem_used_pct: 96.0,
+            telemetry_recent_action_count: 18,
+            ..Default::default()
+        };
+
+        assert!(resource_external_pressure(&pressured) > 0.8);
+        assert!(
+            effective_capacity_score(&pressured, 10.0) < effective_capacity_score(&baseline, 10.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn unload_network_command_removes_local_network() {
+        let node = DistributedNode::new("test-node".to_string(), false);
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: Vec::new(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+        assert!(node.state.read().await.networks.contains_key("alpha"));
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::UnloadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: Vec::new(),
+            layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: String::new(),
+            learning_rule: String::new(),
+        })
+        .await;
+
+        assert!(!node.state.read().await.networks.contains_key("alpha"));
+    }
 
     #[tokio::test]
     async fn spike_transport_defaults_to_persistent_when_available() {

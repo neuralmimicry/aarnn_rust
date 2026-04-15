@@ -29,10 +29,12 @@ pub mod auth_store;
 pub mod central_auth;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
-/// FPAA discovery, verification, and routing helpers.
-pub mod fpaa;
+/// Deployment modes, topology intent, and infrastructure autodetection helpers.
+pub mod deployment;
 /// User-agnostic engine facade around `Runner`.
 pub mod engine;
+/// FPAA discovery, verification, and routing helpers.
+pub mod fpaa;
 /// Core neural network data structures including layers, neurons, and synapses.
 pub mod network;
 pub mod nmchain;
