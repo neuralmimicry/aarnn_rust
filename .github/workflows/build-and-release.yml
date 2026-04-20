@@ -3,13 +3,11 @@ name: Build and Release
 on:
   pull_request:
     branches:
-      - brainregions
       - engine
       - main
       - master
   push:
     branches:
-      - brainregions
       - engine
       - main
       - master

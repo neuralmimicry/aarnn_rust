@@ -2,7 +2,7 @@ name: Container Build, Verify, and Promote
 
 on:
   push:
-    branches: ["brainregions", "main", "master"]
+    branches: ["engine", "main", "master"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:

@@ -28,7 +28,7 @@ case "${ARCH_RAW}" in
   *) IMAGE_ARCH="${ARCH_RAW}" ;;
 esac
 
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:brainregions-${IMAGE_ARCH}}"
+IMAGE_NAME="${IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-${IMAGE_ARCH}}"
 BRAIN_ID_ORCH="${BRAIN_ID_ORCH:-cluster_master}"
 NODE_COUNT="${NODE_COUNT:-2}"
 
