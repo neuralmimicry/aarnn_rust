@@ -5,8 +5,8 @@ set -euo pipefail
 # Requires: podman with qemu-user-static or docker buildx
 
 IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
-REQUESTED_TAG=${2:-"brainregions"}
-IMAGE_TAG="brainregions"
+REQUESTED_TAG=${2:-"engine"}
+IMAGE_TAG="engine"
 PUSH=${3:-"false"}
 CARGO_FEATURES=${4:-"all"}
 PYTHON_MIN_VERSION=${PYTHON_MIN_VERSION:-${5:-"3.12"}}
@@ -16,19 +16,19 @@ SKIP_REMOTE_MANIFEST=${SKIP_REMOTE_MANIFEST:-${8:-"false"}}
 
 KNOWN_ARCHES=("amd64" "arm64")
 
-# Ensure we're building from the brainregions branch
+# Ensure we're building from the engine branch
 if ! command -v git &> /dev/null; then
     echo "Error: git is required to verify the current branch."
     exit 1
 fi
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if [ "${CURRENT_BRANCH}" != "brainregions" ]; then
-    echo "Error: build must run from the 'brainregions' branch (current: '${CURRENT_BRANCH}')."
+if [ "${CURRENT_BRANCH}" != "engine" ]; then
+    echo "Error: build must run from the 'engine' branch (current: '${CURRENT_BRANCH}')."
     exit 1
 fi
 
-if [ "${REQUESTED_TAG}" != "brainregions" ]; then
-    echo "Error: tag must be 'brainregions' for this build (requested: '${REQUESTED_TAG}')."
+if [ "${REQUESTED_TAG}" != "engine" ]; then
+    echo "Error: tag must be 'engine' for this build (requested: '${REQUESTED_TAG}')."
     exit 1
 fi
 

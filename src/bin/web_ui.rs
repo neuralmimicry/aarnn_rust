@@ -1933,6 +1933,18 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
+        "/api/health": {
+          "get": {
+            "tags": ["health"],
+            "summary": "Get system health",
+            "operationId": "getSystemHealth",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [],
+            "responses": {
+              "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatusResponse" } } } },
+            }
+          }
+        },
         "/api/snapshot": {
           "get": {
             "tags": ["network"],

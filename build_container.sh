@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
-IMAGE_TAG=${2:-"brainregions"}
+IMAGE_TAG=${2:-"engine"}
 PUSH=${3:-"false"}
 
 KNOWN_ARCHES=("amd64" "arm64")

@@ -13,7 +13,7 @@ deploy_method: git
 git_use_ssh: false
 git_repo_url: "https://github.com/neuralmimicry/aarnn_rust.git"
 git_repo_url_ssh: "git@github.com:neuralmimicry/aarnn_rust.git"
-git_branch: "brainregions"
+git_branch: "engine"
 git_accept_hostkey: true
 git_update: true
 git_depth: 1
@@ -25,7 +25,7 @@ local_test_command: "cargo test --all-features"
 
 # Container build settings
 image_name: ghcr.io/neuralmimicry/aarnn_rust
-image_tag: brainregions
+image_tag: engine
 cargo_features: all
 python_min_version: "3.12"
 python_full_version: "3.12.2"
