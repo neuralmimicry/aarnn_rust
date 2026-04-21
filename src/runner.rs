@@ -1946,7 +1946,7 @@ impl Runner {
                         nm_log!("[warn] OpenCL output sync buffers creation failed");
                     }
                 }
-                if let (Some(ref mut a), Some(ref mut n), Some(ref mut g)) = (
+                if let (Some(a), Some(n), Some(g)) = (
                     &mut self.cl_syn_ampa_o,
                     &mut self.cl_syn_nmda_o,
                     &mut self.cl_syn_gaba_o,
@@ -1958,22 +1958,13 @@ impl Runner {
                             self.syn_gaba_o.as_slice(),
                         ) {
                             if let Err(e) = cl.queue.enqueue_write_buffer(a, CL_TRUE, 0, sa, &[]) {
-                                nm_log!(
-                                    "[warn] OpenCL sync_cl_syn_buffers ampa_o write failed: {:?}",
-                                    e
-                                );
+                                nm_log!("[warn] OpenCL sync_cl_syn_buffers ampa_o write failed: {:?}", e);
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(n, CL_TRUE, 0, sn, &[]) {
-                                nm_log!(
-                                    "[warn] OpenCL sync_cl_syn_buffers nmda_o write failed: {:?}",
-                                    e
-                                );
+                                nm_log!("[warn] OpenCL sync_cl_syn_buffers nmda_o write failed: {:?}", e);
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(g, CL_TRUE, 0, sg, &[]) {
-                                nm_log!(
-                                    "[warn] OpenCL sync_cl_syn_buffers gaba_o write failed: {:?}",
-                                    e
-                                );
+                                nm_log!("[warn] OpenCL sync_cl_syn_buffers gaba_o write failed: {:?}", e);
                             }
                         }
                     }
@@ -2023,7 +2014,7 @@ impl Runner {
                         nm_log!("[warn] OpenCL hidden[{}] sync buffers creation failed", l);
                     }
                 }
-                if let (Some(ref mut a), Some(ref mut n), Some(ref mut g)) = (
+                if let (Some(a), Some(n), Some(g)) = (
                     &mut self.cl_syn_ampa_h[l],
                     &mut self.cl_syn_nmda_h[l],
                     &mut self.cl_syn_gaba_h[l],
@@ -2062,7 +2053,7 @@ impl Runner {
                 return;
             }
             if is_output {
-                if let (Some(ref mut a), Some(ref mut n), Some(ref mut g)) = (
+                if let (Some(a), Some(n), Some(g)) = (
                     &mut self.cl_syn_ampa_o,
                     &mut self.cl_syn_nmda_o,
                     &mut self.cl_syn_gaba_o,
@@ -2092,7 +2083,7 @@ impl Runner {
                 if l >= self.cl_syn_ampa_h.len() {
                     return;
                 }
-                if let (Some(ref mut a), Some(ref mut n), Some(ref mut g)) = (
+                if let (Some(a), Some(n), Some(g)) = (
                     &mut self.cl_syn_ampa_h[l],
                     &mut self.cl_syn_nmda_h[l],
                     &mut self.cl_syn_gaba_h[l],
@@ -2172,7 +2163,7 @@ impl Runner {
                 self.cl_stp_x_s = Some(x);
                 self.cl_stp_rel_s = Some(rel);
                 self.cl_stp_s_size = size;
-                if let (Some(ref mut u), Some(ref mut x)) =
+                if let (Some(u), Some(x)) =
                     (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s)
                 {
                     unsafe {
@@ -2244,7 +2235,7 @@ impl Runner {
                 if l < self.cl_stp_h_sizes.len() {
                     self.cl_stp_h_sizes[l] = size;
                 }
-                if let (Some(ref mut u), Some(ref mut x)) =
+                if let (Some(u), Some(x)) =
                     (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l])
                 {
                     unsafe {
@@ -2272,7 +2263,7 @@ impl Runner {
         };
         let s_size = self.net.num_sensory_neurons;
         if s_size > 0 {
-            if let (Some(ref mut u), Some(ref mut x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s)
+            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s)
             {
                 if let (Some(u_slice), Some(x_slice)) =
                     (self.stp_u_s.as_slice_mut(), self.stp_x_s.as_slice_mut())
@@ -2292,7 +2283,7 @@ impl Runner {
             if l >= self.cl_stp_u_h.len() || l >= self.cl_stp_x_h.len() {
                 break;
             }
-            if let (Some(ref mut u), Some(ref mut x)) =
+            if let (Some(u), Some(x)) =
                 (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l])
             {
                 if let (Some(u_slice), Some(x_slice)) = (
@@ -2340,7 +2331,7 @@ impl Runner {
                 }
 
                 if is_output {
-                    if let (Some(ref mut ubuf), Some(u)) = (&mut buf.u, self.u_o.as_ref()) {
+                    if let (Some(ubuf), Some(u)) = (&mut buf.u, self.u_o.as_ref()) {
                         unsafe {
                             if let Some(u_data) = u.as_slice() {
                                 if let Err(e) =
@@ -2351,7 +2342,7 @@ impl Runner {
                             }
                         }
                     }
-                    if let (Some(ref mut rbuf), Some(refr)) = (&mut buf.refr, self.refr_o.as_ref())
+                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, self.refr_o.as_ref())
                     {
                         unsafe {
                             if let Some(refr_data) = refr.as_slice() {
@@ -2368,7 +2359,7 @@ impl Runner {
                         }
                     }
                 } else {
-                    if let (Some(ref mut ubuf), Some(u)) =
+                    if let (Some(ubuf), Some(u)) =
                         (&mut buf.u, self.u_h.as_ref().and_then(|uh| uh.get(l)))
                     {
                         unsafe {
@@ -2385,7 +2376,7 @@ impl Runner {
                             }
                         }
                     }
-                    if let (Some(ref mut rbuf), Some(refr)) =
+                    if let (Some(rbuf), Some(refr)) =
                         (&mut buf.refr, self.refr_h.as_ref().and_then(|rh| rh.get(l)))
                     {
                         unsafe {
@@ -2469,7 +2460,7 @@ impl Runner {
             self.cl_buffers_h.get_mut(l).and_then(|o| o.as_mut())
         };
         if let Some(buf) = buf_opt {
-            if let Some(ref mut ubuf) = buf.u {
+            if let Some(ubuf) = &buf.u {
                 let u_opt = if is_output {
                     self.u_o.as_mut()
                 } else {
@@ -2480,7 +2471,7 @@ impl Runner {
                     unsafe {
                         if let Err(e) =
                             cl.queue
-                                .enqueue_read_buffer(ubuf, CL_TRUE, 0, &mut u_vec, &[])
+                                .enqueue_read_buffer(&ubuf, CL_TRUE, 0, &mut u_vec, &[])
                         {
                             nm_log!("[warn] OpenCL state sync u read failed: {:?}", e);
                         }
@@ -2489,7 +2480,7 @@ impl Runner {
                 }
             }
 
-            if let Some(ref mut rbuf) = buf.refr {
+            if let Some(rbuf) = &buf.refr {
                 let r_opt = if is_output {
                     self.refr_o.as_mut()
                 } else {
@@ -2500,7 +2491,7 @@ impl Runner {
                     unsafe {
                         if let Err(e) =
                             cl.queue
-                                .enqueue_read_buffer(rbuf, CL_TRUE, 0, &mut r_vec, &[])
+                                .enqueue_read_buffer(&rbuf, CL_TRUE, 0, &mut r_vec, &[])
                         {
                             nm_log!("[warn] OpenCL state sync refr read failed: {:?}", e);
                         }
@@ -2515,7 +2506,7 @@ impl Runner {
 
     #[cfg(feature = "opencl")]
     fn sync_cl_w_in_to_gpu(&mut self) {
-        if let (Some(ref cl), Some(ref mut buf)) = (&self.cl, &mut self.cl_w_in) {
+        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_in) {
             let size = self.w_in.len();
             let need_recreate = self.cl_w_in_size != size;
             if !need_recreate && !self.cl_w_in_dirty {
@@ -2592,13 +2583,13 @@ impl Runner {
                     }
                 }
             }
-            if let Some(ref mut buf) = self.cl_w_hh_fwd[l] {
+            if let Some(buf) = self.cl_w_hh_fwd[l].as_mut() {
                 let dirty = self.cl_w_hh_fwd_dirty.get(l).copied().unwrap_or(true);
                 if dirty {
                     unsafe {
                         if let Some(slice) = self.w_hh_fwd[l].as_slice() {
                             if let Err(e) =
-                                cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[])
+                                cl.queue.enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
                             {
                                 nm_log!(
                                     "[warn] OpenCL sync_cl_w_hh_fwd[{}] write failed: {:?}",
@@ -2631,13 +2622,13 @@ impl Runner {
                     }
                 }
             }
-            if let Some(ref mut buf) = self.cl_w_hh_bwd[l] {
+            if let Some(buf) = self.cl_w_hh_bwd[l].as_mut() {
                 let dirty = self.cl_w_hh_bwd_dirty.get(l).copied().unwrap_or(true);
                 if dirty {
                     unsafe {
                         if let Some(slice) = self.w_hh_bwd[l].as_slice() {
                             if let Err(e) =
-                                cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[])
+                                cl.queue.enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
                             {
                                 nm_log!(
                                     "[warn] OpenCL sync_cl_w_hh_bwd[{}] write failed: {:?}",
@@ -2666,12 +2657,12 @@ impl Runner {
             {
                 return;
             }
-            if let Some(ref mut buf) = self.cl_w_hh_fwd[l] {
+            if let Some(buf) = &self.cl_w_hh_fwd[l] {
                 let mut w_vec = vec![0.0; self.w_hh_fwd[l].len()];
                 unsafe {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
+                        .enqueue_read_buffer(&buf, CL_TRUE, 0, &mut w_vec, &[])
                     {
                         nm_log!("[warn] OpenCL sync_cl_w_hh_fwd[{}] read failed: {:?}", l, e);
                     } else {
@@ -2681,12 +2672,12 @@ impl Runner {
                     }
                 }
             }
-            if let Some(ref mut buf) = self.cl_w_hh_bwd[l] {
+            if let Some(buf) = &self.cl_w_hh_bwd[l] {
                 let mut w_vec = vec![0.0; self.w_hh_bwd[l].len()];
                 unsafe {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
+                        .enqueue_read_buffer(&buf, CL_TRUE, 0, &mut w_vec, &[])
                     {
                         nm_log!("[warn] OpenCL sync_cl_w_hh_bwd[{}] read failed: {:?}", l, e);
                     } else {
@@ -2701,7 +2692,7 @@ impl Runner {
 
     #[cfg(feature = "opencl")]
     fn sync_cl_w_out_to_gpu(&mut self) {
-        if let (Some(ref cl), Some(ref mut buf)) = (&self.cl, &mut self.cl_w_out) {
+        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_out) {
             let size = self.w_out.len();
             if self.cl_w_out_size == size && !self.cl_w_out_dirty {
                 return;
@@ -2734,7 +2725,7 @@ impl Runner {
     #[cfg(feature = "opencl")]
     #[allow(dead_code)]
     fn sync_cl_spk_hist_s(&mut self) {
-        if let (Some(ref cl), Some(ref mut buf)) = (&self.cl, &mut self.cl_spk_hist_s) {
+        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_spk_hist_s) {
             let hist_len = self.spk_hist_s.len();
             let neurons = self.net.num_sensory_neurons;
             let size = hist_len * neurons;
@@ -2801,7 +2792,7 @@ impl Runner {
         if l >= self.cl_spk_hist_h.len() || l >= self.spk_hist_h.len() || l >= self.v_h.len() {
             return;
         }
-        if let (Some(ref cl), Some(ref mut buf)) = (&self.cl, &mut self.cl_spk_hist_h[l]) {
+        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_spk_hist_h[l]) {
             let hist_len = self.spk_hist_h[l].len();
             let neurons = self.v_h[l].len();
             let size = hist_len * neurons;
@@ -2913,7 +2904,7 @@ impl Runner {
             }
         }
 
-        if let Some(ref mut buf) = self.cl_sparse_in {
+        if let Some(buf) = self.cl_sparse_in.as_mut() {
             unsafe {
                 if let Err(e) =
                     cl.queue
@@ -2936,10 +2927,10 @@ impl Runner {
                 {
                     nm_log!("[warn] OpenCL sparse_in weights write failed: {:?}", e);
                 }
-                if let Some(ref mut d_buf) = buf.delays {
+                if let Some(d_buf) = buf.delays.as_mut() {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_write_buffer(d_buf, CL_TRUE, 0, &delays, &[])
+                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!("[warn] OpenCL sparse_in delays write failed: {:?}", e);
                     }
@@ -3017,7 +3008,7 @@ impl Runner {
             }
         }
 
-        if let Some(Some(ref mut buf)) = self.cl_sparse_fwd.get_mut(l) {
+        if let Some(Some(buf)) = self.cl_sparse_fwd.get_mut(l) {
             unsafe {
                 if let Err(e) =
                     cl.queue
@@ -3052,10 +3043,10 @@ impl Runner {
                         e
                     );
                 }
-                if let Some(ref mut d_buf) = buf.delays {
+                if let Some(d_buf) = buf.delays.as_mut() {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_write_buffer(d_buf, CL_TRUE, 0, &delays, &[])
+                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!(
                             "[warn] OpenCL sparse_fwd[{}] delays write failed: {:?}",
@@ -3137,7 +3128,7 @@ impl Runner {
             }
         }
 
-        if let Some(Some(ref mut buf)) = self.cl_sparse_bwd.get_mut(l) {
+        if let Some(Some(buf)) = self.cl_sparse_bwd.get_mut(l) {
             unsafe {
                 if let Err(e) =
                     cl.queue
@@ -3172,10 +3163,10 @@ impl Runner {
                         e
                     );
                 }
-                if let Some(ref mut d_buf) = buf.delays {
+                if let Some(d_buf) = buf.delays.as_mut() {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_write_buffer(d_buf, CL_TRUE, 0, &delays, &[])
+                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!(
                             "[warn] OpenCL sparse_bwd[{}] delays write failed: {:?}",
@@ -3237,7 +3228,7 @@ impl Runner {
             }
         }
 
-        if let Some(ref mut buf) = self.cl_sparse_out {
+        if let Some(buf) = self.cl_sparse_out.as_mut() {
             unsafe {
                 if let Err(e) =
                     cl.queue
@@ -3260,10 +3251,10 @@ impl Runner {
                 {
                     nm_log!("[warn] OpenCL sparse_out weights write failed: {:?}", e);
                 }
-                if let Some(ref mut d_buf) = buf.delays {
+                if let Some(d_buf) = buf.delays.as_mut() {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_write_buffer(d_buf, CL_TRUE, 0, &delays, &[])
+                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!("[warn] OpenCL sparse_out delays write failed: {:?}", e);
                     }
@@ -4290,7 +4281,7 @@ impl Runner {
     #[cfg(feature = "growth3d")]
     fn apply_import_topology_sparse_rewiring_matrix(
         mat: &mut Array2<f64>,
-        mut presence: Option<&mut Array2<u32>>,
+        presence: Option<&mut Array2<u32>>,
         post_nodes: &[Node3D],
         pre_nodes: &[Node3D],
         keep_fraction: f32,
@@ -4401,7 +4392,7 @@ impl Runner {
         }
 
         let mut kept = 0usize;
-        if let Some(ref mut p) = presence {
+        if let Some(p) = presence {
             for (idx, edge) in edges.iter().enumerate() {
                 if keep_mask[idx] {
                     mat[(edge.row, edge.col)] = edge.adjusted_weight;
@@ -5827,10 +5818,10 @@ impl Runner {
             if self.cl_stp_ok && self.cl.is_some() {
                 if self.sync_cl_stp_sensory() {
                     if let (
-                        Some(ref mut pre),
-                        Some(ref mut u),
-                        Some(ref mut x),
-                        Some(ref mut rel),
+                        Some(pre),
+                        Some(u),
+                        Some(x),
+                        Some(rel),
                     ) = (
                         &mut self.cl_stp_pre_s,
                         &mut self.cl_stp_u_s,
@@ -6103,7 +6094,7 @@ impl Runner {
         let active_s_indices: Vec<usize> = s_t
             .iter()
             .enumerate()
-            .filter(|(_, &s)| s != 0)
+            .filter(|&(_, &s)| s != 0)
             .map(|(i, _)| i)
             .collect();
         let mut active_h_indices = Vec::with_capacity(num_hidden_layers);
@@ -6111,7 +6102,7 @@ impl Runner {
             let active: Vec<usize> = self.last_spk_h[l]
                 .iter()
                 .enumerate()
-                .filter(|(_, &s)| s != 0)
+                .filter(|&(_, &s)| s != 0)
                 .map(|(j, _)| j)
                 .collect();
             active_h_indices.push(active);
@@ -7324,7 +7315,7 @@ impl Runner {
                         if !is_aarnn {
                             self.sync_cl_buffers(0, false);
                             let izh_params = self.effective_izh_params();
-                            if let Some(ref mut buf) =
+                            if let Some(buf) =
                                 self.cl_buffers_h.get_mut(0).and_then(|o| o.as_mut())
                             {
                                 // Upload i_h0
@@ -7685,13 +7676,13 @@ impl Runner {
                                 .map(|b| b as *const Buffer<f64>);
                             // Access buffers via raw pointers to bypass borrow checker while ensuring sequential access
                             let buf_prev_ptr =
-                                if let Some(Some(ref b)) = self.cl_buffers_h.get(l - 1) {
+                                if let Some(Some(b)) = self.cl_buffers_h.get(l - 1) {
                                     Some(b as *const CLBuffers)
                                 } else {
                                     None
                                 };
                             let buf_cur_ptr =
-                                if let Some(Some(ref mut b)) = self.cl_buffers_h.get_mut(l) {
+                                if let Some(Some(b)) = self.cl_buffers_h.get_mut(l) {
                                     Some(b as *mut CLBuffers)
                                 } else {
                                     None
@@ -7779,7 +7770,7 @@ impl Runner {
 
                                     if gpu_success && use_synaptic_filter {
                                         self.sync_cl_syn_buffers(l, false);
-                                        if let (Some(ref mut a), Some(ref mut n), Some(ref mut g)) = (
+                                        if let (Some(a), Some(n), Some(g)) = (
                                             &mut self.cl_syn_ampa_h[l],
                                             &mut self.cl_syn_nmda_h[l],
                                             &mut self.cl_syn_gaba_h[l],
@@ -7842,7 +7833,7 @@ impl Runner {
                                         .and_then(|o| o.as_ref())
                                         .map(|b| b as *const Buffer<f64>);
                                     let buf_next_ptr =
-                                        if let Some(Some(ref b)) = self.cl_buffers_h.get(l + 1) {
+                                        if let Some(Some(b)) = self.cl_buffers_h.get(l + 1) {
                                             Some(b as *const CLBuffers)
                                         } else {
                                             None
@@ -7936,9 +7927,9 @@ impl Runner {
                                             if gpu_success && use_synaptic_filter && !gpu_filtered {
                                                 self.sync_cl_syn_buffers(l, false);
                                                 if let (
-                                                    Some(ref mut a),
-                                                    Some(ref mut n),
-                                                    Some(ref mut g),
+                                                    Some(a),
+                                                    Some(n),
+                                                    Some(g),
                                                 ) = (
                                                     &mut self.cl_syn_ampa_h[l],
                                                     &mut self.cl_syn_nmda_h[l],
@@ -8006,7 +7997,7 @@ impl Runner {
 
                                 // Using raw pointer for buf_cur to bypass borrow checker while we call sync_cl_sparse_bwd
                                 let buf_cur_ptr =
-                                    if let Some(Some(ref mut b)) = self.cl_buffers_h.get_mut(l) {
+                                    if let Some(Some(b)) = self.cl_buffers_h.get_mut(l) {
                                         Some(b as *mut CLBuffers)
                                     } else {
                                         None
@@ -9265,7 +9256,7 @@ impl Runner {
                             if !use_aarnn {
                                 self.sync_cl_buffers(l, false);
                                 let izh_params = self.effective_izh_params();
-                                if let Some(ref mut buf) =
+                                if let Some(buf) =
                                     self.cl_buffers_h.get_mut(l).and_then(|o| o.as_mut())
                                 {
                                     // Upload total current (i_f + i_b)
@@ -9725,16 +9716,12 @@ impl Runner {
 
                         let cl_out_opt = self.cl_w_out.as_ref();
                         let buf_last_ptr =
-                            if let Some(Some(ref b)) = self.cl_buffers_h.get(out_conn_layer) {
+                            if let Some(Some(b)) = self.cl_buffers_h.get(out_conn_layer) {
                                 Some(b as *const CLBuffers)
                             } else {
                                 None
                             };
-                        let buf_o_ptr = if let Some(ref mut b) = self.cl_buffer_o {
-                            Some(b as *mut CLBuffers)
-                        } else {
-                            None
-                        };
+                        let buf_o_ptr = self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
                         let rel_ptr = if use_stp {
                             self.cl_stp_rel_h
                                 .get_mut(out_conn_layer)
@@ -10580,7 +10567,7 @@ impl Runner {
                     if !is_aarnn {
                         self.sync_cl_buffers(0, true);
                         let izh_params = self.effective_izh_params();
-                        if let Some(ref mut buf) = self.cl_buffer_o {
+                        if let Some(buf) = self.cl_buffer_o.as_mut() {
                             // Upload i_o
                             gpu_success = true;
                             unsafe {
@@ -10963,7 +10950,7 @@ impl Runner {
                                     let w_buf_opt = self.cl_w_in.as_ref();
                                     let x_pre_buf_opt = self.cl_x_pre_in.as_mut();
                                     let s_buf_opt = self.cl_s_t.as_mut();
-                                    let h0_buf_opt = if let Some(Some(ref mut b)) =
+                                    let h0_buf_opt = if let Some(Some(b)) =
                                         self.cl_buffers_h.get_mut(0)
                                     {
                                         Some(b)
@@ -11337,18 +11324,14 @@ impl Runner {
 
                             if let Some(ref cl) = self.cl {
                                 let cl_out_opt = self.cl_w_out.as_ref();
-                                let buf_last_ptr = if let Some(Some(ref mut b)) =
+                                let buf_last_ptr = if let Some(Some(b)) =
                                     self.cl_buffers_h.get_mut(out_conn_layer)
                                 {
                                     Some(b as *mut CLBuffers)
                                 } else {
                                     None
                                 };
-                                let buf_o_ptr = if let Some(ref mut b) = self.cl_buffer_o {
-                                    Some(b as *mut CLBuffers)
-                                } else {
-                                    None
-                                };
+                                let buf_o_ptr = self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
 
                                 if let (Some(cl_out), Some(buf_last_p), Some(buf_o_p)) =
                                     (cl_out_opt, buf_last_ptr, buf_o_ptr)
@@ -14740,10 +14723,10 @@ impl Runner {
         }
 
         resize_layer_vec!(self.v_h, f64, 0.0);
-        if let Some(ref mut rfh) = self.refr_h {
+        if let Some(rfh) = self.refr_h.as_mut() {
             resize_layer_vec!(rfh, i32, 0);
         }
-        if let Some(ref mut uh) = self.u_h {
+        if let Some(uh) = self.u_h.as_mut() {
             resize_layer_vec!(uh, f64, 0.0);
         }
         resize_layer_vec!(self.x_post_h, f64, 0.0);
@@ -14815,7 +14798,7 @@ impl Runner {
                 }
             }
         }
-        if let Some(ref mut izh_ref) = self.izh_refr_h {
+        if let Some(izh_ref) = self.izh_refr_h.as_mut() {
             resize_layer_vec!(izh_ref, i32, 0);
         }
 
@@ -14880,19 +14863,21 @@ impl Runner {
             self.rate_ema_o = Array1::<f64>::zeros(o_count);
             changed = true;
         }
-        if let Some(ref mut uo) = self.u_o {
+        if let Some(uo) = self.u_o.as_mut() {
             if uo.len() != o_count {
                 *uo = Array1::<f64>::zeros(o_count);
                 changed = true;
             }
         }
-        if let Some(ref mut ro) = self.refr_o {
+
+        if let Some(ro) = self.refr_o.as_mut() {
             if ro.len() != o_count {
                 *ro = Array1::<i32>::zeros(o_count);
                 changed = true;
             }
         }
-        if let Some(ref mut izh_o) = self.izh_refr_o {
+
+        if let Some(izh_o) = self.izh_refr_o.as_mut() {
             if izh_o.len() != o_count {
                 *izh_o = Array1::<i32>::zeros(o_count);
                 changed = true;
@@ -14902,7 +14887,7 @@ impl Runner {
         #[cfg(any(feature = "ui", feature = "growth3d"))]
         {
             let h0_sz = layer_sizes.get(0).copied().unwrap_or(0);
-            if let Some(ref mut i_h0) = self.last_i_h0 {
+            if let Some(i_h0) = self.last_i_h0.as_mut() {
                 if i_h0.len() != h0_sz {
                     *i_h0 = Array1::<f64>::zeros(h0_sz);
                     changed = true;
@@ -14919,7 +14904,7 @@ impl Runner {
                 }
             }
 
-            if let Some(ref mut i_o) = self.last_i_o {
+            if let Some(i_o) = self.last_i_o.as_mut() {
                 if i_o.len() != o_count {
                     *i_o = Array1::<f64>::zeros(o_count);
                     changed = true;
@@ -15300,7 +15285,7 @@ impl Runner {
             self.rate_ema_h.push(Array1::<f64>::zeros(0));
             self.stp_u_h.push(Array1::<f64>::zeros(0));
             self.stp_x_h.push(Array1::<f64>::zeros(0));
-            if let Some(ref mut r) = self.izh_refr_h {
+            if let Some(r) = self.izh_refr_h.as_mut() {
                 r.push(Array1::<i32>::zeros(0));
             }
             self.bio_h.push(Vec::new());
@@ -16774,12 +16759,12 @@ impl Runner {
         self.v_h[l] = Self::remove_idx(&self.v_h[l], j);
         self.v_h[target_l] = Self::append_val(&self.v_h[target_l], v);
 
-        if let Some(ref mut rfh) = self.refr_h {
+        if let Some(rfh) = self.refr_h.as_mut() {
             let r = rfh[l][j];
             rfh[l] = Self::remove_idx(&rfh[l], j);
             rfh[target_l] = Self::append_val(&rfh[target_l], r);
         }
-        if let Some(ref mut uh) = self.u_h {
+        if let Some(uh) = self.u_h.as_mut() {
             let u = uh[l][j];
             uh[l] = Self::remove_idx(&uh[l], j);
             uh[target_l] = Self::append_val(&uh[target_l], u);
@@ -16837,7 +16822,7 @@ impl Runner {
         self.stp_x_h[l] = Self::remove_idx(&self.stp_x_h[l], j);
         self.stp_x_h[target_l] = Self::append_val(&self.stp_x_h[target_l], sx);
 
-        if let Some(ref mut r) = self.izh_refr_h {
+        if let Some(r) = self.izh_refr_h.as_mut() {
             let rv = r[l][j];
             r[l] = Self::remove_idx(&r[l], j);
             r[target_l] = Self::append_val(&r[target_l], rv);
@@ -17033,10 +17018,10 @@ impl Runner {
 
         // 1. Basic state vectors
         self.v_h[l] = Self::remove_idx(&self.v_h[l], j);
-        if let Some(ref mut rfh) = self.refr_h {
+        if let Some(rfh) = self.refr_h.as_mut() {
             rfh[l] = Self::remove_idx(&rfh[l], j);
         }
-        if let Some(ref mut uh) = self.u_h {
+        if let Some(uh) = self.u_h.as_mut() {
             uh[l] = Self::remove_idx(&uh[l], j);
         }
         self.x_post_h[l] = Self::remove_idx(&self.x_post_h[l], j);
@@ -17053,7 +17038,7 @@ impl Runner {
         self.since_growth_ms[l] = Self::remove_idx(&self.since_growth_ms[l], j);
         self.since_last_bouton_ms[l] = Self::remove_idx(&self.since_last_bouton_ms[l], j);
         self.bio_h[l].remove(j);
-        if let Some(ref mut izh_ref) = self.izh_refr_h {
+        if let Some(izh_ref) = self.izh_refr_h.as_mut() {
             izh_ref[l] = Self::remove_idx(&izh_ref[l], j);
         }
         #[cfg(any(feature = "ui", feature = "growth3d"))]
@@ -17062,7 +17047,7 @@ impl Runner {
                 self.last_i_f[l] = Self::remove_idx(&self.last_i_f[l], j);
             }
             if l == 0 {
-                if let Some(ref mut i_h0) = self.last_i_h0 {
+                if let Some(i_h0) = self.last_i_h0.as_mut() {
                     *i_h0 = Self::remove_idx(i_h0, j);
                 }
             }

@@ -4813,7 +4813,7 @@ impl App {
             }
 
             if let Some(nid) = owning_node {
-                if let Some(ref filter) = view_node_filter {
+                if let Some(filter) = view_node_filter {
                     if nid != filter {
                         return (default_color.gamma_multiply(0.15), false);
                     }
@@ -5833,7 +5833,8 @@ impl Drop for App {
 
 #[cfg(feature = "ui")]
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         observe_time!("App::update");
         observe_hit!("ui_frame");
         let ui_frame_ms = (ctx.input(|i| i.unstable_dt).max(0.0) * 1000.0) as f32;
@@ -7355,15 +7356,18 @@ impl eframe::App for App {
         // --- 2. Panels and Controls ---
         {
             observe_time!("App::update/render");
-            egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.heading("Neuromorphic Network");
-            ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
-        });
+            egui::Panel::top("top").show_inside(ui, |ui| {
+                ui.heading("Neuromorphic Network");
+                ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
+            });
 
-            egui::SidePanel::right("controls").resizable(true).default_width(260.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.heading("Controls");
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(260.0_f32)
+                .show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.heading("Controls");
                     let sleep_label = if let Ok(r) = self.runner.try_read() {
                         if r.net.sleep_enabled {
                             if r.sleep_active { "sleeping" } else { "awake" }
@@ -8262,11 +8266,11 @@ impl eframe::App for App {
                                 NeuromodSignal::Stability => "Stability",
                             }
                         };
-                        let mut pick_signal = |ui: &mut egui::Ui, label: &str, sig: &mut NeuromodSignal| -> bool {
+                        let pick_signal = |ui: &mut egui::Ui, label: &str, sig: &mut NeuromodSignal| -> bool {
                             let mut changed = false;
                             ui.horizontal(|ui| {
                                 ui.label(label);
-                                egui::ComboBox::from_id_source(label)
+                                egui::ComboBox::from_id_salt(label)
                                     .selected_text(signal_label(*sig))
                                     .show_ui(ui, |ui| {
                                         let options = [
@@ -9146,7 +9150,7 @@ impl eframe::App for App {
                                     let mut ramp = crate::ga::GARampController::new(pop_size.max(1), sim_time);
                                     crate::ga::ga_clear_ramp_runtime_status();
 
-                                    for gen in 0..gens {
+                                    for gen_iter in 0..gens {
                                         // Check for control signals
                                         while let Ok(ctrl) = ctrl_rx.try_recv() {
                                             match ctrl {
@@ -9171,7 +9175,7 @@ impl eframe::App for App {
                                         }
 
                                         let plan = ramp.generation_plan();
-                                        crate::ga::ga_set_ramp_runtime(&plan, gen);
+                                        crate::ga::ga_set_ramp_runtime(&plan, gen_iter);
                                         crate::ga::GARampController::apply_plan_overrides(&plan);
                                         ga.resize_population(plan.population_size, &base_cfg, &mut rng);
                                         let gen_seed: u64 = rand::random();
@@ -11149,7 +11153,7 @@ impl eframe::App for App {
     });
 
             let state_arc_for_layout = state_arc.clone();
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
             // Main drawing area
             let avail = ui.available_size();
             let panel_rect = ui.allocate_space(avail).1;
@@ -11188,7 +11192,7 @@ impl eframe::App for App {
                 }
                 // Mouse wheel Y scroll as zoom (use moderate sensitivity)
                 if pointer_over_canvas && !mouse_over_scope {
-                    let scroll_y = i.raw_scroll_delta.y as f32;
+                    let scroll_y = i.smooth_scroll_delta.y as f32;
                     if scroll_y.abs() > 0.5 {
                         // convert wheel delta to multiplicative factor (~ 120 per notch typical)
                         let f: f32 = 1.0 + (scroll_y / 480.0);
@@ -12151,7 +12155,7 @@ impl eframe::App for App {
                     if dist > 5.0 {
                         painter.line_segment(
                             [*label_pos, *target_pos],
-                            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(80)),
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(80)),
                         );
                     }
                     
@@ -12342,7 +12346,7 @@ impl eframe::App for App {
                                 }
                                 let convex_smooth = smooth_polygon(convex_inflated, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 18); // transparent fill
-                                let membrane_stroke_bg = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(180, 195, 255, 64));
+                                let membrane_stroke_bg = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(180, 195, 255, 64));
                                 painter.add(egui::Shape::convex_polygon(convex_smooth, membrane_fill, membrane_stroke_bg));
                             }
 
@@ -12372,7 +12376,7 @@ impl eframe::App for App {
                                     }
                                 }
                                 let outline_smooth = smooth_polygon(outline, 3);
-                                let membrane_stroke = egui::Stroke::new(1.6, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 140));
+                                let membrane_stroke = egui::Stroke::new(1.6_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 140));
                                 painter.add(egui::Shape::closed_line(outline_smooth, membrane_stroke));
                             }
                         }
@@ -12418,7 +12422,7 @@ impl eframe::App for App {
                             if hull.len() >= 3 {
                                 let hull_smooth = smooth_polygon(hull, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
-                                let membrane_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40));
+                                let membrane_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40));
                                 painter.add(egui::Shape::convex_polygon(hull_smooth, membrane_fill, membrane_stroke));
                             }
                         }
@@ -12431,7 +12435,7 @@ impl eframe::App for App {
                         let radius_proj = skull.radius * scale_x.max(scale_y);
                         let membrane_col = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
                         painter.circle_filled(center_proj, radius_proj, membrane_col);
-                        painter.circle_stroke(center_proj, radius_proj, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40)));
+                        painter.circle_stroke(center_proj, radius_proj, egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40)));
                     }
                 }
             }
@@ -12469,7 +12473,7 @@ impl eframe::App for App {
                         let y = panel_rect.top() + 28.0;
                         let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(box_w, box_h));
                         painter.rect_filled(rect, 6.0, egui::Color32::from_rgba_unmultiplied(20, 20, 25, 200));
-                        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
+                        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
                         painter.text(
                             egui::pos2(x + pad, y + pad - 1.0),
                             egui::Align2::LEFT_TOP,
@@ -12599,7 +12603,7 @@ impl eframe::App for App {
                             points: [p0, cp, p1],
                             closed: false,
                             fill: egui::Color32::TRANSPARENT,
-                            stroke: egui::epaint::PathStroke::new(if is_longterm { 1.5 } else { 1.0 }, color),
+                            stroke: egui::epaint::PathStroke::new(if is_longterm { 1.5 } else { 1.0_f32 }, color),
                         }));
                     } else {
                         painter.line_segment([p0, p1], egui::Stroke { width: if is_longterm { 1.5 } else { 1.0 }, color });
@@ -13517,9 +13521,8 @@ impl eframe::App for App {
             let scope_resp = ui.allocate_rect(scope_rect, egui::Sense::hover());
             // Handle zoom via mouse wheel when hovered
             if scope_resp.hovered() {
-                // Use smooth_scroll_delta when available (falls back to raw_scroll_delta)
                 let scroll_y = ui.input(|i| {
-                    let d = if i.smooth_scroll_delta.y != 0.0 { i.smooth_scroll_delta.y } else { i.raw_scroll_delta.y };
+                    let d = i.smooth_scroll_delta.y;
                     d
                 });
                 if scroll_y.abs() > 0.0 {
@@ -13696,7 +13699,7 @@ impl eframe::App for App {
             egui::Window::new("🔬 Biological Detail View")
                 .open(&mut open)
                 .default_size(egui::vec2(600.0, 500.0))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     if active_runner_opt.is_none() {
                         ui.label("Simulation busy...");
                         return;
@@ -13820,8 +13823,8 @@ impl eframe::App for App {
                                 if (zoom - 1.0).abs() > 0.001 {
                                     detail_camera_zoom = (detail_camera_zoom * zoom).clamp(0.1, 10.0);
                                 }
-                                if i.raw_scroll_delta.y != 0.0 {
-                                    let f = 1.0 + (i.raw_scroll_delta.y / 480.0);
+                                if i.smooth_scroll_delta.y != 0.0 {
+                                    let f = 1.0 + (i.smooth_scroll_delta.y / 480.0);
                                     detail_camera_zoom = (detail_camera_zoom * f).clamp(0.1, 10.0);
                                 }
                                 
@@ -14020,13 +14023,13 @@ impl eframe::App for App {
                                         match org.kind {
                                             crate::morphology::OrganelleKind::Nucleus => {
                                                 painter.circle_filled(p, soma_r * 0.35, egui::Color32::from_rgba_unmultiplied(180, 100, 255, 180));
-                                                painter.circle_stroke(p, soma_r * 0.35, egui::Stroke::new(1.0, egui::Color32::from_gray(200)));
+                                                painter.circle_stroke(p, soma_r * 0.35, egui::Stroke::new(1.0_f32, egui::Color32::from_gray(200)));
                                             }
                                             crate::morphology::OrganelleKind::Mitochondria => {
                                                 let pulse = (time * 5.0).sin().abs() as f32 * 0.2 * org.activity;
                                                 let r = soma_r * (0.15 + pulse);
                                                 painter.circle_filled(p, r, egui::Color32::from_rgba_unmultiplied(255, 150, 0, 200));
-                                                painter.circle_stroke(p, r, egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 100, 0)));
+                                                painter.circle_stroke(p, r, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(200, 100, 0)));
                                             }
                                             crate::morphology::OrganelleKind::GolgiApparatus => {
                                                 // Draw as folded ribbons/curves
@@ -14039,14 +14042,14 @@ impl eframe::App for App {
                                                             p + egui::vec2(0.0, offset + 2.0),
                                                             p + egui::vec2(r, offset),
                                                         ],
-                                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 100, 200))
+                                                        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 100, 200))
                                                     ));
                                                 }
                                             }
                                             crate::morphology::OrganelleKind::EndoplasmicReticulum => {
                                                 // Draw as a textured/stippled area
                                                 painter.circle_filled(p, soma_r * 0.25, egui::Color32::from_rgba_unmultiplied(100, 150, 255, 100));
-                                                painter.circle_stroke(p, soma_r * 0.25, egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 100, 200)));
+                                                painter.circle_stroke(p, soma_r * 0.25, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 100, 200)));
                                             }
                                             _ => {
                                                 painter.circle_filled(p, soma_r * 0.1, egui::Color32::LIGHT_GRAY);
@@ -14092,7 +14095,7 @@ impl eframe::App for App {
                                         // Draw bouton at dendrite tip if it's a synapse site
                                         if seg.syn_index.is_some() {
                                             painter.circle_filled(p0, 0.015 * scale, egui::Color32::from_rgba_unmultiplied(180, 255, 180, 200));
-                                            painter.circle_stroke(p0, 0.015 * scale, egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 100)));
+                                            painter.circle_stroke(p0, 0.015 * scale, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 100)));
                                         }
                                     }
 
@@ -14151,7 +14154,7 @@ impl eframe::App for App {
                                         // Draw bouton at axon terminal if it's a synapse site
                                         if seg.syn_index.is_some() {
                                             painter.circle_filled(p1, 0.018 * scale, egui::Color32::from_rgba_unmultiplied(255, 180, 180, 220));
-                                            painter.circle_stroke(p1, 0.018 * scale, egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 100, 100)));
+                                            painter.circle_stroke(p1, 0.018 * scale, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(200, 100, 100)));
                                         }
                                     }
                                     

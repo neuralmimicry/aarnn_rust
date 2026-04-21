@@ -529,7 +529,7 @@ struct Cli {
     aer_max_packet_bytes: usize,
 }
 
-fn configure_openmp_runtime_env() {
+unsafe fn configure_openmp_runtime_env() {
     let auto_enabled = std::env::var("NM_OPENMP_AUTO")
         .ok()
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
@@ -544,13 +544,13 @@ fn configure_openmp_runtime_env() {
         .max(1);
 
     if std::env::var_os("OMP_NUM_THREADS").is_none() {
-        std::env::set_var("OMP_NUM_THREADS", threads.to_string());
+        unsafe{std::env::set_var("OMP_NUM_THREADS", threads.to_string())};
     }
     if std::env::var_os("OMP_PROC_BIND").is_none() {
-        std::env::set_var("OMP_PROC_BIND", "close");
+        unsafe{std::env::set_var("OMP_PROC_BIND", "close")};
     }
     if std::env::var_os("OMP_PLACES").is_none() {
-        std::env::set_var("OMP_PLACES", "cores");
+        unsafe{std::env::set_var("OMP_PLACES", "cores")};
     }
 }
 
@@ -1248,7 +1248,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     maybe_apply_openmpi_bootstrap(&mut args)?;
-    configure_openmp_runtime_env();
+    unsafe { configure_openmp_runtime_env(); }
     if !crate::obs::is_silent() {
         let log_path = std::env::var("NM_LOG_PATH").ok();
         if let Some(path) = log_path.as_deref() {
@@ -1382,7 +1382,7 @@ fn main() -> anyhow::Result<()> {
     // Initialize tracing/logging if requested via CLI.
     if args.trace {
         nm_log!("[trace] NetworkConfig initialized: {:#?}", net_cfg);
-        std::env::set_var("NM_TRACE", "1");
+        unsafe { std::env::set_var("NM_TRACE", "1"); }
     }
 
     // Initialize a shared Tokio runtime for async background tasks.
@@ -1732,11 +1732,11 @@ fn run_ga_search(
 
     let (status_tx, _status_rx) = std::sync::mpsc::channel();
 
-    for gen in 0..n_gen {
-        nm_log!("\n=== Generation {}/{} ===", gen + 1, n_gen);
+    for gen_iter in 0..n_gen {
+        nm_log!("\n=== Generation {}/{} ===", gen_iter + 1, n_gen);
         let gen_seed = rng.random::<u64>();
         let plan = ramp.generation_plan();
-        crate::ga::ga_set_ramp_runtime(&plan, gen);
+        crate::ga::ga_set_ramp_runtime(&plan, gen_iter);
         GARampController::apply_plan_overrides(&plan);
         ga.resize_population(plan.population_size, &base_cfg, &mut rng);
         rt.block_on(ga.evaluate_population(plan.sim_time_ms, gen_seed, &status_tx));
@@ -1765,7 +1765,7 @@ fn run_ga_search(
             // Update local state for reporting back to orchestrator (if we are a node)
             let mut state_mut = rt.block_on(async { dist.state.write().await });
             state_mut.ga_running = true;
-            state_mut.ga_generation = (gen + 1) as u32;
+            state_mut.ga_generation = (gen_iter + 1) as u32;
             state_mut.ga_best_fitness = ga.best_fitness;
             if let Some(best) = &ga.best_config {
                 state_mut.ga_best_config_json = serde_json::to_string(best).unwrap_or_default();
@@ -1789,7 +1789,7 @@ fn run_ga_search(
             );
         }
 
-        if gen < n_gen - 1 {
+        if gen_iter < n_gen - 1 {
             if !crate::ga::ga_wait_for_generation_headroom() {
                 break;
             }
