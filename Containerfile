@@ -113,6 +113,10 @@ RUN if [ "${CARGO_FEATURES}" = "all" ] || [ "${CARGO_FEATURES}" = "all-features"
         cargo build --release --features "${CARGO_FEATURES}" --bin aarnn_rust --bin web_ui; \
     fi
 
+RUN python3.12 -m compileall -b -q /build/tools \
+    && find /build/tools -type f -name '*.py' -delete \
+    && find /build/tools -type d -name '__pycache__' -prune -exec rm -rf {} +
+
 # --- Stage 2: Runtime ---
 FROM quay.io/centos/centos:stream9
 ARG PYTHON_MIN_VERSION=3.12
@@ -164,7 +168,6 @@ COPY --from=builder /build/target/release/aarnn_rust .
 COPY --from=builder /build/target/release/web_ui .
 COPY --from=builder /build/config.json .
 COPY --from=builder /build/tools ./tools
-COPY --from=builder /build/proto ./proto
 
 # Create directories for outputs (PNGs, logs)
 RUN mkdir -p /app/outputs && chmod 777 /app/outputs
