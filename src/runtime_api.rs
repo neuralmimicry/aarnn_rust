@@ -1,8 +1,8 @@
 use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus};
-use anyhow::{anyhow, Context};
-use reqwest::blocking::{Client, RequestBuilder};
+use anyhow::{Context, anyhow};
 use reqwest::Method;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use reqwest::blocking::{Client, RequestBuilder};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -84,10 +84,42 @@ pub struct TokenBalanceResponse {
     pub cashout_total: i64,
     pub shortfall_total: i64,
     pub free_grant_total: i64,
+    #[serde(default = "default_neuron_daily_rate")]
+    pub neuron_daily_rate: i64,
+    #[serde(default)]
+    pub token_vault_url: Option<String>,
+    #[serde(default)]
+    pub buy_tokens_url: Option<String>,
+    #[serde(default)]
+    pub billing_dashboard_url: Option<String>,
+    #[serde(default)]
+    pub billing_admin_url: Option<String>,
     #[serde(default)]
     pub pricing: serde_json::Value,
     #[serde(default)]
     pub identity: Option<serde_json::Value>,
+}
+
+fn default_neuron_daily_rate() -> i64 {
+    1
+}
+
+fn url_encode_form_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~' => encoded.push(byte as char),
+            b' ' => encoded.push('+'),
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -206,6 +238,7 @@ pub struct BlockingRuntimeClient {
     client: Client,
     runtime_user: Option<String>,
     runtime_password: Option<String>,
+    runtime_access_token: Option<String>,
     auth_mode: RuntimeAuthMode,
     authenticated: bool,
 }
@@ -215,6 +248,7 @@ pub struct RemoteWorkspaceBinding {
     pub base_url: String,
     pub user_id: Option<String>,
     pub password: Option<String>,
+    pub access_token: Option<String>,
     pub workspace_id: String,
     pub save_on_exit: bool,
 }
@@ -225,6 +259,7 @@ impl RemoteWorkspaceBinding {
             self.base_url.clone(),
             self.user_id.clone(),
             self.password.clone(),
+            self.access_token.clone(),
         )
     }
 }
@@ -234,6 +269,7 @@ impl BlockingRuntimeClient {
         base_url: impl Into<String>,
         runtime_user: Option<String>,
         runtime_password: Option<String>,
+        runtime_access_token: Option<String>,
     ) -> anyhow::Result<Self> {
         let client = Client::builder()
             .cookie_store(true)
@@ -245,6 +281,7 @@ impl BlockingRuntimeClient {
             client,
             runtime_user,
             runtime_password,
+            runtime_access_token,
             auth_mode: RuntimeAuthMode::Unknown,
             authenticated: false,
         })
@@ -259,7 +296,10 @@ impl BlockingRuntimeClient {
     }
 
     pub fn token_ledger(&mut self, limit: usize) -> anyhow::Result<TokenLedgerResponse> {
-        self.request_json(Method::GET, &format!("/api/tokens/ledger?limit={}", limit.max(1)))
+        self.request_json(
+            Method::GET,
+            &format!("/api/tokens/ledger?limit={}", limit.max(1)),
+        )
     }
 
     pub fn list_workspaces(&mut self) -> anyhow::Result<Vec<WorkspaceSummary>> {
@@ -383,6 +423,20 @@ impl BlockingRuntimeClient {
             return Ok(());
         }
 
+        if self.auth_mode != RuntimeAuthMode::None {
+            if let Some(access_token) = self
+                .runtime_access_token
+                .clone()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            {
+                if self.try_access_token_exchange(&access_token)? {
+                    self.authenticated = true;
+                    return Ok(());
+                }
+            }
+        }
+
         match self.auth_mode {
             RuntimeAuthMode::None => {
                 self.authenticated = true;
@@ -413,10 +467,43 @@ impl BlockingRuntimeClient {
                 Ok(())
             }
             RuntimeAuthMode::Oidc => Err(anyhow!(
-                "runtime API is using OIDC; browser-based login is required"
+                "runtime API is using OIDC; provide a shared access token with --runtime-access-token or NM_RUNTIME_ACCESS_TOKEN"
             )),
             RuntimeAuthMode::Unknown => Err(anyhow!("runtime auth mode is unknown")),
         }
+    }
+
+    fn try_access_token_exchange(&mut self, access_token: &str) -> anyhow::Result<bool> {
+        let body = format!(
+            "access_token={}&next=%2Fapi%2Fme",
+            url_encode_form_component(access_token)
+        );
+        let response = self
+            .client
+            .post(self.url_for("/auth/access/exchange"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .context("failed to exchange runtime access token")?;
+        if !response.status().is_success() {
+            return Ok(false);
+        }
+        let payload = match response.json::<serde_json::Value>() {
+            Ok(payload) => payload,
+            Err(_) => return Ok(false),
+        };
+        let authenticated = payload
+            .get("authenticated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let username_present = payload
+            .get("username")
+            .or_else(|| payload.get("user"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        Ok(authenticated || username_present)
     }
 
     fn build_request(&self, method: Method, path: &str) -> RequestBuilder {

@@ -59,12 +59,12 @@ use rand::{RngExt, SeedableRng};
 use serde::Deserialize;
 
 use crate::config::{
-    apply_clumping_layer_defaults, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference,
-    IzhikevichParams, LIFParams, NetworkConfig, STDPParams,
+    FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference, IzhikevichParams, LIFParams,
+    NetworkConfig, STDPParams, apply_clumping_layer_defaults,
 };
 use crate::deployment::{
-    default_infrastructure_roots, detect_infrastructure, DeploymentConfig, ExecutionMode,
-    ExecutionScope,
+    DeploymentConfig, ExecutionMode, ExecutionScope, default_infrastructure_roots,
+    detect_infrastructure,
 };
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
@@ -468,6 +468,10 @@ struct Cli {
     #[arg(long)]
     runtime_password: Option<String>,
 
+    /// Shared commercial access token used to exchange a runtime session cookie.
+    #[arg(long)]
+    runtime_access_token: Option<String>,
+
     /// Runtime workspace identifier.
     #[arg(long)]
     runtime_workspace: Option<String>,
@@ -544,13 +548,13 @@ unsafe fn configure_openmp_runtime_env() {
         .max(1);
 
     if std::env::var_os("OMP_NUM_THREADS").is_none() {
-        unsafe{std::env::set_var("OMP_NUM_THREADS", threads.to_string())};
+        unsafe { std::env::set_var("OMP_NUM_THREADS", threads.to_string()) };
     }
     if std::env::var_os("OMP_PROC_BIND").is_none() {
-        unsafe{std::env::set_var("OMP_PROC_BIND", "close")};
+        unsafe { std::env::set_var("OMP_PROC_BIND", "close") };
     }
     if std::env::var_os("OMP_PLACES").is_none() {
-        unsafe{std::env::set_var("OMP_PLACES", "cores")};
+        unsafe { std::env::set_var("OMP_PLACES", "cores") };
     }
 }
 
@@ -937,7 +941,17 @@ fn build_runtime_client(args: &Cli) -> anyhow::Result<BlockingRuntimeClient> {
         normalize_runtime_url(url),
         args.runtime_user.clone(),
         args.runtime_password.clone(),
+        runtime_access_token(args),
     )
+}
+
+fn runtime_access_token(args: &Cli) -> Option<String> {
+    args.runtime_access_token.clone().or_else(|| {
+        std::env::var("NM_RUNTIME_ACCESS_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn read_runtime_seed_file(path: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
@@ -1096,7 +1110,7 @@ fn parse_fpaa_route_assignment(
             return Err(anyhow::anyhow!(
                 "unknown FPAA route '{}', expected software or fpaa",
                 other
-            ))
+            ));
         }
     };
     Ok((kernel, route))
@@ -1248,7 +1262,9 @@ fn main() -> anyhow::Result<()> {
     }
 
     maybe_apply_openmpi_bootstrap(&mut args)?;
-    unsafe { configure_openmp_runtime_env(); }
+    unsafe {
+        configure_openmp_runtime_env();
+    }
     if !crate::obs::is_silent() {
         let log_path = std::env::var("NM_LOG_PATH").ok();
         if let Some(path) = log_path.as_deref() {
@@ -1335,6 +1351,7 @@ fn main() -> anyhow::Result<()> {
             base_url: normalize_runtime_url(runtime_url),
             user_id: args.runtime_user.clone(),
             password: args.runtime_password.clone(),
+            access_token: runtime_access_token(&args),
             workspace_id: workspace_id.to_string(),
             save_on_exit: args.runtime_save_on_exit,
         };
@@ -1382,7 +1399,9 @@ fn main() -> anyhow::Result<()> {
     // Initialize tracing/logging if requested via CLI.
     if args.trace {
         nm_log!("[trace] NetworkConfig initialized: {:#?}", net_cfg);
-        unsafe { std::env::set_var("NM_TRACE", "1"); }
+        unsafe {
+            std::env::set_var("NM_TRACE", "1");
+        }
     }
 
     // Initialize a shared Tokio runtime for async background tasks.
@@ -1465,11 +1484,7 @@ fn main() -> anyhow::Result<()> {
         cfg.output_base = args.aer_output_base;
         cfg.max_events = args.aer_max_events;
         cfg.max_packet_bytes = args.aer_max_packet_bytes;
-        if cfg.enabled() {
-            Some(cfg)
-        } else {
-            None
-        }
+        if cfg.enabled() { Some(cfg) } else { None }
     };
 
     let ga_search_enabled = args.ga_search || args.auto_ga;
@@ -1501,7 +1516,9 @@ fn main() -> anyhow::Result<()> {
     }
     #[cfg(not(feature = "ui"))]
     if args.ui {
-        nm_err!("UI requested, but the binary was built without `--features ui`. Falling back to batch mode.");
+        nm_err!(
+            "UI requested, but the binary was built without `--features ui`. Falling back to batch mode."
+        );
     }
     let mut rng = StdRng::seed_from_u64(args.seed);
 
@@ -1686,7 +1703,9 @@ fn main() -> anyhow::Result<()> {
     viz::draw_weight_histograms("weight_histograms_output.png", &sim_out.weights, true)?;
     viz::draw_final_weighted_network("final_weighted_network.png", &net_cfg, &sim_out.weights)?;
 
-    nm_log!("Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png");
+    nm_log!(
+        "Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png"
+    );
     Ok(())
 }
 
@@ -1961,8 +1980,15 @@ fn run_continuous(
                 .map(|v| format!("{}MB", v))
                 .unwrap_or_else(|| "-".into());
             nm_log!(
-                "[info] t={:.2}ms, dt={:.3}ms, avg_calc={:.2}ms, steps/s={}, spikes: H={}, O={}, temp={}, free_mem={}", 
-                sim_time, runner.lif.dt, avg_step_time_ms, steps_since_report, total_hidden_spikes, total_output_spikes, temp_s, free_s
+                "[info] t={:.2}ms, dt={:.3}ms, avg_calc={:.2}ms, steps/s={}, spikes: H={}, O={}, temp={}, free_mem={}",
+                sim_time,
+                runner.lif.dt,
+                avg_step_time_ms,
+                steps_since_report,
+                total_hidden_spikes,
+                total_output_spikes,
+                temp_s,
+                free_s
             );
             last_report = std::time::Instant::now();
             steps_since_report = 0;
@@ -1984,8 +2010,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
     use crate::distributed::proto::{HeartbeatRequest, JoinRequest};
     use crate::distributed::{
-        proto::distributed_neuromorphic_server::DistributedNeuromorphicServer, DistributedNode,
-        ManagedNetwork,
+        DistributedNode, ManagedNetwork,
+        proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
     };
     use tonic::transport::{Channel, Server};
 
@@ -2341,7 +2367,9 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         let deadline = *reconnect_start + reconnect_timeout;
                         loop {
                             if std::time::Instant::now() >= deadline {
-                                nm_err!("[error] Orchestrator unreachable for 5 minutes; shutting down node");
+                                nm_err!(
+                                    "[error] Orchestrator unreachable for 5 minutes; shutting down node"
+                                );
                                 let _ = shutdown_tx_node.send(true);
                                 return;
                             }
@@ -2423,8 +2451,14 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         0.0
                     };
 
-                    nm_log!(" - Network {}: dt={:.3}ms, Total Neurons={}, Distributed across {} nodes, Est. nodes for 1ms: {:.1}", 
-                        id, net.current_dt, net.total_neurons, net.distribution.len(), est_nodes_1ms);
+                    nm_log!(
+                        " - Network {}: dt={:.3}ms, Total Neurons={}, Distributed across {} nodes, Est. nodes for 1ms: {:.1}",
+                        id,
+                        net.current_dt,
+                        net.total_neurons,
+                        net.distribution.len(),
+                        est_nodes_1ms
+                    );
                 }
                 nm_log!("-----------------\n");
             }

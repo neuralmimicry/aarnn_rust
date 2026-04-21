@@ -167,6 +167,25 @@
             </div>
           </section>
 
+          <section class="panel">
+            <div class="panel-title">Tokens &amp; Billing</div>
+            <div class="panel-note">Shared commercial balance plus projected neuron/day burn for the selected workspace and running fleet.</div>
+            <div class="panel-list">
+              <div>Balance: <span id="token-balance">-</span></div>
+              <div>Active burn: <span id="token-burn-rate">-</span></div>
+              <div>Running fleet burn: <span id="token-fleet-burn-rate">-</span></div>
+              <div>Rate model: <span id="token-rate-model">1 / neuron / day</span></div>
+            </div>
+            <div class="panel-note" id="token-status-note">Sign in to load token accounting.</div>
+            <div class="panel-row workspace-actions">
+              <button class="btn ghost small" id="token-refresh" type="button">Refresh</button>
+              <a class="btn ghost small" id="token-vault-link" href="#" target="_blank" rel="noopener">Token Vault</a>
+              <a class="btn ghost small" id="token-buy-link" href="#" target="_blank" rel="noopener">Buy Tokens</a>
+              <a class="btn ghost small" id="token-billing-link" href="#" target="_blank" rel="noopener">Billing</a>
+              <a class="btn ghost small" id="token-admin-link" href="#" target="_blank" rel="noopener">Admin Billing</a>
+            </div>
+          </section>
+
           <section class="panel" id="resource-panel">
             <div class="panel-title">Resources &amp; Performance</div>
             <div class="panel-list">
@@ -377,6 +396,7 @@
       <div class="auth-card">
         <div class="auth-title">Sign in</div>
         <div class="auth-subtitle" id="auth-message">Authentication required.</div>
+        <a class="btn" id="shared-login" href="#">Continue via NeuralMimicry Login</a>
         <form id="login-form" class="auth-form">
           <label for="login-username">Username</label>
           <input id="login-username" type="text" autocomplete="username" />
@@ -388,7 +408,7 @@
           </div>
           <div class="auth-error" id="login-error"></div>
         </form>
-        <div class="auth-divider">or</div>
+        <div class="auth-divider" id="auth-divider">runtime fallback</div>
         <a class="btn" id="oidc-login" href="/auth/oidc/login">Continue with SSO</a>
       </div>
     </div>

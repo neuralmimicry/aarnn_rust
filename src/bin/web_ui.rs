@@ -9,12 +9,12 @@ use aarnn_rust::central_auth::{
 };
 use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure};
-use aarnn_rust::distributed::proto::{
-    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-    network_update_request, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
-    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, StatusRequest,
-};
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
+use aarnn_rust::distributed::proto::{
+    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
+    NetworkUpdateRequest, SpikeBatch, StatusRequest, control_update,
+    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+};
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
     NmChainLoginObservedRequest, NmChainTokenMutationRequest,
@@ -26,37 +26,38 @@ use aarnn_rust::runtime_api::{
 };
 use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
 use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
-use aarnn_rust::spike_io::profiles::{encode_network_inputs_with, SpikeIoConfig};
+use aarnn_rust::spike_io::profiles::{SpikeIoConfig, encode_network_inputs_with};
 use aarnn_rust::spike_io::transport::{
     decode_hex_payload as decode_spike_hex_payload, encode_exchange, spikes_from_transport,
 };
 use anyhow::Context;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::{
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Form, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
-    Extension, Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use clap::Parser;
 use futures_util::StreamExt;
 use openidconnect::{
+    AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
     core::{
         CoreAuthenticationFlow, CoreClient, CoreIdToken, CoreProviderMetadata, CoreUserInfoClaims,
     },
-    reqwest, AccessToken, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
-    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    reqwest,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -64,7 +65,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
@@ -198,6 +199,22 @@ struct Args {
     /// Shared Refiner auth HTTP timeout in seconds.
     #[arg(long, default_value_t = 10)]
     central_auth_timeout_secs: u64,
+
+    /// Shared commercial login URL used for cross-product SSO.
+    #[arg(long)]
+    shared_login_url: Option<String>,
+
+    /// Shared commercial token vault URL.
+    #[arg(long)]
+    token_vault_url: Option<String>,
+
+    /// Shared commercial billing dashboard URL.
+    #[arg(long)]
+    billing_dashboard_url: Option<String>,
+
+    /// Shared commercial admin billing dashboard URL.
+    #[arg(long)]
+    billing_admin_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,6 +252,7 @@ struct AppState {
     runtime: Arc<RuntimeManager>,
     chain: Option<Arc<NmChainClient>>,
     token_pricing: TokenPricing,
+    commerce: CommerceConfig,
 }
 
 #[derive(Clone, Default)]
@@ -259,6 +277,16 @@ struct TokenPricing {
     start_workspace: i64,
     repeat_workspace: i64,
     step_workspace: i64,
+    neuron_daily_rate: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CommerceConfig {
+    shared_login_url: Option<String>,
+    token_vault_url: Option<String>,
+    buy_tokens_url: Option<String>,
+    billing_dashboard_url: Option<String>,
+    billing_admin_url: Option<String>,
 }
 
 impl TokenPricing {
@@ -281,6 +309,11 @@ impl TokenPricing {
                 .unwrap_or(2)
                 .max(0),
             step_workspace: env_opt("NM_AARNN_TOKEN_STEP_COST")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(1)
+                .max(0),
+            neuron_daily_rate: env_opt("NM_AARNN_TOKEN_NEURON_DAILY_RATE")
+                .or_else(|| env_opt("AARNN_TOKEN_NEURON_DAILY_RATE"))
                 .and_then(|value| value.parse::<i64>().ok())
                 .unwrap_or(1)
                 .max(0),
@@ -310,6 +343,24 @@ fn control_action_label(action: WorkspaceControlAction) -> &'static str {
         WorkspaceControlAction::Save => "save",
         WorkspaceControlAction::Step => "step",
     }
+}
+
+const DEFAULT_SHARED_LOGIN_URL: &str = "https://neuralmimicry.ai/login";
+const DEFAULT_TOKEN_VAULT_URL: &str = "https://neuralmimicry.ai/tokens";
+const DEFAULT_BILLING_DASHBOARD_URL: &str = "https://neuralmimicry.ai/billing";
+const DEFAULT_BILLING_ADMIN_URL: &str = "https://neuralmimicry.ai/billing/admin";
+
+fn append_query_param(url: &str, key: &str, value: &str) -> String {
+    let separator = if url.contains('?') {
+        if url.ends_with('?') || url.ends_with('&') {
+            ""
+        } else {
+            "&"
+        }
+    } else {
+        "?"
+    };
+    format!("{url}{separator}{key}={value}")
 }
 
 fn env_opt(key: &str) -> Option<String> {
@@ -476,6 +527,26 @@ fn apply_env_overrides(args: &mut Args) {
         {
             args.central_auth_timeout_secs = timeout.max(1);
         }
+    }
+    if args.shared_login_url.is_none() {
+        args.shared_login_url = env_opt("AARNN_SHARED_LOGIN_URL")
+            .or_else(|| env_opt("NM_SHARED_LOGIN_URL"))
+            .or_else(|| Some(DEFAULT_SHARED_LOGIN_URL.to_string()));
+    }
+    if args.token_vault_url.is_none() {
+        args.token_vault_url = env_opt("AARNN_TOKEN_VAULT_URL")
+            .or_else(|| env_opt("NM_TOKEN_VAULT_URL"))
+            .or_else(|| Some(DEFAULT_TOKEN_VAULT_URL.to_string()));
+    }
+    if args.billing_dashboard_url.is_none() {
+        args.billing_dashboard_url = env_opt("AARNN_BILLING_DASHBOARD_URL")
+            .or_else(|| env_opt("NM_BILLING_DASHBOARD_URL"))
+            .or_else(|| Some(DEFAULT_BILLING_DASHBOARD_URL.to_string()));
+    }
+    if args.billing_admin_url.is_none() {
+        args.billing_admin_url = env_opt("AARNN_BILLING_ADMIN_URL")
+            .or_else(|| env_opt("NM_BILLING_ADMIN_URL"))
+            .or_else(|| Some(DEFAULT_BILLING_ADMIN_URL.to_string()));
     }
 
     if args.auth_mode.trim().eq_ignore_ascii_case("none") {
@@ -1093,6 +1164,12 @@ struct AuthModeResponse {
 struct UiConfigResponse {
     default_orchestrator: Option<String>,
     default_runtime_user: Option<String>,
+    shared_login_url: Option<String>,
+    token_vault_url: Option<String>,
+    buy_tokens_url: Option<String>,
+    billing_dashboard_url: Option<String>,
+    billing_admin_url: Option<String>,
+    neuron_daily_rate: i64,
 }
 
 #[tokio::main]
@@ -1208,6 +1285,16 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
     let token_pricing = TokenPricing::from_env();
+    let commerce = CommerceConfig {
+        shared_login_url: args.shared_login_url.clone(),
+        token_vault_url: args.token_vault_url.clone(),
+        buy_tokens_url: args
+            .token_vault_url
+            .as_deref()
+            .map(|url| append_query_param(url, "action", "add")),
+        billing_dashboard_url: args.billing_dashboard_url.clone(),
+        billing_admin_url: args.billing_admin_url.clone(),
+    };
     let cors = CorsConfig {
         allowed_origins: cors_allowed_origins_from_env(),
     };
@@ -1251,6 +1338,7 @@ async fn main() -> anyhow::Result<()> {
         runtime,
         chain,
         token_pricing,
+        commerce,
     });
 
     let api = Router::new()
@@ -1474,15 +1562,22 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "type": "object",
             "properties": {
               "mode": { "type": "string", "enum": ["none", "local", "oidc"] },
-              "allow_signup": { "type": "boolean" }
+              "allow_signup": { "type": "boolean" },
+              "central_auth": { "type": "boolean" }
             },
-            "required": ["mode", "allow_signup"]
+            "required": ["mode", "allow_signup", "central_auth"]
           },
           "UiConfigResponse": {
             "type": "object",
             "properties": {
               "default_orchestrator": { "type": "string", "nullable": true, "description": "Default gRPC orchestrator address." },
-              "default_runtime_user": { "type": "string", "nullable": true, "description": "Default runtime workspace namespace used for anonymous browser sessions." }
+              "default_runtime_user": { "type": "string", "nullable": true, "description": "Default runtime workspace namespace used for anonymous browser sessions." },
+              "shared_login_url": { "type": "string", "nullable": true, "description": "Commercial NeuralMimicry login URL used for cross-product SSO handoff." },
+              "token_vault_url": { "type": "string", "nullable": true, "description": "Commercial token vault URL." },
+              "buy_tokens_url": { "type": "string", "nullable": true, "description": "Deep link to the token vault buy-more flow." },
+              "billing_dashboard_url": { "type": "string", "nullable": true, "description": "Commercial billing dashboard URL." },
+              "billing_admin_url": { "type": "string", "nullable": true, "description": "Commercial admin billing dashboard URL." },
+              "neuron_daily_rate": { "type": "integer", "format": "int64", "description": "Projected token burn per neuron per day." }
             }
           },
           "MeResponse": {
@@ -2260,6 +2355,12 @@ async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(UiConfigResponse {
         default_orchestrator: state.default_orchestrator.clone(),
         default_runtime_user: state.default_runtime_user.clone(),
+        shared_login_url: state.commerce.shared_login_url.clone(),
+        token_vault_url: state.commerce.token_vault_url.clone(),
+        buy_tokens_url: state.commerce.buy_tokens_url.clone(),
+        billing_dashboard_url: state.commerce.billing_dashboard_url.clone(),
+        billing_admin_url: state.commerce.billing_admin_url.clone(),
+        neuron_daily_rate: state.token_pricing.neuron_daily_rate,
     })
 }
 
@@ -2853,6 +2954,11 @@ async fn tokens_balance(
     Extension(user): Extension<AuthUser>,
 ) -> axum::response::Response {
     let pricing = pricing_payload(&state.token_pricing);
+    let neuron_daily_rate = state.token_pricing.neuron_daily_rate;
+    let token_vault_url = state.commerce.token_vault_url.clone();
+    let buy_tokens_url = state.commerce.buy_tokens_url.clone();
+    let billing_dashboard_url = state.commerce.billing_dashboard_url.clone();
+    let billing_admin_url = state.commerce.billing_admin_url.clone();
     if let Some(access_token) = user.access_token.as_deref() {
         if let Some(central) = state.auth.central.as_ref() {
             return match central.token_snapshot(access_token).await {
@@ -2878,6 +2984,11 @@ async fn tokens_balance(
                     "shortfall_total": snapshot.shortfall_total,
                     "free_grant_total": snapshot.free_grant_total,
                     "identity": snapshot.identity,
+                    "neuron_daily_rate": neuron_daily_rate,
+                    "token_vault_url": token_vault_url,
+                    "buy_tokens_url": buy_tokens_url,
+                    "billing_dashboard_url": billing_dashboard_url,
+                    "billing_admin_url": billing_admin_url,
                 }))
                 .into_response(),
                 Err(err) => (
@@ -2911,6 +3022,11 @@ async fn tokens_balance(
             "shortfall_total": snapshot.shortfall_total,
             "free_grant_total": snapshot.free_grant_total,
             "identity": snapshot.identity,
+            "neuron_daily_rate": neuron_daily_rate,
+            "token_vault_url": token_vault_url,
+            "buy_tokens_url": buy_tokens_url,
+            "billing_dashboard_url": billing_dashboard_url,
+            "billing_admin_url": billing_admin_url,
         }))
         .into_response(),
         Ok(None) => Json(json!({
@@ -2935,6 +3051,11 @@ async fn tokens_balance(
             "shortfall_total": 0,
             "free_grant_total": 0,
             "identity": null,
+            "neuron_daily_rate": neuron_daily_rate,
+            "token_vault_url": token_vault_url,
+            "buy_tokens_url": buy_tokens_url,
+            "billing_dashboard_url": billing_dashboard_url,
+            "billing_admin_url": billing_admin_url,
         }))
         .into_response(),
         Err(err) => (

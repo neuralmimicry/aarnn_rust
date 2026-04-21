@@ -26,17 +26,17 @@ use eframe::{egui, egui::vec2};
 use crate::aer::decode_events;
 #[cfg(feature = "ui")]
 use crate::config::{
-    apply_aarnn_human_biomimicry_defaults, apply_clumping_design, apply_clumping_layer_defaults,
     ClumpingDesign, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference, IzhikevichParams,
-    LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
+    LIFParams, NetworkConfig, NeuromodSignal, STDPParams, apply_aarnn_human_biomimicry_defaults,
+    apply_clumping_design, apply_clumping_layer_defaults,
 };
 #[cfg(feature = "ui")]
 use crate::distributed::{
-    proto::{
-        control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-        NetworkSnapshotRequest, NetworkStatus, NodeStatus, StatusRequest,
-    },
     DistributedNode, ManagedNetwork,
+    proto::{
+        NetworkSnapshotRequest, NetworkStatus, NodeStatus, StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    },
 };
 #[cfg(feature = "ui")]
 use crate::fpaa::{FpaaKernel, FpaaRuntimeStatus};
@@ -53,16 +53,18 @@ use crate::providers::{
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
 #[cfg(feature = "ui")]
-use crate::runtime_api::{RemoteWorkspaceBinding, WorkspaceControlAction, WorkspaceImportRequest};
+use crate::runtime_api::{
+    RemoteWorkspaceBinding, TokenBalanceResponse, WorkspaceControlAction, WorkspaceImportRequest,
+};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use crate::spike_io::encoding::TemporalEncodingContext;
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use crate::spike_io::profiles::{
-    decode_network_outputs, decode_profile_outputs, encode_network_inputs_with,
-    encode_profile_inputs_with, resolve_network_io_profile, NetworkIoProfile,
-    NetworkIoProfileSelector, ProfileInputEncoding, ProfileOutputEncoding,
+    NetworkIoProfile, NetworkIoProfileSelector, ProfileInputEncoding, ProfileOutputEncoding,
     SpikeInputEncodingStrategy, SpikeInputPrimitive, SpikeIoConfig, SpikeOutputDecodingStrategy,
+    decode_network_outputs, decode_profile_outputs, encode_network_inputs_with,
+    encode_profile_inputs_with, resolve_network_io_profile,
 };
 #[cfg(feature = "ui")]
 use crate::spike_io::transport::{apply_hex_aer_payload, apply_usize_indices};
@@ -70,8 +72,8 @@ use crate::stimuli::{AerIoConfig, AerLink};
 use rand::{RngExt, SeedableRng};
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
@@ -929,6 +931,9 @@ enum ToolTaskResult {
         stderr: String,
         error: Option<String>,
     },
+    RemoteTokenBalance {
+        result: Result<TokenBalanceResponse, String>,
+    },
 }
 
 #[cfg(feature = "ui")]
@@ -1281,6 +1286,10 @@ struct App {
     sim_last_spike_len: Arc<AtomicU64>,
     runtime_handle: tokio::runtime::Handle,
     remote_workspace_binding: Option<RemoteWorkspaceBinding>,
+    remote_token_balance: Option<TokenBalanceResponse>,
+    remote_token_error: Option<String>,
+    remote_token_last_refresh: Option<Instant>,
+    remote_token_refresh_inflight: bool,
     // Distributed state
     distributed_node: Option<DistributedNode>,
     view_source: ViewSource,
@@ -2890,6 +2899,10 @@ impl App {
             sim_last_spike_len,
             runtime_handle,
             remote_workspace_binding,
+            remote_token_balance: None,
+            remote_token_error: None,
+            remote_token_last_refresh: None,
+            remote_token_refresh_inflight: false,
             initial_net_cfg,
             initial_lif,
             initial_stdp,
@@ -2899,6 +2912,9 @@ impl App {
 
         if remote_only {
             app.status = "Remote-only UI (local simulation disabled)".into();
+        }
+        if app.remote_workspace_binding.is_some() {
+            app.queue_remote_token_refresh(true);
         }
         let auto_remote_count = app.add_remote_orchestrators_from_env();
         if auto_remote_count > 0 {
@@ -2960,7 +2976,36 @@ impl App {
             .map_err(|err| err.to_string())
     }
 
-    fn push_remote_workspace_snapshot(&self) -> Result<(), String> {
+    fn queue_remote_token_refresh(&mut self, force: bool) {
+        if self.remote_workspace_binding.is_none() {
+            self.remote_token_refresh_inflight = false;
+            return;
+        }
+        if self.remote_token_refresh_inflight {
+            return;
+        }
+        let stale = self
+            .remote_token_last_refresh
+            .map(|ts| ts.elapsed() >= Duration::from_secs(30))
+            .unwrap_or(true);
+        if !force && !stale {
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            return;
+        };
+        let tx = self.tool_task_tx.clone();
+        self.remote_token_refresh_inflight = true;
+        std::thread::spawn(move || {
+            let result = (|| -> Result<TokenBalanceResponse, String> {
+                let mut client = binding.client().map_err(|err| err.to_string())?;
+                client.token_balance().map_err(|err| err.to_string())
+            })();
+            let _ = tx.send(ToolTaskResult::RemoteTokenBalance { result });
+        });
+    }
+
+    fn push_remote_workspace_snapshot(&mut self) -> Result<(), String> {
         let binding = self
             .remote_workspace_binding
             .as_ref()
@@ -2988,6 +3033,7 @@ impl App {
                 },
             )
             .map_err(|err| err.to_string())?;
+        self.queue_remote_token_refresh(true);
         Ok(())
     }
 
@@ -3034,6 +3080,7 @@ impl App {
         client
             .control_workspace(&binding.workspace_id, action)
             .map_err(|err| err.to_string())?;
+        self.queue_remote_token_refresh(true);
         self.status = format!("Remote workspace '{}' {:?}", binding.workspace_id, action);
         Ok(())
     }
@@ -5573,7 +5620,9 @@ impl App {
             Ok(o) => Ok(o),
             Err(e) => {
                 if let Some(8) = e.raw_os_error() {
-                    Err(anyhow::anyhow!("Exec format error launching Python. The configured interpreter may be invalid or wrong-architecture. Set NMD_PYTHON to a working python3, or install Python and required packages."))
+                    Err(anyhow::anyhow!(
+                        "Exec format error launching Python. The configured interpreter may be invalid or wrong-architecture. Set NMD_PYTHON to a working python3, or install Python and required packages."
+                    ))
                 } else {
                     Err(anyhow::anyhow!(format!("Failed to run python: {}", e)))
                 }
@@ -5854,6 +5903,7 @@ impl eframe::App for App {
         }
         self.refresh_fpaa_status(false);
         self.reap_finished_ga_thread();
+        self.queue_remote_token_refresh(false);
 
         let runner_arc = self.runner.clone();
         let spectral_arc = self.spectral_bands.clone();
@@ -6607,7 +6657,10 @@ impl eframe::App for App {
                                             match self.apply_config_to_local_managed(&id, net) {
                                                 Ok(()) => {
                                                     self.refresh_ui_buffers();
-                                                    self.status = format!("Loaded config for local managed network from {}", path.display());
+                                                    self.status = format!(
+                                                        "Loaded config for local managed network from {}",
+                                                        path.display()
+                                                    );
                                                 }
                                                 Err(e) => {
                                                     self.status = format!("Load failed: {}", e);
@@ -6740,6 +6793,19 @@ impl eframe::App for App {
                     };
                     if let Err(e) = self.queue_import(kind, path, json, stdout, stderr) {
                         self.status = format!("{} import failed: {}", kind_str, e);
+                    }
+                }
+                ToolTaskResult::RemoteTokenBalance { result } => {
+                    self.remote_token_refresh_inflight = false;
+                    self.remote_token_last_refresh = Some(Instant::now());
+                    match result {
+                        Ok(balance) => {
+                            self.remote_token_balance = Some(balance);
+                            self.remote_token_error = None;
+                        }
+                        Err(error) => {
+                            self.remote_token_error = Some(error);
+                        }
                     }
                 }
             }
@@ -7411,6 +7477,77 @@ impl eframe::App for App {
                                     if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Stop) {
                                         self.status = format!("Remote stop failed: {}", err);
                                     }
+                                }
+                            });
+                            ui.separator();
+                            let neuron_count = self
+                                .runner
+                                .try_read()
+                                .ok()
+                                .map(|runner| runner.total_neurons());
+                            let token_balance = self.remote_token_balance.clone();
+                            let token_balance_ref = token_balance.as_ref();
+                            let neuron_daily_rate = token_balance_ref
+                                .map(|balance| balance.neuron_daily_rate.max(0))
+                                .unwrap_or(1);
+                            let projected_burn = neuron_count
+                                .map(|count| (count as i64).saturating_mul(neuron_daily_rate));
+                            let balance_label = if self.remote_token_refresh_inflight
+                                && token_balance_ref.is_none()
+                            {
+                                "Loading...".to_string()
+                            } else {
+                                token_balance_ref
+                                    .map(|balance| format!("{} tok", balance.balance))
+                                    .unwrap_or_else(|| "-".to_string())
+                            };
+                            ui.label(format!("Token balance: {}", balance_label));
+                            if let Some(count) = neuron_count {
+                                let burn = projected_burn.unwrap_or(0);
+                                ui.small(format!(
+                                    "Projected burn: {} tok/day ({} neurons x {} tok)",
+                                    burn, count, neuron_daily_rate
+                                ));
+                            } else {
+                                ui.small(format!(
+                                    "Projected burn rate: {} tok per neuron per day.",
+                                    neuron_daily_rate
+                                ));
+                            }
+                            if let Some(balance) = token_balance_ref {
+                                if let Some(updated_at) = balance.updated_at.as_deref() {
+                                    ui.small(format!("Ledger snapshot: {}", updated_at));
+                                }
+                            }
+                            if let Some(error) = self.remote_token_error.as_deref() {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(255, 170, 120),
+                                    format!("Token info unavailable: {}", error),
+                                );
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("Refresh tokens").clicked() {
+                                    self.queue_remote_token_refresh(true);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.token_vault_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Token Vault", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.buy_tokens_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Buy tokens", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.billing_dashboard_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Billing", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.billing_admin_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Admin Billing", url);
                                 }
                             });
                             if binding.save_on_exit {
