@@ -82,6 +82,8 @@ const ioSourceToggle = document.getElementById("io-source-toggle");
 const ioSourceStatus = document.getElementById("io-source-status");
 const authOverlay = document.getElementById("auth-overlay");
 const authMessage = document.getElementById("auth-message");
+const authDivider = document.getElementById("auth-divider");
+const sharedLoginBtn = document.getElementById("shared-login");
 const loginForm = document.getElementById("login-form");
 const loginUsername = document.getElementById("login-username");
 const loginPassword = document.getElementById("login-password");
@@ -90,6 +92,16 @@ const signupBtn = document.getElementById("signup-btn");
 const oidcLogin = document.getElementById("oidc-login");
 const userStatus = document.getElementById("user-status");
 const logoutBtn = document.getElementById("logout-btn");
+const tokenBalanceEl = document.getElementById("token-balance");
+const tokenBurnRateEl = document.getElementById("token-burn-rate");
+const tokenFleetBurnRateEl = document.getElementById("token-fleet-burn-rate");
+const tokenRateModelEl = document.getElementById("token-rate-model");
+const tokenStatusNoteEl = document.getElementById("token-status-note");
+const tokenRefreshBtn = document.getElementById("token-refresh");
+const tokenVaultLink = document.getElementById("token-vault-link");
+const tokenBuyLink = document.getElementById("token-buy-link");
+const tokenBillingLink = document.getElementById("token-billing-link");
+const tokenAdminLink = document.getElementById("token-admin-link");
 const eqPanel = document.getElementById("eq-panel");
 const eqEmpty = document.getElementById("eq-empty");
 const scopeCanvas = document.getElementById("scope-canvas");
@@ -152,9 +164,29 @@ const state = {
   io: loadIoSettings(),
   authMode: "none",
   allowSignup: false,
+  centralAuth: false,
   user: null,
   identity: null,
   userConfigEnabled: false,
+  commerce: {
+    sharedLoginUrl: "",
+    tokenVaultUrl: "",
+    buyTokensUrl: "",
+    billingDashboardUrl: "",
+    billingAdminUrl: ""
+  },
+  token: {
+    configured: false,
+    balance: null,
+    updatedAt: null,
+    neuronDailyRate: 1,
+    tokenVaultUrl: "",
+    buyTokensUrl: "",
+    billingDashboardUrl: "",
+    billingAdminUrl: "",
+    error: "",
+    loading: false
+  },
   runtime: {
     workspaces: [],
     activeWorkspace: loadActiveWorkspace(),
@@ -496,10 +528,97 @@ function saveActiveWorkspace() {
     localStorage.setItem("nm_active_workspace", state.runtime.activeWorkspace || "");
   } catch (_) {}
 }
+function normalizeExternalLink(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function currentAppPath() {
+  return `${window.location.pathname || "/"}${window.location.search || ""}${window.location.hash || ""}` || "/";
+}
+function buildSharedLoginUrl() {
+  const base = normalizeExternalLink(state.commerce.sharedLoginUrl);
+  if (!base) {
+    return "";
+  }
+  try {
+    const url = new URL(base, window.location.origin);
+    url.searchParams.set("launch", "aarnn");
+    url.searchParams.set("next", currentAppPath());
+    return url.toString();
+  } catch (_) {
+    const joiner = base.includes("?") ? "&" : "?";
+    return `${base}${joiner}launch=aarnn&next=${encodeURIComponent(currentAppPath())}`;
+  }
+}
+function formatTokenAmount(value, suffix = " tok") {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return `${new Intl.NumberFormat("en-GB", {
+    maximumFractionDigits: 0
+  }).format(Math.max(0, Math.round(numeric)))}${suffix}`;
+}
+function formatTokenBurn(value) {
+  return formatTokenAmount(value, " tok/day");
+}
+function formatTokenTimestamp(value) {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(parsed);
+}
+function setLinkVisibility(node, url) {
+  if (!node) return;
+  const target = normalizeExternalLink(url);
+  node.style.display = target ? "inline-flex" : "none";
+  if (target) {
+    node.href = target;
+  } else {
+    node.removeAttribute("href");
+  }
+}
+function resetTokenState() {
+  state.token.configured = false;
+  state.token.balance = null;
+  state.token.updatedAt = null;
+  state.token.tokenVaultUrl = state.commerce.tokenVaultUrl;
+  state.token.buyTokensUrl = state.commerce.buyTokensUrl;
+  state.token.billingDashboardUrl = state.commerce.billingDashboardUrl;
+  state.token.billingAdminUrl = state.commerce.billingAdminUrl;
+  state.token.error = "";
+  state.token.loading = false;
+}
 function applyBootstrapConfig(cfg = {}) {
   const defaultUser = cfg && typeof cfg.default_runtime_user === "string" ? cfg.default_runtime_user.trim() : "";
   bootstrapRuntimeDefaultUser = defaultUser;
   state.runtime.defaultUser = defaultUser;
+  state.commerce.sharedLoginUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.shared_login_url);
+  state.commerce.tokenVaultUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.token_vault_url);
+  state.commerce.buyTokensUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.buy_tokens_url);
+  state.commerce.billingDashboardUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.billing_dashboard_url);
+  state.commerce.billingAdminUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.billing_admin_url);
+  const configuredRate = Number(cfg === null || cfg === void 0 ? void 0 : cfg.neuron_daily_rate);
+  if (Number.isFinite(configuredRate) && configuredRate >= 0) {
+    state.token.neuronDailyRate = configuredRate;
+  }
+  if (!state.token.tokenVaultUrl) {
+    resetTokenState();
+  } else {
+    state.token.tokenVaultUrl = state.commerce.tokenVaultUrl;
+    state.token.buyTokensUrl = state.commerce.buyTokensUrl;
+    state.token.billingDashboardUrl = state.commerce.billingDashboardUrl;
+    state.token.billingAdminUrl = state.commerce.billingAdminUrl;
+  }
   if (state.authMode === "none" && defaultUser) {
     const current = (state.runtime.userId || "").trim();
     if (!current || isGeneratedRuntimeUser(current)) {
@@ -632,13 +751,17 @@ async function initAuth() {
       const data = await modeResp.json();
       state.authMode = data.mode || "none";
       state.allowSignup = Boolean(data.allow_signup);
+      state.centralAuth = Boolean(data.central_auth);
     }
   } catch (_) {
     state.authMode = "none";
+    state.centralAuth = false;
   }
   if (state.authMode === "none") {
     applyAuthIdentity(null);
+    resetTokenState();
     setUserStatus(state.identity);
+    syncTokenUi();
     hideAuthOverlay();
     return;
   }
@@ -650,10 +773,13 @@ async function initAuth() {
     setUserStatus(state.identity);
     await loadUserConfig();
     await loadRuntimeStatus();
+    await loadTokenBalance();
     hideAuthOverlay();
   } else {
     applyAuthIdentity(null);
     state.userConfigEnabled = false;
+    resetTokenState();
+    syncTokenUi();
     showAuthOverlay();
   }
 }
@@ -671,17 +797,32 @@ function showAuthOverlay() {
   if (!authOverlay) return;
   authOverlay.classList.remove("hidden");
   if (loginError) loginError.textContent = "";
+  const sharedLoginUrl = buildSharedLoginUrl();
+  const sharedLoginAvailable = Boolean(sharedLoginUrl) && (state.authMode === "oidc" || state.centralAuth);
   if (authMessage) {
-    authMessage.textContent = state.authMode === "oidc" ? "Continue with your SSO provider." : "Enter your credentials.";
+    authMessage.textContent = sharedLoginAvailable ? "Continue via NeuralMimicry Login to keep SSO aligned across products." : state.authMode === "oidc" ? "Continue with your SSO provider." : "Enter your credentials.";
+  }
+  if (sharedLoginBtn) {
+    sharedLoginBtn.style.display = sharedLoginAvailable ? "inline-flex" : "none";
+    if (sharedLoginAvailable) {
+      sharedLoginBtn.href = sharedLoginUrl;
+    } else {
+      sharedLoginBtn.removeAttribute("href");
+    }
   }
   if (loginForm) {
     loginForm.style.display = state.authMode === "local" ? "flex" : "none";
   }
   if (oidcLogin) {
-    oidcLogin.style.display = state.authMode === "oidc" ? "inline-flex" : "none";
+    oidcLogin.style.display = state.authMode === "oidc" && !sharedLoginAvailable ? "inline-flex" : "none";
   }
   if (signupBtn) {
     signupBtn.style.display = state.allowSignup ? "inline-flex" : "none";
+  }
+  if (authDivider) {
+    const showDivider = sharedLoginAvailable && state.authMode === "local";
+    authDivider.style.display = showDivider ? "block" : "none";
+    authDivider.textContent = "runtime fallback";
   }
 }
 function hideAuthOverlay() {
@@ -752,6 +893,7 @@ async function performLogin(username, password) {
     setUserStatus(state.identity);
     await loadUserConfig();
     await loadRuntimeStatus();
+    await loadTokenBalance();
     resetTargetsUi();
     await initTargets();
     refreshNetworkSelect();
@@ -813,6 +955,7 @@ async function performLogout() {
   state.runtime.workspaces = [];
   state.runtime.details.clear();
   state.runtime.autoscaler = null;
+  resetTokenState();
   state.snapshot = null;
   state.activity = null;
   state.graph = null;
@@ -825,6 +968,7 @@ async function performLogout() {
   setPlaceholder();
   drawNetwork();
   setUserStatus(state.identity);
+  syncTokenUi();
   if (state.authMode !== "none") {
     showAuthOverlay();
   }
@@ -1017,6 +1161,93 @@ function workspaceNetworkMeta(workspace, detail = getActiveWorkspaceDetail()) {
     learning_rule: status.learning_rule || state.lastLearning || "aarnn"
   };
 }
+function activeWorkspaceNeuronCount() {
+  const workspace = getActiveWorkspaceMeta();
+  if (!workspace) {
+    return 0;
+  }
+  const meta = workspaceNetworkMeta(workspace, getActiveWorkspaceDetail());
+  return Math.max(0, Number((meta === null || meta === void 0 ? void 0 : meta.total_neurons) || 0));
+}
+function runningWorkspaceNeuronCount() {
+  return state.runtime.workspaces.reduce((total, workspace) => total + (workspace.running ? Math.max(0, Number(workspace.total_neurons || 0)) : 0), 0);
+}
+function syncTokenUi() {
+  const rate = Math.max(0, Number(state.token.neuronDailyRate || 0));
+  const activeBurn = activeWorkspaceNeuronCount() * rate;
+  const fleetBurn = runningWorkspaceNeuronCount() * rate;
+  if (tokenBalanceEl) {
+    if (state.token.loading && state.token.balance === null) {
+      tokenBalanceEl.textContent = "Loading...";
+    } else if (state.authMode === "none") {
+      tokenBalanceEl.textContent = "Sign in required";
+    } else {
+      tokenBalanceEl.textContent = state.token.balance === null ? "-" : formatTokenAmount(state.token.balance);
+    }
+  }
+  if (tokenBurnRateEl) {
+    tokenBurnRateEl.textContent = formatTokenBurn(activeBurn);
+  }
+  if (tokenFleetBurnRateEl) {
+    tokenFleetBurnRateEl.textContent = formatTokenBurn(fleetBurn);
+  }
+  if (tokenRateModelEl) {
+    tokenRateModelEl.textContent = `${formatTokenAmount(rate, "")} / neuron / day`;
+  }
+  if (tokenStatusNoteEl) {
+    if (state.authMode === "none") {
+      tokenStatusNoteEl.textContent = "Token accounting and checkout links are available after shared commercial sign-in.";
+    } else if (!state.user) {
+      tokenStatusNoteEl.textContent = "Sign in to load your shared token balance.";
+    } else if (state.token.error) {
+      tokenStatusNoteEl.textContent = state.token.error;
+    } else if (state.token.loading && state.token.balance === null) {
+      tokenStatusNoteEl.textContent = "Loading shared token balance...";
+    } else {
+      const updatedAt = formatTokenTimestamp(state.token.updatedAt);
+      tokenStatusNoteEl.textContent = updatedAt ? `Last updated ${updatedAt}.` : "Projected burn uses the active workspace and running fleet neuron totals.";
+    }
+  }
+  setLinkVisibility(tokenVaultLink, state.token.tokenVaultUrl || state.commerce.tokenVaultUrl);
+  setLinkVisibility(tokenBuyLink, state.token.buyTokensUrl || state.commerce.buyTokensUrl);
+  setLinkVisibility(tokenBillingLink, state.token.billingDashboardUrl || state.commerce.billingDashboardUrl);
+  setLinkVisibility(tokenAdminLink, state.identity && state.identity.isAdmin ? state.token.billingAdminUrl || state.commerce.billingAdminUrl : "");
+}
+async function loadTokenBalance() {
+  if (state.authMode === "none" || !state.user) {
+    resetTokenState();
+    syncTokenUi();
+    return;
+  }
+  state.token.loading = true;
+  state.token.error = "";
+  syncTokenUi();
+  try {
+    const resp = await fetch("/api/tokens");
+    if (!resp.ok) {
+      state.token.error = "Unable to load token balance right now.";
+      return;
+    }
+    const data = await resp.json();
+    const balance = typeof data.balance !== "undefined" ? Number(data.balance) : Number(data.tokens);
+    state.token.configured = Boolean(data.configured);
+    state.token.balance = Number.isFinite(balance) ? balance : null;
+    state.token.updatedAt = typeof data.updated_at === "string" ? data.updated_at : null;
+    const rate = Number(data.neuron_daily_rate);
+    if (Number.isFinite(rate) && rate >= 0) {
+      state.token.neuronDailyRate = rate;
+    }
+    state.token.tokenVaultUrl = normalizeExternalLink(data.token_vault_url) || state.commerce.tokenVaultUrl;
+    state.token.buyTokensUrl = normalizeExternalLink(data.buy_tokens_url) || state.commerce.buyTokensUrl;
+    state.token.billingDashboardUrl = normalizeExternalLink(data.billing_dashboard_url) || state.commerce.billingDashboardUrl;
+    state.token.billingAdminUrl = normalizeExternalLink(data.billing_admin_url) || state.commerce.billingAdminUrl;
+  } catch (_) {
+    state.token.error = "Unable to load token balance right now.";
+  } finally {
+    state.token.loading = false;
+    syncTokenUi();
+  }
+}
 function refreshWorkspaceSelect() {
   if (!workspaceSelect) return;
   workspaceSelect.innerHTML = "";
@@ -1071,6 +1302,7 @@ function syncWorkspaceUi() {
   if (workspaceStopBtn) workspaceStopBtn.disabled = !workspace || !running;
   if (networkSelect) networkSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
   if (nodeSelect) nodeSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
+  syncTokenUi();
 }
 async function loadRuntimeStatus() {
   if (state.authMode !== "none" && !state.user) return;
@@ -1152,6 +1384,7 @@ async function createWorkspaceFromCurrentState() {
     refreshWorkspaceSelect();
     if (workspaceNameInput) workspaceNameInput.value = "";
     await loadRuntimeStatus();
+    await loadTokenBalance();
     refreshNetworkSelect();
     await fetchSnapshotForActive();
     await pollActivity();
@@ -1231,6 +1464,7 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
     const detail = await resp.json();
     cacheWorkspaceDetail(detail);
     await loadRuntimeStatus();
+    await loadTokenBalance();
     await fetchSnapshotForActive();
     await pollActivity();
     setWorkspaceFeedback(`Updated workspace ${workspace.workspace_id}.`, "success");
@@ -1264,6 +1498,7 @@ async function controlWorkspaceAction(action) {
     const detail = await resp.json();
     cacheWorkspaceDetail(detail);
     await loadRuntimeStatus();
+    await loadTokenBalance();
     await fetchSnapshotForActive();
     await pollActivity();
     setWorkspaceFeedback(`Workspace ${workspace.workspace_id} ${action}.`, "success");
@@ -3802,6 +4037,11 @@ if (logoutBtn) {
     performLogout();
   });
 }
+if (tokenRefreshBtn) {
+  tokenRefreshBtn.addEventListener("click", () => {
+    loadTokenBalance();
+  });
+}
 if (graphAddProbeBtn) {
   graphAddProbeBtn.addEventListener("click", () => {
     const target = state.instrumentation.contextTarget;
@@ -3826,6 +4066,7 @@ window.addEventListener("click", event => {
 async function boot() {
   await initAuth();
   await loadRuntimeStatus();
+  syncTokenUi();
   await initTargets();
   resizeCanvas();
   attachControls();
