@@ -236,10 +236,10 @@ impl CommandQueue {
         queue_size: ocl::types::cl_uint,
     ) -> Result<Self> {
         if let Some(ctx) = context.opencl() {
-            let q = ocl::command_queue::CommandQueue::create_with_properties(
+            let q = unsafe { ocl::command_queue::CommandQueue::create_with_properties(
                 ctx, device_id, properties, queue_size,
             )
-            .map_err(ClError::from)?;
+            .map_err(ClError::from)}?;
             return Ok(Self {
                 backend: CommandQueueBackend::OpenCl(Arc::new(q)),
             });
@@ -273,8 +273,8 @@ impl CommandQueue {
     ) -> Result<()> {
         match (&self.backend, &mut buffer.backend) {
             (CommandQueueBackend::OpenCl(q), BufferBackend::OpenCl(buf)) => {
-                q.enqueue_write_buffer(buf, CL_TRUE, offset, data, &[])
-                    .map_err(ClError::from)?;
+                unsafe {q.enqueue_write_buffer(buf, CL_TRUE, offset, data, &[])
+                    .map_err(ClError::from)}?;
                 Ok(())
             }
             #[cfg(feature = "cuda")]
@@ -303,8 +303,8 @@ impl CommandQueue {
     ) -> Result<()> {
         match (&self.backend, &buffer.backend) {
             (CommandQueueBackend::OpenCl(q), BufferBackend::OpenCl(buf)) => {
-                q.enqueue_read_buffer(buf, CL_TRUE, offset, data, &[])
-                    .map_err(ClError::from)?;
+                unsafe {q.enqueue_read_buffer(buf, CL_TRUE, offset, data, &[])
+                    .map_err(ClError::from)}?;
                 Ok(())
             }
             #[cfg(feature = "cuda")]
@@ -378,8 +378,8 @@ impl<T: GpuData + CudaData> Buffer<T> {
         }
         let len = size_bytes / elem_size;
         if let Some(ctx) = context.opencl() {
-            let buf = ocl::memory::Buffer::create(ctx, flags, size_bytes, host_ptr)
-                .map_err(ClError::from)?;
+            let buf = unsafe{ocl::memory::Buffer::create(ctx, flags, size_bytes, host_ptr)
+                .map_err(ClError::from)}?;
             return Ok(Self {
                 backend: BufferBackend::OpenCl(buf),
                 len,
@@ -594,27 +594,27 @@ impl<'a> ExecuteKernel<'a> {
                     match arg {
                         KernelArg::BufI8(b) => {
                             let bb = b.opencl().ok_or(ClError(CL_INVALID_VALUE))?;
-                            kernel.set_arg(i, bb).map_err(ClError::from)?;
+                            unsafe{kernel.set_arg(i, bb).map_err(ClError::from)}?;
                         }
                         KernelArg::BufI32(b) => {
                             let bb = b.opencl().ok_or(ClError(CL_INVALID_VALUE))?;
-                            kernel.set_arg(i, bb).map_err(ClError::from)?;
+                            unsafe{kernel.set_arg(i, bb).map_err(ClError::from)}?;
                         }
                         KernelArg::BufF32(b) => {
                             let bb = b.opencl().ok_or(ClError(CL_INVALID_VALUE))?;
-                            kernel.set_arg(i, bb).map_err(ClError::from)?;
+                            unsafe{kernel.set_arg(i, bb).map_err(ClError::from)}?;
                         }
                         KernelArg::BufF64(b) => {
                             let bb = b.opencl().ok_or(ClError(CL_INVALID_VALUE))?;
-                            kernel.set_arg(i, bb).map_err(ClError::from)?;
+                            unsafe{kernel.set_arg(i, bb).map_err(ClError::from)}?;
                         }
                         KernelArg::BufF32x4(b) => {
                             let bb = b.opencl().ok_or(ClError(CL_INVALID_VALUE))?;
-                            kernel.set_arg(i, bb).map_err(ClError::from)?;
+                            unsafe{kernel.set_arg(i, bb).map_err(ClError::from)}?;
                         }
-                        KernelArg::I32(v) => kernel.set_arg(i, v).map_err(ClError::from)?,
-                        KernelArg::F32(v) => kernel.set_arg(i, v).map_err(ClError::from)?,
-                        KernelArg::F64(v) => kernel.set_arg(i, v).map_err(ClError::from)?,
+                        KernelArg::I32(v) => unsafe{kernel.set_arg(i, v).map_err(ClError::from)}?,
+                        KernelArg::F32(v) => unsafe{kernel.set_arg(i, v).map_err(ClError::from)}?,
+                        KernelArg::F64(v) => unsafe{kernel.set_arg(i, v).map_err(ClError::from)}?,
                     }
                 }
 
@@ -623,7 +623,7 @@ impl<'a> ExecuteKernel<'a> {
                 for (i, s) in self.global_sizes.iter().copied().take(dim).enumerate() {
                     gws[i] = s.max(1);
                 }
-                ocl_queue
+                unsafe{ocl_queue
                     .enqueue_nd_range_kernel(
                         kernel.get(),
                         dim as u32,
@@ -632,7 +632,7 @@ impl<'a> ExecuteKernel<'a> {
                         ptr::null(),
                         &[],
                     )
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
                 return Ok(());
             }
             _ => {}
@@ -640,7 +640,7 @@ impl<'a> ExecuteKernel<'a> {
 
         #[cfg(feature = "cuda")]
         {
-            self.enqueue_cuda(queue)
+            unsafe{self.enqueue_cuda(queue)}
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -730,7 +730,7 @@ impl<'a> ExecuteKernel<'a> {
                 let mut spk = get!(7, BufI8)
                     .cuda_lock()
                     .ok_or(ClError(CL_INVALID_VALUE))?;
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *v)
                     .arg(&mut *refr)
@@ -742,7 +742,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&mut *spk)
                     .arg(&n_neurons)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "izh_step" => {
                 let v_buf = get!(0, BufF64);
@@ -763,7 +763,7 @@ impl<'a> ExecuteKernel<'a> {
                 let mut spk = get!(9, BufI8)
                     .cuda_lock()
                     .ok_or(ClError(CL_INVALID_VALUE))?;
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *v)
                     .arg(&mut *u)
@@ -777,7 +777,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&mut *spk)
                     .arg(&n_neurons)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_dense" => {
                 let mut i_acc = get!(0, BufF64)
@@ -791,7 +791,7 @@ impl<'a> ExecuteKernel<'a> {
                     .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_pre = get!(3, I32);
                 let n_post = get!(4, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *pre)
@@ -799,7 +799,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&n_pre)
                     .arg(&n_post)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_dense_stp" => {
                 let mut i_acc = get!(0, BufF64)
@@ -813,7 +813,7 @@ impl<'a> ExecuteKernel<'a> {
                     .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_pre = get!(3, I32);
                 let n_post = get!(4, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *rel)
@@ -821,7 +821,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&n_pre)
                     .arg(&n_post)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_sparse" => {
                 let mut i_acc = get!(0, BufF64)
@@ -841,7 +841,7 @@ impl<'a> ExecuteKernel<'a> {
                     .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(5, I32);
                 let accumulate = get!(6, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *pre)
@@ -851,7 +851,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&n_post)
                     .arg(&accumulate)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_sparse_stp" => {
                 let mut i_acc = get!(0, BufF64)
@@ -874,7 +874,7 @@ impl<'a> ExecuteKernel<'a> {
                     .ok_or(ClError(CL_INVALID_VALUE))?;
                 let n_post = get!(6, I32);
                 let accumulate = get!(7, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *pre)
@@ -885,7 +885,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&n_post)
                     .arg(&accumulate)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_sparse_delay" => {
                 let mut i_acc = get!(0, BufF64)
@@ -910,7 +910,7 @@ impl<'a> ExecuteKernel<'a> {
                 let hist_len = get!(7, I32);
                 let neurons_per_frame = get!(8, I32);
                 let accumulate = get!(9, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *hist)
@@ -923,7 +923,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&neurons_per_frame)
                     .arg(&accumulate)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_acc_sparse_delay_stp" => {
                 let mut i_acc = get!(0, BufF64)
@@ -951,7 +951,7 @@ impl<'a> ExecuteKernel<'a> {
                 let hist_len = get!(8, I32);
                 let neurons_per_frame = get!(9, I32);
                 let accumulate = get!(10, I32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *hist)
@@ -965,7 +965,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&neurons_per_frame)
                     .arg(&accumulate)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "syn_filter" => {
                 let i_acc_buf = get!(0, BufF64);
@@ -985,7 +985,7 @@ impl<'a> ExecuteKernel<'a> {
                 let decay_gaba = get!(6, F64);
                 let nmda_ratio = get!(7, F64);
                 let syn_gain = get!(8, F64);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *i_acc)
                     .arg(&mut *ampa)
@@ -998,7 +998,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&syn_gain)
                     .arg(&n_post)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "stp_update" => {
                 let mut u = get!(0, BufF64)
@@ -1016,7 +1016,7 @@ impl<'a> ExecuteKernel<'a> {
                 let stp_u = get!(4, F64);
                 let decay_rec = get!(5, F64);
                 let decay_facil = get!(6, F64);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *u)
                     .arg(&mut *x)
@@ -1027,7 +1027,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&decay_facil)
                     .arg(&n_pre)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "plasticity_update" => {
                 let mut w = get!(0, BufF64)
@@ -1074,7 +1074,7 @@ impl<'a> ExecuteKernel<'a> {
                     block_dim: (16, 16, 1),
                     shared_mem_bytes: 0,
                 };
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *w)
                     .arg(&mut *pre)
@@ -1088,7 +1088,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&n_post)
                     .arg(&rule)
                     .launch(cfg)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             "morpho_energy" => {
                 let mut points = get!(0, BufF32x4)
@@ -1106,7 +1106,7 @@ impl<'a> ExecuteKernel<'a> {
                 let n_syn = get!(4, I32);
                 let radius_sq = get!(5, F32);
                 let kernel_k = get!(6, F32);
-                stream
+                unsafe{stream
                     .launch_builder(kernel)
                     .arg(&mut *points)
                     .arg(&mut *syn_sites)
@@ -1117,7 +1117,7 @@ impl<'a> ExecuteKernel<'a> {
                     .arg(&kernel_k)
                     .arg(&n_points)
                     .launch(cfg_1d)
-                    .map_err(ClError::from)?;
+                    .map_err(ClError::from)}?;
             }
             _ => return Err(ClError(CL_INVALID_VALUE)),
         }

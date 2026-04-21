@@ -162,7 +162,7 @@ fn parse_config(json: &str) -> anyhow::Result<(IoMapping, Runner, Quantizer)> {
     Ok((map, runner, quant))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
     if config_json.is_null() {
         return -1;
@@ -189,7 +189,7 @@ pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -208,7 +208,7 @@ pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f3
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -227,7 +227,7 @@ pub extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) 
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_step(t_ms: f64) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -239,7 +239,7 @@ pub extern "C" fn nm_step(t_ms: f64) -> c_int {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_set_quantizer_threshold(threshold: f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -253,7 +253,7 @@ pub extern "C" fn nm_set_quantizer_threshold(threshold: f32) -> c_int {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_shutdown() {
     // Drop state by replacing with a fresh OnceLock (not supported); simply leak for process lifetime
 }
