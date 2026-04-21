@@ -4553,8 +4553,17 @@ async fn export_snapshot_payload(
             .into_response();
     }
 
+    let script_path = {
+        let direct = std::path::PathBuf::from(format!("tools/{}", script));
+        if direct.exists() {
+            direct
+        } else {
+            std::path::PathBuf::from(format!("tools/{}c", script))
+        }
+    };
+
     let status = tokio::process::Command::new("python3")
-        .arg(format!("tools/{}", script))
+        .arg(script_path)
         .arg(arg_in)
         .arg(&tmp_in)
         .arg(arg_out)

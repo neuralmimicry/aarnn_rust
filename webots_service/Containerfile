@@ -1,22 +1,50 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 
 ARG BUILD_NUMBER=0
 ARG GIT_COMMIT=unknown
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 LABEL org.opencontainers.image.title="NeuralMimicry Webots Broker" \
       org.opencontainers.image.version="${BUILD_NUMBER}" \
       org.opencontainers.image.revision="${GIT_COMMIT}"
 
-WORKDIR /app
+WORKDIR /build
 
 COPY webots_service/requirements.txt /tmp/webots-service-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/webots-service-requirements.txt
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install -r /tmp/webots-service-requirements.txt
 
-COPY webots_service /app/webots_service
-COPY webots_world /app/webots_world
+COPY webots_service /build/webots_service
+COPY webots_world /build/webots_world
+
+RUN /opt/venv/bin/python - <<'PY'
+import compileall
+import pathlib
+import shutil
+
+package_dir = pathlib.Path("/build/webots_service")
+compileall.compile_dir(str(package_dir), force=True, quiet=1, legacy=True)
+for path in package_dir.rglob("*.py"):
+    path.unlink()
+for cache_dir in sorted(package_dir.rglob("__pycache__"), reverse=True):
+    shutil.rmtree(cache_dir)
+PY
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /build/webots_service /app/webots_service
+COPY --from=builder /build/webots_world /app/webots_world
 
 EXPOSE 8080
 

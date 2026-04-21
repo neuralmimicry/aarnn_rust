@@ -5551,28 +5551,36 @@ impl App {
         use std::path::{Path, PathBuf};
         let mut tried: Vec<PathBuf> = Vec::new();
 
+        let candidates = [script_file.to_string(), format!("{}c", script_file)];
+
         // 0) Env override for tools dir
         if let Ok(tools_dir) = std::env::var("NMD_TOOLS_DIR") {
-            let p = Path::new(&tools_dir).join(script_file);
-            tried.push(p.clone());
-            if p.exists() {
-                return Ok(p);
+            for candidate in &candidates {
+                let p = Path::new(&tools_dir).join(candidate);
+                tried.push(p.clone());
+                if p.exists() {
+                    return Ok(p);
+                }
             }
         }
 
         // 1) Relative to current working directory
-        let rel = Path::new("tools").join(script_file);
-        tried.push(rel.clone());
-        if rel.exists() {
-            return Ok(rel);
+        for candidate in &candidates {
+            let rel = Path::new("tools").join(candidate);
+            tried.push(rel.clone());
+            if rel.exists() {
+                return Ok(rel);
+            }
         }
 
         // 2) CARGO_MANIFEST_DIR (project root) if available
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            let p = Path::new(&manifest_dir).join("tools").join(script_file);
-            tried.push(p.clone());
-            if p.exists() {
-                return Ok(p);
+            for candidate in &candidates {
+                let p = Path::new(&manifest_dir).join("tools").join(candidate);
+                tried.push(p.clone());
+                if p.exists() {
+                    return Ok(p);
+                }
             }
         }
 
@@ -5582,10 +5590,12 @@ impl App {
             for _ in 0..4 {
                 // check a few ancestors
                 if let Some(dir) = cur {
-                    let p = dir.join("tools").join(script_file);
-                    tried.push(p.clone());
-                    if p.exists() {
-                        return Ok(p);
+                    for candidate in &candidates {
+                        let p = dir.join("tools").join(candidate);
+                        tried.push(p.clone());
+                        if p.exists() {
+                            return Ok(p);
+                        }
                     }
                     cur = dir.parent().map(Path::to_path_buf);
                 } else {
