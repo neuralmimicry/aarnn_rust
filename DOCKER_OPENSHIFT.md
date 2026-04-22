@@ -10,19 +10,50 @@ The project uses a multi-stage `Containerfile` based on CentOS Stream 9.
 
 ### Build with Podman (Recommended for OpenShift)
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust v1.0.0 true
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false
 ```
-This script creates a manifest for `linux/amd64` and `linux/arm64`, builds both architectures (using QEMU if necessary), and pushes them to GHCR.
-The container build produces both binaries: `aarnn_rust` and `web_ui`.
+By default this builds the native-architecture workload images from the same source tree and assembles a manifest tag per workload:
+
+- `engine-standalone`
+- `engine-orchestrator`
+- `engine-node`
+- `engine-web-ui`
+- `engine-desktop-ui`
+
+Limit the build to a subset of workloads by passing a CSV list as the fourth argument:
+
+```bash
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false orchestrator,node,web-ui
+```
 
 ### Build with Docker Buildx
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/neuralmimicry/aarnn_rust:latest . --push
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/neuralmimicry/aarnn_rust:engine-orchestrator \
+  --build-arg CONTAINER_WORKLOAD=orchestrator \
+  --build-arg CARGO_FEATURES=orchestrator_workload \
+  --build-arg CARGO_BUILD_TARGETS=aarnn_rust \
+  -f Containerfile \
+  --push .
 ```
 
 ## 2. Deployment Architecture
 
-The application can be deployed in multiple modes from the same image:
+The application now builds role-specific images from the same source tree instead of relying on one `--all-features` image for every function.
+
+### Workload / feature matrix
+
+| Workload image | Cargo feature bundle | Effective feature set |
+| --- | --- | --- |
+| `standalone` | `standalone_workload` | `engine_runtime` |
+| `orchestrator` | `orchestrator_workload` | `engine_runtime` |
+| `node` | `node_workload` | `engine_runtime` |
+| `web-ui` | `web_ui_workload` | `engine_runtime` |
+| `desktop-ui` | `desktop_ui_workload` | `engine_runtime + ui + image_input + robot_io` |
+
+`engine_runtime` expands to `parallel + sysinfo + opencl + obs + shmem + growth3d + morpho`.
+
+### Runtime roles
 
 1.  **Standalone CLI**: A single pod running a continuous simulation.
 2.  **Standalone with Rust UI**: Same pod but launched with the native UI (X11/VNC required).
@@ -121,11 +152,10 @@ The project includes a native Rust UI (`egui`) and a Python animation UI (`matpl
 
 ### Building with UI Support
 
-By default, the container is built **with** the `ui` feature so the image can run CLI, Rust UI, orchestrator, node, and web UI modes. You can override the feature set to reduce image size if needed:
+The native UI and IPC/image providers now live in the dedicated `desktop-ui` workload image. Build only that workload when you need an X11-capable container:
 
 ```bash
-# Example building with a slimmer feature set (no UI)
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust v1.0.0 true "growth3d,sysinfo,opencl"
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false desktop-ui
 ```
 
 ### Deploying the UI to OpenShift
@@ -157,7 +187,7 @@ oc apply -k deploy/overlays/ui
 
 ## 9. Web UI Server
 
-The web UI is a separate binary (`web_ui`) bundled in the same image. It serves an HTTP frontend that connects to the orchestrator and nodes via gRPC.
+The web UI is a separate binary (`web_ui`) and now ships as the dedicated `engine-web-ui` image. It serves an HTTP frontend that connects to the orchestrator and nodes via gRPC.
 
 ### Deploying the Web UI to OpenShift
 
@@ -180,23 +210,34 @@ oc apply -f deploy/base/web-ui.yaml
 - Nodes connect to the orchestrator service at `http://orchestrator:50051`.
 - Expose the web UI with a Route/Ingress to allow browsers to access it.
 
-## 10. Running the Image in Different Modes
+## 10. Running the Images in Different Modes
 
-All modes use the same container image and differ only by command/args:
+Each role has a dedicated image tag. The container entrypoint supplies a sensible default command for that role, and you can still override args explicitly when needed.
 
 ```bash
 # CLI-only (single host)
-podman run --rm ghcr.io/neuralmimicry/aarnn_rust:latest --t 2000
+podman run --rm ghcr.io/neuralmimicry/aarnn_rust:engine-standalone
 
 # Rust UI (requires X11 or VNC sidecar)
-podman run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix ghcr.io/neuralmimicry/aarnn_rust:latest --ui
+podman run --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui
 
 # Orchestrator
-podman run --rm -p 50051:50051 -p 50050:50050/udp ghcr.io/neuralmimicry/aarnn_rust:latest --orchestrator --grpc-addr 0.0.0.0:50051
+podman run --rm -p 50051:50051 -p 50050:50050/udp ghcr.io/neuralmimicry/aarnn_rust:engine-orchestrator
 
 # Node
-podman run --rm -p 50052:50052 ghcr.io/neuralmimicry/aarnn_rust:latest --node --orchestrator-addr http://<orchestrator-host>:50051 --grpc-addr 0.0.0.0:50052
+podman run --rm -p 50052:50052 ghcr.io/neuralmimicry/aarnn_rust:engine-node \
+  --node --orchestrator-addr http://<orchestrator-host>:50051 --grpc-addr 0.0.0.0:50052
 
 # Web UI server
-podman run --rm -p 8080:8080 ghcr.io/neuralmimicry/aarnn_rust:latest ./web_ui --listen 0.0.0.0:8080 --orchestrator http://<orchestrator-host>:50051
+podman run --rm -p 8080:8080 ghcr.io/neuralmimicry/aarnn_rust:engine-web-ui \
+  --listen 0.0.0.0:8080 --orchestrator http://<orchestrator-host>:50051
 ```
+
+Local Podman test scripts matching these workloads are available at:
+
+- `run_container_standalone.sh`
+- `run_container_orchestrator.sh`
+- `run_container_node.sh`
+- `run_container_web_ui.sh`
+- `run_container_desktop_ui.sh`
+- `run_container_cluster.sh`

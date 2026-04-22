@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust:engine-arm64"}
+IMAGE_NAME=${1:-""}
 BRAIN_ID=${2:-"motor"}
+
+if [ -z "$IMAGE_NAME" ]; then
+  case "$(uname -m)" in
+    x86_64|amd64) IMAGE_ARCH="amd64" ;;
+    aarch64|arm64) IMAGE_ARCH="arm64" ;;
+    *) IMAGE_ARCH="$(uname -m)" ;;
+  esac
+  IMAGE_NAME="ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}"
+fi
 
 if ! command -v xauth >/dev/null 2>&1; then
   echo "xauth not found. Install xauth and try again." >&2

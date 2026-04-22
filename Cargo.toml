@@ -103,6 +103,34 @@ growth3d = []
 # Experimental: neuron morphology data structures and AARNN extras
 morpho = []
 
+# Engine runtime capabilities shared by standalone, orchestrator, node, and
+# web_ui workloads. The explicit parallel/sysinfo entries let container builds
+# use `--no-default-features` while still getting the expected runtime profile.
+engine_runtime = [
+    "parallel",
+    "sysinfo",
+    "opencl",
+    "obs",
+    "shmem",
+    "growth3d",
+    "morpho",
+]
+
+# Workload aliases used by the role-specific container builds.
+standalone_workload = ["engine_runtime"]
+orchestrator_workload = ["engine_runtime"]
+node_workload = ["engine_runtime"]
+web_ui_workload = ["engine_runtime"]
+desktop_ui_workload = [
+    "engine_runtime",
+    "ui",
+    "image_input",
+    "robot_io",
+]
+
+# Backward-compatible alias for the previous broad container feature set.
+container = ["desktop_ui_workload"]
+
 # Enable CPU data-parallelism with Rayon
 parallel = [
     "dep:rayon",

@@ -22,6 +22,14 @@ This repository integrates the existing neuromorphic build and container workflo
 scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false
 ```
 
+This builds the native-architecture workload images from the same source tree:
+
+- `engine-standalone`
+- `engine-orchestrator`
+- `engine-node`
+- `engine-web-ui`
+- `engine-desktop-ui`
+
 ## Release workflow
 
 GitHub Actions binary release automation lives in `.github/workflows/build-and-release.yml`.
