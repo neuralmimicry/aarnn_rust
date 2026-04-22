@@ -11,7 +11,7 @@ source "${SCRIPT_DIR}/container_workloads.sh"
 
 IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
 IMAGE_TAG=${2:-"engine"}
-PUSH=${3:-"false"}
+PUSH=${PUSH:-${3:-"true"}}
 WORKLOADS_CSV=${WORKLOADS:-${4:-"standalone,orchestrator,node,web-ui,desktop-ui"}}
 PYTHON_MIN_VERSION=${PYTHON_MIN_VERSION:-${5:-"3.12"}}
 PYTHON_FULL_VERSION=${PYTHON_FULL_VERSION:-${6:-"3.12.2"}}
@@ -19,6 +19,8 @@ NO_CACHE=${NO_CACHE:-${7:-"false"}}
 SKIP_REMOTE_MANIFEST=${SKIP_REMOTE_MANIFEST:-${8:-"false"}}
 PULL=${PULL:-${9:-"false"}}
 BUILD_TOOL=${CONTAINER_BUILD_TOOL:-${BUILD_TOOL:-""}}
+REGISTRY_USERNAME=${REGISTRY_USERNAME:-${GHCR_USERNAME:-${GITHUB_USER:-""}}}
+REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${GITHUB_TOKEN:-""}}}
 
 KNOWN_ARCHES=("amd64" "arm64")
 WORKLOADS=()
@@ -91,6 +93,39 @@ role_tag_for() {
 arch_tag_for() {
     local workload="$1"
     printf '%s-%s' "$(role_tag_for "$workload")" "$HOST_ARCH"
+}
+
+registry_host_for_image() {
+    local host="${IMAGE_NAME%%/*}"
+    if [[ "${host}" == *.* ]] || [[ "${host}" == *:* ]] || [[ "${host}" == "localhost" ]]; then
+        printf '%s' "${host}"
+    fi
+}
+
+maybe_login_podman_registry() {
+    local registry_host=""
+
+    [ "${PUSH}" = "true" ] || return 0
+    registry_host="$(registry_host_for_image)"
+    [ -n "${registry_host}" ] || return 0
+
+    if [ -n "${REGISTRY_USERNAME}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
+        echo "Logging in to ${registry_host} with podman before push."
+        printf '%s' "${REGISTRY_PASSWORD}" | podman login "${registry_host}" -u "${REGISTRY_USERNAME}" --password-stdin
+    fi
+}
+
+maybe_login_docker_registry() {
+    local registry_host=""
+
+    [ "${PUSH}" = "true" ] || return 0
+    registry_host="$(registry_host_for_image)"
+    [ -n "${registry_host}" ] || return 0
+
+    if [ -n "${REGISTRY_USERNAME}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
+        echo "Logging in to ${registry_host} with docker before push."
+        printf '%s' "${REGISTRY_PASSWORD}" | docker login "${registry_host}" -u "${REGISTRY_USERNAME}" --password-stdin
+    fi
 }
 
 maybe_add_remote_manifest_entries_podman() {
@@ -204,7 +239,6 @@ build_workload_with_podman() {
     local image_ref="${IMAGE_NAME}:${arch_tag}"
     local features="$(aarnn_container_workload_features "$workload")"
     local targets="$(aarnn_container_workload_targets "$workload")"
-    local need_ui="$(aarnn_container_workload_needs_native_ui "$workload")"
 
     echo "Building ${image_ref}"
     echo "  workload: ${workload}"
@@ -217,7 +251,6 @@ build_workload_with_podman() {
         --build-arg CONTAINER_WORKLOAD="${workload}" \
         --build-arg CARGO_FEATURES="${features}" \
         --build-arg CARGO_BUILD_TARGETS="${targets}" \
-        --build-arg NEED_NATIVE_UI_RUNTIME="${need_ui}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}"
@@ -243,7 +276,6 @@ build_workload_with_buildx() {
     local image_ref="${IMAGE_NAME}:${arch_tag}"
     local features="$(aarnn_container_workload_features "$workload")"
     local targets="$(aarnn_container_workload_targets "$workload")"
-    local need_ui="$(aarnn_container_workload_needs_native_ui "$workload")"
     local output_flag="--load"
 
     if [ "$PUSH" = "true" ]; then
@@ -257,7 +289,6 @@ build_workload_with_buildx() {
         --build-arg CONTAINER_WORKLOAD="${workload}" \
         --build-arg CARGO_FEATURES="${features}" \
         --build-arg CARGO_BUILD_TARGETS="${targets}" \
-        --build-arg NEED_NATIVE_UI_RUNTIME="${need_ui}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}" ${output_flag}
@@ -269,6 +300,7 @@ print_summary() {
     echo "Host platform: ${HOST_PLATFORM}"
     echo "Image repo: ${IMAGE_NAME}"
     echo "Base tag: ${IMAGE_TAG}"
+    echo "Push after build: ${PUSH}"
     echo "Workloads: ${WORKLOADS[*]}"
     echo "Python minimum: ${PYTHON_MIN_VERSION}"
     echo "Python full: ${PYTHON_FULL_VERSION}"
@@ -308,9 +340,9 @@ fi
 
 if { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "podman" ]; } && command -v podman >/dev/null 2>&1; then
     echo "Using Podman for build and manifest assembly."
+    maybe_login_podman_registry
     for workload in "${WORKLOADS[@]}"; do
         build_workload_with_podman "$workload"
-        assemble_podman_manifest "$workload"
     done
 
     if [ "$PUSH" = "true" ]; then
@@ -321,6 +353,7 @@ if { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "podman" ]; } && command -v podma
         for workload in "${WORKLOADS[@]}"; do
             role_tag="$(role_tag_for "$workload")"
             arch_tag="$(arch_tag_for "$workload")"
+            assemble_podman_manifest "$workload"
             echo "To push ${workload}:"
             echo "  podman push ${IMAGE_NAME}:${arch_tag} docker://${IMAGE_NAME}:${arch_tag}"
             echo "  podman manifest push ${IMAGE_NAME}:${role_tag} docker://${IMAGE_NAME}:${role_tag}"
@@ -328,10 +361,13 @@ if { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "podman" ]; } && command -v podma
     fi
 elif { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "docker-buildx" ]; } && docker buildx version >/dev/null 2>&1; then
     echo "Using Docker Buildx for native workload builds."
+    maybe_login_docker_registry
     for workload in "${WORKLOADS[@]}"; do
         build_workload_with_buildx "$workload"
     done
-    if [ "$PUSH" != "true" ]; then
+    if [ "$PUSH" = "true" ]; then
+        echo "Docker Buildx pushed the native architecture workload tags. Manifest assembly remains Podman-only."
+    else
         echo "Docker Buildx native builds completed. Manifest assembly from pre-existing platform images is implemented for Podman only."
     fi
 elif [ "$BUILD_TOOL" = "podman" ]; then

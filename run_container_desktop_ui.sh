@@ -14,7 +14,8 @@ CONFIG_PATH="${CONFIG_PATH:-${ROOT_DIR}/config.json}"
 NETWORK_PATH="${NETWORK_PATH:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/outputs}"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/logs}"
-CACHE_DIR="${CACHE_DIR:-${HOME}/.cache}"
+CACHE_DIR="${CACHE_DIR:-${ROOT_DIR}/.container-cache/desktop-ui}"
+UI_RENDERER="${NM_UI_RENDERER:-glow}"
 
 if [ -z "${DISPLAY:-}" ]; then
     echo "DISPLAY is not set. Use ssh -X/-Y or a local X server." >&2
@@ -46,13 +47,19 @@ RUN_ARGS=(
 PODMAN_ARGS=(
     --rm
     --network=host
+    --ipc=host
+    --userns=keep-id
     --user "$(id -u):$(id -g)"
     --name "aarnn-desktop-ui-$(date +%s)"
     -e DISPLAY="${DISPLAY}"
     -e XAUTHORITY=/tmp/.Xauthority
     -e XDG_CACHE_HOME=/tmp/cache
+    -e MESA_SHADER_CACHE_DIR=/tmp/cache/mesa_shader_cache
     -e FONTCONFIG_PATH=/etc/fonts
+    -e NM_UI_RENDERER="${UI_RENDERER}"
+    -e WINIT_UNIX_BACKEND=x11
     -e LIBGL_ALWAYS_SOFTWARE=1
+    -e LIBGL_DRI3_DISABLE=1
     -e MESA_GL_VERSION_OVERRIDE=3.3
     -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
     -v "${XAUTH}:/tmp/.Xauthority:ro"
@@ -61,8 +68,13 @@ PODMAN_ARGS=(
     -v "${LOG_DIR}:/app/logs:Z"
 )
 
+if [ -d /tmp/.X11-unix ]; then
+    PODMAN_ARGS+=( -v /tmp/.X11-unix:/tmp/.X11-unix:ro )
+fi
+
 aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${CONFIG_PATH}" /app/runtime-config.json --config
 aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${NETWORK_PATH}" /app/runtime-network.json --network
 
 echo "Running desktop-ui workload from ${IMAGE_REF}"
+echo "Renderer: ${UI_RENDERER}"
 exec podman run "${PODMAN_ARGS[@]}" "${IMAGE_REF}" "${RUN_ARGS[@]}"

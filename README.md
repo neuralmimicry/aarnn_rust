@@ -19,16 +19,18 @@ This repository integrates the existing neuromorphic build and container workflo
 ### Build locally
 
 ```bash
-scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false
+scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
 ```
 
-This builds the native-architecture workload images from the same source tree:
+This builds and pushes the native-architecture workload images from the same source tree:
 
 - `engine-standalone`
 - `engine-orchestrator`
 - `engine-node`
 - `engine-web-ui`
 - `engine-desktop-ui`
+
+Pass `false` as the third argument if you want a local-only build without pushing.
 
 ## Release workflow
 
