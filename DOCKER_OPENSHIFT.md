@@ -10,9 +10,9 @@ The project uses a multi-stage `Containerfile` based on CentOS Stream 9.
 
 ### Build with Podman (Recommended for OpenShift)
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
 ```
-By default this builds the native-architecture workload images from the same source tree and assembles a manifest tag per workload:
+By default this builds and pushes the native-architecture workload images from the same source tree and assembles a manifest tag per workload:
 
 - `engine-standalone`
 - `engine-orchestrator`
@@ -23,8 +23,10 @@ By default this builds the native-architecture workload images from the same sou
 Limit the build to a subset of workloads by passing a CSV list as the fourth argument:
 
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false orchestrator,node,web-ui
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine true orchestrator,node,web-ui
 ```
+
+Skip the automatic push by passing `false` as the third argument.
 
 ### Build with Docker Buildx
 ```bash
@@ -155,7 +157,7 @@ The project includes a native Rust UI (`egui`) and a Python animation UI (`matpl
 The native UI and IPC/image providers now live in the dedicated `desktop-ui` workload image. Build only that workload when you need an X11-capable container:
 
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine false desktop-ui
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine true desktop-ui
 ```
 
 ### Deploying the UI to OpenShift

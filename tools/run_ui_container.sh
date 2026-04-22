@@ -13,6 +13,9 @@ if [ -z "$IMAGE_NAME" ]; then
   IMAGE_NAME="ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}"
 fi
 
+UI_RENDERER="${NM_UI_RENDERER:-glow}"
+CACHE_DIR="${CACHE_DIR:-$PWD/.container-cache/desktop-ui}"
+
 if ! command -v xauth >/dev/null 2>&1; then
   echo "xauth not found. Install xauth and try again." >&2
   exit 1
@@ -46,21 +49,35 @@ if ! xauth -f "$XAUTH" list >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$HOME/.cache" "$PWD/outputs" "$PWD/logs"
+mkdir -p "$CACHE_DIR" "$PWD/outputs" "$PWD/logs"
 
-podman run --rm \
-  --network=host \
-  --user "$(id -u):$(id -g)" \
-  -e DISPLAY="$DISPLAY" \
-  -e XAUTHORITY=/tmp/.Xauthority \
-  -e XDG_CACHE_HOME=/tmp/cache \
-  -e FONTCONFIG_PATH=/etc/fonts \
-  -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -e MESA_GL_VERSION_OVERRIDE=3.3 \
-  -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe \
-  -v "$XAUTH:/tmp/.Xauthority:ro" \
-  -v "$HOME/.cache:/tmp/cache:Z" \
-  -v "$PWD/outputs:/app/outputs:Z" \
-  -v "$PWD/logs:/app/logs:Z" \
+PODMAN_ARGS=(
+  --rm
+  --network=host
+  --ipc=host
+  --userns=keep-id
+  --user "$(id -u):$(id -g)"
+  -e DISPLAY="$DISPLAY"
+  -e XAUTHORITY=/tmp/.Xauthority
+  -e XDG_CACHE_HOME=/tmp/cache
+  -e MESA_SHADER_CACHE_DIR=/tmp/cache/mesa_shader_cache
+  -e FONTCONFIG_PATH=/etc/fonts
+  -e NM_UI_RENDERER="$UI_RENDERER"
+  -e WINIT_UNIX_BACKEND=x11
+  -e LIBGL_ALWAYS_SOFTWARE=1
+  -e LIBGL_DRI3_DISABLE=1
+  -e MESA_GL_VERSION_OVERRIDE=3.3
+  -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+  -v "$XAUTH:/tmp/.Xauthority:ro"
+  -v "$CACHE_DIR:/tmp/cache:Z"
+  -v "$PWD/outputs:/app/outputs:Z"
+  -v "$PWD/logs:/app/logs:Z"
+)
+
+if [ -d /tmp/.X11-unix ]; then
+  PODMAN_ARGS+=( -v /tmp/.X11-unix:/tmp/.X11-unix:ro )
+fi
+
+podman run "${PODMAN_ARGS[@]}" \
   "$IMAGE_NAME" \
   --brain-id "$BRAIN_ID" --ui --trace
