@@ -17,8 +17,11 @@
 
 set -Eeuo pipefail
 
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly LOG_PREFIX="[deploy-mixed-cluster]"
+# shellcheck source=scripts/container_workloads.sh
+source "${SCRIPT_DIR}/container_workloads.sh"
 
 # ------------------------------------------------------------------------------
 # Default configuration
@@ -30,7 +33,15 @@ WORKER_HOSTS=("192.168.1.60" "192.168.1.72")
 SSH_USER="${SSH_USER:-${USER}}"
 SSH_PORT="${SSH_PORT:-22}"
 INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL:-stable}"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/neuralmimicry/aarnn_rust:main}"
+AARNN_IMAGE_REPO="${AARNN_IMAGE_REPO:-ghcr.io/neuralmimicry/aarnn_rust}"
+AARNN_IMAGE_TAG="${AARNN_IMAGE_TAG:-engine}"
+AARNN_IMAGE_BASE="${AARNN_IMAGE_BASE:-${AARNN_IMAGE:-}}"
+AARNN_ORCHESTRATOR_IMAGE="${AARNN_ORCHESTRATOR_IMAGE:-${ORCHESTRATOR_IMAGE:-}}"
+AARNN_WEB_UI_IMAGE="${AARNN_WEB_UI_IMAGE:-${WEB_UI_IMAGE:-}}"
+AARNN_NODE_IMAGE="${AARNN_NODE_IMAGE:-${NODE_IMAGE:-}}"
+ORCHESTRATOR_IMAGE=""
+WEB_UI_IMAGE=""
+NODE_IMAGE=""
 NAMESPACE="${NAMESPACE:-default}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-300}"
 INTERACTIVE_SUDO="${INTERACTIVE_SUDO:-true}"
@@ -110,7 +121,12 @@ Options:
   --workers <host1,host2>     Comma-separated worker hosts/IPs.
   --ssh-user <user>           SSH user for worker hosts (default: current user).
   --ssh-port <port>           SSH port for worker hosts (default: 22).
-  --image <image:tag>         Orchestrator image (default: ghcr.io/neuralmimicry/aarnn_rust:main).
+  --image <repo:tag>          Base AARNN image ref used to derive workload tags.
+  --image-repo <repo>         Workload image repository (default: ghcr.io/neuralmimicry/aarnn_rust).
+  --image-tag <tag>           Shared workload image base tag (default: engine).
+  --orchestrator-image <ref>  Override the orchestrator image ref.
+  --web-ui-image <ref>        Override the web-ui image ref.
+  --node-image <ref>          Override the engine node image ref.
   --namespace <ns>            Kubernetes namespace for application workloads (default: default).
   --k3s-channel <channel>     k3s release channel (default: stable).
   --wait-timeout <seconds>    Wait timeout for node readiness (default: 300).
@@ -133,9 +149,11 @@ Options:
   --help                      Show this help.
 
 Environment overrides are supported for the same fields:
-  SSH_USER, SSH_PORT, ORCHESTRATOR_IMAGE, NAMESPACE, INSTALL_K3S_CHANNEL,
-  WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO, WEB_UI_LOCAL_PORT,
-  REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS,
+  SSH_USER, SSH_PORT, AARNN_IMAGE_BASE, AARNN_IMAGE, AARNN_IMAGE_REPO,
+  AARNN_IMAGE_TAG, AARNN_ORCHESTRATOR_IMAGE, ORCHESTRATOR_IMAGE,
+  AARNN_WEB_UI_IMAGE, WEB_UI_IMAGE, AARNN_NODE_IMAGE, NODE_IMAGE,
+  NAMESPACE, INSTALL_K3S_CHANNEL, WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO,
+  WEB_UI_LOCAL_PORT, REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS,
   STOP_SYSTEM_KUBELET, STOP_REMOTE_SYSTEM_KUBELET, GHCR_USERNAME, GHCR_TOKEN,
   GHCR_EMAIL, GHCR_PULL_SECRET_NAME, ROLLOUT_TIMEOUT_SECONDS,
   K3S_KUBELET_CPU_FLAGS, ENABLE_GPU_PASSTHROUGH
@@ -197,6 +215,62 @@ join_by() {
   done
 }
 
+parse_repo_tag_ref() {
+  local ref="$1"
+  local last_path_segment=""
+  local repo_part=""
+  local tag_part=""
+
+  [[ -n "${ref}" ]] || return 1
+  [[ "${ref}" != *@sha256:* ]] || return 1
+  last_path_segment="${ref##*/}"
+  [[ "${last_path_segment}" == *:* ]] || return 1
+
+  repo_part="${ref%:*}"
+  tag_part="${ref##*:}"
+  [[ -n "${repo_part}" && -n "${tag_part}" && "${repo_part}" != "${ref}" ]] || return 1
+
+  printf '%s\t%s\n' "${repo_part}" "${tag_part}"
+}
+
+resolve_workload_image() {
+  local workload="$1"
+  local explicit_ref="$2"
+
+  if [[ -n "${explicit_ref}" ]]; then
+    printf '%s' "${explicit_ref}"
+    return 0
+  fi
+
+  printf '%s:%s' "${AARNN_IMAGE_REPO}" "$(aarnn_container_workload_tag "${AARNN_IMAGE_TAG}" "${workload}")"
+}
+
+resolve_workload_images() {
+  local parsed_base=""
+
+  if [[ -n "${AARNN_IMAGE_BASE}" ]]; then
+    parsed_base="$(parse_repo_tag_ref "${AARNN_IMAGE_BASE}")" || fail "--image / AARNN_IMAGE_BASE must be a repo:tag ref without a digest."
+    AARNN_IMAGE_REPO="${parsed_base%%$'\t'*}"
+    AARNN_IMAGE_TAG="${parsed_base##*$'\t'}"
+  fi
+
+  ORCHESTRATOR_IMAGE="$(resolve_workload_image orchestrator "${AARNN_ORCHESTRATOR_IMAGE}")"
+  WEB_UI_IMAGE="$(resolve_workload_image web-ui "${AARNN_WEB_UI_IMAGE}")"
+  NODE_IMAGE="$(resolve_workload_image node "${AARNN_NODE_IMAGE}")"
+}
+
+image_ref_is_mutable() {
+  local image_ref="$1"
+  [[ "${image_ref}" != *@sha256:* ]]
+}
+
+any_workload_image_matches_prefix() {
+  local prefix="$1"
+  [[ "${ORCHESTRATOR_IMAGE}" == "${prefix}"* ]] \
+    || [[ "${WEB_UI_IMAGE}" == "${prefix}"* ]] \
+    || [[ "${NODE_IMAGE}" == "${prefix}"* ]]
+}
+
 parse_workers_csv() {
   local csv="$1"
   local -a parsed=()
@@ -236,7 +310,32 @@ parse_args() {
       --image)
         shift
         [[ $# -gt 0 ]] || fail "--image requires a value"
-        ORCHESTRATOR_IMAGE="$1"
+        AARNN_IMAGE_BASE="$1"
+        ;;
+      --image-repo)
+        shift
+        [[ $# -gt 0 ]] || fail "--image-repo requires a value"
+        AARNN_IMAGE_REPO="$1"
+        ;;
+      --image-tag)
+        shift
+        [[ $# -gt 0 ]] || fail "--image-tag requires a value"
+        AARNN_IMAGE_TAG="$1"
+        ;;
+      --orchestrator-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--orchestrator-image requires a value"
+        AARNN_ORCHESTRATOR_IMAGE="$1"
+        ;;
+      --web-ui-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--web-ui-image requires a value"
+        AARNN_WEB_UI_IMAGE="$1"
+        ;;
+      --node-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--node-image requires a value"
+        AARNN_NODE_IMAGE="$1"
         ;;
       --namespace)
         shift
@@ -323,6 +422,8 @@ parse_args() {
 }
 
 validate_config() {
+  resolve_workload_images
+
   ensure_positive_integer "${SSH_PORT}" "SSH port"
   ensure_positive_integer "${WAIT_TIMEOUT_SECONDS}" "Wait timeout"
   ensure_positive_integer "${WEB_UI_LOCAL_PORT}" "Web UI local port"
@@ -338,6 +439,11 @@ validate_config() {
   [[ -n "${SSH_USER}" ]] || fail "SSH user must not be empty"
   [[ -n "${NAMESPACE}" ]] || fail "Namespace must not be empty"
   [[ -n "${INSTALL_K3S_CHANNEL}" ]] || fail "k3s channel must not be empty"
+  [[ -n "${AARNN_IMAGE_REPO}" ]] || fail "AARNN image repo must not be empty"
+  [[ -n "${AARNN_IMAGE_TAG}" ]] || fail "AARNN image tag must not be empty"
+  [[ -n "${ORCHESTRATOR_IMAGE}" ]] || fail "Orchestrator image must not be empty"
+  [[ -n "${WEB_UI_IMAGE}" ]] || fail "Web UI image must not be empty"
+  [[ -n "${NODE_IMAGE}" ]] || fail "Node image must not be empty"
 
   refresh_ssh_opts
 }
@@ -663,7 +769,7 @@ configure_registry_auth() {
       --docker-password="${GHCR_TOKEN}" \
       --docker-email="${GHCR_EMAIL}" \
       --dry-run=client -o yaml | kubectl apply -f -
-  elif [[ "${ORCHESTRATOR_IMAGE}" == ghcr.io/* ]]; then
+  elif any_workload_image_matches_prefix "ghcr.io/"; then
     warn "No GHCR credentials provided. If the image is private, set GHCR_USERNAME and GHCR_TOKEN (or use --ghcr-username/--ghcr-token)."
   fi
 }
@@ -752,7 +858,9 @@ deploy_orchestrator() {
   local control_plane_node_name=""
   local sa_pull_secret_yaml=""
   local pod_pull_secret_yaml=""
-  local image_pull_policy="IfNotPresent"
+  local orchestrator_image_pull_policy="IfNotPresent"
+  local web_ui_image_pull_policy="IfNotPresent"
+  local node_image_pull_policy="IfNotPresent"
   local force_rollout_restart="false"
   local gpu_pod_volumes_yaml=""
   local gpu_container_mounts_yaml=""
@@ -760,8 +868,16 @@ deploy_orchestrator() {
 
   control_plane_node_name="$(hostname -s)"
 
-  if [[ "${ORCHESTRATOR_IMAGE}" != *@sha256:* ]]; then
-    image_pull_policy="Always"
+  if image_ref_is_mutable "${ORCHESTRATOR_IMAGE}"; then
+    orchestrator_image_pull_policy="Always"
+    force_rollout_restart="true"
+  fi
+  if image_ref_is_mutable "${WEB_UI_IMAGE}"; then
+    web_ui_image_pull_policy="Always"
+    force_rollout_restart="true"
+  fi
+  if image_ref_is_mutable "${NODE_IMAGE}"; then
+    node_image_pull_policy="Always"
     force_rollout_restart="true"
   fi
 
@@ -776,7 +892,7 @@ deploy_orchestrator() {
     gpu_pod_volumes_yaml=$'      volumes:\n        - name: host-dev\n          hostPath:\n            path: /dev\n            type: Directory\n        - name: host-sys\n          hostPath:\n            path: /sys\n            type: Directory'
   fi
 
-  log "Deploying orchestrator (${ORCHESTRATOR_IMAGE}) to namespace '${NAMESPACE}', pinned to ${control_plane_node_name}."
+  log "Deploying workloads to namespace '${NAMESPACE}' with orchestrator=${ORCHESTRATOR_IMAGE}, web-ui=${WEB_UI_IMAGE}, node=${NODE_IMAGE}, pinned to ${control_plane_node_name}."
   cat <<EOF | kubectl -n "${NAMESPACE}" apply -f -
 apiVersion: v1
 kind: ServiceAccount
@@ -836,7 +952,7 @@ ${pod_pull_secret_yaml}
       containers:
         - name: neuromorphic
           image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          imagePullPolicy: ${orchestrator_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
@@ -898,8 +1014,8 @@ ${pod_pull_secret_yaml}
           effect: NoSchedule
       containers:
         - name: web-ui
-          image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          image: ${WEB_UI_IMAGE}
+          imagePullPolicy: ${web_ui_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
@@ -942,8 +1058,8 @@ ${pod_pull_secret_yaml}
                     operator: DoesNotExist
       containers:
         - name: neuromorphic-node
-          image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          image: ${NODE_IMAGE}
+          imagePullPolicy: ${node_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:

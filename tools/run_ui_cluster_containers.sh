@@ -28,7 +28,8 @@ case "${ARCH_RAW}" in
   *) IMAGE_ARCH="${ARCH_RAW}" ;;
 esac
 
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-${IMAGE_ARCH}}"
+ORCH_IMAGE_NAME="${ORCH_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}}"
+NODE_IMAGE_NAME="${NODE_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-node-${IMAGE_ARCH}}"
 BRAIN_ID_ORCH="${BRAIN_ID_ORCH:-cluster_master}"
 NODE_COUNT="${NODE_COUNT:-2}"
 
@@ -157,7 +158,7 @@ CONTAINERS+=("$ORCH_NAME")
 
 podman run --rm --name "$ORCH_NAME" \
   "${COMMON_OPTS[@]}" \
-  "$IMAGE_NAME" \
+  "$ORCH_IMAGE_NAME" \
   --orchestrator --brain-id "$BRAIN_ID_ORCH" \
   --grpc-addr "0.0.0.0:$ORCH_PORT" \
   "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" \
@@ -179,7 +180,7 @@ for i in $(seq 1 "$NODE_COUNT"); do
 
   podman run --rm --name "$NODE_NAME" \
     "${COMMON_OPTS[@]}" \
-    "$IMAGE_NAME" \
+    "$NODE_IMAGE_NAME" \
     --node --brain-id "node_${i}" \
     --grpc-addr "0.0.0.0:$NODE_PORT" \
     --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" --quiet \

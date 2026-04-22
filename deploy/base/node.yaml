@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: neuromorphic
-          image: ghcr.io/neuralmimicry/aarnn_rust:latest
+          image: ghcr.io/neuralmimicry/aarnn_rust:engine-node
           args: ["--node", "--orchestrator-addr", "http://orchestrator:50051"]
           resources:
             requests:
