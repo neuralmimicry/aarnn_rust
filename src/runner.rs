@@ -20,48 +20,48 @@
 //! heavy computations to the GPU via the `OpenCLManager`.
 //!   conduction in this file is only active in the UI path when compiled with
 //!   the appropriate features and the AARNN model is selected.
-use ndarray::{s, Array1, Array2};
+use ndarray::{Array1, Array2, s};
 
 use crate::aarnn::dynamics::{
+    AarnnDecays, ActiveDendriteSpec, DendriteStructureSignal, SynapticDriveParams,
     apply_active_dendritic_compartment, apply_gap_junction_mean_field,
     apply_synaptic_filter as apply_aarnn_synaptic_filter, precalculate_decays,
     sanitize_current_array as sanitize_current_array_ref,
-    sanitize_current_value as sanitize_current_value_ref, AarnnDecays, ActiveDendriteSpec,
-    DendriteStructureSignal, SynapticDriveParams,
+    sanitize_current_value as sanitize_current_value_ref,
 };
 #[cfg(feature = "growth3d")]
 use crate::aarnn::dynamics::{
-    apply_local_gap_junction_coupling, volume_transmission_factors_for_layer, SpatialPoint3,
+    SpatialPoint3, apply_local_gap_junction_coupling, volume_transmission_factors_for_layer,
 };
 #[cfg(feature = "growth3d")]
 use crate::aarnn::plasticity::enforce_dale_matrix_cols_with_mask as dale_enforce_cols_with_mask;
 use crate::aarnn::plasticity::{
-    apply_synaptic_scaling_matrix_rows as scale_synaptic_rows,
+    ShortTermPlasticityParams, apply_synaptic_scaling_matrix_rows as scale_synaptic_rows,
     enforce_dale_matrix_cols as dale_enforce_cols,
     is_inhibitory_presyn as inferred_inhibitory_presyn,
     release_probability as release_probability_ref, stp_update_slice as stp_update_slice_ref,
-    triplet_eta_scale, ShortTermPlasticityParams,
+    triplet_eta_scale,
 };
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::aarnn::transmission::{
-    compute_delay_and_attenuation, CompartmentClass, DelayAttenuationSpec,
-    DendriticTransmissionProfile, FatigueProfile, MyelinationProfile,
+    CompartmentClass, DelayAttenuationSpec, DendriticTransmissionProfile, FatigueProfile,
+    MyelinationProfile, compute_delay_and_attenuation,
 };
 
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
-    Buffer, CLBuffers, ExecuteKernel, OpenCLManager, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
+    Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, CLBuffers, ExecuteKernel, OpenCLManager,
 };
 #[cfg(feature = "growth3d")]
 use crate::config::AarnnBioParams;
 use crate::config::{
-    apply_clumping_layer_defaults, backfill_aarnn_biomimicry_profile_missing_fields,
-    AarnnBiomimicryProfile,
+    AarnnBiomimicryProfile, apply_clumping_layer_defaults,
+    backfill_aarnn_biomimicry_profile_missing_fields,
 };
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{EvolutionResult, Morphology};
-use crate::network::{build_network, BuiltNetwork};
+use crate::network::{BuiltNetwork, build_network};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
 use crate::topology::{Node3D, Topology3D};
@@ -71,12 +71,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "opencl")]
 use std::ptr;
-#[cfg(all(feature = "morpho", feature = "growth3d"))]
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 #[cfg(feature = "opencl")]
 use std::sync::Arc;
 #[cfg(any(feature = "parallel", all(feature = "morpho", feature = "growth3d")))]
 use std::sync::OnceLock;
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 // -------------------- Save / Load helper types --------------------
 #[derive(Serialize, Deserialize, Clone)]
@@ -1082,11 +1082,7 @@ impl Runner {
 
         let in_l = self.net.sensory_target_layer.unwrap_or_else(|| {
             if matches!(self.neuron_model, NeuronModel::Aarnn) {
-                if num > 1 {
-                    1
-                } else {
-                    0
-                }
+                if num > 1 { 1 } else { 0 }
             } else {
                 0
             }
@@ -1094,11 +1090,7 @@ impl Runner {
 
         let out_l = self.net.output_source_layer.unwrap_or_else(|| {
             if matches!(self.neuron_model, NeuronModel::Aarnn) {
-                if num > 4 {
-                    4
-                } else {
-                    num.saturating_sub(1)
-                }
+                if num > 4 { 4 } else { num.saturating_sub(1) }
             } else {
                 num.saturating_sub(1)
             }
@@ -1958,13 +1950,22 @@ impl Runner {
                             self.syn_gaba_o.as_slice(),
                         ) {
                             if let Err(e) = cl.queue.enqueue_write_buffer(a, CL_TRUE, 0, sa, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers ampa_o write failed: {:?}", e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers ampa_o write failed: {:?}",
+                                    e
+                                );
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(n, CL_TRUE, 0, sn, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers nmda_o write failed: {:?}", e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers nmda_o write failed: {:?}",
+                                    e
+                                );
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(g, CL_TRUE, 0, sg, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers gaba_o write failed: {:?}", e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers gaba_o write failed: {:?}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -2026,13 +2027,25 @@ impl Runner {
                             self.syn_gaba_h[l].as_slice(),
                         ) {
                             if let Err(e) = cl.queue.enqueue_write_buffer(a, CL_TRUE, 0, sa, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers ampa_h[{}] write failed: {:?}", l, e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers ampa_h[{}] write failed: {:?}",
+                                    l,
+                                    e
+                                );
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(n, CL_TRUE, 0, sn, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers nmda_h[{}] write failed: {:?}", l, e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers nmda_h[{}] write failed: {:?}",
+                                    l,
+                                    e
+                                );
                             }
                             if let Err(e) = cl.queue.enqueue_write_buffer(g, CL_TRUE, 0, sg, &[]) {
-                                nm_log!("[warn] OpenCL sync_cl_syn_buffers gaba_h[{}] write failed: {:?}", l, e);
+                                nm_log!(
+                                    "[warn] OpenCL sync_cl_syn_buffers gaba_h[{}] write failed: {:?}",
+                                    l,
+                                    e
+                                );
                             }
                         }
                     }
@@ -2163,9 +2176,7 @@ impl Runner {
                 self.cl_stp_x_s = Some(x);
                 self.cl_stp_rel_s = Some(rel);
                 self.cl_stp_s_size = size;
-                if let (Some(u), Some(x)) =
-                    (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s)
-                {
+                if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s) {
                     unsafe {
                         if let (Some(su), Some(sx)) =
                             (self.stp_u_s.as_slice(), self.stp_x_s.as_slice())
@@ -2235,9 +2246,7 @@ impl Runner {
                 if l < self.cl_stp_h_sizes.len() {
                     self.cl_stp_h_sizes[l] = size;
                 }
-                if let (Some(u), Some(x)) =
-                    (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l])
-                {
+                if let (Some(u), Some(x)) = (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l]) {
                     unsafe {
                         if let (Some(su), Some(sx)) =
                             (self.stp_u_h[l].as_slice(), self.stp_x_h[l].as_slice())
@@ -2263,8 +2272,7 @@ impl Runner {
         };
         let s_size = self.net.num_sensory_neurons;
         if s_size > 0 {
-            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s)
-            {
+            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s) {
                 if let (Some(u_slice), Some(x_slice)) =
                     (self.stp_u_s.as_slice_mut(), self.stp_x_s.as_slice_mut())
                 {
@@ -2283,9 +2291,7 @@ impl Runner {
             if l >= self.cl_stp_u_h.len() || l >= self.cl_stp_x_h.len() {
                 break;
             }
-            if let (Some(u), Some(x)) =
-                (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l])
-            {
+            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l]) {
                 if let (Some(u_slice), Some(x_slice)) = (
                     self.stp_u_h[l].as_slice_mut(),
                     self.stp_x_h[l].as_slice_mut(),
@@ -2342,8 +2348,7 @@ impl Runner {
                             }
                         }
                     }
-                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, self.refr_o.as_ref())
-                    {
+                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, self.refr_o.as_ref()) {
                         unsafe {
                             if let Some(refr_data) = refr.as_slice() {
                                 if let Err(e) =
@@ -2408,7 +2413,7 @@ impl Runner {
                     self.net.num_output_neurons
                 } else {
                     self.v_h.get(l).map(|v| v.len()).unwrap_or(0)
-                })
+                });
             }
         };
         let size = if is_output {
@@ -2589,7 +2594,8 @@ impl Runner {
                     unsafe {
                         if let Some(slice) = self.w_hh_fwd[l].as_slice() {
                             if let Err(e) =
-                                cl.queue.enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
+                                cl.queue
+                                    .enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
                             {
                                 nm_log!(
                                     "[warn] OpenCL sync_cl_w_hh_fwd[{}] write failed: {:?}",
@@ -2628,7 +2634,8 @@ impl Runner {
                     unsafe {
                         if let Some(slice) = self.w_hh_bwd[l].as_slice() {
                             if let Err(e) =
-                                cl.queue.enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
+                                cl.queue
+                                    .enqueue_write_buffer(&mut *buf, CL_TRUE, 0, slice, &[])
                             {
                                 nm_log!(
                                     "[warn] OpenCL sync_cl_w_hh_bwd[{}] write failed: {:?}",
@@ -2928,9 +2935,9 @@ impl Runner {
                     nm_log!("[warn] OpenCL sparse_in weights write failed: {:?}", e);
                 }
                 if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) = cl
-                        .queue
-                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
+                    if let Err(e) =
+                        cl.queue
+                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!("[warn] OpenCL sparse_in delays write failed: {:?}", e);
                     }
@@ -3044,9 +3051,9 @@ impl Runner {
                     );
                 }
                 if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) = cl
-                        .queue
-                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
+                    if let Err(e) =
+                        cl.queue
+                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!(
                             "[warn] OpenCL sparse_fwd[{}] delays write failed: {:?}",
@@ -3164,9 +3171,9 @@ impl Runner {
                     );
                 }
                 if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) = cl
-                        .queue
-                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
+                    if let Err(e) =
+                        cl.queue
+                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!(
                             "[warn] OpenCL sparse_bwd[{}] delays write failed: {:?}",
@@ -3252,9 +3259,9 @@ impl Runner {
                     nm_log!("[warn] OpenCL sparse_out weights write failed: {:?}", e);
                 }
                 if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) = cl
-                        .queue
-                        .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
+                    if let Err(e) =
+                        cl.queue
+                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
                     {
                         nm_log!("[warn] OpenCL sparse_out delays write failed: {:?}", e);
                     }
@@ -4201,11 +4208,7 @@ impl Runner {
     #[cfg(feature = "growth3d")]
     fn normalize_optional_token(raw: Option<&str>) -> Option<String> {
         let s = raw?.trim().to_ascii_lowercase();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.is_empty() { None } else { Some(s) }
     }
 
     #[cfg(feature = "growth3d")]
@@ -4793,7 +4796,9 @@ impl Runner {
                     .unwrap_or(false);
                 if !allow {
                     self.cl_stp_ok = false;
-                    nm_log!("[info] OpenCL STP disabled; using CPU path. Set NM_OPENCL_STP=1 to enable.");
+                    nm_log!(
+                        "[info] OpenCL STP disabled; using CPU path. Set NM_OPENCL_STP=1 to enable."
+                    );
                 }
             }
         }
@@ -5253,7 +5258,12 @@ impl Runner {
                         nm_log!("[warn] new_cols init out of bounds: ({}, {})", j, i_add);
                     }
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                        nm_log!("[trace] synapse made: sensory {} -> hidden {}:{} - initialized on sensory resize", s_old + i_add, target_layer, j);
+                        nm_log!(
+                            "[trace] synapse made: sensory {} -> hidden {}:{} - initialized on sensory resize",
+                            s_old + i_add,
+                            target_layer,
+                            j
+                        );
                     }
                 }
             }
@@ -5379,7 +5389,12 @@ impl Runner {
                     let j = idxs[s];
                     new_rows[(i_add, j)] = fastrand::f64() * 0.3 + 0.1;
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                        nm_log!("[trace] synapse made: hidden {}:{} -> output {} - initialized on output resize", target_layer, j, o_old + i_add);
+                        nm_log!(
+                            "[trace] synapse made: hidden {}:{} -> output {} - initialized on output resize",
+                            target_layer,
+                            j,
+                            o_old + i_add
+                        );
                     }
                 }
             }
@@ -5722,11 +5737,7 @@ impl Runner {
                     (self.thalamic_gate_phase + step) % std::f32::consts::TAU;
                 let phase_gate = self.thalamic_gate_phase.sin() * 0.5 + 0.5;
                 let open = phase_gate >= 1.0 - duty;
-                if open {
-                    1.0
-                } else {
-                    floor
-                }
+                if open { 1.0 } else { floor }
             } else {
                 floor
             };
@@ -5817,12 +5828,7 @@ impl Runner {
             #[cfg(feature = "opencl")]
             if self.cl_stp_ok && self.cl.is_some() {
                 if self.sync_cl_stp_sensory() {
-                    if let (
-                        Some(pre),
-                        Some(u),
-                        Some(x),
-                        Some(rel),
-                    ) = (
+                    if let (Some(pre), Some(u), Some(x), Some(rel)) = (
                         &mut self.cl_stp_pre_s,
                         &mut self.cl_stp_u_s,
                         &mut self.cl_stp_x_s,
@@ -6940,11 +6946,7 @@ impl Runner {
                                             }
                                             #[cfg(not(feature = "growth3d"))]
                                             {
-                                                if steps_delay >= 1 {
-                                                    0
-                                                } else {
-                                                    s_t[i]
-                                                }
+                                                if steps_delay >= 1 { 0 } else { s_t[i] }
                                             }
                                         };
                                         if s != 0 {
@@ -7093,11 +7095,7 @@ impl Runner {
                                             }
                                             #[cfg(not(feature = "growth3d"))]
                                             {
-                                                if steps_delay >= 1 {
-                                                    0
-                                                } else {
-                                                    s_t[i]
-                                                }
+                                                if steps_delay >= 1 { 0 } else { s_t[i] }
                                             }
                                         };
                                         if s != 0 {
@@ -7156,11 +7154,7 @@ impl Runner {
                                             }
                                             #[cfg(not(feature = "growth3d"))]
                                             {
-                                                if steps_delay >= 1 {
-                                                    0
-                                                } else {
-                                                    s_t[i]
-                                                }
+                                                if steps_delay >= 1 { 0 } else { s_t[i] }
                                             }
                                         };
                                         if s != 0 {
@@ -7315,8 +7309,7 @@ impl Runner {
                         if !is_aarnn {
                             self.sync_cl_buffers(0, false);
                             let izh_params = self.effective_izh_params();
-                            if let Some(buf) =
-                                self.cl_buffers_h.get_mut(0).and_then(|o| o.as_mut())
+                            if let Some(buf) = self.cl_buffers_h.get_mut(0).and_then(|o| o.as_mut())
                             {
                                 // Upload i_h0
                                 gpu_success = true;
@@ -7360,7 +7353,10 @@ impl Runner {
                                                         .set_global_work_size(size)
                                                         .enqueue_nd_range(&cl.queue);
                                                     if let Err(e) = launch {
-                                                        nm_log!("[warn] OpenCL H0 lif_step failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL H0 lif_step failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     }
                                                 }
@@ -7386,7 +7382,10 @@ impl Runner {
                                                         .set_global_work_size(size)
                                                         .enqueue_nd_range(&cl.queue);
                                                     if let Err(e) = launch {
-                                                        nm_log!("[warn] OpenCL H0 izh_step failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL H0 izh_step failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     }
                                                 }
@@ -7675,18 +7674,16 @@ impl Runner {
                                 .and_then(|o| o.as_ref())
                                 .map(|b| b as *const Buffer<f64>);
                             // Access buffers via raw pointers to bypass borrow checker while ensuring sequential access
-                            let buf_prev_ptr =
-                                if let Some(Some(b)) = self.cl_buffers_h.get(l - 1) {
-                                    Some(b as *const CLBuffers)
-                                } else {
-                                    None
-                                };
-                            let buf_cur_ptr =
-                                if let Some(Some(b)) = self.cl_buffers_h.get_mut(l) {
-                                    Some(b as *mut CLBuffers)
-                                } else {
-                                    None
-                                };
+                            let buf_prev_ptr = if let Some(Some(b)) = self.cl_buffers_h.get(l - 1) {
+                                Some(b as *const CLBuffers)
+                            } else {
+                                None
+                            };
+                            let buf_cur_ptr = if let Some(Some(b)) = self.cl_buffers_h.get_mut(l) {
+                                Some(b as *mut CLBuffers)
+                            } else {
+                                None
+                            };
 
                             if let (Some(cl_fwd_ptr), Some(buf_prev_p), Some(buf_cur_p)) =
                                 (cl_fwd_ptr, buf_prev_ptr, buf_cur_ptr)
@@ -7742,7 +7739,10 @@ impl Runner {
                                                     )
                                                     .enqueue_nd_range(&cl.queue);
                                                 if let Err(e) = launch {
-                                                    nm_log!("[warn] OpenCL dense HH fwd acc stp failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL dense HH fwd acc stp failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             } else {
@@ -7813,7 +7813,10 @@ impl Runner {
                                             &mut i_vec,
                                             &[],
                                         ) {
-                                            nm_log!("[warn] OpenCL dense HH fwd i_total read failed: {:?}", e);
+                                            nm_log!(
+                                                "[warn] OpenCL dense HH fwd i_total read failed: {:?}",
+                                                e
+                                            );
                                             gpu_success = false;
                                         } else {
                                             i_f = Array1::from_vec(i_vec);
@@ -7865,7 +7868,10 @@ impl Runner {
                                                         &stp_release_h[l + 1],
                                                         &[],
                                                     ) {
-                                                        nm_log!("[warn] OpenCL dense HH bwd rel write failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL dense HH bwd rel write failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     } else {
                                                         rel_buf_opt = Some(rel);
@@ -7896,7 +7902,10 @@ impl Runner {
                                                                 )
                                                                 .enqueue_nd_range(&cl.queue);
                                                         if let Err(e) = launch {
-                                                            nm_log!("[warn] OpenCL dense HH bwd acc stp failed: {:?}", e);
+                                                            nm_log!(
+                                                                "[warn] OpenCL dense HH bwd acc stp failed: {:?}",
+                                                                e
+                                                            );
                                                             gpu_success = false;
                                                         }
                                                     } else {
@@ -7918,7 +7927,10 @@ impl Runner {
                                                         )
                                                         .enqueue_nd_range(&cl.queue);
                                                     if let Err(e) = launch {
-                                                        nm_log!("[warn] OpenCL dense HH bwd acc failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL dense HH bwd acc failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     }
                                                 }
@@ -7926,11 +7938,7 @@ impl Runner {
 
                                             if gpu_success && use_synaptic_filter && !gpu_filtered {
                                                 self.sync_cl_syn_buffers(l, false);
-                                                if let (
-                                                    Some(a),
-                                                    Some(n),
-                                                    Some(g),
-                                                ) = (
+                                                if let (Some(a), Some(n), Some(g)) = (
                                                     &mut self.cl_syn_ampa_h[l],
                                                     &mut self.cl_syn_nmda_h[l],
                                                     &mut self.cl_syn_gaba_h[l],
@@ -7955,7 +7963,10 @@ impl Runner {
                                                         )
                                                         .enqueue_nd_range(&cl.queue);
                                                     if let Err(e) = launch {
-                                                        nm_log!("[warn] OpenCL dense HH bwd filter failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL dense HH bwd filter failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     } else {
                                                         gpu_filtered = true;
@@ -7973,7 +7984,10 @@ impl Runner {
                                                     &mut i_vec,
                                                     &[],
                                                 ) {
-                                                    nm_log!("[warn] OpenCL dense HH bwd i_total read failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL dense HH bwd i_total read failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 } else {
                                                     i_b = Array1::from_vec(i_vec);
@@ -8051,7 +8065,10 @@ impl Runner {
                                                 &stp_release_h[l - 1],
                                                 &[],
                                             ) {
-                                                nm_log!("[warn] OpenCL sparse HH fwd rel write failed: {:?}", e);
+                                                nm_log!(
+                                                    "[warn] OpenCL sparse HH fwd rel write failed: {:?}",
+                                                    e
+                                                );
                                                 cl_ok = false;
                                             } else {
                                                 rel_buf_opt = Some(rel);
@@ -8165,7 +8182,10 @@ impl Runner {
                                                     &mut i_vec,
                                                     &[],
                                                 ) {
-                                                    nm_log!("[warn] OpenCL sparse fwd read failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL sparse fwd read failed: {:?}",
+                                                        e
+                                                    );
                                                     cl_ok = false;
                                                 } else {
                                                     i_f = Array1::from_vec(i_vec);
@@ -8207,7 +8227,10 @@ impl Runner {
                                                         &stp_release_h[l + 1],
                                                         &[],
                                                     ) {
-                                                        nm_log!("[warn] OpenCL sparse HH bwd rel write failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL sparse HH bwd rel write failed: {:?}",
+                                                            e
+                                                        );
                                                         cl_ok = false;
                                                     } else {
                                                         rel_buf_opt = Some(rel);
@@ -8277,7 +8300,10 @@ impl Runner {
                                                         }
                                                     };
                                                     if let Err(e) = bwd_res {
-                                                        nm_log!("[warn] OpenCL sparse bwd kernel failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL sparse bwd kernel failed: {:?}",
+                                                            e
+                                                        );
                                                         cl_ok = false;
                                                     }
                                                 }
@@ -8311,7 +8337,10 @@ impl Runner {
                                                             )
                                                             .enqueue_nd_range(&cl.queue);
                                                             if let Err(e) = launch {
-                                                                nm_log!("[warn] OpenCL sparse filter failed: {:?}", e);
+                                                                nm_log!(
+                                                                    "[warn] OpenCL sparse filter failed: {:?}",
+                                                                    e
+                                                                );
                                                                 cl_ok = false;
                                                             } else {
                                                                 gpu_filtered = true;
@@ -8330,7 +8359,10 @@ impl Runner {
                                                                 &[],
                                                             )
                                                         {
-                                                            nm_log!("[warn] OpenCL sparse bwd read failed: {:?}", e);
+                                                            nm_log!(
+                                                                "[warn] OpenCL sparse bwd read failed: {:?}",
+                                                                e
+                                                            );
                                                             cl_ok = false;
                                                         } else {
                                                             // Since i_total now contains i_f + i_b, we need to extract i_b
@@ -8512,11 +8544,7 @@ impl Runner {
                                                     }
                                                     #[cfg(not(feature = "growth3d"))]
                                                     {
-                                                        if steps_delay >= 1 {
-                                                            0
-                                                        } else {
-                                                            s_t[i]
-                                                        }
+                                                        if steps_delay >= 1 { 0 } else { s_t[i] }
                                                     }
                                                 };
                                                 if s != 0 {
@@ -8906,11 +8934,7 @@ impl Runner {
                                                 }
                                                 #[cfg(not(feature = "growth3d"))]
                                                 {
-                                                    if steps_delay >= 1 {
-                                                        0
-                                                    } else {
-                                                        s_t[i]
-                                                    }
+                                                    if steps_delay >= 1 { 0 } else { s_t[i] }
                                                 }
                                             };
                                             if s != 0 {
@@ -8984,11 +9008,7 @@ impl Runner {
                                                 }
                                                 #[cfg(not(feature = "growth3d"))]
                                                 {
-                                                    if steps_delay >= 1 {
-                                                        0
-                                                    } else {
-                                                        s_t[i]
-                                                    }
+                                                    if steps_delay >= 1 { 0 } else { s_t[i] }
                                                 }
                                             };
                                             if s != 0 {
@@ -9326,7 +9346,10 @@ impl Runner {
                                                         )
                                                         .enqueue_nd_range(&cl.queue);
                                                     if let Err(e) = launch {
-                                                        nm_log!("[warn] OpenCL Hl izh_step failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL Hl izh_step failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     }
                                                 }
@@ -9789,7 +9812,10 @@ impl Runner {
                                                 .set_global_work_size(num_output_neurons)
                                                 .enqueue_nd_range(&cl.queue);
                                             if let Err(e) = launch {
-                                                nm_log!("[warn] OpenCL dense output acc stp failed: {:?}", e);
+                                                nm_log!(
+                                                    "[warn] OpenCL dense output acc stp failed: {:?}",
+                                                    e
+                                                );
                                                 gpu_success = false;
                                             }
                                         } else {
@@ -9964,7 +9990,10 @@ impl Runner {
                                                 .set_global_work_size(num_output_neurons)
                                                 .enqueue_nd_range(&cl.queue);
                                             if let Err(e) = launch {
-                                                nm_log!("[warn] OpenCL sparse output acc stp failed: {:?}", e);
+                                                nm_log!(
+                                                    "[warn] OpenCL sparse output acc stp failed: {:?}",
+                                                    e
+                                                );
                                                 gpu_success = false;
                                             }
                                         } else {
@@ -10609,7 +10638,10 @@ impl Runner {
                                                     .set_global_work_size(num_output_neurons)
                                                     .enqueue_nd_range(&cl.queue);
                                                 if let Err(e) = launch {
-                                                    nm_log!("[warn] OpenCL output lif_step failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL output lif_step failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             }
@@ -10635,7 +10667,10 @@ impl Runner {
                                                     .set_global_work_size(num_output_neurons)
                                                     .enqueue_nd_range(&cl.queue);
                                                 if let Err(e) = launch {
-                                                    nm_log!("[warn] OpenCL output izh_step failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL output izh_step failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             }
@@ -10950,13 +10985,12 @@ impl Runner {
                                     let w_buf_opt = self.cl_w_in.as_ref();
                                     let x_pre_buf_opt = self.cl_x_pre_in.as_mut();
                                     let s_buf_opt = self.cl_s_t.as_mut();
-                                    let h0_buf_opt = if let Some(Some(b)) =
-                                        self.cl_buffers_h.get_mut(0)
-                                    {
-                                        Some(b)
-                                    } else {
-                                        None
-                                    };
+                                    let h0_buf_opt =
+                                        if let Some(Some(b)) = self.cl_buffers_h.get_mut(0) {
+                                            Some(b)
+                                        } else {
+                                            None
+                                        };
 
                                     if let (
                                         Some(w_buf),
@@ -10975,7 +11009,10 @@ impl Runner {
                                                     slice,
                                                     &[],
                                                 ) {
-                                                    nm_log!("[warn] OpenCL learning x_pre_in write failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL learning x_pre_in write failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             } else {
@@ -10990,7 +11027,10 @@ impl Runner {
                                                     &s_t,
                                                     &[],
                                                 ) {
-                                                    nm_log!("[warn] OpenCL learning s_t write failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL learning s_t write failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             }
@@ -11005,7 +11045,10 @@ impl Runner {
                                                         slice,
                                                         &[],
                                                     ) {
-                                                        nm_log!("[warn] OpenCL learning x_trace write failed: {:?}", e);
+                                                        nm_log!(
+                                                            "[warn] OpenCL learning x_trace write failed: {:?}",
+                                                            e
+                                                        );
                                                         gpu_success = false;
                                                     }
                                                 } else {
@@ -11042,7 +11085,10 @@ impl Runner {
                                                     ])
                                                     .enqueue_nd_range(&cl.queue);
                                                 if let Err(e) = launch {
-                                                    nm_log!("[warn] OpenCL plasticity kernel failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL plasticity kernel failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             }
@@ -11331,7 +11377,8 @@ impl Runner {
                                 } else {
                                     None
                                 };
-                                let buf_o_ptr = self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
+                                let buf_o_ptr =
+                                    self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
 
                                 if let (Some(cl_out), Some(buf_last_p), Some(buf_o_p)) =
                                     (cl_out_opt, buf_last_ptr, buf_o_ptr)
@@ -11359,7 +11406,10 @@ impl Runner {
                                                 s1,
                                                 &[],
                                             ) {
-                                                nm_log!("[warn] OpenCL learning out last_trace write failed: {:?}", e);
+                                                nm_log!(
+                                                    "[warn] OpenCL learning out last_trace write failed: {:?}",
+                                                    e
+                                                );
                                                 gpu_success = false;
                                             }
                                             if gpu_success {
@@ -11370,7 +11420,10 @@ impl Runner {
                                                     s2,
                                                     &[],
                                                 ) {
-                                                    nm_log!("[warn] OpenCL learning out o_trace write failed: {:?}", e);
+                                                    nm_log!(
+                                                        "[warn] OpenCL learning out o_trace write failed: {:?}",
+                                                        e
+                                                    );
                                                     gpu_success = false;
                                                 }
                                             }
@@ -11401,7 +11454,10 @@ impl Runner {
                                                 ])
                                                 .enqueue_nd_range(&cl.queue);
                                             if let Err(e) = launch {
-                                                nm_log!("[warn] OpenCL out plasticity kernel failed: {:?}", e);
+                                                nm_log!(
+                                                    "[warn] OpenCL out plasticity kernel failed: {:?}",
+                                                    e
+                                                );
                                                 gpu_success = false;
                                             }
                                         }
@@ -12924,11 +12980,7 @@ impl Runner {
                 0.0f32,
                 |m, (&ax, &den)| {
                     let t = (ax / v_ax + den / v_den + base_lat) * myelin_delay_scale;
-                    if t > m {
-                        t
-                    } else {
-                        m
-                    }
+                    if t > m { t } else { m }
                 },
             );
             let need = ((max_total_ms / dt).ceil() as usize + 2).clamp(2, 256);
@@ -14025,7 +14077,11 @@ impl Runner {
                         *cell = w;
                     }
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                        nm_log!("[trace] synapse made: sensory {} -> hidden 0:{} - attached to new neuron", pick, j_new);
+                        nm_log!(
+                            "[trace] synapse made: sensory {} -> hidden 0:{} - attached to new neuron",
+                            pick,
+                            j_new
+                        );
                     }
                 }
             } else {
@@ -14072,7 +14128,12 @@ impl Runner {
                 }
                 if migrated > 0 {
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                        nm_log!("[trace] {} input synapses migrated from hidden 0:{} to new hidden 0:{}", migrated, parent_j, j_new);
+                        nm_log!(
+                            "[trace] {} input synapses migrated from hidden 0:{} to new hidden 0:{}",
+                            migrated,
+                            parent_j,
+                            j_new
+                        );
                     }
                 }
             }
@@ -15852,7 +15913,14 @@ impl Runner {
         }
         if migrated_h_in > 0 {
             if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                nm_log!("[trace] {} incoming hidden synapses migrated from hidden {}:{} to new hidden {}:{}", migrated_h_in, l, parent_j, l, j_new);
+                nm_log!(
+                    "[trace] {} incoming hidden synapses migrated from hidden {}:{} to new hidden {}:{}",
+                    migrated_h_in,
+                    l,
+                    parent_j,
+                    l,
+                    j_new
+                );
             }
         }
         self.w_hh_fwd[l - 1] = new_fwd;
@@ -16053,7 +16121,14 @@ impl Runner {
             }
             if migrated_out > 0 {
                 if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                    nm_log!("[trace] {} outgoing synapses migrated from hidden {}:{} to new hidden {}:{}", migrated_out, l, parent_j, l, j_new);
+                    nm_log!(
+                        "[trace] {} outgoing synapses migrated from hidden {}:{} to new hidden {}:{}",
+                        migrated_out,
+                        l,
+                        parent_j,
+                        l,
+                        j_new
+                    );
                 }
             }
             self.w_hh_fwd[l] = new_fwd_next;
@@ -16127,7 +16202,13 @@ impl Runner {
                             continue;
                         }
                         if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                            nm_log!("[trace] synapse made: hidden {}:{} -> hidden {}:{} - proximity-biased edge on spawn", l-1, i, l, j_new);
+                            nm_log!(
+                                "[trace] synapse made: hidden {}:{} -> hidden {}:{} - proximity-biased edge on spawn",
+                                l - 1,
+                                i,
+                                l,
+                                j_new
+                            );
                         }
                         added += 1;
                     }
@@ -16413,7 +16494,7 @@ impl Runner {
                 if fastrand::f32() < self.net.migrate_in_prob.clamp(0.0, 1.0) {
                     let a = 0.4 + 0.2 * fastrand::f32();
                     let w_new = (a as f64) * w_old; // to new receiver
-                                                    // parent row unchanged here (stays with original), optional: damp a bit
+                    // parent row unchanged here (stays with original), optional: damp a bit
                     new_fwd[(j_new_next, i)] = w_new.clamp(self.stdp.w_min, self.stdp.w_max);
                     new_bwd[(i, j_new_next)] = new_fwd[(j_new_next, i)];
                     migrated_in += 1;
@@ -16625,7 +16706,13 @@ impl Runner {
                     fwd[(j_new, i)] = v;
                     bwd[(i, j_new)] = v;
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
-                        nm_log!("[trace] synapse made: hidden {}:{} -> hidden {}:{} - proximity-biased edge on spawn", l, i, target, j_new);
+                        nm_log!(
+                            "[trace] synapse made: hidden {}:{} -> hidden {}:{} - proximity-biased edge on spawn",
+                            l,
+                            i,
+                            target,
+                            j_new
+                        );
                     }
                     added += 1;
                 }

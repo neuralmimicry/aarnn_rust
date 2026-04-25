@@ -5,7 +5,8 @@ use aarnn_rust::auth_store::{
 };
 use aarnn_rust::central_auth::{
     CentralApiError, CentralAuthClient, CentralLoginResponse, CentralSessionResponse,
-    CentralTokenActionResponse, CentralTokenLedgerResponse, CentralTokenSnapshot,
+    CentralTokenActionResponse, CentralTokenClient, CentralTokenLedgerResponse,
+    CentralTokenSnapshot,
 };
 use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure};
@@ -176,7 +177,7 @@ struct Args {
     #[arg(long)]
     oidc_redirect_url: Option<String>,
 
-    /// Optional nmchain API base URL for shared auth and token accounting.
+    /// Optional nmchain API base URL for shared token accounting.
     #[arg(long)]
     nmchain_api_base: Option<String>,
 
@@ -192,13 +193,21 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     nmchain_timeout_secs: u64,
 
-    /// Optional shared Refiner auth API base URL.
+    /// Optional shared auth/session API base URL.
     #[arg(long)]
     central_auth_api_base: Option<String>,
 
-    /// Shared Refiner auth HTTP timeout in seconds.
+    /// Shared auth/session HTTP timeout in seconds.
     #[arg(long, default_value_t = 10)]
     central_auth_timeout_secs: u64,
+
+    /// Optional shared billing API base URL for token accounting.
+    #[arg(long)]
+    billing_api_base: Option<String>,
+
+    /// Shared billing HTTP timeout in seconds.
+    #[arg(long, default_value_t = 10)]
+    billing_timeout_secs: u64,
 
     /// Shared commercial login URL used for cross-product SSO.
     #[arg(long)]
@@ -268,6 +277,7 @@ struct AuthConfig {
     session_ttl_secs: u64,
     oidc: Option<OidcConfig>,
     central: Option<Arc<CentralAuthClient>>,
+    billing: Option<Arc<CentralTokenClient>>,
 }
 
 #[derive(Clone, Debug)]
@@ -526,6 +536,21 @@ fn apply_env_overrides(args: &mut Args) {
             .and_then(|value| value.parse::<u64>().ok())
         {
             args.central_auth_timeout_secs = timeout.max(1);
+        }
+    }
+    if args.billing_api_base.is_none() {
+        args.billing_api_base = env_opt("AARNN_BILLING_API_BASE")
+            .or_else(|| env_opt("NM_BILLING_API_BASE"))
+            .or_else(|| args.central_auth_api_base.clone());
+    }
+    if args.billing_timeout_secs == 10 {
+        if let Some(timeout) = env_opt("AARNN_BILLING_TIMEOUT_SECS")
+            .or_else(|| env_opt("NM_BILLING_TIMEOUT_SECS"))
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            args.billing_timeout_secs = timeout.max(1);
+        } else if args.central_auth_timeout_secs != 10 {
+            args.billing_timeout_secs = args.central_auth_timeout_secs;
         }
     }
     if args.shared_login_url.is_none() {
@@ -1184,6 +1209,14 @@ async fn main() -> anyhow::Result<()> {
         )?)),
         _ => None,
     };
+    let billing = match args.billing_api_base.clone() {
+        Some(base_url) if !base_url.trim().is_empty() => Some(Arc::new(CentralTokenClient::new(
+            base_url,
+            Duration::from_secs(args.billing_timeout_secs.max(1)),
+        )?)),
+        _ => None,
+    };
+    let central_auth_enabled = central_auth.is_some();
     let auth_root = std::path::Path::new(&args.users_file)
         .parent()
         .map(|path| path.to_path_buf())
@@ -1198,7 +1231,7 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     let mut users = UserStore::load(&args.users_file).await;
 
-    if auth_mode_val == AuthMode::Local && central_auth.is_none() {
+    if auth_mode_val == AuthMode::Local && !central_auth_enabled {
         if let (Some(user), Some(pass)) = (args.local_user.as_deref(), args.local_pass.as_deref()) {
             let hash = hash_password(pass)?;
             let existing = users.find_by_username_mut(user);
@@ -1267,10 +1300,11 @@ async fn main() -> anyhow::Result<()> {
     let auth = AuthConfig {
         mode: auth_mode_val,
         users_file: args.users_file.clone(),
-        allow_signup: args.allow_signup && central_auth.is_none(),
+        allow_signup: args.allow_signup && !central_auth_enabled,
         session_ttl_secs: args.session_ttl_secs,
         oidc,
         central: central_auth,
+        billing,
     };
 
     let chain = match args.nmchain_api_base.clone() {
@@ -2791,25 +2825,25 @@ async fn chain_token_entries(
     Ok(response.entries)
 }
 
-async fn central_token_snapshot(
+async fn shared_token_snapshot(
     state: &AppState,
     access_token: &str,
 ) -> Result<Option<CentralTokenSnapshot>, CentralApiError> {
-    let Some(central) = state.auth.central.as_ref() else {
+    let Some(billing) = state.auth.billing.as_ref() else {
         return Ok(None);
     };
-    central.token_snapshot(access_token).await.map(Some)
+    billing.token_snapshot(access_token).await.map(Some)
 }
 
-async fn central_token_entries(
+async fn shared_token_entries(
     state: &AppState,
     access_token: &str,
     limit: usize,
 ) -> Result<Vec<aarnn_rust::central_auth::CentralTokenLedgerEntry>, CentralApiError> {
-    let Some(central) = state.auth.central.as_ref() else {
+    let Some(billing) = state.auth.billing.as_ref() else {
         return Ok(Vec::new());
     };
-    let response: CentralTokenLedgerResponse = central.token_ledger(access_token, limit).await?;
+    let response: CentralTokenLedgerResponse = billing.token_ledger(access_token, limit).await?;
     Ok(response.entries)
 }
 
@@ -2818,7 +2852,7 @@ async fn ensure_token_budget(state: &AppState, user: &AuthUser, cost: i64) -> an
         return Ok(());
     }
     if let Some(access_token) = user.access_token.as_deref() {
-        if let Some(snapshot) = central_token_snapshot(state, access_token)
+        if let Some(snapshot) = shared_token_snapshot(state, access_token)
             .await
             .map_err(|err| anyhow::anyhow!(err.to_string()))?
         {
@@ -2856,8 +2890,8 @@ async fn debit_tokens(
         return Ok(());
     }
     if let Some(access_token) = user.access_token.as_deref() {
-        if let Some(central) = state.auth.central.as_ref() {
-            let response: CentralTokenActionResponse = central
+        if let Some(billing) = state.auth.billing.as_ref() {
+            let response: CentralTokenActionResponse = billing
                 .debit_tokens(access_token, amount, &request_id, meta)
                 .await
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -2917,13 +2951,13 @@ async fn refund_tokens(
         return;
     }
     if let Some(access_token) = user.access_token.as_deref() {
-        if let Some(central) = state.auth.central.as_ref() {
-            if let Err(err) = central
+        if let Some(billing) = state.auth.billing.as_ref() {
+            if let Err(err) = billing
                 .refund_tokens(access_token, amount, &request_id, meta)
                 .await
             {
                 eprintln!(
-                    "[warn] central refund failed for {}: {}",
+                    "[warn] billing refund failed for {}: {}",
                     user.username, err
                 );
             }
@@ -2960,8 +2994,8 @@ async fn tokens_balance(
     let billing_dashboard_url = state.commerce.billing_dashboard_url.clone();
     let billing_admin_url = state.commerce.billing_admin_url.clone();
     if let Some(access_token) = user.access_token.as_deref() {
-        if let Some(central) = state.auth.central.as_ref() {
-            return match central.token_snapshot(access_token).await {
+        if let Some(billing) = state.auth.billing.as_ref() {
+            return match billing.token_snapshot(access_token).await {
                 Ok(snapshot) => Json(json!({
                     "configured": true,
                     "pricing": pricing,
@@ -3073,8 +3107,8 @@ async fn tokens_ledger(
 ) -> axum::response::Response {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     if let Some(access_token) = user.access_token.as_deref() {
-        if state.auth.central.is_some() {
-            return match central_token_entries(&state, access_token, limit).await {
+        if state.auth.billing.is_some() {
+            return match shared_token_entries(&state, access_token, limit).await {
                 Ok(entries) => Json(json!({
                     "configured": true,
                     "entries": entries,

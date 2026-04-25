@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use reqwest::{Client, Method};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -136,7 +136,9 @@ impl NmChainClient {
         Ok(Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             app_id: app_id.into().trim().to_string(),
-            api_token: api_token.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+            api_token: api_token
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
             client,
         })
     }
@@ -150,8 +152,12 @@ impl NmChainClient {
         scope: &str,
         account_id: &str,
     ) -> anyhow::Result<NmChainAccountSnapshot> {
-        self.request_json(Method::GET, &format!("/api/accounts/{}/{}", scope.trim(), account_id.trim()), None::<&Value>)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/api/accounts/{}/{}", scope.trim(), account_id.trim()),
+            None::<&Value>,
+        )
+        .await
     }
 
     pub async fn ledger_entries(
@@ -163,7 +169,11 @@ impl NmChainClient {
         let url = format!(
             "{}{}?limit={}",
             self.base_url,
-            format!("/api/accounts/{}/{}/ledger", scope.trim(), account_id.trim()),
+            format!(
+                "/api/accounts/{}/{}/ledger",
+                scope.trim(),
+                account_id.trim()
+            ),
             limit.max(1)
         );
         let mut request = self.client.request(Method::GET, url);
@@ -207,7 +217,9 @@ impl NmChainClient {
         path: &str,
         body: Option<&B>,
     ) -> anyhow::Result<T> {
-        let mut request = self.client.request(method, format!("{}{}", self.base_url, path));
+        let mut request = self
+            .client
+            .request(method, format!("{}{}", self.base_url, path));
         if let Some(token) = self.api_token.as_deref() {
             request = request.bearer_auth(token);
         }
@@ -243,7 +255,12 @@ async fn decode_response<T: DeserializeOwned>(response: reqwest::Response) -> an
                 .get("error")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
-                .or_else(|| value.get("message").and_then(Value::as_str).map(ToOwned::to_owned))
+                .or_else(|| {
+                    value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
         })
         .unwrap_or(text);
     Err(anyhow!("nmchain request failed ({}): {}", status, message))

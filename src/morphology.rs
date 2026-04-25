@@ -48,7 +48,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::cl_compute::OpenCLManager;
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
-    Buffer, ClError, ExecuteKernel, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
+    Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ExecuteKernel,
 };
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -97,11 +97,7 @@ impl Point3 {
     }
     pub fn normalize(&self) -> Point3 {
         let m = self.mag();
-        if m > 1e-9 {
-            self.mul(1.0 / m)
-        } else {
-            *self
-        }
+        if m > 1e-9 { self.mul(1.0 / m) } else { *self }
     }
     pub fn lerp(&self, other: Point3, t: f32) -> Point3 {
         Point3 {
@@ -2186,11 +2182,7 @@ impl Morphology {
 
         let num_layers = topo_layers.len();
         let in_l = if is_aarnn {
-            if num_layers > 1 {
-                1
-            } else {
-                0
-            }
+            if num_layers > 1 { 1 } else { 0 }
         } else {
             0
         };
@@ -3993,11 +3985,7 @@ impl Morphology {
 
         let num_layers = self.dendrites.len();
         let in_l = if is_aarnn {
-            if num_layers > 1 {
-                1
-            } else {
-                0
-            }
+            if num_layers > 1 { 1 } else { 0 }
         } else {
             0
         };
@@ -4022,7 +4010,10 @@ impl Morphology {
 
         let decay_base = if config.component_decay_rate < 0.1 {
             if is_trace && should_log {
-                nm_log!("[trace] WARNING: component_decay_rate ({:.6}) is very low, connections will prune almost immediately. Consider values > 0.9", config.component_decay_rate);
+                nm_log!(
+                    "[trace] WARNING: component_decay_rate ({:.6}) is very low, connections will prune almost immediately. Consider values > 0.9",
+                    config.component_decay_rate
+                );
             }
             config.component_decay_rate
         } else {
@@ -4030,8 +4021,13 @@ impl Morphology {
         };
         let decay = decay_base.powf(dt);
         if is_trace && should_log {
-            nm_log!("[trace] morphology evolve: dt={:.2}ms, decay_base={:.6}, decay_factor={:.6}, aarnn={}", 
-                dt, decay_base, decay, is_aarnn);
+            nm_log!(
+                "[trace] morphology evolve: dt={:.2}ms, decay_base={:.6}, decay_factor={:.6}, aarnn={}",
+                dt,
+                decay_base,
+                decay,
+                is_aarnn
+            );
         }
         let sprout_p = config.dendrite_sprout_prob * dt;
         let attraction_r = config.energy_attraction_radius;
@@ -5698,8 +5694,14 @@ impl Morphology {
                                     } else {
                                         format!("hidden {}", l_idx)
                                     };
-                                    nm_log!("[trace] dendrite sprouted: {}:{} at {:?} -> {:?} - energy {:.4}", 
-                                        name, j, best_p, base_pos, local_e);
+                                    nm_log!(
+                                        "[trace] dendrite sprouted: {}:{} at {:?} -> {:?} - energy {:.4}",
+                                        name,
+                                        j,
+                                        best_p,
+                                        base_pos,
+                                        local_e
+                                    );
                                 }
                                 // Sprout a new branch/trunk towards the energy peak
                                 new_dendrite_branches.push((
@@ -5974,11 +5976,27 @@ impl Morphology {
                                                     });
 
                                                     if al == -1 {
-                                                        nm_log!("[info] sensory connection migration planned (soma): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                        nm_log!(
+                                                            "[info] sensory connection migration planned (soma): sensory:{} moves to hidden {}:{} (closer target)",
+                                                            aj,
+                                                            l_idx,
+                                                            j
+                                                        );
                                                     } else if is_output {
-                                                        nm_log!("[info] output connection migration planned (soma): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                        nm_log!(
+                                                            "[info] output connection migration planned (soma): hidden {}:{} moves to output:{} (closer target)",
+                                                            al,
+                                                            aj,
+                                                            j
+                                                        );
                                                     } else {
-                                                        nm_log!("[info] synapse migration planned (soma): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                        nm_log!(
+                                                            "[info] synapse migration planned (soma): {}:{} -> {}:{} (closer target)",
+                                                            al,
+                                                            aj,
+                                                            l_idx,
+                                                            j
+                                                        );
                                                     }
                                                 }
 
@@ -6008,8 +6026,13 @@ impl Morphology {
                                                     } else {
                                                         format!("hidden {}", l_idx)
                                                     };
-                                                    nm_log!("[trace] synapse made (soma-probe): {}:{} -> {}:{} - soma proximity", 
-                                                        pre_name, aj, post_name, j);
+                                                    nm_log!(
+                                                        "[trace] synapse made (soma-probe): {}:{} -> {}:{} - soma proximity",
+                                                        pre_name,
+                                                        aj,
+                                                        post_name,
+                                                        j
+                                                    );
                                                 }
                                                 observe_hit!("morphology/synapse_formed");
                                                 new_syns.push(Synapse {
@@ -6145,8 +6168,15 @@ impl Morphology {
                                                 migration_idx = Some(si);
                                                 true
                                             } else {
-                                                nm_log!("[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            aj, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                nm_log!(
+                                                    "[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})",
+                                                    aj,
+                                                    si,
+                                                    tip_e,
+                                                    new_d2,
+                                                    near_thresh,
+                                                    max_d2 * 0.7
+                                                );
                                                 false
                                             }
                                         } else {
@@ -6182,8 +6212,15 @@ impl Morphology {
                                                 migration_idx = Some(si);
                                                 true
                                             } else {
-                                                nm_log!("[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            j, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                nm_log!(
+                                                    "[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})",
+                                                    j,
+                                                    si,
+                                                    tip_e,
+                                                    new_d2,
+                                                    near_thresh,
+                                                    max_d2 * 0.7
+                                                );
                                                 false
                                             }
                                         } else {
@@ -6268,11 +6305,27 @@ impl Morphology {
                                             });
 
                                             if al == -1 {
-                                                nm_log!("[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)",
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             } else if is_output {
-                                                nm_log!("[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                nm_log!(
+                                                    "[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    j
+                                                );
                                             } else {
-                                                nm_log!("[info] synapse migration planned: {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] synapse migration planned: {}:{} -> {}:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             }
                                         }
 
@@ -6302,8 +6355,13 @@ impl Morphology {
                                             } else {
                                                 format!("hidden {}", l_idx)
                                             };
-                                            nm_log!("[trace] synapse made (distributed): {}:{} -> {}:{} - contact", 
-                                                pre_name, aj, post_name, j);
+                                            nm_log!(
+                                                "[trace] synapse made (distributed): {}:{} -> {}:{} - contact",
+                                                pre_name,
+                                                aj,
+                                                post_name,
+                                                j
+                                            );
                                         }
                                         observe_hit!("morphology/synapse_formed");
                                         new_syns.push(Synapse {
@@ -6602,11 +6660,27 @@ impl Morphology {
                                         });
 
                                         if al == -1 {
-                                            nm_log!("[info] sensory connection migration planned (spatial): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                            nm_log!(
+                                                "[info] sensory connection migration planned (spatial): sensory:{} moves to hidden {}:{} (closer target)",
+                                                aj,
+                                                l_idx,
+                                                j
+                                            );
                                         } else if is_output {
-                                            nm_log!("[info] output connection migration planned (spatial): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                            nm_log!(
+                                                "[info] output connection migration planned (spatial): hidden {}:{} moves to output:{} (closer target)",
+                                                al,
+                                                aj,
+                                                j
+                                            );
                                         } else {
-                                            nm_log!("[info] synapse migration planned (spatial): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                            nm_log!(
+                                                "[info] synapse migration planned (spatial): {}:{} -> {}:{} (closer target)",
+                                                al,
+                                                aj,
+                                                l_idx,
+                                                j
+                                            );
                                         }
                                     }
 
@@ -6646,8 +6720,13 @@ impl Morphology {
                                 } else {
                                     format!("hidden {}", l_idx)
                                 };
-                                nm_log!("[trace] synapse made: {}:{} -> {}:{} - physical contact detected", 
-                                    pre_name, aj, post_name, j);
+                                nm_log!(
+                                    "[trace] synapse made: {}:{} -> {}:{} - physical contact detected",
+                                    pre_name,
+                                    aj,
+                                    post_name,
+                                    j
+                                );
 
                                 observe_hit!("morphology/synapse_formed");
                                 new_syns.push(Synapse {
@@ -6949,11 +7028,27 @@ impl Morphology {
                                             });
 
                                             if al == -1 {
-                                                nm_log!("[info] sensory connection migration planned (exploratory): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] sensory connection migration planned (exploratory): sensory:{} moves to hidden {}:{} (closer target)",
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             } else if is_output {
-                                                nm_log!("[info] output connection migration planned (exploratory): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                nm_log!(
+                                                    "[info] output connection migration planned (exploratory): hidden {}:{} moves to output:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    j
+                                                );
                                             } else {
-                                                nm_log!("[info] synapse migration planned (exploratory): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] synapse migration planned (exploratory): {}:{} -> {}:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             }
                                         }
 
@@ -6985,8 +7080,13 @@ impl Morphology {
                                         } else {
                                             format!("hidden {}", l_idx)
                                         };
-                                        nm_log!("[trace] synapse made (probe): {}:{} -> {}:{} - exploratory contact", 
-                                            pre_name, aj, post_name, j);
+                                        nm_log!(
+                                            "[trace] synapse made (probe): {}:{} -> {}:{} - exploratory contact",
+                                            pre_name,
+                                            aj,
+                                            post_name,
+                                            j
+                                        );
                                     }
                                     observe_hit!("morphology/synapse_formed");
                                     new_syns.push(Synapse {
@@ -7212,7 +7312,14 @@ impl Morphology {
                             } else {
                                 self.somas[in_l][best_j].pos
                             };
-                            nm_log!("[info] post-fallback planned sensory migration: si={} post {}->{} (d2 {:.6}->{:.6})", si, cur_post, best_j, cur_d2, best_d2);
+                            nm_log!(
+                                "[info] post-fallback planned sensory migration: si={} post {}->{} (d2 {:.6}->{:.6})",
+                                si,
+                                cur_post,
+                                best_j,
+                                cur_d2,
+                                best_d2
+                            );
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
                                 new_pre_l: -1,
@@ -7310,7 +7417,14 @@ impl Morphology {
                             } else {
                                 self.somas[pre_l][best_i].pos
                             };
-                            nm_log!("[info] post-fallback planned output migration: si={} pre {}->{} (d2 {:.6}->{:.6})", si, pre_id, best_i, cur_d2, best_d2);
+                            nm_log!(
+                                "[info] post-fallback planned output migration: si={} pre {}->{} (d2 {:.6}->{:.6})",
+                                si,
+                                pre_id,
+                                best_i,
+                                cur_d2,
+                                best_d2
+                            );
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
                                 new_pre_l: pre_l as isize,
@@ -7396,10 +7510,40 @@ impl Morphology {
             } else {
                 (0.0, 0.0, 0.0, 0.0)
             };
-            nm_log!("[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})",
-                unsafe { CALL_COUNT }, total_axons, stats.axon_sprout_successes, stats.axon_sprout_attempts,
-                total_dendrites, stats.dendrite_sprout_successes, stats.dendrite_sprout_attempts, stats.dendrite_sprout_too_near, stats.dendrite_sprout_low_energy,
-                self.synapses.len(), stats.contact_checks, stats.contact_candidates, stats.contact_incompatible, stats.contact_too_far, stats.contact_successes, stats.contact_rejected_cap, stats.contact_rejected_close, stats.contact_self_skips, stats.contact_existing_skips, stats.contact_post_cap_skips, stats.contact_probe_checks, stats.contact_skipped_low_energy, stats.contact_tip_cap_hits, tip_avg, stats.contact_tip_energy_min, stats.contact_tip_energy_max, t_ema, t_dev, t_cap, t_skip, pair_cap);
+            nm_log!(
+                "[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})",
+                unsafe { CALL_COUNT },
+                total_axons,
+                stats.axon_sprout_successes,
+                stats.axon_sprout_attempts,
+                total_dendrites,
+                stats.dendrite_sprout_successes,
+                stats.dendrite_sprout_attempts,
+                stats.dendrite_sprout_too_near,
+                stats.dendrite_sprout_low_energy,
+                self.synapses.len(),
+                stats.contact_checks,
+                stats.contact_candidates,
+                stats.contact_incompatible,
+                stats.contact_too_far,
+                stats.contact_successes,
+                stats.contact_rejected_cap,
+                stats.contact_rejected_close,
+                stats.contact_self_skips,
+                stats.contact_existing_skips,
+                stats.contact_post_cap_skips,
+                stats.contact_probe_checks,
+                stats.contact_skipped_low_energy,
+                stats.contact_tip_cap_hits,
+                tip_avg,
+                stats.contact_tip_energy_min,
+                stats.contact_tip_energy_max,
+                t_ema,
+                t_dev,
+                t_cap,
+                t_skip,
+                pair_cap
+            );
 
             if is_trace {
                 let avg_stimuli = if self.synapses.is_empty() {

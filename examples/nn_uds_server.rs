@@ -612,7 +612,7 @@ fn main() -> io::Result<()> {
     if server_args.enable_ui {
         // Minimal eframe window to show last inputs/outputs as bars
         {
-            use eframe::{egui, NativeOptions};
+            use eframe::{NativeOptions, egui};
             let li = last_inputs.clone();
             let lo = last_outputs.clone();
             let options = NativeOptions::default();

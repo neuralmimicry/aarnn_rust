@@ -1,7 +1,7 @@
 use anyhow::Context;
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::time::Duration;
 
@@ -100,8 +100,19 @@ pub struct CentralTokenActionResponse {
 
 #[derive(Clone, Debug)]
 pub struct CentralAuthClient {
+    api: SharedApiClient,
+}
+
+#[derive(Clone, Debug)]
+pub struct CentralTokenClient {
+    api: SharedApiClient,
+}
+
+#[derive(Clone, Debug)]
+struct SharedApiClient {
     base_url: String,
     client: Client,
+    service_label: &'static str,
 }
 
 #[derive(Clone, Debug)]
@@ -112,14 +123,17 @@ pub struct CentralApiError {
 }
 
 impl CentralApiError {
-    fn from_response(status: StatusCode, payload: Value) -> Self {
+    fn from_response(status: StatusCode, payload: Value, service_label: &str) -> Self {
         let message = payload
             .get("details")
             .and_then(Value::as_str)
             .or_else(|| payload.get("error").and_then(Value::as_str))
             .map(str::to_string)
             .unwrap_or_else(|| {
-                format!("central auth request failed with HTTP {}", status.as_u16())
+                format!(
+                    "{service_label} request failed with HTTP {}",
+                    status.as_u16()
+                )
             });
         Self {
             status: Some(status.as_u16()),
@@ -145,142 +159,25 @@ impl fmt::Display for CentralApiError {
 
 impl std::error::Error for CentralApiError {}
 
-impl CentralAuthClient {
-    pub fn new(base_url: impl Into<String>, timeout: Duration) -> anyhow::Result<Self> {
+impl SharedApiClient {
+    fn new(
+        base_url: impl Into<String>,
+        timeout: Duration,
+        service_label: &'static str,
+    ) -> anyhow::Result<Self> {
         let client = Client::builder()
             .timeout(timeout)
             .build()
-            .context("failed to build central auth client")?;
+            .with_context(|| format!("failed to build {service_label} client"))?;
         Ok(Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             client,
+            service_label,
         })
     }
 
-    pub fn configured(&self) -> bool {
+    fn configured(&self) -> bool {
         !self.base_url.is_empty()
-    }
-
-    pub async fn session(
-        &self,
-        access_token: &str,
-    ) -> Result<CentralSessionResponse, CentralApiError> {
-        self.request_json(
-            Method::GET,
-            "/api/session",
-            None::<&Value>,
-            Some(access_token),
-        )
-        .await
-    }
-
-    pub async fn login(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<CentralLoginResponse, CentralApiError> {
-        self.request_json(
-            Method::POST,
-            "/api/login",
-            Some(&json!({
-                "username": username.trim(),
-                "password": password,
-            })),
-            None,
-        )
-        .await
-    }
-
-    pub async fn oidc_exchange(
-        &self,
-        id_token: &str,
-        access_token: Option<&str>,
-    ) -> Result<CentralLoginResponse, CentralApiError> {
-        self.request_json(
-            Method::POST,
-            "/api/oidc/exchange",
-            Some(&json!({
-                "id_token": id_token,
-                "access_token": access_token.unwrap_or(""),
-            })),
-            None,
-        )
-        .await
-    }
-
-    pub async fn token_snapshot(
-        &self,
-        access_token: &str,
-    ) -> Result<CentralTokenSnapshot, CentralApiError> {
-        self.request_json(
-            Method::GET,
-            "/api/tokens",
-            None::<&Value>,
-            Some(access_token),
-        )
-        .await
-    }
-
-    pub async fn token_ledger(
-        &self,
-        access_token: &str,
-        limit: usize,
-    ) -> Result<CentralTokenLedgerResponse, CentralApiError> {
-        self.request_json(
-            Method::GET,
-            &format!("/api/tokens/ledger?limit={}", limit.max(1)),
-            None::<&Value>,
-            Some(access_token),
-        )
-        .await
-    }
-
-    pub async fn debit_tokens(
-        &self,
-        access_token: &str,
-        amount: i64,
-        request_id: &str,
-        meta: Value,
-    ) -> Result<CentralTokenActionResponse, CentralApiError> {
-        self.request_json(
-            Method::POST,
-            "/api/tokens",
-            Some(&json!({
-                "action": "debit",
-                "token_amount": amount,
-                "request_id": request_id,
-                "source": meta.get("source").and_then(Value::as_str).unwrap_or("aarnn"),
-                "note": meta.get("note").and_then(Value::as_str),
-                "operation": meta.get("operation").and_then(Value::as_str),
-                "workspace_id": meta.get("workspace_id").and_then(Value::as_str),
-            })),
-            Some(access_token),
-        )
-        .await
-    }
-
-    pub async fn refund_tokens(
-        &self,
-        access_token: &str,
-        amount: i64,
-        request_id: &str,
-        meta: Value,
-    ) -> Result<CentralTokenActionResponse, CentralApiError> {
-        self.request_json(
-            Method::POST,
-            "/api/tokens",
-            Some(&json!({
-                "action": "refund",
-                "token_amount": amount,
-                "request_id": request_id,
-                "source": meta.get("source").and_then(Value::as_str).unwrap_or("aarnn"),
-                "note": meta.get("note").and_then(Value::as_str),
-                "operation": meta.get("operation").and_then(Value::as_str),
-                "workspace_id": meta.get("workspace_id").and_then(Value::as_str),
-            })),
-            Some(access_token),
-        )
-        .await
     }
 
     async fn request_json<B: Serialize, T: for<'de> Deserialize<'de>>(
@@ -291,9 +188,10 @@ impl CentralAuthClient {
         bearer_token: Option<&str>,
     ) -> Result<T, CentralApiError> {
         if !self.configured() {
-            return Err(CentralApiError::from_client_error(
-                "central auth client is not configured",
-            ));
+            return Err(CentralApiError::from_client_error(format!(
+                "{} client is not configured",
+                self.service_label
+            )));
         }
         let mut request = self
             .client
@@ -308,21 +206,178 @@ impl CentralAuthClient {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request
-            .send()
+        let response = request.send().await.map_err(|err| {
+            CentralApiError::from_client_error(format!("{}: {}", self.service_label, err))
+        })?;
+        decode_response(response, self.service_label).await
+    }
+}
+
+impl CentralAuthClient {
+    pub fn new(base_url: impl Into<String>, timeout: Duration) -> anyhow::Result<Self> {
+        Ok(Self {
+            api: SharedApiClient::new(base_url, timeout, "central auth")?,
+        })
+    }
+
+    pub fn configured(&self) -> bool {
+        self.api.configured()
+    }
+
+    pub async fn session(
+        &self,
+        access_token: &str,
+    ) -> Result<CentralSessionResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::GET,
+                "/api/session",
+                None::<&Value>,
+                Some(access_token),
+            )
             .await
-            .map_err(|err| CentralApiError::from_client_error(err.to_string()))?;
-        decode_response(response).await
+    }
+
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<CentralLoginResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::POST,
+                "/api/login",
+                Some(&json!({
+                    "username": username.trim(),
+                    "password": password,
+                })),
+                None,
+            )
+            .await
+    }
+
+    pub async fn oidc_exchange(
+        &self,
+        id_token: &str,
+        access_token: Option<&str>,
+    ) -> Result<CentralLoginResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::POST,
+                "/api/oidc/exchange",
+                Some(&json!({
+                    "id_token": id_token,
+                    "access_token": access_token.unwrap_or(""),
+                })),
+                None,
+            )
+            .await
+    }
+}
+
+impl CentralTokenClient {
+    pub fn new(base_url: impl Into<String>, timeout: Duration) -> anyhow::Result<Self> {
+        Ok(Self {
+            api: SharedApiClient::new(base_url, timeout, "billing api")?,
+        })
+    }
+
+    pub fn configured(&self) -> bool {
+        self.api.configured()
+    }
+
+    pub async fn token_snapshot(
+        &self,
+        access_token: &str,
+    ) -> Result<CentralTokenSnapshot, CentralApiError> {
+        self.api
+            .request_json(
+                Method::GET,
+                "/api/tokens",
+                None::<&Value>,
+                Some(access_token),
+            )
+            .await
+    }
+
+    pub async fn token_ledger(
+        &self,
+        access_token: &str,
+        limit: usize,
+    ) -> Result<CentralTokenLedgerResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::GET,
+                &format!("/api/tokens/ledger?limit={}", limit.max(1)),
+                None::<&Value>,
+                Some(access_token),
+            )
+            .await
+    }
+
+    pub async fn debit_tokens(
+        &self,
+        access_token: &str,
+        amount: i64,
+        request_id: &str,
+        meta: Value,
+    ) -> Result<CentralTokenActionResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::POST,
+                "/api/tokens",
+                Some(&json!({
+                    "action": "debit",
+                    "token_amount": amount,
+                    "request_id": request_id,
+                    "source": meta.get("source").and_then(Value::as_str).unwrap_or("aarnn"),
+                    "note": meta.get("note").and_then(Value::as_str),
+                    "operation": meta.get("operation").and_then(Value::as_str),
+                    "workspace_id": meta.get("workspace_id").and_then(Value::as_str),
+                })),
+                Some(access_token),
+            )
+            .await
+    }
+
+    pub async fn refund_tokens(
+        &self,
+        access_token: &str,
+        amount: i64,
+        request_id: &str,
+        meta: Value,
+    ) -> Result<CentralTokenActionResponse, CentralApiError> {
+        self.api
+            .request_json(
+                Method::POST,
+                "/api/tokens",
+                Some(&json!({
+                    "action": "refund",
+                    "token_amount": amount,
+                    "request_id": request_id,
+                    "source": meta.get("source").and_then(Value::as_str).unwrap_or("aarnn"),
+                    "note": meta.get("note").and_then(Value::as_str),
+                    "operation": meta.get("operation").and_then(Value::as_str),
+                    "workspace_id": meta.get("workspace_id").and_then(Value::as_str),
+                })),
+                Some(access_token),
+            )
+            .await
     }
 }
 
 async fn decode_response<T: for<'de> Deserialize<'de>>(
     response: reqwest::Response,
+    service_label: &str,
 ) -> Result<T, CentralApiError> {
     let status = response.status();
     let payload = response.json::<Value>().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
-        return Err(CentralApiError::from_response(status, payload));
+        return Err(CentralApiError::from_response(
+            status,
+            payload,
+            service_label,
+        ));
     }
     serde_json::from_value(payload)
         .map_err(|err| CentralApiError::from_client_error(err.to_string()))

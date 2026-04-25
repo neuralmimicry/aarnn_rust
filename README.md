@@ -117,6 +117,11 @@ Set these environment variables before running `src/bin/web_ui.rs`:
 - `NMCHAIN_API_BASE=http://nmchain-host:9080`
 - `NMCHAIN_API_TOKEN=<aarnn-app-token>`
 - `NMCHAIN_APP_ID=aarnn`
+- Optional shared auth/session and billing overrides when identity and token routes are split across services:
+  - `AARNN_CENTRAL_AUTH_API_BASE=http://customers-host:5010`
+  - `AARNN_BILLING_API_BASE=http://billing-host:5020`
+  - `AARNN_BILLING_TIMEOUT_SECS=10`
+  - If `AARNN_BILLING_API_BASE` is unset, AARNN falls back to `AARNN_CENTRAL_AUTH_API_BASE` for backward compatibility.
 - Optional debit schedule overrides:
   - `NM_AARNN_TOKEN_CREATE_COST` (default `25`)
   - `NM_AARNN_TOKEN_IMPORT_COST` (default `25`)

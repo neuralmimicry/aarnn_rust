@@ -22,7 +22,7 @@
 //! 4. **Crossover**: Combine parameters from successful parents to create offspring.
 //! 5. **Mutation**: Apply random changes to offspring parameters to maintain diversity.
 
-use rand::{prelude::StdRng, RngExt, SeedableRng};
+use rand::{RngExt, SeedableRng, prelude::StdRng};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -42,12 +42,12 @@ fn ga_sys_mb_from_raw(raw: u64) -> u64 {
     }
 }
 #[cfg(feature = "opencl")]
-use crate::cl_compute::gpu_device_ids_for_indices;
-#[cfg(feature = "opencl")]
 use crate::cl_compute::OpenCLManager;
-use crate::config::{apply_clumping_design, ClumpingDesign, NetworkConfig, NeuromodSignal};
+#[cfg(feature = "opencl")]
+use crate::cl_compute::gpu_device_ids_for_indices;
+use crate::config::{ClumpingDesign, NetworkConfig, NeuromodSignal, apply_clumping_design};
 use crate::monitor::{
-    self, update_sys_cache, update_temp_cache, MonitorHeuristics, SafetySnapshot,
+    self, MonitorHeuristics, SafetySnapshot, update_sys_cache, update_temp_cache,
 };
 use crate::runner::Runner;
 use crate::sim;
@@ -277,11 +277,7 @@ fn parse_env_usize_list(name: &str) -> Option<Vec<usize>> {
             out.push(v);
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn parse_env_string_list(name: &str) -> Vec<String> {
@@ -354,11 +350,7 @@ pub fn ga_set_worker_limit_override(limit: Option<usize>) {
 
 fn ga_worker_limit_override() -> Option<usize> {
     let v = GA_WORKER_LIMIT_OVERRIDE.load(Ordering::Relaxed);
-    if v > 0 {
-        Some(v)
-    } else {
-        None
-    }
+    if v > 0 { Some(v) } else { None }
 }
 
 pub fn ga_total_evaluations() -> u64 {
@@ -3662,7 +3654,10 @@ impl GASearch {
                     Ok(None) => break,
                     Err(_) => {
                         if last_progress.elapsed() > stall_timeout {
-                            nm_err!("[warn] Distributed GA evaluation stalled for {:?}; marking remaining individuals as failed.", stall_timeout);
+                            nm_err!(
+                                "[warn] Distributed GA evaluation stalled for {:?}; marking remaining individuals as failed.",
+                                stall_timeout
+                            );
                             break;
                         }
                     }
@@ -3680,7 +3675,9 @@ impl GASearch {
                 self.inflight.clear();
                 let _ = status_tx.send(self.clone());
             } else if last_progress.elapsed() > stall_timeout {
-                nm_err!("[warn] Distributed GA evaluation experienced extended stalls; consider reducing population or sim time.");
+                nm_err!(
+                    "[warn] Distributed GA evaluation experienced extended stalls; consider reducing population or sim time."
+                );
             }
             if let Some(reason) = safety_event {
                 ga_record_safety_event(&reason);
@@ -3765,7 +3762,9 @@ impl GASearch {
                     };
                     if num_threads != last_morph_threads {
                         if num_threads == 1 {
-                            nm_log!("[info] GA batching: morpho growth active; sequential evals until resources recover.");
+                            nm_log!(
+                                "[info] GA batching: morpho growth active; sequential evals until resources recover."
+                            );
                         } else {
                             nm_log!(
                                 "[info] GA batching: morpho growth active; scaling to {} workers.",
@@ -3781,7 +3780,9 @@ impl GASearch {
                     batch_len = 1;
                     last_morph_threads = 1;
                     if last_split_log.elapsed() > Duration::from_secs(5) {
-                        nm_log!("[info] GA batching: memory pressure detected; running sequential batches.");
+                        nm_log!(
+                            "[info] GA batching: memory pressure detected; running sequential batches."
+                        );
                         last_split_log = Instant::now();
                     }
                 } else {
@@ -3926,7 +3927,10 @@ impl GASearch {
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if last_progress.elapsed() > stall_timeout {
-                        nm_err!("[warn] Local GA evaluation stalled for {:?}; marking remaining individuals as failed.", stall_timeout);
+                        nm_err!(
+                            "[warn] Local GA evaluation stalled for {:?}; marking remaining individuals as failed.",
+                            stall_timeout
+                        );
                         GA_ABORT_REQUESTED.store(true, Ordering::SeqCst);
                         abort_after_loop = true;
                         break;
@@ -3959,7 +3963,9 @@ impl GASearch {
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    nm_err!("[warn] Local GA evaluation worker channel closed early; marking remaining individuals as failed.");
+                    nm_err!(
+                        "[warn] Local GA evaluation worker channel closed early; marking remaining individuals as failed."
+                    );
                     GA_ABORT_REQUESTED.store(true, Ordering::SeqCst);
                     abort_after_loop = true;
                     break;
@@ -3984,7 +3990,9 @@ impl GASearch {
             self.inflight.clear();
             let _ = status_tx.send(self.clone());
         } else if last_progress.elapsed() > stall_timeout {
-            nm_err!("[warn] Local GA evaluation experienced extended stalls; consider reducing population or sim time.");
+            nm_err!(
+                "[warn] Local GA evaluation experienced extended stalls; consider reducing population or sim time."
+            );
         }
         let paused_ms = GA_PAUSED_MS.load(Ordering::Relaxed) as u64;
         let remote_wait_ms = GA_REMOTE_WAIT_MS.load(Ordering::Relaxed);
@@ -4844,11 +4852,7 @@ impl GASearch {
                 &mut total,
             );
 
-            if total > 0.0 {
-                hits / total
-            } else {
-                0.0
-            }
+            if total > 0.0 { hits / total } else { 0.0 }
         } else {
             0.0
         };

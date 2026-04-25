@@ -678,9 +678,11 @@ continuum_tenant_aarnn_continuum_url: "https://continuum.example"
             fingerprint.runtime_root.as_deref(),
             Some("/var/lib/aarnn/runtime")
         );
-        assert!(fingerprint
-            .startup_network_ids
-            .contains(&"tenant-aarnn".to_string()));
+        assert!(
+            fingerprint
+                .startup_network_ids
+                .contains(&"tenant-aarnn".to_string())
+        );
         assert!(fingerprint.host_names.contains(&"qc01".to_string()));
         assert!(fingerprint.host_names.contains(&"rk1".to_string()));
     }

@@ -34,7 +34,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tonic::{Request, Response, Status};
 
 #[cfg(not(feature = "sysinfo"))]
@@ -3655,9 +3655,15 @@ impl DistributedNode {
                         }
                     }
                 } else {
-                    nm_log!("[info] Loading network {} with layers {:?} (redundant: {:?}, depth: {}, model: {}, learning: {})", 
-                        cmd.network_id, cmd.layers, cmd.redundant_layers, cmd.desired_aarnn_depth,
-                        cmd.neuron_model, cmd.learning_rule);
+                    nm_log!(
+                        "[info] Loading network {} with layers {:?} (redundant: {:?}, depth: {}, model: {}, learning: {})",
+                        cmd.network_id,
+                        cmd.layers,
+                        cmd.redundant_layers,
+                        cmd.desired_aarnn_depth,
+                        cmd.neuron_model,
+                        cmd.learning_rule
+                    );
 
                     let mut snapshot_json: Option<String> = None;
                     #[cfg(feature = "growth3d")]
@@ -5068,10 +5074,11 @@ mod tests {
         let requested_payload =
             serde_json::to_string(&requested_cfg).expect("serialize requested config");
 
-        assert!(node
-            .maybe_refresh_manual_transition_payload("alpha", &requested_payload)
-            .await
-            .is_none());
+        assert!(
+            node.maybe_refresh_manual_transition_payload("alpha", &requested_payload)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -5232,13 +5239,17 @@ mod tests {
         assert!(status.live_transition_allowed);
         assert_eq!(status.last_transition_source, "manual");
         assert!(status.last_transition_ts_ms > 0);
-        assert!(status
-            .last_transition_reason
-            .contains("manual deployment transition"));
-        assert!(status
-            .deployment_modes
-            .iter()
-            .any(|mode| mode == "combined"));
+        assert!(
+            status
+                .last_transition_reason
+                .contains("manual deployment transition")
+        );
+        assert!(
+            status
+                .deployment_modes
+                .iter()
+                .any(|mode| mode == "combined")
+        );
         assert!(state.last_deployment_transition.contains_key("alpha"));
     }
 
