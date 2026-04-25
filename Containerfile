@@ -24,11 +24,22 @@ RUN set -eux; \
     case ",${CARGO_FEATURES},${CONTAINER_WORKLOAD}," in \
         *,all,*|*,all-features,*|*,ui,*|*,image_input,*|*,video_input,*|*,webcam_input,*|*,robot_io,*|*,desktop_ui_workload,*|*,container,*|*,desktop-ui,*) need_ui=1 ;; \
     esac; \
+    resolve_package() { \
+        for candidate in "$@"; do \
+            if apt-cache show "$candidate" >/dev/null 2>&1; then \
+                printf '%s\n' "$candidate"; \
+                return 0; \
+            fi; \
+        done; \
+        printf 'error: unable to resolve package from candidates: %s\n' "$*" >&2; \
+        return 1; \
+    }; \
     packages='ca-certificates python3 python3-venv python3-pip openmpi-bin ocl-icd-libopencl1'; \
-    if [ "${need_ui}" = "1" ]; then \
-        packages="$packages libgl1 libx11-6 libxext6 libxrender1 libice6 libsm6 libxcursor1 libxi6 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxkbcommon-x11-0 libasound2 libgtk-3-0"; \
-    fi; \
     apt-get update; \
+    if [ "${need_ui}" = "1" ]; then \
+        alsa_package="$(resolve_package libasound2t64 libasound2)"; \
+        packages="$packages libgl1 libx11-6 libxext6 libxrender1 libice6 libsm6 libxcursor1 libxi6 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxkbcommon-x11-0 ${alsa_package} libgtk-3-0"; \
+    fi; \
     apt-get install -y --no-install-recommends $packages; \
     arch="$(dpkg --print-architecture)"; \
     deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"; \
