@@ -88,6 +88,18 @@ jobs:
         run: |
           echo "build_id=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare Debian package for container build
+        run: |
+          chmod +x scripts/package-release.sh scripts/prepare_container_package.sh
+          ./scripts/prepare_container_package.sh \
+            --workload standalone \
+            --arch "${{ matrix.arch }}" \
+            --output-dir ./dist/container \
+            --cache-dir ./.container-cache/debs-ci \
+            --force \
+            --cargo-features "${{ github.event.inputs.cargo_features || 'all' }}" \
+            --cargo-build-targets "aarnn_rust"
+
       - name: Build and push architecture image
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
@@ -98,7 +110,7 @@ jobs:
             --file ./Containerfile
             --platform "linux/${{ matrix.arch }}"
             --tag "${ARCH_TAG}"
-            --build-arg "BUILD_ID=${BUILD_ID}"
+            --build-arg "CONTAINER_WORKLOAD=standalone"
             --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'all' }}"
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"

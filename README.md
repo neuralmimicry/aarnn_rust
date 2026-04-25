@@ -22,7 +22,7 @@ This repository integrates the existing neuromorphic build and container workflo
 scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
 ```
 
-This builds and pushes the native-architecture workload images from the same source tree:
+This builds and pushes the native-architecture workload images from the same source tree. The script now prepares and reuses workload-specific Debian packages under `.container-cache/` and feeds those packages into the container build instead of compiling Rust inside the image:
 
 - `engine-standalone`
 - `engine-orchestrator`
@@ -39,10 +39,11 @@ GitHub Actions binary release automation lives in `.github/workflows/build-and-r
 - `Cargo.toml` is the release version source of truth.
 - official GitHub releases require a matching `vX.Y.Z` tag.
 - `scripts/package-release.sh --version <cargo-version> --output-dir ./dist` builds the release tarball and checksum manifest.
+- `scripts/package-release.sh --version <cargo-version> --output-dir ./dist --platform linux-x86_64 --deb-arch amd64` also emits a Debian package for Linux.
 - manual `workflow_dispatch` runs can package artifacts from any ref.
 - publish steps only run from a `v*` tag ref, either automatically on tag push or manually from `workflow_dispatch`.
 
-The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. The existing `.github/workflows/container-build.yml` pipeline remains the multi-arch container promotion path for richer runtime images.
+The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. Linux CI now validates `.deb` artifacts on both `amd64` and `arm64` runners. The existing `.github/workflows/container-build.yml` pipeline remains the multi-arch container promotion path for richer runtime images.
 
 ### Train a sample model artefact
 

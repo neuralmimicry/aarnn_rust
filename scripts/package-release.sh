@@ -8,15 +8,20 @@ Usage: package-release.sh [options]
 Build and package AARNN Rust release artifacts.
 
 Options:
-  --version VERSION           Version label for the packaged artifacts.
-  --output-dir DIR            Directory to receive the packaged artifacts.
-  --target-triple TRIPLE      Optional cargo target triple.
-  --platform NAME             Platform suffix in output names. Default: derived from host.
-  --skip-build                Reuse existing release binaries instead of building them.
-  -h, --help                  Show this help text.
+  --version VERSION              Version label for the packaged artifacts.
+  --output-dir DIR               Directory to receive the packaged artifacts.
+  --target-triple TRIPLE         Optional cargo target triple.
+  --platform NAME                Platform suffix in output names. Default: derived from host.
+  --deb-arch ARCH                Also build a Debian package for linux using ARCH (amd64 or arm64).
+  --cargo-features FEATURES      Cargo feature selection. Default: cargo defaults.
+  --cargo-build-targets TARGETS  Space-delimited cargo binary targets. Default: "aarnn_rust web_ui".
+  --skip-build                   Reuse existing release binaries instead of building them.
+  -h, --help                     Show this help text.
 
 Examples:
   ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist
+  ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist --platform linux-x86_64 --deb-arch amd64
+  ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist --cargo-features standalone_workload --cargo-build-targets "aarnn_rust"
 USAGE
 }
 
@@ -58,12 +63,183 @@ binary_dir() {
   fi
 }
 
+parse_build_targets() {
+  local bin=""
+  BUILD_TARGET_LIST=()
+  for bin in $CARGO_BUILD_TARGETS; do
+    [[ -n "$bin" ]] || continue
+    BUILD_TARGET_LIST+=("$bin")
+  done
+  if ((${#BUILD_TARGET_LIST[@]} == 0)); then
+    die "--cargo-build-targets resolved to an empty target list"
+  fi
+}
+
+resolve_binary_paths() {
+  local bin=""
+  BIN_PATHS=()
+  for bin in "${BUILD_TARGET_LIST[@]}"; do
+    BIN_PATHS+=("${BIN_DIR}/${bin}")
+  done
+}
+
+validate_deb_arch() {
+  case "$1" in
+    amd64|arm64)
+      ;;
+    *)
+      die "unsupported Debian architecture: $1"
+      ;;
+  esac
+}
+
+debian_package_version() {
+  local version sanitized
+  version="$1"
+  [[ -n "$version" ]] || die "Debian package version is empty"
+  sanitized=$(
+    printf '%s' "$version" \
+      | tr '-' '~' \
+      | sed -E 's/[^A-Za-z0-9.+:~]+/./g; s/^[^A-Za-z0-9]+//; s/[^A-Za-z0-9]+$//'
+  )
+  [[ -n "$sanitized" ]] || die "unable to derive Debian package version from '$version'"
+  printf '%s\n' "$sanitized"
+}
+
+compute_deb_depends() {
+  if ! command -v dpkg-shlibdeps >/dev/null 2>&1; then
+    printf '\n'
+    return
+  fi
+
+  local work_dir stage_root output depends binary staged_path
+  local -a analyze_args=()
+  work_dir=$(mktemp -d)
+
+  stage_root="$work_dir/root/usr/bin"
+  install -d -m 0755 "$work_dir/debian" "$stage_root"
+  cat >"$work_dir/debian/control" <<'CONTROL'
+Source: aarnn-rust
+Section: admin
+Priority: optional
+Maintainer: NeuralMimicry <opensource@neuralmimicry.ai>
+Standards-Version: 4.7.0
+Package: aarnn-rust
+Architecture: any
+Description: temporary shlibdeps metadata carrier
+CONTROL
+
+  for binary in "$@"; do
+    [[ -n "$binary" && -f "$binary" ]] || continue
+    staged_path="$stage_root/$(basename "$binary")"
+    install -m 0755 "$binary" "$staged_path"
+    analyze_args+=("-e" "./${staged_path#$work_dir/}")
+  done
+
+  if ((${#analyze_args[@]} == 0)); then
+    rm -rf "$work_dir"
+    printf '\n'
+    return
+  fi
+
+  output=$(
+    cd "$work_dir"
+    dpkg-shlibdeps --ignore-missing-info -O -Tdebian/substvars \
+      "${analyze_args[@]}" 2>/dev/null || true
+  )
+  rm -rf "$work_dir"
+
+  depends=$(printf '%s\n' "$output" | sed -n 's/^shlibs:Depends=//p' | tail -n 1)
+  printf '%s\n' "$depends" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/, ,/, /g; s/^, //; s/, $//'
+}
+
+create_debian_package() {
+  local deb_version deb_stage_root deb_root deb_path depends docs_root share_root
+  local idx=""
+  local -a staged_bin_paths=()
+
+  [[ "$PLATFORM" == linux* ]] || die "--deb-arch is only supported for linux platforms"
+  validate_deb_arch "$DEB_ARCH"
+  command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb is required when --deb-arch is used"
+
+  deb_version=$(debian_package_version "$VERSION")
+  deb_stage_root="$OUTPUT_DIR/.deb-stage"
+  deb_root="$deb_stage_root/root"
+  deb_path="$OUTPUT_DIR/aarnn-rust_${deb_version}_${DEB_ARCH}.deb"
+  docs_root="$deb_root/usr/share/doc/aarnn-rust"
+  share_root="$deb_root/usr/share/aarnn-rust"
+
+  rm -rf "$deb_stage_root"
+  install -d -m 0755 \
+    "$deb_root/DEBIAN" \
+    "$deb_root/usr/bin" \
+    "$docs_root" \
+    "$share_root"
+
+  for idx in "${!BUILD_TARGET_LIST[@]}"; do
+    install -m 0755 "${BIN_PATHS[$idx]}" "$deb_root/usr/bin/${BUILD_TARGET_LIST[$idx]}"
+    staged_bin_paths+=("$deb_root/usr/bin/${BUILD_TARGET_LIST[$idx]}")
+  done
+
+  if [[ -f "$REPO_ROOT/config.json" ]]; then
+    install -m 0644 "$REPO_ROOT/config.json" "$share_root/config.json"
+  fi
+  if [[ -f "$REPO_ROOT/README.md" ]]; then
+    install -m 0644 "$REPO_ROOT/README.md" "$docs_root/README.md"
+  fi
+  if [[ -f "$REPO_ROOT/docs/operations.md" ]]; then
+    install -m 0644 "$REPO_ROOT/docs/operations.md" "$docs_root/operations.md"
+  fi
+  if [[ -f "$REPO_ROOT/docs/architecture.md" ]]; then
+    install -m 0644 "$REPO_ROOT/docs/architecture.md" "$docs_root/architecture.md"
+  fi
+
+  depends=$(compute_deb_depends "${staged_bin_paths[@]}")
+
+  {
+    printf 'Package: aarnn-rust\n'
+    printf 'Version: %s\n' "$deb_version"
+    printf 'Section: admin\n'
+    printf 'Priority: optional\n'
+    printf 'Architecture: %s\n' "$DEB_ARCH"
+    if [[ -n "$depends" ]]; then
+      printf 'Depends: %s\n' "$depends"
+    fi
+    printf 'Maintainer: NeuralMimicry <opensource@neuralmimicry.ai>\n'
+    printf 'Homepage: https://github.com/neuralmimicry/aarnn_rust\n'
+    printf 'Description: AARNN runtime binaries and web UI assets\n'
+    printf ' The aarnn-rust package installs the selected AARNN runtime binaries,\n'
+    printf ' bundled configuration, and operations documentation.\n'
+  } >"$deb_root/DEBIAN/control"
+
+  dpkg-deb --build --root-owner-group "$deb_root" "$deb_path" >/dev/null
+  artifacts+=("$deb_path")
+  rm -rf "$deb_stage_root"
+}
+
 build_binaries() {
-  local args
-  args=(cargo build --locked --release --bin aarnn_rust --bin web_ui)
+  local -a args=(cargo build --locked --release)
+  local bin=""
+
   if [[ -n "$TARGET_TRIPLE" ]]; then
     args+=(--target "$TARGET_TRIPLE")
   fi
+
+  case "$CARGO_FEATURES" in
+    ""|default)
+      ;;
+    all|all-features)
+      args+=(--all-features)
+      ;;
+    *)
+      args+=(--no-default-features --features "$CARGO_FEATURES")
+      ;;
+  esac
+
+  for bin in "${BUILD_TARGET_LIST[@]}"; do
+    args+=(--bin "$bin")
+  done
+
   (
     cd "$REPO_ROOT"
     "${args[@]}"
@@ -74,7 +250,12 @@ VERSION=
 OUTPUT_DIR=
 TARGET_TRIPLE=
 PLATFORM=
+DEB_ARCH=
+CARGO_FEATURES=
+CARGO_BUILD_TARGETS="aarnn_rust web_ui"
 SKIP_BUILD=0
+BUILD_TARGET_LIST=()
+BIN_PATHS=()
 
 while (($#)); do
   case "$1" in
@@ -98,6 +279,21 @@ while (($#)); do
       (($#)) || die "--platform requires a value"
       PLATFORM="$1"
       ;;
+    --deb-arch)
+      shift
+      (($#)) || die "--deb-arch requires a value"
+      DEB_ARCH="$1"
+      ;;
+    --cargo-features)
+      shift
+      (($#)) || die "--cargo-features requires a value"
+      CARGO_FEATURES="$1"
+      ;;
+    --cargo-build-targets)
+      shift
+      (($#)) || die "--cargo-build-targets requires a value"
+      CARGO_BUILD_TARGETS="$1"
+      ;;
     --skip-build)
       SKIP_BUILD=1
       ;;
@@ -119,17 +315,19 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 PLATFORM="${PLATFORM:-$(default_platform)}"
 
+parse_build_targets
 BIN_DIR=$(binary_dir)
-AARNN_BIN="$BIN_DIR/aarnn_rust"
-WEB_UI_BIN="$BIN_DIR/web_ui"
+resolve_binary_paths
 
-if (( ! SKIP_BUILD )) || [[ ! -x "$AARNN_BIN" || ! -x "$WEB_UI_BIN" ]]; then
+if (( ! SKIP_BUILD )); then
   log "building release binaries"
   build_binaries
 fi
 
-[[ -x "$AARNN_BIN" ]] || die "missing aarnn_rust binary: $AARNN_BIN"
-[[ -x "$WEB_UI_BIN" ]] || die "missing web_ui binary: $WEB_UI_BIN"
+resolve_binary_paths
+for idx in "${!BUILD_TARGET_LIST[@]}"; do
+  [[ -x "${BIN_PATHS[$idx]}" ]] || die "missing ${BUILD_TARGET_LIST[$idx]} binary: ${BIN_PATHS[$idx]}"
+done
 
 ARCHIVE_BASENAME="aarnn_rust-${VERSION}-${PLATFORM}"
 OUTPUT_DIR=$(mkdir -p "$OUTPUT_DIR" && cd "$OUTPUT_DIR" && pwd)
@@ -140,8 +338,9 @@ CHECKSUM_PATH="$OUTPUT_DIR/${ARCHIVE_BASENAME}.sha256.txt"
 
 rm -rf "$STAGE_ROOT"
 mkdir -p "$PAYLOAD_DIR/docs"
-install -m 0755 "$AARNN_BIN" "$PAYLOAD_DIR/aarnn_rust"
-install -m 0755 "$WEB_UI_BIN" "$PAYLOAD_DIR/web_ui"
+for idx in "${!BUILD_TARGET_LIST[@]}"; do
+  install -m 0755 "${BIN_PATHS[$idx]}" "$PAYLOAD_DIR/${BUILD_TARGET_LIST[$idx]}"
+done
 if [[ -f "$REPO_ROOT/config.json" ]]; then
   install -m 0644 "$REPO_ROOT/config.json" "$PAYLOAD_DIR/config.json"
 fi
@@ -156,15 +355,26 @@ if [[ -f "$REPO_ROOT/docs/architecture.md" ]]; then
 fi
 
 tar -C "$STAGE_ROOT" -czf "$ARCHIVE_PATH" "$ARCHIVE_BASENAME"
+artifacts=("$ARCHIVE_PATH")
+
+if [[ -n "$DEB_ARCH" ]]; then
+  create_debian_package
+fi
+
 checksum_cmd=$(sha256_tool)
 (
   cd "$OUTPUT_DIR"
-  $checksum_cmd "$(basename "$ARCHIVE_PATH")" >"$(basename "$CHECKSUM_PATH")"
+  relative_artifacts=()
+  for artifact in "${artifacts[@]}"; do
+    relative_artifacts+=("$(basename "$artifact")")
+  done
+  $checksum_cmd "${relative_artifacts[@]}" >"$(basename "$CHECKSUM_PATH")"
 )
 
 log
 log "packaged AARNN Rust release artifacts:"
-log "  $ARCHIVE_PATH"
-log "  $CHECKSUM_PATH"
+for artifact in "${artifacts[@]}" "$CHECKSUM_PATH"; do
+  log "  $artifact"
+done
 
 rm -rf "$STAGE_ROOT"
