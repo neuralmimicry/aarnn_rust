@@ -13,17 +13,17 @@
 //!
 //! The UI Runner (`runner.rs`) implements detailed AARNN per‑segment conduction
 //! using morphology when built with `growth3d+morpho` features.
-use ndarray::{s, Array1, Array2};
+use ndarray::{Array1, Array2, s};
 use rand::{Rng, RngExt};
 
 use crate::aarnn::dynamics::{
-    apply_synaptic_filter as apply_aarnn_synaptic_filter, SynapticDriveParams,
+    SynapticDriveParams, apply_synaptic_filter as apply_aarnn_synaptic_filter,
 };
-use crate::aarnn::plasticity::{stp_update_slice, ShortTermPlasticityParams};
+use crate::aarnn::plasticity::{ShortTermPlasticityParams, stp_update_slice};
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
-    get_global_cl_manager, Buffer, ClError, ClResult, ExecuteKernel, OpenCLManager,
-    CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE,
+    Buffer, CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ClResult,
+    ExecuteKernel, OpenCLManager, get_global_cl_manager,
 };
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
 use crate::network::BuiltNetwork;
@@ -607,11 +607,7 @@ pub fn run_snn(
         .sensory_target_layer
         .unwrap_or_else(|| {
             if matches!(neuron_model, NeuronModel::Aarnn) {
-                if num_hidden_layers > 1 {
-                    1
-                } else {
-                    0
-                }
+                if num_hidden_layers > 1 { 1 } else { 0 }
             } else {
                 0
             }

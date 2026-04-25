@@ -9,23 +9,23 @@
 //! requested on FPAA but the transport/image verification is not good enough, the
 //! effective route falls back to the Rust implementation.
 
-use ndarray::{arr1, Array1, Array2};
+use ndarray::{Array1, Array2, arr1};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::aarnn::dynamics::{
-    apply_active_dendritic_compartment, apply_local_gap_junction_coupling,
-    apply_synaptic_filter, volume_transmission_factors_for_layer, ActiveDendriteSpec,
-    DendriteStructureSignal, SpatialPoint3, SynapticDriveParams,
+    ActiveDendriteSpec, DendriteStructureSignal, SpatialPoint3, SynapticDriveParams,
+    apply_active_dendritic_compartment, apply_local_gap_junction_coupling, apply_synaptic_filter,
+    volume_transmission_factors_for_layer,
 };
 use crate::aarnn::plasticity::{
-    apply_synaptic_scaling_matrix_rows, enforce_dale_matrix_cols_with_mask, stp_step,
-    triplet_eta_scale, ShortTermPlasticityParams, ShortTermPlasticityState,
+    ShortTermPlasticityParams, ShortTermPlasticityState, apply_synaptic_scaling_matrix_rows,
+    enforce_dale_matrix_cols_with_mask, stp_step, triplet_eta_scale,
 };
 use crate::aarnn::transmission::{
-    compute_delay_and_attenuation, CompartmentClass, DelayAttenuationSpec,
-    DendriticTransmissionProfile, MyelinationProfile,
+    CompartmentClass, DelayAttenuationSpec, DendriticTransmissionProfile, MyelinationProfile,
+    compute_delay_and_attenuation,
 };
 use crate::config::{
     FpaaConfig, FpaaKernelRoute, FpaaRoutingConfig, FpaaStartupMode, FpaaTransportPreference,
@@ -131,9 +131,9 @@ impl FpaaKernel {
             "morphology_transmission" | "morphology-transmission" => {
                 Some(Self::MorphologyTransmission)
             }
-            "triplet_scaling_dale_hybrid"
-            | "triplet-scaling-dale-hybrid"
-            | "triplet" => Some(Self::TripletScalingDaleHybrid),
+            "triplet_scaling_dale_hybrid" | "triplet-scaling-dale-hybrid" | "triplet" => {
+                Some(Self::TripletScalingDaleHybrid)
+            }
             _ => None,
         }
     }
@@ -250,9 +250,9 @@ impl FpaaRuntimeStatus {
     pub fn unmet_requirement(&self) -> Option<String> {
         if self.startup_mode == FpaaStartupMode::Required && !self.ready {
             return Some(
-                self.startup_error
-                    .clone()
-                    .unwrap_or_else(|| "FPAA required but no ready transport was found".to_string()),
+                self.startup_error.clone().unwrap_or_else(|| {
+                    "FPAA required but no ready transport was found".to_string()
+                }),
             );
         }
         let unmet: Vec<&str> = self
@@ -328,7 +328,9 @@ impl PersistedProgramState {
         } else {
             None
         };
-        expected_kind.map(|kind| kind == transport.kind).unwrap_or(true)
+        expected_kind
+            .map(|kind| kind == transport.kind)
+            .unwrap_or(true)
     }
 }
 
@@ -346,7 +348,8 @@ fn ahf_fingerprint(bytes: &[u8]) -> String {
 }
 
 fn parse_ahf_file(path: &Path) -> Result<Vec<u8>, String> {
-    let raw = fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let mut bytes = Vec::new();
     for (index, line) in raw.lines().enumerate() {
         let token = line.trim();
@@ -380,7 +383,10 @@ fn parse_ahf_file(path: &Path) -> Result<Vec<u8>, String> {
 fn validate_ahf_file(path: &Path) -> Result<String, String> {
     let bytes = parse_ahf_file(path)?;
     if bytes.len() < 12 {
-        return Err(format!("{} too short for a primary AHF header", path.display()));
+        return Err(format!(
+            "{} too short for a primary AHF header",
+            path.display()
+        ));
     }
     if bytes.iter().take(5).any(|&b| b != 0) {
         return Err(format!(
@@ -501,7 +507,9 @@ fn detect_usb(config: &FpaaConfig) -> Option<FpaaTransportInfo> {
 
 fn detect_transport(config: &FpaaConfig) -> Option<FpaaTransportInfo> {
     let order: &[FpaaTransportPreference] = match config.transport_preference {
-        FpaaTransportPreference::Auto => &[FpaaTransportPreference::PiHat, FpaaTransportPreference::Usb],
+        FpaaTransportPreference::Auto => {
+            &[FpaaTransportPreference::PiHat, FpaaTransportPreference::Usb]
+        }
         FpaaTransportPreference::PiHat => &[FpaaTransportPreference::PiHat],
         FpaaTransportPreference::Usb => &[FpaaTransportPreference::Usb],
     };
@@ -640,18 +648,24 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
         FpaaKernel::GapJunctionField => {
             let mut curr = Array1::zeros(3);
             let v = arr1(&[-40.0, -60.0, -70.0]);
-            let coupled = apply_local_gap_junction_coupling(
-                &mut curr,
-                &v,
-                1.0,
-                0.2,
-                None,
-                |idx| match idx {
-                    0 => SpatialPoint3 { x: 0.0, y: 0.0, z: 0.0 },
-                    1 => SpatialPoint3 { x: 0.05, y: 0.0, z: 0.0 },
-                    _ => SpatialPoint3 { x: 1.0, y: 0.0, z: 0.0 },
-                },
-            );
+            let coupled =
+                apply_local_gap_junction_coupling(&mut curr, &v, 1.0, 0.2, None, |idx| match idx {
+                    0 => SpatialPoint3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    1 => SpatialPoint3 {
+                        x: 0.05,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    _ => SpatialPoint3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                });
             if !coupled || curr[1].abs() <= 0.0 {
                 return Err("gap junction coupling did not affect nearby node".to_string());
             }
@@ -660,14 +674,28 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                 0.2,
                 0.4,
                 1.5,
-                &[SpatialPoint3 { x: 0.0, y: 0.0, z: 0.0 }],
+                &[SpatialPoint3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                }],
                 |idx| match idx {
-                    0 => SpatialPoint3 { x: 0.0, y: 0.0, z: 0.0 },
-                    _ => SpatialPoint3 { x: 0.1, y: 0.0, z: 0.0 },
+                    0 => SpatialPoint3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    _ => SpatialPoint3 {
+                        x: 0.1,
+                        y: 0.0,
+                        z: 0.0,
+                    },
                 },
             );
             if factors[0] <= 1.0 {
-                return Err("volume transmission factor did not exceed baseline near source".to_string());
+                return Err(
+                    "volume transmission factor did not exceed baseline near source".to_string(),
+                );
             }
             Ok(())
         }
@@ -731,7 +759,9 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
         FpaaKernel::TripletScalingDaleHybrid => {
             let eta = triplet_eta_scale(0.4, 0.5, 0.1, 0.25, 0.15);
             if eta <= 1.0 {
-                return Err("triplet eta scale did not potentiate under positive correlation".to_string());
+                return Err(
+                    "triplet eta scale did not potentiate under positive correlation".to_string(),
+                );
             }
             let mut weights = Array2::from_shape_vec((2, 3), vec![0.3, -0.2, 0.1, 0.5, 0.2, -0.4])
                 .map_err(|e| e.to_string())?;
@@ -781,7 +811,10 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
 
     let detected_transport = detect_transport(config);
     let available = detected_transport.is_some();
-    let ready = detected_transport.as_ref().map(|transport| transport.ready).unwrap_or(false);
+    let ready = detected_transport
+        .as_ref()
+        .map(|transport| transport.ready)
+        .unwrap_or(false);
     let program_state = load_program_state(&state_path);
     let state_file_present = program_state.is_some();
     let state_schema_supported = program_state
@@ -842,7 +875,8 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
                         verification = FpaaKernelVerification::MissingManifest;
                         note = format!(
                             "manifest id mismatch: expected {}, found {}",
-                            kernel.id(), manifest.id
+                            kernel.id(),
+                            manifest.id
                         );
                     } else if !ahf_present {
                         verification = FpaaKernelVerification::MissingAhf;
@@ -878,7 +912,8 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
                                     }
                                     None => {
                                         verification = FpaaKernelVerification::MissingProgramState;
-                                        note = "no persisted programming state for this kernel".to_string();
+                                        note = "no persisted programming state for this kernel"
+                                            .to_string();
                                     }
                                 }
                             }
@@ -926,9 +961,13 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
             FpaaKernelRoute::Software
         };
 
-        if requested_route == FpaaKernelRoute::Fpaa && current_fingerprint.is_none() && note.is_empty() {
-            note = "requested FPAA route will fall back to software until a verified image is present"
-                .to_string();
+        if requested_route == FpaaKernelRoute::Fpaa
+            && current_fingerprint.is_none()
+            && note.is_empty()
+        {
+            note =
+                "requested FPAA route will fall back to software until a verified image is present"
+                    .to_string();
         }
 
         kernels.push(FpaaKernelStatus {
@@ -992,7 +1031,10 @@ mod tests {
 
     #[test]
     fn kernel_id_parser_accepts_aliases() {
-        assert_eq!(FpaaKernel::parse_id("stp"), Some(FpaaKernel::ShortTermPlasticity));
+        assert_eq!(
+            FpaaKernel::parse_id("stp"),
+            Some(FpaaKernel::ShortTermPlasticity)
+        );
         assert_eq!(
             FpaaKernel::parse_id("gap-junction-field"),
             Some(FpaaKernel::GapJunctionField)
@@ -1005,10 +1047,12 @@ mod tests {
         cfg.startup_mode = FpaaStartupMode::Disabled;
         let status = startup_probe(&cfg);
         assert!(!status.ready);
-        assert!(status
-            .kernels
-            .iter()
-            .all(|kernel| kernel.effective_route == FpaaKernelRoute::Software));
+        assert!(
+            status
+                .kernels
+                .iter()
+                .all(|kernel| kernel.effective_route == FpaaKernelRoute::Software)
+        );
     }
 
     #[test]

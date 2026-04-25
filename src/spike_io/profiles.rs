@@ -6,10 +6,10 @@ use crate::config::{IzhikevichParams, LIFParams};
 use crate::runner::Runner;
 use crate::sim::NeuronModel;
 use crate::spike_io::encoding::{
+    IsiEncoding, PhaseEncoding, RateEncoding, SignalDomain, TemporalEncodingContext, TtfsEncoding,
     isi_encode, multiplex_or, phase_encode, population_decode_average, population_level_encode,
     population_rate_encode_with, population_threshold_encode, rate_encode_with,
-    spikes_to_unit_interval, threshold_encode, ttfs_encode, IsiEncoding, PhaseEncoding,
-    RateEncoding, SignalDomain, TemporalEncodingContext, TtfsEncoding,
+    spikes_to_unit_interval, threshold_encode, ttfs_encode,
 };
 
 /// Profiles used by the UI/IPC adapters to match network-specific signal semantics.

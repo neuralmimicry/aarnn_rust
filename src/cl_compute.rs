@@ -16,8 +16,8 @@
 #![cfg(feature = "opencl")]
 
 use crate::gpu_api::{
-    cl_device_id, cl_device_type, CommandQueue, Context, Device, Kernel, Program,
-    CL_DEVICE_TYPE_CPU, CL_DEVICE_TYPE_GPU,
+    CL_DEVICE_TYPE_CPU, CL_DEVICE_TYPE_GPU, CommandQueue, Context, Device, Kernel, Program,
+    cl_device_id, cl_device_type,
 };
 use opencl3::platform::get_platforms;
 use std::ptr;
@@ -30,8 +30,8 @@ static GLOBAL_CL_MANAGER: OnceLock<Option<Arc<OpenCLManager>>> = OnceLock::new()
 static CUDA_GPU_COUNT: OnceLock<usize> = OnceLock::new();
 
 pub use crate::gpu_api::{
-    Buffer, ClError, ExecuteKernel, Result as ClResult, CL_INVALID_VALUE, CL_MEM_READ_ONLY,
-    CL_MEM_READ_WRITE, CL_TRUE,
+    Buffer, CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ExecuteKernel,
+    Result as ClResult,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,11 +172,7 @@ fn probe_nvidia_cuda_gpu_count() -> usize {
                         || line.starts_with("GPU"))
             })
             .count();
-        if count > 0 {
-            Some(count)
-        } else {
-            None
-        }
+        if count > 0 { Some(count) } else { None }
     };
 
     if let Some(count) = query_count(&["--query-gpu=name", "--format=csv,noheader"], false) {

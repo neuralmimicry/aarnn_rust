@@ -23,11 +23,11 @@
 use std::collections::HashMap;
 
 use crate::spike_io::encoding::{
-    population_decode_average, population_rate_encode_with, population_threshold_encode,
-    TemporalEncodingContext,
+    TemporalEncodingContext, population_decode_average, population_rate_encode_with,
+    population_threshold_encode,
 };
 use crate::spike_io::profiles::{
-    decode_network_outputs, encode_network_inputs_with, SpikeInputEncodingStrategy, SpikeIoConfig,
+    SpikeInputEncodingStrategy, SpikeIoConfig, decode_network_outputs, encode_network_inputs_with,
 };
 
 /// Direction of a port range.
@@ -210,11 +210,7 @@ impl TimeSync {
     pub fn sync_dt(&mut self, val: f64, is_delta: bool, fallback_dt: f64) -> f64 {
         if is_delta {
             self.last_external_time = None; // Reset mode
-            if val > 0.0 {
-                val
-            } else {
-                fallback_dt
-            }
+            if val > 0.0 { val } else { fallback_dt }
         } else {
             let dt = if let Some(prev) = self.last_external_time {
                 val - prev
@@ -222,11 +218,7 @@ impl TimeSync {
                 fallback_dt
             };
             self.last_external_time = Some(val);
-            if dt > 0.0 {
-                dt
-            } else {
-                fallback_dt
-            }
+            if dt > 0.0 { dt } else { fallback_dt }
         }
     }
 }

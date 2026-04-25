@@ -1205,11 +1205,7 @@ pub fn brain_region_space_scale(regions: &[BrainRegionConfig]) -> f32 {
         }
     }
 
-    if max_abs > 2.0 {
-        1.0 / max_abs
-    } else {
-        1.0
-    }
+    if max_abs > 2.0 { 1.0 / max_abs } else { 1.0 }
 }
 
 /// Apply the baseline AARNN biomimicry profile used by UI defaults:
@@ -2387,15 +2383,17 @@ mod tests {
         assert!(cfg.neuron_types.iter().any(|t| t.name == "SOM_Interneuron"));
         assert!(cfg.neuron_types.iter().any(|t| t.name == "VIP_Interneuron"));
         assert!(cfg.neuron_types.iter().any(|t| t.name == "L2_3_Pyramidal"));
-        assert!(cfg
-            .neuron_types
-            .iter()
-            .any(|t| t.name == "L4_SpinyStellate"));
+        assert!(
+            cfg.neuron_types
+                .iter()
+                .any(|t| t.name == "L4_SpinyStellate")
+        );
         assert!(cfg.neuron_types.iter().any(|t| t.name == "L5_Pyramidal"));
-        assert!(cfg
-            .neuron_types
-            .iter()
-            .any(|t| t.name == "L6_Corticothalamic"));
+        assert!(
+            cfg.neuron_types
+                .iter()
+                .any(|t| t.name == "L6_Corticothalamic")
+        );
         assert!(cfg.aarnn_myelination_enabled);
         assert!(cfg.aarnn_myelination_rate > 0.0);
         assert!(cfg.aarnn_demyelination_rate > 0.0);
