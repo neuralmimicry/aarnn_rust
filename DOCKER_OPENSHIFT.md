@@ -4,15 +4,15 @@ This project supports multi-architecture builds and distributed deployment on Re
 
 ## 1. Multi-Architecture Container Build
 
-The project uses a multi-stage `Containerfile` based on CentOS Stream 9.
+The project uses a `Containerfile` based on Ubuntu 24.04.
 
-> **Note**: While RedHat UBI is often preferred for OpenShift, this project uses CentOS Stream 9 as a base because it provides access to necessary dependencies like OpenCL headers, Protobuf compiler, and Netlink development libraries (from the CRB and AppStream repositories). Additionally, OpenCV is built from source during the container build process to ensure availability and consistent versioning across different architectures, as it is not present in the standard CentOS Stream 9 repositories.
+> **Note**: Container builds no longer compile AARNN from source inside the image. Instead, `scripts/build_container.sh` stages a workload-specific `.deb` package for the native architecture and the `Containerfile` installs that package into the runtime image. This keeps the image build path aligned with the binary release artifacts and avoids repeated in-image Rust builds.
 
 ### Build with Podman (Recommended for OpenShift)
 ```bash
 ./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
 ```
-By default this builds and pushes the native-architecture workload images from the same source tree and assembles a manifest tag per workload:
+By default this builds and pushes the native-architecture workload images from the same source tree, stages the matching workload `.deb` package for the host architecture, and assembles a manifest tag per workload:
 
 - `engine-standalone`
 - `engine-orchestrator`
@@ -29,12 +29,19 @@ Limit the build to a subset of workloads by passing a CSV list as the fourth arg
 Skip the automatic push by passing `false` as the third argument.
 
 ### Build with Docker Buildx
+First stage the package you want the `Containerfile` to install:
+
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 \
+./scripts/prepare_container_package.sh --workload orchestrator
+```
+
+Then build the image:
+
+```bash
+docker buildx build --platform linux/amd64 \
   -t ghcr.io/neuralmimicry/aarnn_rust:engine-orchestrator \
   --build-arg CONTAINER_WORKLOAD=orchestrator \
   --build-arg CARGO_FEATURES=orchestrator_workload \
-  --build-arg CARGO_BUILD_TARGETS=aarnn_rust \
   -f Containerfile \
   --push .
 ```

@@ -1,5 +1,7 @@
 # Rust
 /target/
+/dist/
+/.container-cache/
 **/*.rs.bk
 
 # Python

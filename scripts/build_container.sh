@@ -19,8 +19,11 @@ NO_CACHE=${NO_CACHE:-${7:-"false"}}
 SKIP_REMOTE_MANIFEST=${SKIP_REMOTE_MANIFEST:-${8:-"false"}}
 PULL=${PULL:-${9:-"false"}}
 BUILD_TOOL=${CONTAINER_BUILD_TOOL:-${BUILD_TOOL:-""}}
+FORCE_DEB_REBUILD=${CONTAINER_DEB_FORCE_REBUILD:-${FORCE_DEB_REBUILD:-${NO_CACHE}}}
 REGISTRY_USERNAME=${REGISTRY_USERNAME:-${GHCR_USERNAME:-${GITHUB_USER:-""}}}
 REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${GITHUB_TOKEN:-""}}}
+CONTAINER_DEB_STAGE_DIR=${CONTAINER_DEB_STAGE_DIR:-"${ROOT_DIR}/dist/container"}
+CONTAINER_DEB_CACHE_DIR=${CONTAINER_DEB_CACHE_DIR:-"${ROOT_DIR}/.container-cache/debs"}
 
 KNOWN_ARCHES=("amd64" "arm64")
 WORKLOADS=()
@@ -93,6 +96,27 @@ role_tag_for() {
 arch_tag_for() {
     local workload="$1"
     printf '%s-%s' "$(role_tag_for "$workload")" "$HOST_ARCH"
+}
+
+prepare_workload_package() {
+    local workload="$1"
+    local features="$(aarnn_container_workload_features "$workload")"
+    local targets="$(aarnn_container_workload_targets "$workload")"
+    local prep_args=(
+        --workload "$workload"
+        --arch "$HOST_ARCH"
+        --output-dir "$CONTAINER_DEB_STAGE_DIR"
+        --cache-dir "$CONTAINER_DEB_CACHE_DIR"
+        --cargo-features "$features"
+        --cargo-build-targets "$targets"
+    )
+
+    if [ "$FORCE_DEB_REBUILD" = "true" ]; then
+        prep_args+=(--force)
+    fi
+
+    echo "Preparing Debian package for ${workload} (${HOST_ARCH})"
+    "${SCRIPT_DIR}/prepare_container_package.sh" "${prep_args[@]}"
 }
 
 registry_host_for_image() {
@@ -244,13 +268,13 @@ build_workload_with_podman() {
     echo "  workload: ${workload}"
     echo "  features: ${features}"
     echo "  targets: ${targets}"
+    prepare_workload_package "$workload"
 
     podman build ${NO_CACHE_ARG} --platform "${HOST_PLATFORM}" \
         ${PULL_ARG} \
         -t "${image_ref}" \
         --build-arg CONTAINER_WORKLOAD="${workload}" \
         --build-arg CARGO_FEATURES="${features}" \
-        --build-arg CARGO_BUILD_TARGETS="${targets}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}"
@@ -283,12 +307,12 @@ build_workload_with_buildx() {
     fi
 
     echo "Building ${image_ref} with Docker Buildx"
+    prepare_workload_package "$workload"
     docker buildx build ${NO_CACHE_ARG} --platform "${HOST_PLATFORM}" \
         ${PULL_ARG} \
         -t "${image_ref}" \
         --build-arg CONTAINER_WORKLOAD="${workload}" \
         --build-arg CARGO_FEATURES="${features}" \
-        --build-arg CARGO_BUILD_TARGETS="${targets}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}" ${output_flag}
@@ -304,6 +328,9 @@ print_summary() {
     echo "Workloads: ${WORKLOADS[*]}"
     echo "Python minimum: ${PYTHON_MIN_VERSION}"
     echo "Python full: ${PYTHON_FULL_VERSION}"
+    echo "Force workload package rebuilds: ${FORCE_DEB_REBUILD}"
+    echo "Container package stage dir: ${CONTAINER_DEB_STAGE_DIR}"
+    echo "Container package cache dir: ${CONTAINER_DEB_CACHE_DIR}"
     for workload in "${WORKLOADS[@]}"; do
         role_tag="$(role_tag_for "$workload")"
         echo "  - ${workload}: ${IMAGE_NAME}:${role_tag}-${HOST_ARCH} (manifest ${IMAGE_NAME}:${role_tag})"
@@ -313,6 +340,7 @@ print_summary() {
 parse_workloads "$WORKLOADS_CSV"
 detect_host_arch
 NO_CACHE="$(normalize_bool "$NO_CACHE")"
+FORCE_DEB_REBUILD="$(normalize_bool "$FORCE_DEB_REBUILD")"
 SKIP_REMOTE_MANIFEST="$(normalize_bool "$SKIP_REMOTE_MANIFEST")"
 PUSH="$(normalize_bool "$PUSH")"
 PULL="$(normalize_bool "$PULL")"
