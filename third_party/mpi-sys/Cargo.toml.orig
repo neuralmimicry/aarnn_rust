@@ -1,0 +1,27 @@
+[package]
+name = "mpi-sys"
+version = "0.2.3"
+authors = [
+    "Benedikt Steinbusch <ben@rockshrub.de>",
+    "Andrew Gaspar <andrew.gaspar@outlook.com>"
+]
+description = "Message Passing Interface bindings for Rust"
+homepage = "https://github.com/rsmpi/rsmpi"
+repository = "https://github.com/rsmpi/rsmpi"
+documentation = "https://docs.rs/mpi"
+keywords = [ "message-passing", "parallel" ]
+categories = [ "external-ffi-bindings" ]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.65"
+links = "mpi"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.49"
+bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
+build-probe-mpi = { path = "../build-probe-mpi", version = "0.1.5" }
+
+[package.metadata.release]
+tag-name = "{{crate_name}}-{{version}}"

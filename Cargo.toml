@@ -217,3 +217,4 @@ features = [
 
 [patch.crates-io]
 ibverbs-sys = { path = "third_party/ibverbs-sys" }
+mpi-sys = { path = "third_party/mpi-sys" }
