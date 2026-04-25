@@ -22,7 +22,7 @@ on:
       cargo_features:
         description: "Cargo features to build"
         required: false
-        default: "standalone_workload"
+        default: "all-features"
 
 env:
   REGISTRY: ghcr.io
@@ -97,7 +97,7 @@ jobs:
             --output-dir ./dist/container \
             --cache-dir ./.container-cache/debs-ci \
             --force \
-            --cargo-features "${{ github.event.inputs.cargo_features || 'standalone_workload' }}" \
+            --cargo-features "${{ github.event.inputs.cargo_features || 'all-features' }}" \
             --cargo-build-targets "aarnn_rust"
 
       - name: Build and push architecture image
@@ -111,7 +111,7 @@ jobs:
             --platform "linux/${{ matrix.arch }}"
             --tag "${ARCH_TAG}"
             --build-arg "CONTAINER_WORKLOAD=standalone"
-            --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'standalone_workload' }}"
+            --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'all-features' }}"
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
             .

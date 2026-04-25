@@ -78,6 +78,7 @@ collect_fingerprint_inputs() {
     src \
     web_ui \
     third_party/ibverbs-sys \
+    third_party/mpi-sys \
     scripts/package-release.sh
   do
     path="$ROOT_DIR/$rel"
