@@ -12,6 +12,7 @@ Options:
   --output-dir DIR               Directory to receive the packaged artifacts.
   --target-triple TRIPLE         Optional cargo target triple.
   --platform NAME                Platform suffix in output names. Default: derived from host.
+  --artifact-suffix NAME         Optional extra suffix appended to artifact filenames.
   --deb-arch ARCH                Also build a Debian package for linux using ARCH (amd64 or arm64).
   --cargo-features FEATURES      Cargo feature selection. Default: cargo defaults.
   --cargo-build-targets TARGETS  Space-delimited cargo binary targets. Default: "aarnn_rust web_ui".
@@ -21,6 +22,7 @@ Options:
 Examples:
   ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist
   ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist --platform linux-x86_64 --deb-arch amd64
+  ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist --artifact-suffix ubuntu24.04
   ./scripts/package-release.sh --version 0.1.0 --output-dir ./dist --cargo-features standalone_workload --cargo-build-targets "aarnn_rust"
 USAGE
 }
@@ -56,10 +58,12 @@ sha256_tool() {
 }
 
 binary_dir() {
+  local target_root
+  target_root="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
   if [[ -n "$TARGET_TRIPLE" ]]; then
-    printf '%s/target/%s/release\n' "$REPO_ROOT" "$TARGET_TRIPLE"
+    printf '%s/%s/release\n' "$target_root" "$TARGET_TRIPLE"
   else
-    printf '%s/target/release\n' "$REPO_ROOT"
+    printf '%s/release\n' "$target_root"
   fi
 }
 
@@ -81,6 +85,21 @@ resolve_binary_paths() {
   for bin in "${BUILD_TARGET_LIST[@]}"; do
     BIN_PATHS+=("${BIN_DIR}/${bin}")
   done
+}
+
+sanitize_artifact_suffix() {
+  local raw="$1" sanitized
+  [[ -n "$raw" ]] || {
+    printf '\n'
+    return
+  }
+
+  sanitized=$(
+    printf '%s' "$raw" \
+      | sed -E 's/[^A-Za-z0-9._+-]+/-/g; s/^-+//; s/-+$//'
+  )
+  [[ -n "$sanitized" ]] || die "unable to derive artifact suffix from '$raw'"
+  printf '%s\n' "$sanitized"
 }
 
 validate_deb_arch() {
@@ -165,7 +184,7 @@ create_debian_package() {
   deb_version=$(debian_package_version "$VERSION")
   deb_stage_root="$OUTPUT_DIR/.deb-stage"
   deb_root="$deb_stage_root/root"
-  deb_path="$OUTPUT_DIR/aarnn-rust_${deb_version}_${DEB_ARCH}.deb"
+  deb_path="$OUTPUT_DIR/aarnn-rust_${deb_version}${ARTIFACT_SUFFIX_FILENAME_PART}_${DEB_ARCH}.deb"
   docs_root="$deb_root/usr/share/doc/aarnn-rust"
   share_root="$deb_root/usr/share/aarnn-rust"
 
@@ -253,6 +272,7 @@ PLATFORM=
 DEB_ARCH=
 CARGO_FEATURES=
 CARGO_BUILD_TARGETS="aarnn_rust web_ui"
+ARTIFACT_SUFFIX=
 SKIP_BUILD=0
 BUILD_TARGET_LIST=()
 BIN_PATHS=()
@@ -278,6 +298,11 @@ while (($#)); do
       shift
       (($#)) || die "--platform requires a value"
       PLATFORM="$1"
+      ;;
+    --artifact-suffix)
+      shift
+      (($#)) || die "--artifact-suffix requires a value"
+      ARTIFACT_SUFFIX="$1"
       ;;
     --deb-arch)
       shift
@@ -314,6 +339,11 @@ done
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 PLATFORM="${PLATFORM:-$(default_platform)}"
+ARTIFACT_SUFFIX="$(sanitize_artifact_suffix "$ARTIFACT_SUFFIX")"
+ARTIFACT_SUFFIX_FILENAME_PART=''
+if [[ -n "$ARTIFACT_SUFFIX" ]]; then
+  ARTIFACT_SUFFIX_FILENAME_PART="_${ARTIFACT_SUFFIX}"
+fi
 
 parse_build_targets
 BIN_DIR=$(binary_dir)
@@ -330,6 +360,9 @@ for idx in "${!BUILD_TARGET_LIST[@]}"; do
 done
 
 ARCHIVE_BASENAME="aarnn_rust-${VERSION}-${PLATFORM}"
+if [[ -n "$ARTIFACT_SUFFIX" ]]; then
+  ARCHIVE_BASENAME="${ARCHIVE_BASENAME}-${ARTIFACT_SUFFIX}"
+fi
 OUTPUT_DIR=$(mkdir -p "$OUTPUT_DIR" && cd "$OUTPUT_DIR" && pwd)
 STAGE_ROOT="$OUTPUT_DIR/.stage"
 PAYLOAD_DIR="$STAGE_ROOT/$ARCHIVE_BASENAME"

@@ -36,6 +36,19 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_FEATURES: all-features
+  CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  UBUNTU_NATIVE_BUILD_DEPS: >-
+    ca-certificates curl xz-utils build-essential pkg-config libssl-dev protobuf-compiler
+    dpkg-dev clang libclang-dev cmake git perl python3 libnl-3-dev
+    libnl-route-3-dev libudev-dev
+    ocl-icd-opencl-dev libopenmpi-dev libopencv-dev libgtk-3-dev libasound2-dev
+    libv4l-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxext-dev
+    libxrender-dev libice-dev libsm-dev libxcursor-dev libxi-dev
+    libxrandr-dev libxcomposite-dev libxdamage-dev libxfixes-dev
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
+    libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+    libfontconfig1-dev libfreetype6-dev
 
 concurrency:
   group: build-and-release-${{ github.ref }}
@@ -45,7 +58,7 @@ jobs:
   verify:
     name: Verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,8 +71,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev protobuf-compiler
+          sudo apt-get install -y --no-install-recommends $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -68,19 +80,19 @@ jobs:
         run: cargo fmt --check
 
       - name: Check build
-        run: cargo check --locked --all-targets
+        run: cargo check --locked --all-features --all-targets
 
       - name: Run tests
-        run: cargo test --locked --all-targets
+        run: cargo test --locked --all-features --all-targets
 
       - name: Build release binaries
-        run: cargo build --locked --release --bin aarnn_rust --bin web_ui
+        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
 
       - name: Smoke test CLI help
-        run: cargo run --locked --release --bin aarnn_rust -- --help
+        run: cargo run --locked --release --all-features --bin aarnn_rust -- --help
 
       - name: Smoke test web UI help
-        run: cargo run --locked --release --bin web_ui -- --help
+        run: cargo run --locked --release --all-features --bin web_ui -- --help
 
       - name: Validate release script
         run: bash -n scripts/package-release.sh
@@ -134,65 +146,94 @@ jobs:
           echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
 
   package-linux:
-    name: Package Linux (${{ matrix.deb_arch }})
+    name: Package Linux (${{ matrix.ubuntu_label }} ${{ matrix.deb_arch }})
     needs:
       - verify
       - release-meta
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    runs-on: ${{ matrix.host_runner }}
+    timeout-minutes: 120
+    container:
+      image: ubuntu:${{ matrix.ubuntu_series }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - host_runner: ubuntu-24.04
+            ubuntu_series: "24.04"
+            ubuntu_label: ubuntu24.04
             rust_target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             deb_arch: amd64
-          - runner: ubuntu-24.04-arm
+            container_platform: amd64
+          - host_runner: ubuntu-24.04
+            ubuntu_series: "25.04"
+            ubuntu_label: ubuntu25.04
+            rust_target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            deb_arch: amd64
+            container_platform: amd64
+          - host_runner: ubuntu-24.04-arm
+            ubuntu_series: "24.04"
+            ubuntu_label: ubuntu24.04
             rust_target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
             deb_arch: arm64
+            container_platform: arm64
+          - host_runner: ubuntu-24.04-arm
+            ubuntu_series: "25.04"
+            ubuntu_label: ubuntu25.04
+            rust_target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+            deb_arch: arm64
+            container_platform: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
       - name: Install native build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev protobuf-compiler dpkg-dev
+          apt-get update
+          apt-get install -y --no-install-recommends $UBUNTU_NATIVE_BUILD_DEPS
 
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+          . "$HOME/.cargo/env"
+          rustup target add "${{ matrix.rust_target }}"
 
       - name: Package Linux release artifacts
         shell: bash
         run: |
           set -euo pipefail
+          . "$HOME/.cargo/env"
           chmod +x scripts/package-release.sh
           ./scripts/package-release.sh \
             --version "${{ needs.release-meta.outputs.artifact_version }}" \
             --output-dir ./dist \
             --target-triple "${{ matrix.rust_target }}" \
             --platform "${{ matrix.platform }}" \
-            --deb-arch "${{ matrix.deb_arch }}"
+            --artifact-suffix "${{ matrix.ubuntu_label }}" \
+            --deb-arch "${{ matrix.deb_arch }}" \
+            --cargo-features "${{ env.CARGO_FEATURES }}" \
+            --cargo-build-targets "${{ env.CARGO_BUILD_TARGETS }}"
 
       - name: Validate Debian package metadata
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find dist -maxdepth 1 -type f -name 'aarnn-rust_*.deb' | head -n 1)"
+          deb_path="$(find dist -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
           if [[ -z "$deb_path" ]]; then
             echo "::error::Expected a Debian package under dist/"
             exit 1
           fi
 
-          expected_version="$(basename "$deb_path" | sed -E 's/^aarnn-rust_(.*)_[^_]+\.deb$/\1/')"
+          expected_version="$(
+            printf '%s' "${{ needs.release-meta.outputs.artifact_version }}" \
+              | tr '-' '~' \
+              | sed -E 's/[^A-Za-z0-9.+:~]+/./g; s/^[^A-Za-z0-9]+//; s/[^A-Za-z0-9]+$//'
+          )"
           actual_package="$(dpkg-deb -f "$deb_path" Package)"
           actual_version="$(dpkg-deb -f "$deb_path" Version)"
           actual_arch="$(dpkg-deb -f "$deb_path" Architecture)"
@@ -205,11 +246,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find dist -maxdepth 1 -type f -name 'aarnn-rust_*.deb' | head -n 1)"
+          deb_path="$(find dist -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
           deb_path="$(readlink -f "$deb_path")"
 
-          sudo apt-get update
-          sudo apt-get install -y "$deb_path"
+          apt-get update
+          apt-get install -y "$deb_path"
 
           test -x /usr/bin/aarnn_rust
           test -x /usr/bin/web_ui
@@ -221,7 +262,7 @@ jobs:
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-assets-${{ matrix.platform }}
+          name: release-assets-${{ matrix.platform }}-${{ matrix.ubuntu_label }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
