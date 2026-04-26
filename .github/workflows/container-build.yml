@@ -55,6 +55,35 @@ jobs:
           }
           podman --version
 
+      - name: Configure rootless podman runtime environment
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+
+          # Ensure XDG_RUNTIME_DIR is writable; /run/user/<uid> is a tmpfs
+          # mount that disappears after a session logout or host reboot.
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            fallback="/tmp/podman-run-${uid}"
+            mkdir -p "${fallback}"
+            chmod 0700 "${fallback}"
+            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
+            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+          fi
+
+          # Prefer crun; fall back to runc via containers.conf when crun is absent.
+          if ! command -v crun >/dev/null 2>&1; then
+            if command -v runc >/dev/null 2>&1; then
+              conf_dir="${HOME}/.config/containers"
+              mkdir -p "${conf_dir}"
+              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
+              echo "crun not found; configured podman to use runc."
+            else
+              echo "Neither crun nor runc found on PATH." >&2
+              exit 1
+            fi
+          fi
+
       - name: Verify runner architecture matches matrix
         run: |
           HOST_ARCH="$(uname -m)"
@@ -166,6 +195,30 @@ jobs:
           }
           podman --version
 
+      - name: Configure rootless podman runtime environment
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            fallback="/tmp/podman-run-${uid}"
+            mkdir -p "${fallback}"
+            chmod 0700 "${fallback}"
+            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
+            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+          fi
+          if ! command -v crun >/dev/null 2>&1; then
+            if command -v runc >/dev/null 2>&1; then
+              conf_dir="${HOME}/.config/containers"
+              mkdir -p "${conf_dir}"
+              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
+              echo "crun not found; configured podman to use runc."
+            else
+              echo "Neither crun nor runc found on PATH." >&2
+              exit 1
+            fi
+          fi
+
       - name: Log in to GHCR
         run: |
           printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
@@ -235,6 +288,30 @@ jobs:
             exit 1
           }
           podman --version
+
+      - name: Configure rootless podman runtime environment
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            fallback="/tmp/podman-run-${uid}"
+            mkdir -p "${fallback}"
+            chmod 0700 "${fallback}"
+            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
+            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+          fi
+          if ! command -v crun >/dev/null 2>&1; then
+            if command -v runc >/dev/null 2>&1; then
+              conf_dir="${HOME}/.config/containers"
+              mkdir -p "${conf_dir}"
+              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
+              echo "crun not found; configured podman to use runc."
+            else
+              echo "Neither crun nor runc found on PATH." >&2
+              exit 1
+            fi
+          fi
 
       - name: Log in to GHCR
         run: |
