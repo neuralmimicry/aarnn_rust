@@ -75,12 +75,8 @@ jobs:
           fi
 
           # Override storage.conf so podman's RunRoot matches the writable dir.
-          cat > "${conf_dir}/storage.conf" <<STORAGECFG
-[storage]
-driver = "overlay"
-runroot = "${runtime_dir}/containers"
-graphroot = "${HOME}/.local/share/containers/storage"
-STORAGECFG
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
 
           # Prefer crun; fall back to runc when crun is absent.
           if command -v crun >/dev/null 2>&1; then
@@ -91,10 +87,7 @@ STORAGECFG
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
           fi
-          cat > "${conf_dir}/containers.conf" <<CONTAINERCFG
-[engine]
-runtime = "${oci_runtime}"
-CONTAINERCFG
+          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
 
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
