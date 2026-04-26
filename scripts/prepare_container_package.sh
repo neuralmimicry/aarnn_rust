@@ -130,7 +130,7 @@ build_package_in_container() {
     "$build_cache_root/rustup" \
     "$build_cache_root/target"
 
-  podman run --rm --pull=missing \
+  podman run --rm -i --pull=missing \
     --platform "$container_platform" \
     -e DEBIAN_FRONTEND=noninteractive \
     -e CARGO_HOME=/cargo \
