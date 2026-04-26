@@ -2,7 +2,7 @@ name: Auto Version and Tag
 
 on:
   push:
-    branches: [main, master]
+    branches: [engine, main, master]
   workflow_dispatch:
     inputs:
       bump_type:
