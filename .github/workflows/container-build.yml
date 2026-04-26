@@ -94,7 +94,9 @@ jobs:
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
           fi
-          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          # cgroup_manager=cgroupfs avoids sd-bus/systemd dependency when there
+          # is no active user session (non-login CI runners).
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
 
           echo "OCI runtime: ${oci_runtime}"
@@ -237,7 +239,7 @@ jobs:
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
           fi
-          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
@@ -338,7 +340,7 @@ jobs:
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
           fi
-          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
