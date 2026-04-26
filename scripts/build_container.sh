@@ -20,6 +20,7 @@ SKIP_REMOTE_MANIFEST=${SKIP_REMOTE_MANIFEST:-${8:-"false"}}
 PULL=${PULL:-${9:-"false"}}
 BUILD_TOOL=${CONTAINER_BUILD_TOOL:-${BUILD_TOOL:-""}}
 FORCE_DEB_REBUILD=${CONTAINER_DEB_FORCE_REBUILD:-${FORCE_DEB_REBUILD:-${NO_CACHE}}}
+PREBUILT=${CONTAINER_DEB_PREBUILT:-"false"}
 REGISTRY_USERNAME=${REGISTRY_USERNAME:-${GHCR_USERNAME:-${GITHUB_USER:-""}}}
 REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${GITHUB_TOKEN:-""}}}
 CONTAINER_DEB_STAGE_DIR=${CONTAINER_DEB_STAGE_DIR:-"${ROOT_DIR}/dist/container"}
@@ -100,6 +101,20 @@ arch_tag_for() {
 
 prepare_workload_package() {
     local workload="$1"
+
+    if [ "$(normalize_bool "$PREBUILT")" = "true" ]; then
+        local existing_deb
+        existing_deb="$(find "$CONTAINER_DEB_STAGE_DIR" -maxdepth 1 -type f \
+            -name "aarnn-rust_*_${HOST_ARCH}.deb" 2>/dev/null | sort | head -n 1)"
+        if [ -z "$existing_deb" ]; then
+            printf 'error: CONTAINER_DEB_PREBUILT=true but no aarnn-rust_*_%s.deb found in %s\n' \
+                "$HOST_ARCH" "$CONTAINER_DEB_STAGE_DIR" >&2
+            exit 1
+        fi
+        printf 'Using pre-built Debian package for %s: %s\n' "$workload" "$existing_deb"
+        return 0
+    fi
+
     local features="$(aarnn_container_workload_features "$workload")"
     local targets="$(aarnn_container_workload_targets "$workload")"
     local prep_args=(
@@ -328,6 +343,7 @@ print_summary() {
     echo "Workloads: ${WORKLOADS[*]}"
     echo "Python minimum: ${PYTHON_MIN_VERSION}"
     echo "Python full: ${PYTHON_FULL_VERSION}"
+    echo "Pre-built .deb mode: ${PREBUILT}"
     echo "Force workload package rebuilds: ${FORCE_DEB_REBUILD}"
     echo "Container package stage dir: ${CONTAINER_DEB_STAGE_DIR}"
     echo "Container package cache dir: ${CONTAINER_DEB_CACHE_DIR}"
@@ -341,6 +357,7 @@ parse_workloads "$WORKLOADS_CSV"
 detect_host_arch
 NO_CACHE="$(normalize_bool "$NO_CACHE")"
 FORCE_DEB_REBUILD="$(normalize_bool "$FORCE_DEB_REBUILD")"
+PREBUILT="$(normalize_bool "$PREBUILT")"
 SKIP_REMOTE_MANIFEST="$(normalize_bool "$SKIP_REMOTE_MANIFEST")"
 PUSH="$(normalize_bool "$PUSH")"
 PULL="$(normalize_bool "$PULL")"
