@@ -59,30 +59,45 @@ jobs:
         run: |
           set -euo pipefail
           uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
 
-          # Ensure XDG_RUNTIME_DIR is writable; /run/user/<uid> is a tmpfs
-          # mount that disappears after a session logout or host reboot.
+          # /run/user/<uid> is a tmpfs that vanishes after session logout or
+          # reboot.  Fall back to a persistent /tmp directory and wire it into
+          # both XDG_RUNTIME_DIR and storage.conf so podman uses it consistently.
           runtime_dir="/run/user/${uid}"
           if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            fallback="/tmp/podman-run-${uid}"
-            mkdir -p "${fallback}"
-            chmod 0700 "${fallback}"
-            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
-            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
           fi
 
-          # Prefer crun; fall back to runc via containers.conf when crun is absent.
-          if ! command -v crun >/dev/null 2>&1; then
-            if command -v runc >/dev/null 2>&1; then
-              conf_dir="${HOME}/.config/containers"
-              mkdir -p "${conf_dir}"
-              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
-              echo "crun not found; configured podman to use runc."
-            else
-              echo "Neither crun nor runc found on PATH." >&2
-              exit 1
-            fi
+          # Override storage.conf so podman's RunRoot matches the writable dir.
+          cat > "${conf_dir}/storage.conf" <<STORAGECFG
+[storage]
+driver = "overlay"
+runroot = "${runtime_dir}/containers"
+graphroot = "${HOME}/.local/share/containers/storage"
+STORAGECFG
+
+          # Prefer crun; fall back to runc when crun is absent.
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
           fi
+          cat > "${conf_dir}/containers.conf" <<CONTAINERCFG
+[engine]
+runtime = "${oci_runtime}"
+CONTAINERCFG
+
+          echo "OCI runtime: ${oci_runtime}"
+          echo "RunRoot: ${runtime_dir}/containers"
 
       - name: Verify runner architecture matches matrix
         run: |
