@@ -71,12 +71,19 @@ jobs:
             mkdir -p "${runtime_dir}/containers"
             chmod 0700 "${runtime_dir}"
             echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            # The graphroot database records the RunRoot path. When the previous
+            # RunRoot (e.g. /run/user/<uid>) is gone, the stale DB causes podman
+            # to ignore storage.conf and use the old non-writable path.  Remove
+            # the stale database so podman starts fresh with our new config.
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
             echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
           fi
 
-          # Override storage.conf so podman's RunRoot matches the writable dir.
+          # Write storage.conf and export the path so all subsequent podman
+          # calls in this job pick up the config regardless of defaults.
           printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
             "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
           # Prefer crun; fall back to runc when crun is absent.
           if command -v crun >/dev/null 2>&1; then
@@ -88,6 +95,7 @@ jobs:
             exit 1
           fi
           printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
 
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
@@ -207,25 +215,32 @@ jobs:
         run: |
           set -euo pipefail
           uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
           runtime_dir="/run/user/${uid}"
           if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            fallback="/tmp/podman-run-${uid}"
-            mkdir -p "${fallback}"
-            chmod 0700 "${fallback}"
-            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
-            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
           fi
-          if ! command -v crun >/dev/null 2>&1; then
-            if command -v runc >/dev/null 2>&1; then
-              conf_dir="${HOME}/.config/containers"
-              mkdir -p "${conf_dir}"
-              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
-              echo "crun not found; configured podman to use runc."
-            else
-              echo "Neither crun nor runc found on PATH." >&2
-              exit 1
-            fi
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
           fi
+          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+          echo "OCI runtime: ${oci_runtime}"
+          echo "RunRoot: ${runtime_dir}/containers"
 
       - name: Log in to GHCR
         run: |
@@ -301,25 +316,32 @@ jobs:
         run: |
           set -euo pipefail
           uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
           runtime_dir="/run/user/${uid}"
           if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            fallback="/tmp/podman-run-${uid}"
-            mkdir -p "${fallback}"
-            chmod 0700 "${fallback}"
-            echo "XDG_RUNTIME_DIR=${fallback}" >> "${GITHUB_ENV}"
-            echo "Warning: ${runtime_dir} not writable; using ${fallback}"
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
           fi
-          if ! command -v crun >/dev/null 2>&1; then
-            if command -v runc >/dev/null 2>&1; then
-              conf_dir="${HOME}/.config/containers"
-              mkdir -p "${conf_dir}"
-              printf '[engine]\nruntime = "runc"\n' >> "${conf_dir}/containers.conf"
-              echo "crun not found; configured podman to use runc."
-            else
-              echo "Neither crun nor runc found on PATH." >&2
-              exit 1
-            fi
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
           fi
+          printf '[engine]\nruntime = "%s"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+          echo "OCI runtime: ${oci_runtime}"
+          echo "RunRoot: ${runtime_dir}/containers"
 
       - name: Log in to GHCR
         run: |
