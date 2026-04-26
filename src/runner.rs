@@ -17380,6 +17380,10 @@ mod tests {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
         let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
         net.growth_enabled = true;
         // make growth easy in tests
         net.saturation_threshold = 0.01;
@@ -18086,6 +18090,10 @@ mod tests {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
         let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
         net.growth_enabled = true;
         let mut r = Runner::new(lif, stdp, net, NeuronModel::Lif, Learning::Stdp);
         // Force a queue that targets next layer
@@ -18414,6 +18422,8 @@ mod tests {
         use crate::morphology::{Point3, SynKind, Synapse};
 
         let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
         net.use_morphology = true;
         net.morpho_growth_enabled = true;
         net.growth_enabled = false; // Disable layer splitting growth
@@ -18685,6 +18695,8 @@ mod tests {
         use crate::morphology::{Point3, SynKind, Synapse};
 
         let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
         net.use_morphology = true;
         net.morpho_growth_enabled = true;
         net.growth_enabled = false;
@@ -18914,6 +18926,8 @@ mod tests {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
         let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
         net.num_sensory_neurons = 5;
         net.num_output_neurons = 5;
         net.num_hidden_layers = 1;
