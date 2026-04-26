@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          short_sha="${GITHUB_SHA::0:7}"
+          short_sha="${GITHUB_SHA:0:7}"
           release_tag=""
           publish_release="false"
 
