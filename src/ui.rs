@@ -7887,7 +7887,7 @@ impl eframe::App for App {
                 if self.distributed_node.is_some() {
                     let mut new_source = None;
                     let mut clear_filter = false;
-                    
+
                     ui.collapsing("View Selection & Cluster", |ui| {
                         let current_view = match &self.view_source {
                             ViewSource::Standalone => format!("Standalone: {}", self.brain_id),
@@ -7976,7 +7976,7 @@ impl eframe::App for App {
                             });
                         }
                     });
-                    
+
                     if let Some(source) = new_source { self.set_view_source(source); }
                     if clear_filter { self.view_node_filter = None; }
                 }
@@ -7985,7 +7985,7 @@ impl eframe::App for App {
                     ui.collapsing("Cluster Dashboard", |ui| {
                         ui.label(format!("Node ID: {}", node_id));
                         ui.label(format!("Role: {}", if is_orchestrator { "Orchestrator" } else { "Worker Node" }));
-                        
+
                         if is_orchestrator {
                             ui.separator();
                             ui.label(format!("Active Networks: {}", network_registry.len()));
@@ -8022,7 +8022,7 @@ impl eframe::App for App {
                                             source, net.last_transition_ts_ms, net.last_transition_reason
                                         ));
                                     }
-                                    
+
                                     // Calculate estimated nodes for 1ms cycle
                                     let mut total_workload_ms = 0.0;
                                     let mut total_cluster_neurons = 0;
@@ -8079,7 +8079,7 @@ impl eframe::App for App {
                                         } else {
                                             ui.label("Temp: n/a");
                                         }
-                                        
+
                                         ui.separator();
                                         ui.label(format!("GA Evaluations: {}", res.ga_total_evaluations));
                                         if total_cluster_ga_evals > 0 {
@@ -8135,13 +8135,13 @@ impl eframe::App for App {
                                                 ));
                                             }
                                         }
-                                        
+
                                         if res.ga_running {
                                             ui.separator();
                                             ui.colored_label(egui::Color32::LIGHT_GREEN, "🧬 GA Search Running");
                                             ui.label(format!("Generation: {}", res.ga_generation));
                                             ui.label(format!("Best Fitness: {:.4}", res.ga_best_fitness));
-                                            
+
                                             if !res.ga_best_config_json.is_empty() {
                                                 if ui.button("Apply Node's Best GA Params").clicked() {
                                                     if let Ok(cfg) = serde_json::from_str(&res.ga_best_config_json) {
@@ -8222,7 +8222,7 @@ impl eframe::App for App {
                     ui.radio_value(&mut self.neuron_model, NeuronModelSel::Izh, "Izh").on_hover_text("Izhikevich: rich spiking dynamics via quadratic integrate-and-fire");
                     ui.radio_value(&mut self.neuron_model, NeuronModelSel::Aarnn, "AARNN").on_hover_text("Axon–Axon–Recurrent Neural Network: includes connection length and transmission velocity in thresholding");
                 });
-                
+
                 // AARNN specific parameters - always visible when AARNN is selected
                 if matches!(self.neuron_model, NeuronModelSel::Aarnn) || matches!(self.learning, LearningSel::Aarnn) {
                     ui.add_space(4.0);
@@ -8614,7 +8614,7 @@ impl eframe::App for App {
                             let mut changed = false;
                             changed |= ui.add(egui::Slider::new(&mut net.aarnn_velocity, 0.1..=50.0).text("Default Velocity")).on_hover_text("Aggregate default velocity (used if per-segment velocities are zero)").changed();
                             changed |= ui.checkbox(&mut net.use_aarnn_delays, "Use Conduction Delays").on_hover_text("Apply velocity-based discrete delays proportional to connection length (growth3d)").changed();
-                            
+
                             // Per-segment controls (exact AARNN conduction)
                             ui.collapsing("Detailed Conduction Physics", |ui| {
                                 changed |= ui.add(egui::Slider::new(&mut net.axon_velocity, 0.0..=100.0).text("Axon velocity")).on_hover_text("If > 0, overrides default velocity for axon segments").changed();
@@ -8886,7 +8886,7 @@ impl eframe::App for App {
                         self.sensory_activity = vec![0.0; num_s];
                         self.hidden_activity = (0..num_l).map(|_| vec![0.0; num_h]).collect();
                         self.output_activity = vec![0.0; num_o];
-                        
+
                         let num_l2 = net.num_hidden_layers;
                         let num_h2 = net.num_hidden_per_layer_initial;
                         let num_s2 = net.num_sensory_neurons;
@@ -8979,7 +8979,7 @@ impl eframe::App for App {
 
                     changed |= ui.checkbox(&mut net.morpho_growth_enabled, "Enable physical growth")
                         .on_hover_text("Allow dendrites to sprout and grow towards synaptic energy density, forming new connections on axon contact.").changed();
-                    
+
                     ui.add_enabled_ui(net.morpho_growth_enabled, |ui| {
                         // Intelligent Heuristic Section
                         ui.group(|ui| {
@@ -8994,7 +8994,7 @@ impl eframe::App for App {
 
                                 // Intelligent heuristic: progressively more aggressive if no/low growth
                                 let phase = self.boost_connectivity_count as f32;
-                                
+
                                 // --- Morphological (Physical) ---
                                 net.energy_attraction_radius = (0.4 + 0.2 * phase).min(3.0);
                                 net.energy_kernel_k = (2.0 - 0.3 * phase).max(0.01);
@@ -9003,15 +9003,15 @@ impl eframe::App for App {
                                 net.axon_contact_dist = (0.04 + 0.05 * phase).min(1.0);
                                 net.component_decay_rate = (0.01 + 0.0005 * phase).min(1.0);
                                 net.synaptic_stabilization_strength = (0.05 + 0.05 * phase).min(0.5);
-                                
+
                                 net.trunk_growth_rate = (0.005 + 0.005 * phase).min(0.5);
                                 net.branch_growth_rate = (0.02 + 0.02 * phase).min(1.0);
                                 net.bouton_growth_rate = (0.1 + 0.05 * phase).min(2.0);
                                 net.max_segment_length = (5.0 + 0.1 * phase).min(5.0);
-                                
+
                                 net.spatial_clumping_strength = (0.005 * phase).min(0.2);
                                 net.density_target = (0.05 + 0.05 * phase).min(1.0);
-                                
+
                                 // --- Topological (Network Structure) ---
                                 net.growth_enabled = true;
                                 self.growth_enabled = true; // Sync UI state
@@ -9034,7 +9034,7 @@ impl eframe::App for App {
                                 self.status = format!("Connectivity boosted (Phase {})", self.boost_connectivity_count);
                                 changed = true;
                             }
-                            
+
                             // Indicators
                             let topo_pot = (2.0f32 - net.saturation_threshold).clamp(0.0, 2.0) / 2.0;
                             let morph_pot = (net.energy_attraction_radius * net.dendrite_sprout_prob * net.axon_contact_dist * (1.0 + net.aarnn_ambient_energy_level) * 200.0).min(1.0);
@@ -9066,7 +9066,7 @@ impl eframe::App for App {
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.synaptic_stabilization_strength, 0.0..=1.0).text("Synaptic stabilization"))
                             .on_hover_text("Amount by which a synapse's stimuli (structural stability) increases per spike. Higher values make active synapses harder to prune.")
                             .changed();
-                        
+
                         ui.separator();
                         ui.label("Synaptic Dynamics & Stability");
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.component_pruning_threshold, 0.001..=0.2).text("Pruning threshold"))
@@ -9081,14 +9081,14 @@ impl eframe::App for App {
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.synaptic_consolidation_factor, 0.0..=1.0).text("Consolidation factor"))
                             .on_hover_text("Reduces the effective decay rate for established connections, rewarding stability.")
                             .changed();
-                        
+
                         ui.separator();
                         ui.label("Growth Rates & Constraints");
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.trunk_growth_rate, 0.0001..=0.5).text("Trunk growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.branch_growth_rate, 0.001..=1.0).text("Branch growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.bouton_growth_rate, 0.005..=2.0).text("Bouton growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.max_segment_length, 0.1..=2.0).text("Max segment length")).changed();
-                        
+
                         ui.separator();
                         ui.label("Geometry & Collision");
                         geom_changed |= ui.checkbox(&mut net.enforce_unique_geometry, "Enforce unique geometry")
@@ -9203,7 +9203,7 @@ impl eframe::App for App {
                         ui.label("Remote-only mode: local GA search disabled.");
                         return;
                     }
-                    
+
                     ui.add(egui::Slider::new(&mut self.ga_pop_size, 4..=100).text("Population size"));
                     ui.add(egui::Slider::new(&mut self.ga_generations, 1..=100).text("Generations"));
                     ui.add(egui::Slider::new(&mut self.ga_mutation_rate, 0.001..=0.3).text("Initial mutation rate"));
@@ -9250,13 +9250,13 @@ impl eframe::App for App {
                                 crate::ga::ga_reset_abort_reason();
                                 crate::ga::ga_clear_ramp_runtime_status();
                                 crate::ga::ga_mark_dirty();
-                                
+
                                 let (tx, rx) = std::sync::mpsc::channel();
                                 self.ga_rx = Some(rx);
-                                
+
                                 let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
                                 self.ga_control_tx = Some(ctrl_tx);
-                                
+
                                 // Determine if we are restarting from a previous search
                                 let mut is_restart = false;
                                 let mut existing_leaderboard = Vec::new();
@@ -9278,20 +9278,20 @@ impl eframe::App for App {
                             let gens = self.ga_generations;
                             let runtime_handle = self.runtime_handle.clone();
                             crate::ga::ga_set_stall_timeout_secs(base_cfg.ga_stall_timeout_secs);
-                                
+
                                 match std::thread::Builder::new().name("ga-ui".into()).spawn(move || {
                                     // Keep GA controller thread unpinned so worker budgeting and child pools
                                     // can see/use the full CPU set.
                                     let mut seed_rng = rand::rng();
                                     let mut rng = rand::rngs::StdRng::from_rng(&mut seed_rng);
                                     let mut ga = GASearch::new(pop_size.max(1), &base_cfg, &mut rng, dist_node, is_restart, existing_leaderboard);
-                                    
+
                                     // Set initial self-adaptive rates from UI
                                     for ind in &mut ga.population {
                                         ind.mutation_rate = mutation_rate;
                                         ind.crossover_rate = crossover_rate;
                                     }
-                                    
+
                                     let mut paused = false;
                                     let mut stop_requested = false;
                                     let mut ramp = crate::ga::GARampController::new(pop_size.max(1), sim_time);
@@ -9329,9 +9329,9 @@ impl eframe::App for App {
                                         runtime_handle.block_on(ga.evaluate_population(plan.sim_time_ms, gen_seed, &tx));
                                         let success = crate::ga::ga_abort_reason().is_none();
                                         ramp.note_generation_result(success);
-                                        
+
                                         if tx.send(ga.clone()).is_err() { break; }
-                                        
+
                                         if !crate::ga::ga_wait_for_generation_headroom() {
                                             let _ = tx.send(ga.clone());
                                             break;
@@ -9370,7 +9370,7 @@ impl eframe::App for App {
                             ui.separator();
                             ui.label(format!("Generation: {}", ga.generation));
                             ui.label(format!("Best Fitness: {:.4}", ga.best_fitness));
-                            
+
                             if !ga.population.is_empty() {
                                 let avg_mut: f64 = ga.population.iter().map(|ind| ind.mutation_rate).sum::<f64>() / ga.population.len() as f64;
                                 let avg_cross: f64 = ga.population.iter().map(|ind| ind.crossover_rate).sum::<f64>() / ga.population.len() as f64;
@@ -9885,7 +9885,7 @@ impl eframe::App for App {
                             ui.label("Brain ID:");
                             ui.label(egui::RichText::new(&self.brain_id).strong());
                         });
-                        
+
                         ui.collapsing("Connection", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Socket:");
@@ -9909,7 +9909,7 @@ impl eframe::App for App {
                             let color = if self.ipc_connected { egui::Color32::GREEN } else { egui::Color32::RED };
                             let peer = self.ipc_last_peer.as_deref().unwrap_or("none");
                             let age_ms = self.ipc_last_receive_time.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1);
-                            
+
                             ui.horizontal(|ui| { ui.label("Connected:"); ui.colored_label(color, conn); });
                             ui.label(format!("Peer: {}", peer));
                             ui.label(format!("Last frame: {} ms ago", age_ms));
@@ -10256,7 +10256,7 @@ impl eframe::App for App {
                             .on_hover_text(
                                 "Only used by the older port-mapping quantizer paths; the network spike_io policy above drives current IPC encoding",
                             );
-                            
+
                             let mut thr = self.ipc_threshold;
                             if ui.add(egui::Slider::new(&mut thr, 0.0..=1.0).text("Threshold"))
                                 .on_hover_text("Float→spike threshold; lower to increase activity").changed() {
@@ -10440,7 +10440,7 @@ impl eframe::App for App {
                         });
                         ui.separator();
                         // Provider band probes (if available)
-                        if let Some(bands) = bands_guard.as_deref() { 
+                        if let Some(bands) = bands_guard.as_deref() {
                             ui.horizontal(|ui|{
                                 ui.label("Band b:");
                                 let mut b = 0usize; ui.add(egui::DragValue::new(&mut b).range(0..=bands.len().saturating_sub(1)));
@@ -11371,7 +11371,7 @@ impl eframe::App for App {
                         } else {
                             egui::pos2(x_ref * old_zoom + self.cam_pan.x, y_ref * old_zoom + self.cam_pan.y)
                         };
-                        
+
                         let focal_point = i.pointer.hover_pos()
                             .filter(|p| panel_rect.contains(*p))
                             .unwrap_or(current_network_center);
@@ -12305,7 +12305,7 @@ impl eframe::App for App {
                             egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(80)),
                         );
                     }
-                    
+
                     painter.text(
                         *label_pos,
                         egui::Align2::CENTER_CENTER,
@@ -12501,7 +12501,7 @@ impl eframe::App for App {
                             let k = ((n as f32).sqrt() as usize).clamp(3, 25);
                             let now = std::time::Instant::now();
                             let force_recompute = self.last_hull_update.elapsed() > std::time::Duration::from_millis(300) || self.cached_skull_hull.is_empty();
-                            
+
                             if force_recompute {
                                 self.cached_skull_hull = concave_hull_knn(pts2d.clone(), k);
                                 self.last_hull_update = now;
@@ -12527,7 +12527,7 @@ impl eframe::App for App {
                                 painter.add(egui::Shape::closed_line(outline_smooth, membrane_stroke));
                             }
                         }
-                    } else if let Some((rx, ry, rz)) = skull.radii { 
+                    } else if let Some((rx, ry, rz)) = skull.radii {
                         // Sample ellipsoid surface, project to 2D, compute convex hull and draw as vector polygon
                         let cx = skull.center.x - pivot.0;
                         let cyw = skull.center.y - pivot.1;
@@ -12658,7 +12658,7 @@ impl eframe::App for App {
             for (li, layer) in hidden_positions.iter().enumerate() {
                 let (col_h_base, vis_h) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, li as isize, egui::Color32::from_rgb(255, 160, 60), &network_registry);
                 if !vis_h && view_node_filter.is_some() { continue; }
-                
+
                 for (j, &p) in layer.iter().enumerate() {
                     let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
@@ -13087,20 +13087,20 @@ impl eframe::App for App {
                                 let p0 = send_pos[i];
                                 let p1 = recv_pos[r];
                                 let is_longterm = check_lt(r, i);
-                                
+
                                 // width/alpha from weight (absolute)
                                 let abs_w = w.abs();
                                 let ww = (1.0 + 3.0 * abs_w).clamp(1.0, 4.0) * (if is_longterm { 1.3 } else { 1.0 });
-                                
+
                                 let mut base_col = if is_longterm {
                                     egui::Color32::from_rgb(0, 255, 128) // Greenish for longterm
                                 } else {
                                     egui::Color32::from_rgb(255, 128, 0) // Orangeish for new
                                 };
-                                
+
                                 if !vis_from || !vis_to { base_col = base_col.gamma_multiply(0.2); }
                                 let col_line = base_col.gamma_multiply((0.3 + 0.7 * abs_w).clamp(0.3, 1.0));
-                                
+
                                 // subtle glow
                                 painter.line_segment([p0, p1], egui::Stroke { width: ww + 1.5, color: col_line.gamma_multiply(0.25) });
                                 painter.line_segment([p0, p1], egui::Stroke { width: ww, color: col_line });
@@ -13129,7 +13129,7 @@ impl eframe::App for App {
                     for l in 1..hidden_positions.len() {
                         let (_, vis_prev) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize - 1, egui::Color32::TRANSPARENT, &network_registry);
                         let (_, vis_curr) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                        
+
                         let send_mask = active_runner.last_spk_h.get(l-1).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         let recv_mask = active_runner.last_spk_h.get(l).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         if let Some(w) = active_runner.w_hh_fwd.get(l-1) {
@@ -13148,7 +13148,7 @@ impl eframe::App for App {
                     if out_l < hidden_positions.len() {
                         let source_h = &hidden_positions[out_l];
                         let (_, vis_source) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, out_l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                        
+
                         let send_mask = active_runner.last_spk_h.get(out_l).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         let recv_mask = active_runner.last_spk_o.as_slice().unwrap_or(&[]);
                         draw_links(&painter, &mut edge_shapes_vec, source_h, output_positions, send_mask, recv_mask, &active_runner.w_out, egui::Color32::from_rgb(160, 240, 160), "out", &format!("H{}:", out_l+1), "O", vis_source, vis_o, Box::new(move |k, j| active_runner.is_longterm_out(k, j)));
@@ -13161,7 +13161,7 @@ impl eframe::App for App {
                             let send_layer = l + 1;
                             let (_, vis_send) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, send_layer as isize, egui::Color32::TRANSPARENT, &network_registry);
                             let (_, vis_recv) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                            
+
                             let send_pos = &hidden_positions[send_layer];
                             let recv_pos = &hidden_positions[l];
                             let send_mask: &[i8] = previous_hidden_spikes.get(send_layer).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -13854,9 +13854,9 @@ impl eframe::App for App {
                     let active_runner = active_runner_opt.unwrap();
                     if let Some(pick) = selected_neuron_pick {
                         // Detect first selection or handle newly selected neuron
-                        let is_new = detail_last_neuron.is_none() || 
+                        let is_new = detail_last_neuron.is_none() ||
                             format!("{:?}", detail_last_neuron.unwrap()) != format!("{:?}", pick);
-                        
+
                         if is_new {
                             detail_last_neuron = Some(pick);
                             let acts = self.find_activations(active_runner, pick);
@@ -13894,7 +13894,7 @@ impl eframe::App for App {
                             ui.checkbox(&mut detail_paused, "Pause Playback");
                             ui.label("(Drag: Rotate, Ctrl+Drag: Pan, WASD/QE: Fly)");
                         });
-                        
+
                         ui.separator();
 
                         // Independent timescale/playback
@@ -13962,7 +13962,7 @@ impl eframe::App for App {
 
                         // 3D Visualizer Area
                         let (rect, response) = ui.allocate_at_least(ui.available_size() - egui::vec2(0.0, 20.0), egui::Sense::click_and_drag());
-                        
+
                         // Handle 3D rotation/pan/zoom/fly-through for detail view
                         ui.input(|i| {
                             if response.hovered() {
@@ -13974,7 +13974,7 @@ impl eframe::App for App {
                                     let f = 1.0 + (i.smooth_scroll_delta.y / 480.0);
                                     detail_camera_zoom = (detail_camera_zoom * f).clamp(0.1, 10.0);
                                 }
-                                
+
                                 // Fly-through keyboard controls (WASD/QE)
                                 let speed = 0.02f32;
                                 if i.key_down(egui::Key::W) { detail_camera_pos[2] += speed; }
@@ -14065,7 +14065,7 @@ impl eframe::App for App {
                                             align_yaw = sum.2.atan2(sum.0);
                                         }
                                     }
-                                    
+
                                     let project = |p: crate::morphology::Point3, part: DetailPart| {
                                         let x = p.x; let y = p.y; let z = p.z;
                                         // Rotate around soma center + camera translation
@@ -14094,25 +14094,25 @@ impl eframe::App for App {
 
                                         let (sy, cy_rot) = detail_camera_yaw.sin_cos();
                                         let (sp, cp) = detail_camera_pitch.sin_cos();
-                                        
+
                                         // 3D Rotation
                                         let x1 = mx * cy_rot - mz * sy;
                                         let z1 = mx * sy + mz * cy_rot;
-                                        
+
                                         let y2 = my * cp - z1 * sp;
                                         let z2 = my * sp + z1 * cp;
-                                        
+
                                         // Perspective-like depth scaling
                                         let depth_scale = (1.5 + z2).max(0.1);
                                         let final_scale = scale * depth_scale;
-                                        
+
                                         egui::pos2(center.x + x1 * final_scale, center.y + y2 * final_scale)
                                     };
 
                                     // Draw Soma (sphere approximation)
                                     let soma_p = project(soma.pos, DetailPart::Soma);
                                     let soma_r = 0.05 * scale; // default soma size
-                                    
+
                                     if let Some(mpos) = mouse_pos {
                                         if mpos.distance(soma_p) <= soma_r {
                                             detail_tooltip = Some(format!("Soma (Layer {}, ID {}) - ATP: {:.1}%", soma.layer, soma.id, soma.atp * 100.0));
@@ -14143,18 +14143,18 @@ impl eframe::App for App {
                                         }
                                         _ => false,
                                     };
-                                    
+
                                     let soma_col = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 160, 60) };
                                     let membrane_col = egui::Color32::from_rgb(255, 200, 150).gamma_multiply(0.8);
-                                    
+
                                     // Draw Soma Membrane (close-fitting)
                                     painter.circle_filled(soma_p, soma_r, soma_col.gamma_multiply(0.3));
-                                    
+
                                     // ATP indicator (outer ring)
                                     let atp = soma.atp;
                                     let atp_col = if atp > 0.5 { egui::Color32::from_rgb(50, 255, 50) } else { egui::Color32::from_rgb(255, 50, 50) };
                                     painter.circle_stroke(soma_p, soma_r + 4.0 * detail_camera_zoom, egui::Stroke::new(2.0 * detail_camera_zoom, atp_col.gamma_multiply(0.4)));
-                                    
+
                                     painter.circle_stroke(soma_p, soma_r, egui::Stroke::new(3.0 * detail_camera_zoom, membrane_col));
 
                                     // Draw Organelles
@@ -14304,7 +14304,7 @@ impl eframe::App for App {
                                             painter.circle_stroke(p1, 0.018 * scale, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(200, 100, 100)));
                                         }
                                     }
-                                    
+
                                     // Info overlay
                                     painter.text(rect.left_top() + egui::vec2(10.0, 10.0), egui::Align2::LEFT_TOP, format!("ATP Level: {:.1}%", soma.atp * 100.0), egui::FontId::proportional(14.0), atp_col);
 

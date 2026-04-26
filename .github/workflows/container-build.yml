@@ -100,6 +100,24 @@ jobs:
             --cargo-features "${{ github.event.inputs.cargo_features || 'all-features' }}" \
             --cargo-build-targets "aarnn_rust"
 
+      - name: Smoke install container Debian package in Ubuntu 24.04
+        run: |
+          set -euo pipefail
+          podman run --rm --pull=missing \
+            --platform "linux/${{ matrix.arch }}" \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "$PWD/dist/container:/tmp/aarnn:ro" \
+            ubuntu:24.04 \
+            bash -lc '
+              set -euo pipefail
+              arch="$(dpkg --print-architecture)"
+              deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"
+              test -n "$deb"
+              apt-get update
+              apt-get install -y --no-install-recommends "$deb"
+              test -x /usr/bin/aarnn_rust
+            '
+
       - name: Build and push architecture image
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
