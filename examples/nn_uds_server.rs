@@ -625,8 +625,8 @@ fn main() -> io::Result<()> {
                         lo: Arc<Mutex<Vec<f32>>>,
                     }
                     impl eframe::App for Viz {
-                        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+                            egui::CentralPanel::default().show_inside(ui, |ui| {
                                 ui.heading("Inputs (S) and Outputs (O)");
                                 if let Ok(li) = self.li.lock() {
                                     draw_bars(ui, &li, "Inputs");
@@ -635,7 +635,7 @@ fn main() -> io::Result<()> {
                                     draw_bars(ui, &lo, "Outputs");
                                 }
                             });
-                            ctx.request_repaint_after(Duration::from_millis(33));
+                            ui.ctx().request_repaint_after(Duration::from_millis(33));
                         }
                     }
                     fn draw_bars(ui: &mut egui::Ui, vals: &[f32], title: &str) {
