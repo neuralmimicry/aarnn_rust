@@ -277,6 +277,30 @@ jobs:
           podman manifest add "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BUILD}-arm64"
           podman manifest push --all "${IMAGE}:${BRANCH_TAG}" "docker://${IMAGE}:${BRANCH_TAG}"
 
+      - name: Publish version and latest tags on release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          BUILD=${GITHUB_SHA}
+          VERSION_TAG="${GITHUB_REF_NAME}"
+
+          # Semver tag (e.g. v0.1.2)
+          podman manifest rm "${IMAGE}:${VERSION_TAG}" >/dev/null 2>&1 || true
+          podman image rm -f "${IMAGE}:${VERSION_TAG}" >/dev/null 2>&1 || true
+          podman manifest create "${IMAGE}:${VERSION_TAG}"
+          podman manifest add "${IMAGE}:${VERSION_TAG}" "docker://${IMAGE}:${BUILD}-amd64"
+          podman manifest add "${IMAGE}:${VERSION_TAG}" "docker://${IMAGE}:${BUILD}-arm64"
+          podman manifest push --all "${IMAGE}:${VERSION_TAG}" "docker://${IMAGE}:${VERSION_TAG}"
+
+          # latest always points to the newest release
+          podman manifest rm "${IMAGE}:latest" >/dev/null 2>&1 || true
+          podman image rm -f "${IMAGE}:latest" >/dev/null 2>&1 || true
+          podman manifest create "${IMAGE}:latest"
+          podman manifest add "${IMAGE}:latest" "docker://${IMAGE}:${BUILD}-amd64"
+          podman manifest add "${IMAGE}:latest" "docker://${IMAGE}:${BUILD}-arm64"
+          podman manifest push --all "${IMAGE}:latest" "docker://${IMAGE}:latest"
+          echo "Published ${IMAGE}:${VERSION_TAG} and ${IMAGE}:latest"
+
       - name: Verify published manifests include amd64 and arm64
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
@@ -297,6 +321,13 @@ jobs:
             BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
             verify_ref "${IMAGE}:${BRANCH_TAG}" "linux/amd64"
             verify_ref "${IMAGE}:${BRANCH_TAG}" "linux/arm64"
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            verify_ref "${IMAGE}:${GITHUB_REF_NAME}" "linux/amd64"
+            verify_ref "${IMAGE}:${GITHUB_REF_NAME}" "linux/arm64"
+            verify_ref "${IMAGE}:latest" "linux/amd64"
+            verify_ref "${IMAGE}:latest" "linux/arm64"
           fi
 
   promote:

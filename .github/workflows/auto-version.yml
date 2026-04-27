@@ -109,5 +109,8 @@ jobs:
         shell: bash
         run: |
           git tag "${{ steps.ver.outputs.tag }}"
+          # Force-update the floating 'latest' tag to this commit.
+          git tag -f latest
           git push origin HEAD:"${GITHUB_REF_NAME}" "${{ steps.ver.outputs.tag }}"
-          echo "Tagged and pushed ${{ steps.ver.outputs.tag }}"
+          git push origin -f refs/tags/latest
+          echo "Tagged and pushed ${{ steps.ver.outputs.tag }} and latest"
