@@ -20,13 +20,34 @@ Viewpoint {
   position 0.00 1.67 1.43
 }
 TexturedBackground {
+  texture "dawn_cloudy_empty"
+  luminosity 1.0
 }
 TexturedBackgroundLight {
+  texture "dawn_cloudy_empty"
+  luminosity 0.62
+}
+# Soft directional key light — no visible glare orb, casts crisp shadows.
+DirectionalLight {
+  color 1.0 0.96 0.88
+  direction -0.38 -0.28 -0.88
+  intensity 1.05
+  castShadows TRUE
 }
 # Scene-aware demo hall with clear robot zones and low-profile staging.
 RectangleArena {
   floorSize 8.30 8.30
   wallHeight 1.55
+  floorAppearance PBRAppearance {
+    baseColor 0.19 0.18 0.16
+    roughness 0.97
+    metalness 0.01
+  }
+  wallAppearance PBRAppearance {
+    baseColor 0.31 0.28 0.24
+    roughness 0.91
+    metalness 0.01
+  }
 }
 Solid {
   translation 0.0000 0.0000 0.005
@@ -90,18 +111,18 @@ Solid {
 PointLight {
   location 1.4000 1.2000 2.20
   color 1.00 0.93 0.82
-  intensity 3.2
-  attenuation 0 0 0.030
-  radius 6.50
-  castShadows TRUE
+  intensity 11.0
+  attenuation 0 0 1.80
+  radius 7.00
+  castShadows FALSE
 }
 PointLight {
   location -1.4000 -1.2000 2.02
   color 0.82 0.91 1.00
-  intensity 2.8
-  attenuation 0 0 0.034
-  radius 6.00
-  castShadows TRUE
+  intensity 9.0
+  attenuation 0 0 2.10
+  radius 6.50
+  castShadows FALSE
 }
 Transform {
   translation 0.0000 0.0000 0.004
@@ -332,17 +353,17 @@ Solid {
 }
 PointLight {
   location 0.2200 -0.1900 0.3100
-  color 1.00 0.58 0.24
-  intensity 2.70
-  attenuation 0 0 0.2770
+  color 1.00 0.62 0.28
+  intensity 0.55
+  attenuation 0 0 4.5000
   radius 1.80
   castShadows FALSE
 }
 PointLight {
   location -0.0600 0.2100 0.2900
-  color 0.74 0.88 1.00
-  intensity 2.05
-  attenuation 0 0 0.3400
+  color 0.72 0.87 1.00
+  intensity 0.42
+  attenuation 0 0 5.2000
   radius 1.65
   castShadows FALSE
 }

@@ -1536,6 +1536,94 @@ fn choose_single_node_target(
         .map(|(node_id, _)| node_id.clone())
 }
 
+fn build_sharded_node_assignments(
+    target_node_capacities: &[(String, f32)],
+    total_layers: u32,
+) -> Vec<(String, Vec<u32>, Vec<u32>)> {
+    if target_node_capacities.is_empty() || total_layers == 0 {
+        return Vec::new();
+    }
+
+    let mut sorted_targets = target_node_capacities.to_vec();
+    sorted_targets.sort_by(|lhs, rhs| {
+        rhs.1
+            .total_cmp(&lhs.1)
+            .then_with(|| lhs.0.cmp(&rhs.0))
+    });
+
+    let all_layers: Vec<u32> = (0..total_layers).collect();
+
+    // Very small networks (for example Celegans snapshots with one hidden layer
+    // plus output) cannot be split into more unique contiguous ranges than there
+    // are layers. If we apply the normal ±1 overlap expansion here, every node
+    // ends up with the full network and the per-node views become useless.
+    //
+    // Keep the strongest node as an anchor that hosts the full end-to-end path
+    // for UI/Webots and assign single-layer partial ranges to the remaining
+    // nodes so local managed views still reflect actual per-node ownership.
+    if (total_layers as usize) <= sorted_targets.len() {
+        let mut assignments = Vec::with_capacity(sorted_targets.len());
+        assignments.push((
+            sorted_targets[0].0.clone(),
+            all_layers.clone(),
+            all_layers.clone(),
+        ));
+        for (idx, (node_id, _)) in sorted_targets.iter().enumerate().skip(1) {
+            let layer = ((idx - 1) % total_layers as usize) as u32;
+            assignments.push((node_id.clone(), vec![layer], vec![layer]));
+        }
+        return assignments;
+    }
+
+    let mut layer_counts = vec![0u32; total_layers as usize];
+    let mut node_assignments = Vec::with_capacity(sorted_targets.len());
+    let mut target_capacity_sum: f32 = sorted_targets.iter().map(|(_, cap)| *cap).sum();
+    if target_capacity_sum <= 0.0 {
+        target_capacity_sum = sorted_targets.len() as f32;
+    }
+
+    let mut current_cap_sum = 0.0;
+    for (node_id, cap) in &sorted_targets {
+        let start_ratio = current_cap_sum / target_capacity_sum;
+        current_cap_sum += cap;
+        let end_ratio = current_cap_sum / target_capacity_sum;
+
+        let start = (start_ratio * total_layers as f32).round() as u32;
+        let end = (end_ratio * total_layers as f32).round() as u32;
+
+        // Ensure at least one layer if there's any remaining capacity.
+        let end = if start == end && end < total_layers {
+            end + 1
+        } else {
+            end
+        };
+
+        // Add overlap for boundary synchronization/redundancy.
+        let r_start = start.saturating_sub(1);
+        let r_end = (end + 1).min(total_layers);
+
+        let layers: Vec<u32> = (r_start..r_end).collect();
+        for &l in &layers {
+            if (l as usize) < layer_counts.len() {
+                layer_counts[l as usize] += 1;
+            }
+        }
+        node_assignments.push((node_id.clone(), layers));
+    }
+
+    node_assignments
+        .into_iter()
+        .map(|(node_id, layers)| {
+            let redundant: Vec<u32> = layers
+                .iter()
+                .filter(|&&l| (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1)
+                .copied()
+                .collect();
+            (node_id, layers, redundant)
+        })
+        .collect()
+}
+
 fn deployment_prefers_combined(deployment: &DeploymentConfig) -> bool {
     deployment.combined_group.is_some()
         || deployment.has_mode(crate::deployment::ExecutionMode::Combined)
@@ -3421,39 +3509,10 @@ impl DistributedNode {
                     all_pending.push((node_id_clone, stop_cmd));
                 }
             } else {
-                let mut layer_counts = vec![0u32; total_layers as usize];
-                let mut node_assignments = Vec::new();
+                let node_assignments =
+                    build_sharded_node_assignments(&target_node_capacities, total_layers);
 
-                let mut current_cap_sum = 0.0;
-                for (node_id, cap) in &target_node_capacities {
-                    let start_ratio = current_cap_sum / target_capacity_sum;
-                    current_cap_sum += cap;
-                    let end_ratio = current_cap_sum / target_capacity_sum;
-
-                    let start = (start_ratio * total_layers as f32).round() as u32;
-                    let end = (end_ratio * total_layers as f32).round() as u32;
-
-                    // Ensure at least one layer if there's any capacity
-                    let end = if start == end && end < total_layers {
-                        end + 1
-                    } else {
-                        end
-                    };
-
-                    // Add overlap for boundary synchronization/redundancy
-                    let r_start = start.saturating_sub(1);
-                    let r_end = (end + 1).min(total_layers);
-
-                    let layers: Vec<u32> = (r_start..r_end).collect();
-                    for &l in &layers {
-                        if (l as usize) < layer_counts.len() {
-                            layer_counts[l as usize] += 1;
-                        }
-                    }
-                    node_assignments.push((node_id.clone(), layers));
-                }
-
-                for (node_id, layers) in node_assignments {
+                for (node_id, layers, redundant) in node_assignments {
                     net_status.distribution.insert(
                         node_id.clone(),
                         LayerRange {
@@ -3461,14 +3520,6 @@ impl DistributedNode {
                             layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
                         },
                     );
-
-                    let redundant: Vec<u32> = layers
-                        .iter()
-                        .filter(|&&l| {
-                            (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1
-                        })
-                        .copied()
-                        .collect();
 
                     let cmd = NetworkCommand {
                         r#type: proto::network_command::CommandType::LoadNetwork as i32,
@@ -3998,6 +4049,23 @@ impl DistributedNeuromorphic for DistributedNode {
         state.nodes.insert(node_id.clone(), node_status);
         state.peers.insert(node_id.clone(), connect_addr.clone());
         for (net_id, net_res) in req.network_resources {
+            // Auto-register networks reported by the joining worker that the
+            // orchestrator does not already know about (e.g. the worker was
+            // configured via NM_BRAINS but the orchestrator was not given a
+            // matching NM_ORCHESTRATOR_NETWORK_SPECS entry).
+            if !state.network_registry.contains_key(&net_id) {
+                let num_layers = (net_res.layer_neuron_counts.len() as u32).max(1);
+                state.network_registry.insert(
+                    net_id.clone(),
+                    proto::NetworkStatus {
+                        network_id: net_id.clone(),
+                        num_layers,
+                        total_neurons: net_res.num_neurons,
+                        playing: true,
+                        ..Default::default()
+                    },
+                );
+            }
             state
                 .network_runtime_metrics
                 .entry(net_id)
@@ -4102,8 +4170,25 @@ impl DistributedNeuromorphic for DistributedNode {
             for metrics in state.network_runtime_metrics.values_mut() {
                 metrics.remove(&req.node_id);
             }
-            // Update network distribution info with current neuron counts
+            // Update network distribution info with current neuron counts.
+            // Also auto-register any networks the worker reports that the
+            // orchestrator has not seen yet (handles workers that started
+            // before NM_ORCHESTRATOR_NETWORK_SPECS was populated).
             for (net_id, net_res) in req.network_resources {
+                if !state.network_registry.contains_key(&net_id) {
+                    let num_layers = (net_res.layer_neuron_counts.len() as u32).max(1);
+                    state.network_registry.insert(
+                        net_id.clone(),
+                        proto::NetworkStatus {
+                            network_id: net_id.clone(),
+                            num_layers,
+                            total_neurons: net_res.num_neurons,
+                            playing: true,
+                            ..Default::default()
+                        },
+                    );
+                    needs_rebalance = true;
+                }
                 state
                     .network_runtime_metrics
                     .entry(net_id.clone())
@@ -4231,6 +4316,21 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut state = self.state.write().await;
 
         if !state.is_orchestrator {
+            // Worker nodes accept ControlUpdate for locally managed networks.
+            // This lets the orchestrator (or any authorised caller) push
+            // start/stop/reset commands directly without waiting for the next
+            // heartbeat cycle.
+            if let Some(proto::network_update_request::Update::Control(c)) = req.update.as_ref() {
+                let action = proto::control_update::Action::try_from(c.action)
+                    .map_err(|_| Status::invalid_argument("invalid control action"))?;
+                let net_arc = state.networks.get(&network_id).cloned();
+                drop(state);
+                if let Some(net_arc) = net_arc {
+                    let mut net = net_arc.write().await;
+                    apply_control_to_managed_network(&mut net, action);
+                    return Ok(Response::new(proto::NetworkUpdateResponse { success: true }));
+                }
+            }
             return Err(Status::permission_denied("Not an orchestrator"));
         }
 
@@ -4809,6 +4909,31 @@ mod tests {
         assert_eq!(
             selected,
             vec![("node-c".to_string(), 3.0), ("node-b".to_string(), 2.0),]
+        );
+    }
+
+    #[test]
+    fn tiny_networks_keep_partial_views_when_targets_exceed_layers() {
+        let assignments = build_sharded_node_assignments(
+            &[
+                ("node-b".to_string(), 2.0),
+                ("node-c".to_string(), 1.0),
+                ("node-a".to_string(), 3.0),
+            ],
+            2,
+        );
+
+        assert_eq!(
+            assignments,
+            vec![
+                (
+                    "node-a".to_string(),
+                    vec![0, 1],
+                    vec![0, 1],
+                ),
+                ("node-b".to_string(), vec![0], vec![0]),
+                ("node-c".to_string(), vec![1], vec![1]),
+            ]
         );
     }
 
