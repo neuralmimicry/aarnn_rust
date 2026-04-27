@@ -34,8 +34,9 @@ use crate::config::{
 use crate::distributed::{
     DistributedNode, ManagedNetwork,
     proto::{
-        NetworkSnapshotRequest, NetworkStatus, NodeStatus, StatusRequest, control_update,
-        distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        ControlUpdate, NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus,
+        StatusRequest, control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        network_update_request,
     },
 };
 #[cfg(feature = "ui")]
@@ -3959,12 +3960,40 @@ impl App {
                     NetworkLayout::Conventional
                 }
             }
-            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => {
+            ViewSource::LocalManaged(id) => {
                 if network_registry
                     .get(id)
                     .map(|net| net.desired_aarnn_depth > 0)
                     .unwrap_or(false)
                 {
+                    NetworkLayout::Aarnn
+                } else {
+                    NetworkLayout::Conventional
+                }
+            }
+            ViewSource::ClusterGlobal(id) => {
+                // Prefer Aarnn if the registry says the network uses it, or if we
+                // have already received 3D topology data from the remote node.
+                let from_registry = network_registry
+                    .get(id)
+                    .map(|net| {
+                        net.desired_aarnn_depth > 0
+                            || net.neuron_model.eq_ignore_ascii_case("aarnn")
+                    })
+                    .unwrap_or(false);
+                #[cfg(feature = "growth3d")]
+                let from_topo = self
+                    .cluster_topo_cache
+                    .as_ref()
+                    .map(|topo| {
+                        !topo.layers.is_empty()
+                            || !topo.sensory_nodes.is_empty()
+                            || !topo.output_nodes.is_empty()
+                    })
+                    .unwrap_or(false);
+                #[cfg(not(feature = "growth3d"))]
+                let from_topo = false;
+                if from_registry || from_topo {
                     NetworkLayout::Aarnn
                 } else {
                     NetworkLayout::Conventional
@@ -3985,7 +4014,12 @@ impl App {
             {
                 // Prevent stale AARNN topology data from being reused in conventional layout.
                 self.cached_edge_topo = None;
-                self.cluster_topo_cache = None;
+                // In ClusterGlobal mode the topology is fetched from a remote node and must
+                // survive layout transitions — clearing it here would prevent the Aarnn view
+                // from ever recovering once the fetch completes.
+                if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+                    self.cluster_topo_cache = None;
+                }
                 self.reset_topology_pid_states();
             }
             #[cfg(feature = "growth3d")]
@@ -4037,6 +4071,55 @@ impl App {
         }
     }
 
+    fn distributed_view_auto_select_enabled() -> bool {
+        std::env::var("NM_UI_AUTO_SELECT_DISTRIBUTED_VIEW")
+            .ok()
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(true)
+    }
+
+    fn preferred_cluster_network_id(&self) -> Option<String> {
+        if let ViewSource::ClusterGlobal(id) = &self.view_source {
+            if self.dist_network_registry.contains_key(id) {
+                return Some(id.clone());
+            }
+        }
+
+        let mut network_ids: Vec<String> = self.dist_network_registry.keys().cloned().collect();
+        network_ids.sort();
+
+        let preferred = |require_playing: bool, require_distribution: bool| {
+            network_ids
+                .iter()
+                .filter(|id| {
+                    self.dist_network_registry
+                        .get(*id)
+                        .map(|status| {
+                            (!require_playing || status.playing)
+                                && (!require_distribution || !status.distribution.is_empty())
+                        })
+                        .unwrap_or(false)
+                })
+                .max_by_key(|id| {
+                    self.dist_network_registry
+                        .get(*id)
+                        .map(|status| status.total_neurons)
+                        .unwrap_or(0)
+                })
+                .cloned()
+        };
+
+        preferred(true, true)
+            .or_else(|| preferred(false, true))
+            .or_else(|| preferred(true, false))
+            .or_else(|| network_ids.first().cloned())
+    }
+
     fn maybe_select_initial_distributed_view(&mut self) {
         if self.dist_initial_view_selected {
             return;
@@ -4049,39 +4132,17 @@ impl App {
             self.dist_initial_view_selected = true;
             return;
         }
-        let auto_select_enabled = std::env::var("NM_UI_AUTO_SELECT_DISTRIBUTED_VIEW")
-            .ok()
-            .map(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(false);
-        if !auto_select_enabled {
+        // Default distributed UIs to the managed/cluster view so Start/Stop
+        // reflects the network actually hosted by the node. Set
+        // NM_UI_AUTO_SELECT_DISTRIBUTED_VIEW=0 to keep the old standalone
+        // default.
+        if !Self::distributed_view_auto_select_enabled() {
             self.dist_initial_view_selected = true;
             return;
         }
 
         let preferred = if self.dist_is_orchestrator {
-            let mut network_ids: Vec<String> = self.dist_network_registry.keys().cloned().collect();
-            network_ids.sort();
-            network_ids
-                .iter()
-                .find(|id| *id == &self.brain_id)
-                .cloned()
-                .or_else(|| {
-                    network_ids
-                        .iter()
-                        .find(|id| {
-                            self.dist_network_registry
-                                .get(*id)
-                                .map(|status| status.playing)
-                                .unwrap_or(false)
-                        })
-                        .cloned()
-                })
-                .or_else(|| network_ids.first().cloned())
+            self.preferred_cluster_network_id()
                 .map(ViewSource::ClusterGlobal)
         } else {
             let mut network_ids: Vec<String> =
@@ -4272,35 +4333,86 @@ impl App {
             ViewSource::ClusterGlobal(_) => "Cluster network",
             ViewSource::Standalone => "Standalone",
         };
+
+        let playing_after =
+            matches!(action, control_update::Action::Start | control_update::Action::Repeat);
+
         if let Some(node) = &self.distributed_node {
-            match node.apply_network_control(network_id, action) {
-                Ok(()) => {
-                    let playing_after = matches!(
-                        action,
-                        control_update::Action::Start | control_update::Action::Repeat
-                    );
-                    self.dist_local_playing_cache
-                        .insert(network_id.to_string(), playing_after);
-                    if let Some(net_status) = self.dist_network_registry.get_mut(network_id) {
-                        match action {
-                            control_update::Action::Start | control_update::Action::Repeat => {
-                                net_status.playing = true;
-                            }
-                            control_update::Action::Stop
-                            | control_update::Action::Reset
-                            | control_update::Action::New => {
-                                net_status.playing = false;
-                            }
+            let queue_result = node.apply_network_control(network_id, action);
+            // "Cluster state busy" means the write lock was contended — the
+            // direct gRPC path below will still deliver the command immediately,
+            // so treat it as a soft failure and still update the UI optimistically.
+            let fatal = match &queue_result {
+                Err(e) if e.contains("Cluster state busy") => false,
+                Err(_) => true,
+                Ok(()) => false,
+            };
+            if !fatal {
+                // Optimistic UI update: reflect the intended state immediately.
+                self.dist_local_playing_cache
+                    .insert(network_id.to_string(), playing_after);
+                if let Some(net_status) = self.dist_network_registry.get_mut(network_id) {
+                    match action {
+                        control_update::Action::Start | control_update::Action::Repeat => {
+                            net_status.playing = true;
+                        }
+                        control_update::Action::Stop
+                        | control_update::Action::Reset
+                        | control_update::Action::New => {
+                            net_status.playing = false;
                         }
                     }
-                    self.status = format!("{} {} ({})", view_scope, status, network_id);
                 }
-                Err(err) => {
-                    self.status = format!("{} {} failed: {}", view_scope, status, err);
-                }
+                self.status = format!("{} {} ({})", view_scope, status, network_id);
+            } else {
+                self.status = format!(
+                    "{} {} failed: {}",
+                    view_scope,
+                    status,
+                    queue_result.unwrap_err()
+                );
             }
         } else {
             self.status = "Cluster control unavailable".into();
+        }
+
+        // For ClusterGlobal views also send a direct gRPC UpdateNetwork to
+        // every worker node that manages this network.  Workers now accept
+        // ControlUpdate directly (they no longer require is_orchestrator for
+        // this RPC variant), so this gives immediate effect even when the
+        // heartbeat-queue path was temporarily busy.
+        if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+            if let Some(net_status) = self.dist_network_registry.get(network_id) {
+                let node_ids: Vec<String> = net_status.distribution.keys().cloned().collect();
+                let rt = self.runtime_handle.clone();
+                let net_id = network_id.to_string();
+                let action_i32 = action as i32;
+                for node_id in node_ids {
+                    if let Some(node_info) = self.dist_nodes.get(&node_id) {
+                        let mut addr = node_info.address.clone();
+                        if addr.is_empty() {
+                            continue;
+                        }
+                        if !addr.starts_with("http://") && !addr.starts_with("https://") {
+                            addr = format!("http://{}", addr);
+                        }
+                        let net_id_c = net_id.clone();
+                        rt.spawn(async move {
+                            if let Ok(mut client) =
+                                DistributedNeuromorphicClient::connect(addr).await
+                            {
+                                let req = NetworkUpdateRequest {
+                                    network_id: net_id_c,
+                                    update: Some(network_update_request::Update::Control(
+                                        ControlUpdate { action: action_i32 },
+                                    )),
+                                };
+                                let _ = client.update_network(Request::new(req)).await;
+                            }
+                        });
+                    }
+                }
+            }
         }
         if matches!(
             action,
@@ -7591,7 +7703,13 @@ impl eframe::App for App {
                                 && !self.dist_network_registry.is_empty()
                                 || !self.dist_local_playing_cache.is_empty())
                         {
-                            ui.label("Standalone controls only. Use View Selection for cluster networks.");
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 196, 128),
+                                "Standalone view controls only this local runner.",
+                            );
+                            ui.small(
+                                "Orchestrator Start/Stop/Repeat/Reset affects the selected cluster network instead. Switch View Selection to a local managed or cluster network to control the distributed run.",
+                            );
                         }
                         let view_network_id = match &self.view_source {
                             ViewSource::Standalone => None,
@@ -7908,7 +8026,16 @@ impl eframe::App for App {
                             }
                             if is_orchestrator {
                                 if ui.button("Cluster Global (combined)").clicked() {
-                                    new_source = Some(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                                    // Use the network with the most neurons (has distribution
+                                    // data) rather than the orchestrator's own brain_id, which
+                                    // is a node ID and may not match any registered network.
+                                    let net_id = network_registry
+                                        .iter()
+                                        .filter(|(_, s)| !s.distribution.is_empty())
+                                        .max_by_key(|(_, s)| s.total_neurons)
+                                        .map(|(id, _)| id.clone())
+                                        .unwrap_or_else(|| self.brain_id.clone());
+                                    new_source = Some(ViewSource::ClusterGlobal(net_id));
                                     clear_filter = true;
                                 }
                             }
@@ -7952,7 +8079,19 @@ impl eframe::App for App {
                             for (id, status) in &connected_nodes {
                                 let label = format!("Focus {}", id);
                                 if ui.button(label).clicked() {
-                                    new_source = Some(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                                    // Keep current ClusterGlobal network ID if already set,
+                                    // otherwise pick the best registered network.
+                                    let net_id = if let ViewSource::ClusterGlobal(cur) = &self.view_source {
+                                        cur.clone()
+                                    } else {
+                                        network_registry
+                                            .iter()
+                                            .filter(|(_, s)| !s.distribution.is_empty())
+                                            .max_by_key(|(_, s)| s.total_neurons)
+                                            .map(|(nid, _)| nid.clone())
+                                            .unwrap_or_else(|| self.brain_id.clone())
+                                    };
+                                    new_source = Some(ViewSource::ClusterGlobal(net_id));
                                     filter_node = Some(id.clone());
                                 }
                                 if let Some(res) = &status.resources {
@@ -8206,7 +8345,9 @@ impl eframe::App for App {
                             self.refresh_ui_buffers(); // Trigger layout recompute when switching node parts
                         }
                         if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-                            self.set_view_source(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                            if let Some(net_id) = self.preferred_cluster_network_id() {
+                                self.set_view_source(ViewSource::ClusterGlobal(net_id));
+                            }
                         }
                     }
                 }
@@ -11525,7 +11666,12 @@ impl eframe::App for App {
             let layout_ns = cluster_layout_ns.unwrap_or(active_net.num_sensory_neurons);
             let layout_o = cluster_layout_o.unwrap_or(active_net.num_output_neurons);
             let layout_layers = cluster_layout_layers.unwrap_or(active_net.num_hidden_layers.max(1));
-            let cache_layout_active = (self.show_static_overlays || self.force_show_connections)
+            // In ClusterGlobal mode the snapshot comes from one node only, so
+            // cached_layer_sizes reflects a single node's neuron counts rather than the
+            // cluster aggregate.  Always bypass the cache path so cluster_layer_sizes
+            // (which sums all nodes) is used for layout instead.
+            let cache_layout_active = !matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && (self.show_static_overlays || self.force_show_connections)
                 && !self.cached_edges.is_empty()
                 && !self.cached_layer_sizes.is_empty();
             #[cfg(feature = "growth3d")]
@@ -12660,7 +12806,12 @@ impl eframe::App for App {
                 if !vis_h && view_node_filter.is_some() { continue; }
 
                 for (j, &p) in layer.iter().enumerate() {
-                    let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    // In ClusterGlobal mode activity data is only available for the local
+                    // node; remote neurons have no entry in hidden_activity.  Use a 0.5
+                    // baseline so all cluster neurons render at a visible brightness rather
+                    // than the near-invisible 30% that a 0.0 default produces.
+                    let activity_default = if matches!(view_source, ViewSource::ClusterGlobal(_)) { 0.5 } else { 0.0 };
+                    let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(activity_default).clamp(0.0, 1.0);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
                     let mut col = col_h_base.gamma_multiply(0.30 + 0.70 * a);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]

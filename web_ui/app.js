@@ -21,6 +21,7 @@ const startStopBtn = document.getElementById("start-stop");
 const repeatBtn = document.getElementById("repeat");
 const resetBtn = document.getElementById("reset");
 const newBtn = document.getElementById("new");
+const controlNoteEl = document.getElementById("control-note");
 const workspaceSelect = document.getElementById("workspace-select");
 const workspaceUserInput = document.getElementById("workspace-user");
 const workspaceNameInput = document.getElementById("workspace-name");
@@ -1854,6 +1855,11 @@ function getActiveNetworkMeta() {
   const networks = state.networksByTarget.get(state.active) || [];
   return networks.find(n => n.network_id === state.activeNetwork);
 }
+function getActiveOrchestratorAddr() {
+  if (isWorkspaceMode()) return "";
+  const status = state.statusByTarget.get(state.active);
+  return normalizeAddr((status === null || status === void 0 ? void 0 : status.orchestrator) || state.active || "");
+}
 function playingKey(addr, networkId) {
   if (!addr || !networkId) return "";
   return `${addr}::${networkId}`;
@@ -1897,6 +1903,24 @@ function setActiveNetworkPlaying(playing) {
   }
   refreshControlButtons();
 }
+function refreshControlNote() {
+  if (!controlNoteEl) return;
+  if (isWorkspaceMode()) {
+    const workspace = getActiveWorkspaceMeta();
+    controlNoteEl.textContent = workspace ? `Controls go to workspace runtime ${workspace.workspace_id}.` : "Select a workspace or switch to cluster mode to control a runtime.";
+    return;
+  }
+  const orchestrator = getActiveOrchestratorAddr();
+  if (!orchestrator || !state.activeNetwork) {
+    controlNoteEl.textContent = "Select an orchestrator and cluster network to control.";
+    return;
+  }
+  if (state.activeNodeId) {
+    controlNoteEl.textContent = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus ${state.activeNodeId} only changes the snapshot and activity source.`;
+    return;
+  }
+  controlNoteEl.textContent = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus only changes the snapshot and activity source.`;
+}
 function refreshControlButtons() {
   if (!startStopBtn || !repeatBtn || !resetBtn || !newBtn) return;
   if (isWorkspaceMode()) {
@@ -1907,6 +1931,11 @@ function refreshControlButtons() {
     repeatBtn.disabled = !workspace;
     resetBtn.disabled = !workspace;
     newBtn.disabled = !workspace;
+    startStopBtn.title = "Start or stop the active workspace runtime";
+    repeatBtn.title = "Reset the workspace state and start from t=0";
+    resetBtn.title = "Reset the workspace to its startup state and keep it stopped";
+    newBtn.title = "Replace the workspace with a fresh single-neuron network";
+    refreshControlNote();
     syncWorkspaceUi();
     return;
   }
@@ -1917,6 +1946,11 @@ function refreshControlButtons() {
   repeatBtn.disabled = !canControl;
   resetBtn.disabled = !canControl;
   newBtn.disabled = !canControl;
+  startStopBtn.title = "Start or stop the selected cluster network through its orchestrator";
+  repeatBtn.title = "Reset the selected cluster network and start it from t=0 through its orchestrator";
+  resetBtn.title = "Reset the selected cluster network to its startup state and keep it stopped";
+  newBtn.title = "Replace the selected cluster network with a fresh single-neuron network";
+  refreshControlNote();
 }
 function isAarnnNetwork(meta) {
   return Number((meta === null || meta === void 0 ? void 0 : meta.desired_aarnn_depth) || 0) > 0;
@@ -3002,13 +3036,18 @@ async function applyRemoteJsonPayload(raw, label) {
     return false;
   }
   try {
+    const orchestratorAddr = getActiveOrchestratorAddr();
+    if (!orchestratorAddr) {
+      setToolStatus(`Select an orchestrator before loading ${label.toLowerCase()}.`);
+      return false;
+    }
     const res = await fetch("/api/update_network", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        addr: state.active,
+        addr: orchestratorAddr,
         network_id: state.activeNetwork,
         config_json: raw
       })
@@ -3300,12 +3339,16 @@ async function updateNetworkSettings(options = {}) {
     return;
   }
   const payload = {
-    addr: state.active,
+    addr: getActiveOrchestratorAddr(),
     network_id: state.activeNetwork,
     config_json: configJson,
     neuron_model: activeModel,
     learning_rule: activeLearning
   };
+  if (!payload.addr) {
+    console.error("No active orchestrator selected for network update");
+    return;
+  }
   try {
     const res = await fetch("/api/update_network", {
       method: "POST",
@@ -3336,8 +3379,10 @@ async function sendControlAction(action) {
     return;
   }
   if (!state.active || !state.activeNetwork) return;
+  const orchestratorAddr = getActiveOrchestratorAddr();
+  if (!orchestratorAddr) return;
   const payload = {
-    addr: state.active,
+    addr: orchestratorAddr,
     network_id: state.activeNetwork,
     action
   };

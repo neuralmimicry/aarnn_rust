@@ -319,9 +319,23 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     node: bool,
 
-    /// Address of the orchestrator (if running as a node)
+    /// Address of the orchestrator (if running as a node or sending cluster control).
+    /// For cluster control this is auto-detected from infrastructure metadata when available.
     #[arg(long)]
     orchestrator_addr: Option<String>,
+
+    /// Network ID to send a control command to via the orchestrator.
+    /// Optional only when the orchestrator currently exposes exactly one network.
+    /// Example: --orchestrator-addr http://localhost:50051 \
+    ///          --cluster-control-network celegans_01 \
+    ///          --cluster-control-action stop
+    #[arg(long)]
+    cluster_control_network: Option<String>,
+
+    /// Control action to send to the network specified by --cluster-control-network.
+    /// Accepted values: start, stop, reset, repeat, new
+    #[arg(long, value_parser = ["start", "stop", "reset", "repeat", "new"])]
+    cluster_control_action: Option<String>,
 
     /// Execution modes for this network or network set.
     #[arg(long = "execution-mode", value_enum, value_delimiter = ',', num_args = 1..)]
@@ -905,6 +919,113 @@ fn build_orchestrator_startup_networks(
     Ok(startup_networks)
 }
 
+/// Send a single control command to a cluster network via the orchestrator gRPC
+/// and exit. Used by `--cluster-control-action` and, when needed,
+/// `--cluster-control-network`.
+fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
+    use crate::distributed::proto::{
+        ControlUpdate, NetworkUpdateRequest, StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        network_update_request,
+    };
+    use tonic::Request;
+
+    let explicit_network_id = args
+        .cluster_control_network
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let action_str = args
+        .cluster_control_action
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--cluster-control-action is required"))?;
+
+    let action = match action_str {
+        "start" => control_update::Action::Start,
+        "stop" => control_update::Action::Stop,
+        "reset" => control_update::Action::Reset,
+        "repeat" => control_update::Action::Repeat,
+        "new" => control_update::Action::New,
+        other => anyhow::bail!("Unknown control action '{}'; accepted: start stop reset repeat new", other),
+    };
+
+    let detected_addr = autodetected_orchestrator_addr(args);
+    let addr = args
+        .orchestrator_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(normalize_runtime_url)
+        .or_else(|| detected_addr.as_deref().map(normalize_runtime_url))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--orchestrator-addr is required for cluster control unless infrastructure detection can resolve it"
+            )
+        })?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let mut client = DistributedNeuromorphicClient::connect(addr.clone())
+            .await
+            .with_context(|| format!("Failed to connect to orchestrator at {}", addr))?;
+        let network_id = match explicit_network_id {
+            Some(id) => id,
+            None => {
+                let status = client
+                    .get_system_status(Request::new(StatusRequest {}))
+                    .await
+                    .map_err(|s| anyhow::anyhow!("gRPC status error: {}", s))?
+                    .into_inner();
+                let mut network_ids = status
+                    .networks
+                    .into_iter()
+                    .map(|network| network.network_id.trim().to_string())
+                    .filter(|id| !id.is_empty())
+                    .collect::<Vec<_>>();
+                network_ids.sort();
+                network_ids.dedup();
+                match network_ids.len() {
+                    0 => anyhow::bail!(
+                        "No cluster networks are currently registered on orchestrator {}",
+                        addr
+                    ),
+                    1 => {
+                        let only = network_ids.pop().unwrap_or_default();
+                        println!(
+                            "Auto-selected network '{}' from orchestrator {}",
+                            only, addr
+                        );
+                        only
+                    }
+                    _ => anyhow::bail!(
+                        "--cluster-control-network is required when orchestrator {} exposes multiple networks: {}",
+                        addr,
+                        network_ids.join(", ")
+                    ),
+                }
+            }
+        };
+        let req = NetworkUpdateRequest {
+            network_id: network_id.clone(),
+            update: Some(network_update_request::Update::Control(ControlUpdate {
+                action: action as i32,
+            })),
+        };
+        client
+            .update_network(Request::new(req))
+            .await
+            .map_err(|s| anyhow::anyhow!("gRPC error: {}", s))?;
+        println!(
+            "Sent {} to network '{}' via {}",
+            action_str, network_id, addr
+        );
+        anyhow::Ok(())
+    })
+}
+
 fn normalize_runtime_url(raw: &str) -> String {
     if raw.starts_with("http://") || raw.starts_with("https://") {
         raw.to_string()
@@ -1259,6 +1380,10 @@ fn main() -> anyhow::Result<()> {
 
     if args.runtime_action.is_some() {
         return handle_runtime_action(&args);
+    }
+
+    if args.cluster_control_network.is_some() || args.cluster_control_action.is_some() {
+        return handle_cluster_control(&args);
     }
 
     maybe_apply_openmpi_bootstrap(&mut args)?;

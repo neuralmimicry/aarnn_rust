@@ -1043,18 +1043,18 @@ def build_celegans_interactive_ecology(
                 warm_x,
                 warm_z,
                 0.31,
-                color=(1.00, 0.58, 0.24),
-                intensity=2.70,
-                attenuation=0.2770,
+                color=(1.00, 0.62, 0.28),
+                intensity=0.55,
+                attenuation=4.50,
                 radius=1.80,
             ),
             point_light_node(
                 cool_x,
                 cool_z,
                 0.29,
-                color=(0.74, 0.88, 1.00),
-                intensity=2.05,
-                attenuation=0.3400,
+                color=(0.72, 0.87, 1.00),
+                intensity=0.42,
+                attenuation=5.20,
                 radius=1.65,
             ),
         ]
@@ -1957,6 +1957,16 @@ def build_environment_block(
 RectangleArena {{
   floorSize {arena_size:.2f} {arena_size:.2f}
   wallHeight {wall_height:.2f}
+  floorAppearance PBRAppearance {{
+    baseColor 0.19 0.18 0.16
+    roughness 0.97
+    metalness 0.01
+  }}
+  wallAppearance PBRAppearance {{
+    baseColor 0.31 0.28 0.24
+    roughness 0.91
+    metalness 0.01
+  }}
 }}
 Solid {{
   translation {center_x:.4f} {center_z:.4f} 0.005
@@ -2020,18 +2030,18 @@ Solid {{
 PointLight {{
   location {center_x + max(1.4, scene_radius * 0.55):.4f} {center_z + max(1.2, scene_radius * 0.42):.4f} {light_height:.2f}
   color 1.00 0.93 0.82
-  intensity 3.2
-  attenuation 0 0 0.030
-  radius {max(6.5, scene_radius * 2.8):.2f}
-  castShadows TRUE
+  intensity 11.0
+  attenuation 0 0 1.80
+  radius {max(7.0, scene_radius * 2.8):.2f}
+  castShadows FALSE
 }}
 PointLight {{
   location {center_x - max(1.4, scene_radius * 0.55):.4f} {center_z - max(1.2, scene_radius * 0.42):.4f} {light_height - 0.18:.2f}
   color 0.82 0.91 1.00
-  intensity 2.8
-  attenuation 0 0 0.034
-  radius {max(6.0, scene_radius * 2.5):.2f}
-  castShadows TRUE
+  intensity 9.0
+  attenuation 0 0 2.10
+  radius {max(6.5, scene_radius * 2.5):.2f}
+  castShadows FALSE
 }}
 {storage_block}{zone_props}"""
 
@@ -2163,8 +2173,19 @@ Viewpoint {{
   position {cam_x:.2f} {cam_y:.2f} {cam_z:.2f}
 }}
 TexturedBackground {{
+  texture "dawn_cloudy_empty"
+  luminosity 1.0
 }}
 TexturedBackgroundLight {{
+  texture "dawn_cloudy_empty"
+  luminosity 0.62
+}}
+# Soft directional key light — no visible glare orb, casts crisp shadows.
+DirectionalLight {{
+  color 1.0 0.96 0.88
+  direction -0.38 -0.28 -0.88
+  intensity 1.05
+  castShadows TRUE
 }}
 {build_environment_block(entries, positions, arena_half_size, include_fridge)}
 {stimuli_nodes}

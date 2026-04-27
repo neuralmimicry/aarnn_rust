@@ -1,6 +1,6 @@
 {
   "spike_io": {
-    "profile": "celegans",
+    "profile": "c_elegans",
     "input_strategy": "profile_default",
     "output_strategy": "profile_default"
   },
