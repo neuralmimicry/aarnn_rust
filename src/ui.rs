@@ -35,8 +35,8 @@ use crate::distributed::{
     DistributedNode, ManagedNetwork,
     proto::{
         ControlUpdate, NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus,
-        StatusRequest, control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-        network_update_request,
+        StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
     },
 };
 #[cfg(feature = "ui")]
@@ -4334,8 +4334,10 @@ impl App {
             ViewSource::Standalone => "Standalone",
         };
 
-        let playing_after =
-            matches!(action, control_update::Action::Start | control_update::Action::Repeat);
+        let playing_after = matches!(
+            action,
+            control_update::Action::Start | control_update::Action::Repeat
+        );
 
         if let Some(node) = &self.distributed_node {
             let queue_result = node.apply_network_control(network_id, action);

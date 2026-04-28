@@ -5,6 +5,21 @@ const shellState = {
   user: null,
   identity: null
 };
+const shellServiceAccess = window.NMServiceAccess || {
+  getServiceAccessMap: () => ({}),
+  getServiceAccess: (_sessionData, serviceKey) => ({
+    service_key: String(serviceKey || "").trim().toLowerCase(),
+    access_level: "none",
+    public_access_level: "none",
+    visible_access_level: "none",
+    visible: false,
+    can_request: false,
+    can_observe: false,
+    can_use: false,
+    can_control: false
+  }),
+  getVisibleServices: () => []
+};
 function shellEl(id) {
   return document.getElementById(id);
 }
@@ -45,6 +60,8 @@ function normalizeIdentity(payload) {
   const activeTeam = payload.active_team && typeof payload.active_team === "object" ? payload.active_team : null;
   const teamCount = Math.max(0, Number((_payload$team_count = payload.team_count) !== null && _payload$team_count !== void 0 ? _payload$team_count : activeTeam ? 1 : 0) || 0);
   const pendingInvitationCount = Math.max(0, Number((_payload$pending_invi = payload.pending_invitation_count) !== null && _payload$pending_invi !== void 0 ? _payload$pending_invi : 0) || 0);
+  const serviceAccess = shellServiceAccess.getServiceAccessMap(payload || {});
+  const visibleServices = Array.isArray(payload.visible_services) ? payload.visible_services.map(service => String(service || "").trim().toLowerCase()).filter(Boolean) : shellServiceAccess.getVisibleServices(payload || {});
   return {
     username,
     role,
@@ -54,7 +71,11 @@ function normalizeIdentity(payload) {
     activeTeamLabel: activeTeamLabel(activeTeam),
     teamCount,
     pendingInvitationCount,
-    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin"))
+    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin")),
+    serviceAccess,
+    visibleServices,
+    aarnnAccess: shellServiceAccess.getServiceAccess(payload || {}, "aarnn"),
+    billingAccess: shellServiceAccess.getServiceAccess(payload || {}, "billing")
   };
 }
 function applyShellIdentity(payload) {
@@ -66,6 +87,12 @@ function identitySummary(identity) {
   const parts = [`Signed in as ${identity.username}`];
   if (identity.groups.length) {
     parts.push(`groups: ${identity.groups.join(", ")}`);
+  }
+  if (identity.aarnnAccess && identity.aarnnAccess.visible) {
+    parts.push(`AARNN access: ${identity.aarnnAccess.access_level}`);
+  }
+  if (identity.billingAccess && identity.billingAccess.visible) {
+    parts.push(`billing: ${identity.billingAccess.access_level}`);
   }
   if (identity.activeTeamLabel) {
     parts.push(`team: ${identity.activeTeamLabel}`);
@@ -198,12 +225,12 @@ async function shellSignup(username, password) {
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      setShellError(data.error || "Signup failed.");
+      setShellError(data.error || "Sign-up failed.");
       return;
     }
-    setShellError("Signup successful. Log in with the new account.");
+    setShellError("Sign-up successful. Sign in with the new account.");
   } catch (_) {
-    setShellError("Signup failed.");
+    setShellError("Sign-up failed.");
   }
 }
 async function shellLogout() {

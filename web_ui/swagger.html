@@ -38,7 +38,7 @@
         <p class="hero-subtitle">
           Use this surface for executable API calls against the same runtime contract used by the Web UI and native tools.
           It shares the same-origin session cookie with the browser shell, so log in once and then exercise protected
-          endpoints directly from the explorer below.
+          endpoints directly from the explorer below, subject to the resolved AARNN service authorisation.
         </p>
         <div class="runtime-grid">
           <div class="runtime-card">
@@ -114,7 +114,7 @@
           <div class="panel-title">Swagger Explorer</div>
           <div class="swagger-hint">
             Requests use <code>credentials: include</code>, so the <code>nm_session</code> cookie is sent automatically.
-            In local-auth mode, log in first with the shell above or with <code>POST /api/login</code>. In OIDC mode,
+            In local-auth mode, sign in first with the shell above or with <code>POST /api/login</code>. In OIDC mode,
             complete the browser redirect flow and return here.
           </div>
         </div>
@@ -124,6 +124,7 @@
       </section>
     </main>
 
+    <script src="/service-access.js"></script>
     <script src="/shell.js"></script>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>

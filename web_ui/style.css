@@ -1460,6 +1460,11 @@ pre {
   color: #9fd4ff;
 }
 
+.method.delete {
+  background: #432127;
+  color: #ffb0bb;
+}
+
 .matrix-pill {
   display: inline-flex;
   align-items: center;

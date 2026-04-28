@@ -25,6 +25,11 @@ use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
 };
+use aarnn_rust::service_access::{
+    ResolvedServiceAccess, SERVICE_ACCESS_CONTROL, SERVICE_ACCESS_OBSERVE, SERVICE_ACCESS_REQUEST,
+    SERVICE_ACCESS_USE, ServiceAccessMap, normalise_groups, resolve_service_access,
+    visible_service_keys,
+};
 use aarnn_rust::shared_fs::{acquire_lease_with_timeout, write_json_pretty};
 use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
 use aarnn_rust::spike_io::profiles::{SpikeIoConfig, encode_network_inputs_with};
@@ -355,10 +360,141 @@ fn control_action_label(action: WorkspaceControlAction) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AccessRequirement {
+    service_key: &'static str,
+    access_level: &'static str,
+}
+
+impl AccessRequirement {
+    const fn new(service_key: &'static str, access_level: &'static str) -> Self {
+        Self {
+            service_key,
+            access_level,
+        }
+    }
+
+    const fn aarnn_request() -> Self {
+        Self::new("aarnn", SERVICE_ACCESS_REQUEST)
+    }
+
+    const fn aarnn_observe() -> Self {
+        Self::new("aarnn", SERVICE_ACCESS_OBSERVE)
+    }
+
+    const fn aarnn_use() -> Self {
+        Self::new("aarnn", SERVICE_ACCESS_USE)
+    }
+
+    const fn aarnn_control() -> Self {
+        Self::new("aarnn", SERVICE_ACCESS_CONTROL)
+    }
+}
+
+fn is_public_api_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/openapi.json"
+            | "/api/config"
+            | "/api/auth/mode"
+            | "/api/login"
+            | "/api/signup"
+            | "/api/me"
+            | "/openapi.json"
+            | "/config"
+            | "/auth/mode"
+            | "/login"
+            | "/signup"
+            | "/me"
+    )
+}
+
+fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequirement> {
+    let segments = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    match (method.as_str(), segments.as_slice()) {
+        (_, ["api", "logout"]) => None,
+        ("GET", ["api", "tokens"]) => Some(AccessRequirement::aarnn_request()),
+        ("GET", ["api", "tokens", "ledger"]) => Some(AccessRequirement::aarnn_request()),
+        ("GET", ["api", "user", "config"]) => Some(AccessRequirement::aarnn_request()),
+        ("POST", ["api", "user", "config"]) => Some(AccessRequirement::aarnn_request()),
+        ("GET", ["api", "runtime", "status"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "runtime", "workspaces"]) => Some(AccessRequirement::aarnn_observe()),
+        ("POST", ["api", "runtime", "workspaces"]) => Some(AccessRequirement::aarnn_use()),
+        ("GET", ["api", "runtime", "workspaces", _]) => Some(AccessRequirement::aarnn_observe()),
+        ("DELETE", ["api", "runtime", "workspaces", _]) => Some(AccessRequirement::aarnn_control()),
+        ("GET", ["api", "runtime", "workspaces", _, "snapshot"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
+        ("GET", ["api", "runtime", "workspaces", _, "activity"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
+        ("POST", ["api", "runtime", "workspaces", _, "control"]) => {
+            Some(AccessRequirement::aarnn_use())
+        }
+        ("POST", ["api", "runtime", "workspaces", _, "import"]) => {
+            Some(AccessRequirement::aarnn_use())
+        }
+        ("GET", ["api", "runtime", "workspaces", _, "export"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
+        ("GET", ["api", "status"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "snapshot"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "activity"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "export"]) => Some(AccessRequirement::aarnn_observe()),
+        ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "aer", "stream"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "llm", "mirror"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "update_network"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "control_network"]) => Some(AccessRequirement::aarnn_use()),
+        _ => None,
+    }
+}
+
+fn workspace_control_requirement(action: WorkspaceControlAction) -> AccessRequirement {
+    match action {
+        WorkspaceControlAction::Stop
+        | WorkspaceControlAction::Reset
+        | WorkspaceControlAction::New => AccessRequirement::aarnn_control(),
+        WorkspaceControlAction::Start
+        | WorkspaceControlAction::Repeat
+        | WorkspaceControlAction::Save
+        | WorkspaceControlAction::Step => AccessRequirement::aarnn_use(),
+    }
+}
+
+fn insufficient_service_access_response(
+    user: &AuthUser,
+    requirement: AccessRequirement,
+) -> Response {
+    let current = user.service_access_for(requirement.service_key);
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "forbidden",
+            "details": format!(
+                "This operation requires {}:{} authorisation.",
+                requirement.service_key,
+                requirement.access_level
+            ),
+            "service_key": requirement.service_key,
+            "required_access_level": requirement.access_level,
+            "access_level": current.access_level,
+            "visible_access_level": current.visible_access_level,
+            "visible": current.visible,
+        })),
+    )
+        .into_response()
+}
+
 const DEFAULT_SHARED_LOGIN_URL: &str = "https://neuralmimicry.ai/login";
 const DEFAULT_TOKEN_VAULT_URL: &str = "https://neuralmimicry.ai/tokens";
 const DEFAULT_BILLING_DASHBOARD_URL: &str = "https://neuralmimicry.ai/billing";
 const DEFAULT_BILLING_ADMIN_URL: &str = "https://neuralmimicry.ai/billing/admin";
+const LOCAL_SERVICE_ACCESS_OVERRIDES: &[(&str, &str)] = &[("aarnn", SERVICE_ACCESS_CONTROL)];
 
 fn append_query_param(url: &str, key: &str, value: &str) -> String {
     let separator = if url.contains('?') {
@@ -661,6 +797,7 @@ struct AuthUser {
     team_count: i64,
     pending_invitation_count: i64,
     is_admin: bool,
+    service_access: ServiceAccessMap,
 }
 
 impl AuthUser {
@@ -679,6 +816,8 @@ impl AuthUser {
             Some(0),
             Some(0),
             Some(false),
+            None,
+            LOCAL_SERVICE_ACCESS_OVERRIDES,
         )
     }
 
@@ -698,6 +837,8 @@ impl AuthUser {
             response.team_count,
             response.pending_invitation_count,
             response.is_admin,
+            Some(response.service_access.clone()),
+            &[],
         ))
     }
 
@@ -716,20 +857,40 @@ impl AuthUser {
             response.team_count,
             response.pending_invitation_count,
             response.is_admin,
+            Some(response.service_access.clone()),
+            &[],
         ))
     }
 
     fn from_session_record(record: SessionRecord) -> Self {
+        let SessionRecord {
+            username,
+            access_token,
+            identity,
+            ..
+        } = record;
+        let service_access = if identity.service_access.is_empty() {
+            None
+        } else {
+            Some(json!(identity.service_access))
+        };
+        let local_overrides = if access_token.is_none() {
+            LOCAL_SERVICE_ACCESS_OVERRIDES
+        } else {
+            &[]
+        };
         build_auth_user(
-            record.username,
-            record.access_token,
-            record.identity.role,
-            record.identity.groups,
-            record.identity.email,
-            record.identity.active_team,
-            record.identity.team_count,
-            record.identity.pending_invitation_count,
-            record.identity.is_admin,
+            username,
+            access_token,
+            identity.role,
+            identity.groups,
+            identity.email,
+            identity.active_team,
+            identity.team_count,
+            identity.pending_invitation_count,
+            identity.is_admin,
+            service_access,
+            local_overrides,
         )
     }
 
@@ -742,6 +903,32 @@ impl AuthUser {
             team_count: Some(self.team_count),
             pending_invitation_count: Some(self.pending_invitation_count),
             is_admin: Some(self.is_admin),
+            service_access: self.service_access.clone(),
+        }
+    }
+
+    fn visible_services(&self) -> Vec<String> {
+        visible_service_keys(&self.service_access)
+    }
+
+    fn service_access_for(&self, service_key: &str) -> ResolvedServiceAccess {
+        self.service_access
+            .get(service_key)
+            .cloned()
+            .unwrap_or_else(|| ResolvedServiceAccess::none(service_key.to_string()))
+    }
+
+    fn can_access(&self, requirement: AccessRequirement) -> bool {
+        if requirement.service_key.is_empty() {
+            return true;
+        }
+        let access = self.service_access_for(requirement.service_key);
+        match requirement.access_level {
+            SERVICE_ACCESS_REQUEST => access.can_request,
+            SERVICE_ACCESS_OBSERVE => access.can_observe,
+            SERVICE_ACCESS_USE => access.can_use,
+            SERVICE_ACCESS_CONTROL => access.can_control,
+            _ => false,
         }
     }
 }
@@ -922,22 +1109,7 @@ fn normalize_identity_role(value: Option<&str>) -> String {
 }
 
 fn normalize_identity_groups(values: &[String], role: &str) -> Vec<String> {
-    let mut groups = Vec::new();
-    let mut seen = HashSet::new();
-    let normalized_role = role.trim().to_lowercase();
-    if !normalized_role.is_empty() && seen.insert(normalized_role.clone()) {
-        groups.push(normalized_role);
-    }
-    for value in values {
-        let normalized = value.trim().to_lowercase();
-        if normalized.is_empty() {
-            continue;
-        }
-        if seen.insert(normalized.clone()) {
-            groups.push(normalized);
-        }
-    }
-    groups
+    normalise_groups(values, role)
 }
 
 fn normalize_identity_active_team(value: Option<Value>) -> Option<Value> {
@@ -973,6 +1145,8 @@ fn build_auth_user(
     team_count: Option<i64>,
     pending_invitation_count: Option<i64>,
     is_admin: Option<bool>,
+    raw_service_access: Option<Value>,
+    override_authenticated_grants: &[(&str, &str)],
 ) -> AuthUser {
     let username = username.trim().to_string();
     let role = normalize_identity_role(role.as_deref());
@@ -983,6 +1157,14 @@ fn build_auth_user(
     let pending_invitation_count = normalize_identity_count(pending_invitation_count, 0);
     let is_admin =
         is_admin.unwrap_or_else(|| role == "admin" || groups.iter().any(|group| group == "admin"));
+    let service_access = resolve_service_access(
+        raw_service_access.as_ref().filter(|value| !value.is_null()),
+        true,
+        &role,
+        &groups,
+        is_admin,
+        override_authenticated_grants,
+    );
     AuthUser {
         username,
         access_token: normalize_optional_string(access_token.as_deref()),
@@ -993,6 +1175,7 @@ fn build_auth_user(
         team_count,
         pending_invitation_count,
         is_admin,
+        service_access,
     }
 }
 
@@ -1007,6 +1190,8 @@ fn auth_identity_payload(user: &AuthUser) -> Value {
         "team_count": user.team_count,
         "pending_invitation_count": user.pending_invitation_count,
         "is_admin": user.is_admin,
+        "service_access": user.service_access.clone(),
+        "visible_services": user.visible_services(),
     })
 }
 
@@ -1146,6 +1331,97 @@ struct AerStreamFrame {
     input_values: Option<Vec<f32>>,
     spike_io: Option<SpikeIoConfig>,
     is_backward: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LlmMirrorDirection {
+    Input,
+    Output,
+}
+
+#[derive(Deserialize)]
+struct LlmMirrorPayload {
+    request_id: String,
+    conversation_id: String,
+    workflow: String,
+    role: String,
+    direction: LlmMirrorDirection,
+    provider: Option<String>,
+    model: Option<String>,
+    request_category: Option<String>,
+    system: Option<String>,
+    prompt_text: Option<String>,
+    text: String,
+    #[serde(default)]
+    message_roles: Vec<String>,
+    aer_base: u32,
+    output_base: u32,
+    aer_payload_hex: String,
+    #[serde(default)]
+    sensory_spikes: Vec<u8>,
+    network_id: Option<String>,
+    node_id: Option<String>,
+    #[serde(default)]
+    request_candidate_reply: bool,
+}
+
+#[derive(Serialize)]
+struct LlmMirrorCandidateResponse {
+    reply_text: Option<String>,
+    confidence: Option<f64>,
+    usable: bool,
+    source: Option<String>,
+    output_spike_indices: Vec<u32>,
+    output_aer_payload_hex: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LlmMirrorStimulusResponse {
+    attempted: bool,
+    accepted_batches: usize,
+    target: Option<String>,
+    network_id: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LlmMirrorResponseBody {
+    accepted: bool,
+    request_id: String,
+    conversation_id: String,
+    direction: LlmMirrorDirection,
+    text_chars: usize,
+    spike_count: usize,
+    aer_payload_hex: String,
+    candidate: Option<LlmMirrorCandidateResponse>,
+    stimulation: Option<LlmMirrorStimulusResponse>,
+}
+
+#[derive(Serialize)]
+struct LlmMirrorRecord {
+    recorded_at: u64,
+    actor: String,
+    actor_role: String,
+    actor_groups: Vec<String>,
+    request_id: String,
+    conversation_id: String,
+    workflow: String,
+    role: String,
+    direction: LlmMirrorDirection,
+    provider: Option<String>,
+    model: Option<String>,
+    request_category: Option<String>,
+    system: Option<String>,
+    prompt_text: Option<String>,
+    text: String,
+    message_roles: Vec<String>,
+    aer_base: u32,
+    output_base: u32,
+    aer_payload_hex: String,
+    sensory_spikes: Vec<u8>,
+    stimulation: LlmMirrorStimulusResponse,
+    candidate: Option<LlmMirrorCandidateResponse>,
 }
 
 #[derive(Deserialize)]
@@ -1421,6 +1697,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/export", get(export))
         .route("/aer/inject", post(aer_inject))
         .route("/aer/stream", post(aer_stream))
+        .route("/llm/mirror", post(llm_mirror))
         .route("/update_network", post(update_network))
         .route("/control_network", post(control_network))
         .layer(DefaultBodyLimit::max(grpc_max_message_bytes()))
@@ -1432,6 +1709,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/service-access.js", get(service_access_js))
         .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
         .route("/docs", get(docs_page))
@@ -1478,6 +1756,19 @@ async fn app_js() -> impl IntoResponse {
         HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/app.js"))
+}
+
+async fn service_access_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (headers, include_str!("../../web_ui/service-access.js"))
 }
 
 async fn shell_js() -> impl IntoResponse {
@@ -1543,7 +1834,7 @@ fn build_openapi_spec(state: &AppState) -> Value {
         .clone()
         .unwrap_or_else(|| "(not configured)".to_string());
     let auth_note = format!(
-        "Current runtime auth mode: `{}`. Protected endpoints require the `nm_session` cookie. \
+        "Current runtime auth mode: `{}`. Protected endpoints require either the `nm_session` cookie or a Customers-issued bearer token, plus the relevant `service_access.aarnn` authorisation. \
 Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
         auth_mode
     );
@@ -1573,6 +1864,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
         { "name": "user", "description": "Per-user persisted configuration" },
         { "name": "cluster", "description": "Cluster/system status and telemetry" },
         { "name": "network", "description": "Network snapshot/activity/control/update/export APIs" },
+        { "name": "integration", "description": "Backend integration routes" },
         { "name": "oidc", "description": "OIDC browser and token exchange endpoints" }
       ],
       "components": {
@@ -1582,6 +1874,12 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "in": "cookie",
             "name": "nm_session",
             "description": "Session cookie set by /api/login or OIDC flow."
+          },
+          "bearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "opaque",
+            "description": "Customers-issued bearer token for backend integrations such as Gail."
           }
         },
         "schemas": {
@@ -1591,6 +1889,31 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "error": { "type": "string" }
             },
             "required": ["error"]
+          },
+          "ServiceAccessEntry": {
+            "type": "object",
+            "properties": {
+              "service_key": { "type": "string" },
+              "access_level": { "type": "string", "enum": ["none", "request", "observe", "use", "control"] },
+              "public_access_level": { "type": "string", "enum": ["none", "request", "observe", "use", "control"] },
+              "visible_access_level": { "type": "string", "enum": ["none", "request", "observe", "use", "control"] },
+              "visible": { "type": "boolean" },
+              "can_request": { "type": "boolean" },
+              "can_observe": { "type": "boolean" },
+              "can_use": { "type": "boolean" },
+              "can_control": { "type": "boolean" }
+            },
+            "required": [
+              "service_key",
+              "access_level",
+              "public_access_level",
+              "visible_access_level",
+              "visible",
+              "can_request",
+              "can_observe",
+              "can_use",
+              "can_control"
+            ]
           },
           "AuthModeResponse": {
             "type": "object",
@@ -1627,7 +1950,12 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "active_team": { "type": "object", "nullable": true, "additionalProperties": true },
               "team_count": { "type": "integer", "format": "int64" },
               "pending_invitation_count": { "type": "integer", "format": "int64" },
-              "is_admin": { "type": "boolean" }
+              "is_admin": { "type": "boolean" },
+              "service_access": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/ServiceAccessEntry" }
+              },
+              "visible_services": { "type": "array", "items": { "type": "string" } }
             },
             "required": ["authenticated"]
           },
@@ -1661,6 +1989,11 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "team_count": { "type": "integer", "format": "int64" },
               "pending_invitation_count": { "type": "integer", "format": "int64" },
               "is_admin": { "type": "boolean" },
+              "service_access": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/ServiceAccessEntry" }
+              },
+              "visible_services": { "type": "array", "items": { "type": "string" } },
               "access_token": { "type": "string", "nullable": true }
             },
             "required": ["ok", "authenticated", "username"]
@@ -1882,6 +2215,97 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             },
             "required": ["accepted", "target", "network_id"]
           },
+          "LlmMirrorPayload": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "conversation_id": { "type": "string" },
+              "workflow": { "type": "string" },
+              "role": { "type": "string" },
+              "direction": { "type": "string", "enum": ["input", "output"] },
+              "provider": { "type": "string", "nullable": true },
+              "model": { "type": "string", "nullable": true },
+              "request_category": { "type": "string", "nullable": true },
+              "system": { "type": "string", "nullable": true },
+              "prompt_text": { "type": "string", "nullable": true },
+              "text": { "type": "string" },
+              "message_roles": { "type": "array", "items": { "type": "string" } },
+              "aer_base": { "type": "integer", "format": "uint32" },
+              "output_base": { "type": "integer", "format": "uint32" },
+              "aer_payload_hex": { "type": "string" },
+              "sensory_spikes": {
+                "type": "array",
+                "items": { "type": "integer", "format": "uint8" },
+                "description": "Binary spike vector mirrored from Gail's SNN/AER translation layer."
+              },
+              "network_id": { "type": "string", "nullable": true },
+              "node_id": { "type": "string", "nullable": true },
+              "request_candidate_reply": { "type": "boolean" }
+            },
+            "required": [
+              "request_id",
+              "conversation_id",
+              "workflow",
+              "role",
+              "direction",
+              "text",
+              "aer_base",
+              "output_base",
+              "aer_payload_hex"
+            ]
+          },
+          "LlmMirrorCandidate": {
+            "type": "object",
+            "properties": {
+              "reply_text": { "type": "string", "nullable": true },
+              "confidence": { "type": "number", "format": "float", "nullable": true },
+              "usable": { "type": "boolean" },
+              "source": { "type": "string", "nullable": true },
+              "output_spike_indices": {
+                "type": "array",
+                "items": { "type": "integer", "format": "uint32" }
+              },
+              "output_aer_payload_hex": { "type": "string", "nullable": true }
+            },
+            "required": ["usable", "output_spike_indices"]
+          },
+          "LlmMirrorStimulus": {
+            "type": "object",
+            "properties": {
+              "attempted": { "type": "boolean" },
+              "accepted_batches": { "type": "integer", "format": "uint64" },
+              "target": { "type": "string", "nullable": true },
+              "network_id": { "type": "string", "nullable": true },
+              "error": { "type": "string", "nullable": true }
+            },
+            "required": ["attempted", "accepted_batches"]
+          },
+          "LlmMirrorResponse": {
+            "type": "object",
+            "properties": {
+              "accepted": { "type": "boolean" },
+              "request_id": { "type": "string" },
+              "conversation_id": { "type": "string" },
+              "direction": { "type": "string", "enum": ["input", "output"] },
+              "text_chars": { "type": "integer", "format": "uint64" },
+              "spike_count": { "type": "integer", "format": "uint64" },
+              "aer_payload_hex": { "type": "string" },
+              "candidate": {
+                "$ref": "#/components/schemas/LlmMirrorCandidate",
+                "nullable": true
+              },
+              "stimulation": { "$ref": "#/components/schemas/LlmMirrorStimulus" }
+            },
+            "required": [
+              "accepted",
+              "request_id",
+              "conversation_id",
+              "direction",
+              "text_chars",
+              "spike_count",
+              "aer_payload_hex"
+            ]
+          },
           "OidcExchangePayload": {
             "type": "object",
             "properties": {
@@ -1980,7 +2404,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
         "/api/signup": {
           "post": {
             "tags": ["auth"],
-            "summary": "Signup (if enabled)",
+            "summary": "Sign-up (if enabled)",
             "operationId": "signupLocal",
             "requestBody": {
               "required": true,
@@ -1991,9 +2415,9 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               }
             },
             "responses": {
-              "200": { "description": "Signup successful.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignupResponse" } } } },
+              "200": { "description": "Sign-up successful.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignupResponse" } } } },
               "400": { "description": "Invalid request or local auth disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "403": { "description": "Signup disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Sign-up disabled.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "409": { "description": "User exists.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -2017,7 +2441,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "security": [{ "cookieAuth": [] }],
             "responses": {
               "200": { "description": "Saved config payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserConfigResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           },
           "post": {
@@ -2035,7 +2459,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             },
             "responses": {
               "200": { "description": "Config saved.", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -2057,7 +2481,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Cluster status payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatusResponse" } } } },
               "400": { "description": "Missing orchestrator address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Unable to connect to orchestrator.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -2088,7 +2512,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Serialized network snapshot.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SnapshotResponse" } } } },
               "400": { "description": "Missing network_id or address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Snapshot fetch failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -2107,7 +2531,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Activity vectors for sensory/hidden/output.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ActivityResponse" } } } },
               "400": { "description": "Missing network_id or address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Activity fetch failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -2131,7 +2555,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "400": { "description": "Missing orchestrator address or invalid update payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "403": { "description": "Cluster policy denied the requested live transition.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "404": { "description": "Target network was not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "409": { "description": "Live deployment transition requires explicit permission.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "500": { "description": "Update failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Connect failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
@@ -2155,7 +2579,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Control result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
               "400": { "description": "Invalid action or missing address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "500": { "description": "Update failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Connect failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
@@ -2206,12 +2630,12 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "AER exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid payload or missing fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
-            "/api/aer/stream": {
+        "/api/aer/stream": {
               "post": {
                 "tags": ["network"],
                 "summary": "Inject a stream of AER exchanges (NDJSON over HTTP)",
@@ -2242,8 +2666,30 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Stream accepted and forwarded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid NDJSON or missing data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/llm/mirror": {
+          "post": {
+            "tags": ["integration"],
+            "summary": "Mirror Gail LLM I/O into the AARNN runtime",
+            "description": "Accepts a mirrored Gail input or output exchange, persists the exchange beneath the runtime root, optionally stimulates the selected network with the supplied AER payload, and can return a low-confidence bootstrap candidate reply. This route is intended for backend integrations and is normally called with a Customers-issued Gail service-account bearer token.",
+            "operationId": "mirrorLlmExchange",
+            "security": [{ "cookieAuth": [] }, { "bearerAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/LlmMirrorPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Mirrored exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LlmMirrorResponse" } } } },
+              "400": { "description": "Invalid mirrored exchange payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -2268,7 +2714,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                 }
               },
               "400": { "description": "Missing/invalid parameters.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorized.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "500": { "description": "Tool or file processing failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Snapshot source unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
@@ -2280,7 +2726,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "summary": "Start browser OIDC login",
             "operationId": "startOidcLogin",
             "responses": {
-              "303": { "description": "Redirect to OIDC authorization endpoint." },
+              "303": { "description": "Redirect to OIDC authorisation endpoint." },
               "503": { "description": "OIDC not configured.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -2344,29 +2790,26 @@ async fn api_auth_middleware(
         return next.run(req).await;
     }
     let path = req.uri().path();
-    if matches!(
-        path,
-        "/api/openapi.json"
-            | "/api/config"
-            | "/api/auth/mode"
-            | "/api/login"
-            | "/api/signup"
-            | "/api/me"
-            | "/openapi.json"
-            | "/config"
-            | "/auth/mode"
-            | "/login"
-            | "/signup"
-            | "/me"
-    ) {
+    if is_public_api_path(path) {
         return next.run(req).await;
     }
+    let access_requirement = api_access_requirement(req.method(), path);
     let jar = CookieJar::from_headers(req.headers());
     if let Some(user) = session_auth_user(&state, &jar).await {
+        if let Some(requirement) = access_requirement {
+            if !user.can_access(requirement) {
+                return insufficient_service_access_response(&user, requirement);
+            }
+        }
         req.extensions_mut().insert(user);
         return next.run(req).await;
     }
     if let Some(user) = bearer_auth_user(&state, req.headers()).await {
+        if let Some(requirement) = access_requirement {
+            if !user.can_access(requirement) {
+                return insufficient_service_access_response(&user, requirement);
+            }
+        }
         req.extensions_mut().insert(user);
         return next.run(req).await;
     }
@@ -2431,6 +2874,8 @@ async fn me(
             "team_count": 0,
             "pending_invitation_count": 0,
             "is_admin": false,
+            "service_access": json!({}),
+            "visible_services": Vec::<String>::new(),
         }))
         .into_response();
     }
@@ -2759,6 +3204,8 @@ async fn chain_sync_identity_best_effort(
             "team_count": user.team_count,
             "pending_invitation_count": user.pending_invitation_count,
             "is_admin": user.is_admin,
+            "service_access": user.service_access.clone(),
+            "visible_services": user.visible_services(),
         }),
     };
     if let Err(err) = chain.upsert_identity(&payload).await {
@@ -3366,6 +3813,10 @@ async fn control_runtime_workspace(
     Path(workspace_id): Path<String>,
     Json(payload): Json<WorkspaceControlRequest>,
 ) -> axum::response::Response {
+    let requirement = workspace_control_requirement(payload.action);
+    if !user.can_access(requirement) {
+        return insufficient_service_access_response(&user, requirement);
+    }
     let cost = state.token_pricing.control_cost(payload.action);
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -4956,6 +5407,438 @@ async fn send_aer_batches(
     Ok(accepted)
 }
 
+const LLM_MIRROR_MAX_TEXT_CHARS: usize = 8192;
+const LLM_MIRROR_MAX_SPIKES: usize = 4096;
+const LLM_MIRROR_DEFAULT_SPIKES: usize = 128;
+
+async fn llm_mirror(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<LlmMirrorPayload>,
+) -> impl IntoResponse {
+    let request_id = payload.request_id.trim().to_string();
+    if request_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "request_id is required" })),
+        )
+            .into_response();
+    }
+    let conversation_id = payload
+        .conversation_id
+        .trim()
+        .to_string()
+        .chars()
+        .take(256)
+        .collect::<String>();
+    if conversation_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "conversation_id is required" })),
+        )
+            .into_response();
+    }
+    let workflow = payload.workflow.trim().to_string();
+    if workflow.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workflow is required" })),
+        )
+            .into_response();
+    }
+    let role = payload.role.trim().to_string();
+    if role.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "role is required" })),
+        )
+            .into_response();
+    }
+    let text = truncate_mirror_text(&compact_mirror_text(payload.text.as_str()));
+    if text.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        )
+            .into_response();
+    }
+    let system = payload
+        .system
+        .as_deref()
+        .map(compact_mirror_text)
+        .map(|value| truncate_mirror_text(&value))
+        .filter(|value| !value.is_empty());
+    let prompt_text = payload
+        .prompt_text
+        .as_deref()
+        .map(compact_mirror_text)
+        .map(|value| truncate_mirror_text(&value))
+        .filter(|value| !value.is_empty());
+    let provider = normalize_optional_text(payload.provider.as_deref());
+    let model = normalize_optional_text(payload.model.as_deref());
+    let request_category = normalize_optional_text(payload.request_category.as_deref());
+    let sensory_spikes = normalise_mirror_spikes(
+        payload.sensory_spikes.clone(),
+        payload.aer_base,
+        payload.aer_payload_hex.as_str(),
+        text.as_str(),
+    );
+    let exchange_spikes = sensory_spikes
+        .iter()
+        .map(|value| if *value > 0 { 1i8 } else { 0i8 })
+        .collect::<Vec<_>>();
+    let exchange = encode_exchange(
+        mirror_now_ms().saturating_mul(1000),
+        payload.aer_base,
+        &exchange_spikes,
+    );
+    let aer_payload_hex = hex::encode(&exchange.aer_payload);
+    let spike_count = exchange.spike_indices.len();
+    let stimulation =
+        stimulate_llm_mirror(state.as_ref(), &payload, aer_payload_hex.as_str()).await;
+    let candidate = build_llm_mirror_candidate(
+        &payload.direction,
+        payload.request_candidate_reply,
+        text.as_str(),
+        &exchange,
+        sensory_spikes.len(),
+        stimulation.accepted_batches,
+    );
+    let record = LlmMirrorRecord {
+        recorded_at: mirror_now_ms(),
+        actor: user.username.clone(),
+        actor_role: user.role.clone(),
+        actor_groups: user.groups.clone(),
+        request_id: request_id.clone(),
+        conversation_id: conversation_id.clone(),
+        workflow,
+        role,
+        direction: payload.direction,
+        provider,
+        model,
+        request_category,
+        system,
+        prompt_text,
+        text: text.clone(),
+        message_roles: payload.message_roles,
+        aer_base: payload.aer_base,
+        output_base: payload.output_base,
+        aer_payload_hex: aer_payload_hex.clone(),
+        sensory_spikes: sensory_spikes.clone(),
+        stimulation: LlmMirrorStimulusResponse {
+            attempted: stimulation.attempted,
+            accepted_batches: stimulation.accepted_batches,
+            target: stimulation.target.clone(),
+            network_id: stimulation.network_id.clone(),
+            error: stimulation.error.clone(),
+        },
+        candidate: candidate.as_ref().map(clone_llm_mirror_candidate),
+    };
+    if let Err(error) = persist_llm_mirror_record(
+        state.runtime.root_dir().to_path_buf(),
+        conversation_id.as_str(),
+        request_id.as_str(),
+        payload.direction,
+        record,
+    )
+    .await
+    {
+        eprintln!(
+            "[warn] failed to persist mirrored LLM exchange request_id={} error={}",
+            request_id, error
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(LlmMirrorResponseBody {
+            accepted: true,
+            request_id,
+            conversation_id,
+            direction: payload.direction,
+            text_chars: text.chars().count(),
+            spike_count,
+            aer_payload_hex,
+            candidate,
+            stimulation: Some(stimulation),
+        }),
+    )
+        .into_response()
+}
+
+fn compact_mirror_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_mirror_text(value: &str) -> String {
+    value.chars().take(LLM_MIRROR_MAX_TEXT_CHARS).collect()
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(compact_mirror_text)
+        .map(|value| truncate_mirror_text(&value))
+        .filter(|value| !value.is_empty())
+}
+
+fn normalise_mirror_spikes(
+    spikes: Vec<u8>,
+    aer_base: u32,
+    aer_payload_hex: &str,
+    text: &str,
+) -> Vec<u8> {
+    let sanitized = spikes
+        .into_iter()
+        .take(LLM_MIRROR_MAX_SPIKES)
+        .map(|value| if value > 0 { 1u8 } else { 0u8 })
+        .collect::<Vec<_>>();
+    if sanitized.iter().any(|value| *value > 0) {
+        sanitized
+    } else {
+        if let Ok(aer_payload) = decode_spike_hex_payload(aer_payload_hex) {
+            if let Ok(decoded) =
+                spikes_from_transport(&aer_payload, aer_base, &[], LLM_MIRROR_DEFAULT_SPIKES)
+            {
+                let decoded = decoded
+                    .into_iter()
+                    .map(|value| if value > 0 { 1u8 } else { 0u8 })
+                    .collect::<Vec<_>>();
+                if decoded.iter().any(|value| *value > 0) {
+                    return decoded;
+                }
+            }
+        }
+        text_to_mirror_spikes(text, LLM_MIRROR_DEFAULT_SPIKES)
+    }
+}
+
+fn text_to_mirror_spikes(text: &str, sensory_size: usize) -> Vec<u8> {
+    let sensory_size = sensory_size.clamp(32, LLM_MIRROR_MAX_SPIKES);
+    let mut spikes = vec![0u8; sensory_size];
+    let compact = compact_mirror_text(text).to_ascii_lowercase();
+    let bytes = compact.as_bytes();
+    let len = bytes.len().max(1);
+    for (index, byte) in bytes.iter().enumerate() {
+        let primary = ((*byte as usize) + index * 17 + len * 29) % sensory_size;
+        spikes[primary] = 1;
+        if index > 0 {
+            let previous = bytes[index - 1] as usize;
+            let secondary =
+                ((*byte as usize) * 31 + previous + index * 11 + len * 7) % sensory_size;
+            spikes[secondary] = 1;
+        }
+    }
+    spikes
+}
+
+fn build_llm_mirror_candidate(
+    direction: &LlmMirrorDirection,
+    request_candidate_reply: bool,
+    text: &str,
+    exchange: &aarnn_rust::spike_io::transport::SpikeExchange,
+    sensory_size: usize,
+    accepted_batches: usize,
+) -> Option<LlmMirrorCandidateResponse> {
+    if !request_candidate_reply || !matches!(direction, LlmMirrorDirection::Output) {
+        return None;
+    }
+    let density = exchange.spike_indices.len() as f64 / sensory_size.max(1) as f64;
+    let confidence =
+        (0.16 + density * 0.24 + if accepted_batches > 0 { 0.1 } else { 0.0 }).clamp(0.16, 0.55);
+    Some(LlmMirrorCandidateResponse {
+        reply_text: Some(text.to_string()),
+        confidence: Some((confidence * 1000.0).round() / 1000.0),
+        usable: true,
+        source: Some(
+            if accepted_batches > 0 {
+                "stimulated_transport_echo"
+            } else {
+                "transport_mirror_echo"
+            }
+            .to_string(),
+        ),
+        output_spike_indices: exchange.spike_indices.clone(),
+        output_aer_payload_hex: Some(hex::encode(&exchange.aer_payload)),
+    })
+}
+
+fn clone_llm_mirror_candidate(
+    candidate: &LlmMirrorCandidateResponse,
+) -> LlmMirrorCandidateResponse {
+    LlmMirrorCandidateResponse {
+        reply_text: candidate.reply_text.clone(),
+        confidence: candidate.confidence,
+        usable: candidate.usable,
+        source: candidate.source.clone(),
+        output_spike_indices: candidate.output_spike_indices.clone(),
+        output_aer_payload_hex: candidate.output_aer_payload_hex.clone(),
+    }
+}
+
+async fn stimulate_llm_mirror(
+    state: &AppState,
+    payload: &LlmMirrorPayload,
+    aer_payload_hex: &str,
+) -> LlmMirrorStimulusResponse {
+    let network_id = payload
+        .network_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let Some(network_id) = network_id else {
+        return LlmMirrorStimulusResponse {
+            attempted: false,
+            accepted_batches: 0,
+            target: None,
+            network_id: None,
+            error: None,
+        };
+    };
+
+    let mut response = LlmMirrorStimulusResponse {
+        attempted: true,
+        accepted_batches: 0,
+        target: None,
+        network_id: Some(network_id.clone()),
+        error: None,
+    };
+
+    let orchestrator_addr = match resolve_addr_or_default(None, state.default_orchestrator.clone())
+    {
+        Ok(addr) => addr,
+        Err(err) => {
+            response.error = Some(api_error_message(err));
+            return response;
+        }
+    };
+
+    let node_id = payload
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let target_addr = if node_id.is_some() {
+        match resolve_network_addr(orchestrator_addr.clone(), &network_id, node_id).await {
+            Ok(addr) => addr,
+            Err(err) => {
+                response.error = Some(api_error_message(err));
+                return response;
+            }
+        }
+    } else {
+        orchestrator_addr
+    };
+    response.target = Some(target_addr.clone());
+
+    let batch = match build_aer_batch(
+        &target_addr,
+        network_id.clone(),
+        0,
+        None,
+        None,
+        payload.aer_base,
+        matches!(payload.direction, LlmMirrorDirection::Output),
+        Some(aer_payload_hex.to_string()),
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(batch) => batch,
+        Err(err) => {
+            response.error = Some(api_error_message(err));
+            return response;
+        }
+    };
+
+    match send_aer_batches(target_addr, vec![batch]).await {
+        Ok(accepted) => {
+            response.accepted_batches = accepted;
+            response
+        }
+        Err(err) => {
+            response.error = Some(api_error_message(err));
+            response
+        }
+    }
+}
+
+async fn persist_llm_mirror_record(
+    runtime_root: PathBuf,
+    conversation_id: &str,
+    request_id: &str,
+    direction: LlmMirrorDirection,
+    record: LlmMirrorRecord,
+) -> anyhow::Result<()> {
+    let safe_conversation = sanitize_mirror_segment(conversation_id, "conversation");
+    let safe_request = sanitize_mirror_segment(request_id, "request");
+    let path = runtime_root
+        .join("llm_mirror")
+        .join(safe_conversation)
+        .join(format!(
+            "{}-{}-{}.json",
+            mirror_now_ms(),
+            safe_request,
+            mirror_direction_label(direction)
+        ));
+    tokio::task::spawn_blocking(move || write_json_pretty(&path, &record))
+        .await
+        .context("llm mirror persistence task failed")?
+}
+
+fn sanitize_mirror_segment(raw: &str, fallback: &str) -> String {
+    let sanitized = raw
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches(|ch| ch == '-' || ch == '.')
+        .to_ascii_lowercase();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn mirror_direction_label(direction: LlmMirrorDirection) -> &'static str {
+    match direction {
+        LlmMirrorDirection::Input => "input",
+        LlmMirrorDirection::Output => "output",
+    }
+}
+
+fn mirror_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn api_error_message(error: ApiError) -> String {
+    let (status, Json(payload)) = error;
+    payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            payload
+                .get("details")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| status.to_string())
+}
+
 async fn aer_inject(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AerInjectPayload>,
@@ -5403,5 +6286,89 @@ async fn resolve_network_addr(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "no candidate target address resolved" })),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_access_requirement_maps_runtime_routes() {
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/tokens"),
+            Some(AccessRequirement::aarnn_request())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/status"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/runtime/workspaces"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/llm/mirror"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::DELETE, "/api/runtime/workspaces/demo"),
+            Some(AccessRequirement::aarnn_control())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/snapshot"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+    }
+
+    #[test]
+    fn api_access_requirement_allows_public_routes() {
+        assert!(is_public_api_path("/api/openapi.json"));
+        assert_eq!(api_access_requirement(&Method::POST, "/api/logout"), None);
+        assert_eq!(api_access_requirement(&Method::GET, "/api/me"), None);
+    }
+
+    #[test]
+    fn workspace_control_requirement_escalates_destructive_actions() {
+        assert_eq!(
+            workspace_control_requirement(WorkspaceControlAction::Start),
+            AccessRequirement::aarnn_use()
+        );
+        assert_eq!(
+            workspace_control_requirement(WorkspaceControlAction::Repeat),
+            AccessRequirement::aarnn_use()
+        );
+        assert_eq!(
+            workspace_control_requirement(WorkspaceControlAction::Stop),
+            AccessRequirement::aarnn_control()
+        );
+        assert_eq!(
+            workspace_control_requirement(WorkspaceControlAction::Reset),
+            AccessRequirement::aarnn_control()
+        );
+        assert_eq!(
+            workspace_control_requirement(WorkspaceControlAction::New),
+            AccessRequirement::aarnn_control()
+        );
+    }
+
+    #[test]
+    fn llm_mirror_candidate_remains_low_confidence_echo() {
+        let exchange = encode_exchange(1000, 4096, &[0, 1, 1, 0, 1, 0]);
+        let candidate = build_llm_mirror_candidate(
+            &LlmMirrorDirection::Output,
+            true,
+            "AARNN mirrored reply",
+            &exchange,
+            6,
+            1,
+        )
+        .expect("candidate");
+        assert!(candidate.usable);
+        assert_eq!(
+            candidate.reply_text.as_deref(),
+            Some("AARNN mirrored reply")
+        );
+        assert!(candidate.confidence.unwrap_or_default() < 0.6);
     }
 }

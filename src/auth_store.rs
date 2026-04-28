@@ -1,3 +1,4 @@
+use crate::service_access::ServiceAccessMap;
 use crate::shared_fs::{read_json_if_exists, write_json_pretty};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,8 @@ pub struct SessionIdentityRecord {
     pub pending_invitation_count: Option<i64>,
     #[serde(default)]
     pub is_admin: Option<bool>,
+    #[serde(default)]
+    pub service_access: ServiceAccessMap,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

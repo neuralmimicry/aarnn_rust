@@ -1545,11 +1545,7 @@ fn build_sharded_node_assignments(
     }
 
     let mut sorted_targets = target_node_capacities.to_vec();
-    sorted_targets.sort_by(|lhs, rhs| {
-        rhs.1
-            .total_cmp(&lhs.1)
-            .then_with(|| lhs.0.cmp(&rhs.0))
-    });
+    sorted_targets.sort_by(|lhs, rhs| rhs.1.total_cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
 
     let all_layers: Vec<u32> = (0..total_layers).collect();
 
@@ -4328,7 +4324,9 @@ impl DistributedNeuromorphic for DistributedNode {
                 if let Some(net_arc) = net_arc {
                     let mut net = net_arc.write().await;
                     apply_control_to_managed_network(&mut net, action);
-                    return Ok(Response::new(proto::NetworkUpdateResponse { success: true }));
+                    return Ok(Response::new(proto::NetworkUpdateResponse {
+                        success: true,
+                    }));
                 }
             }
             return Err(Status::permission_denied("Not an orchestrator"));
@@ -4926,11 +4924,7 @@ mod tests {
         assert_eq!(
             assignments,
             vec![
-                (
-                    "node-a".to_string(),
-                    vec![0, 1],
-                    vec![0, 1],
-                ),
+                ("node-a".to_string(), vec![0, 1], vec![0, 1],),
                 ("node-b".to_string(), vec![0], vec![0]),
                 ("node-c".to_string(), vec![1], vec![1]),
             ]

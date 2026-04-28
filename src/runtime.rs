@@ -963,6 +963,10 @@ impl RuntimeManager {
         Ok(manager)
     }
 
+    pub fn root_dir(&self) -> &Path {
+        &self.config.root_dir
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.stop_tx.send(true);
     }

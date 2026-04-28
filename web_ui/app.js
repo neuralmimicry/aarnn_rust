@@ -204,6 +204,21 @@ const state = {
   },
   instrumentation: loadInstrumentationState()
 };
+const serviceAccessApi = window.NMServiceAccess || {
+  getServiceAccessMap: () => ({}),
+  getServiceAccess: (_sessionData, serviceKey) => ({
+    service_key: String(serviceKey || "").trim().toLowerCase(),
+    access_level: "none",
+    public_access_level: "none",
+    visible_access_level: "none",
+    visible: false,
+    can_request: false,
+    can_observe: false,
+    can_use: false,
+    can_control: false
+  }),
+  getVisibleServices: () => []
+};
 let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
 let ioSourceRunner = null;
@@ -236,6 +251,8 @@ function normalizeAuthIdentity(payload) {
   const activeTeam = payload.active_team && typeof payload.active_team === "object" ? payload.active_team : null;
   const teamCount = Math.max(0, Number((_payload$team_count = payload.team_count) !== null && _payload$team_count !== void 0 ? _payload$team_count : activeTeam ? 1 : 0) || 0);
   const pendingInvitationCount = Math.max(0, Number((_payload$pending_invi = payload.pending_invitation_count) !== null && _payload$pending_invi !== void 0 ? _payload$pending_invi : 0) || 0);
+  const serviceAccess = serviceAccessApi.getServiceAccessMap(payload || {});
+  const visibleServices = Array.isArray(payload.visible_services) ? payload.visible_services.map(service => String(service || "").trim().toLowerCase()).filter(Boolean) : serviceAccessApi.getVisibleServices(payload || {});
   return {
     username,
     role,
@@ -245,18 +262,70 @@ function normalizeAuthIdentity(payload) {
     activeTeamLabel: authActiveTeamLabel(activeTeam),
     teamCount,
     pendingInvitationCount,
-    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin"))
+    isAdmin: Boolean(payload.is_admin || role === "admin" || groups.includes("admin")),
+    serviceAccess,
+    visibleServices,
+    aarnnAccess: serviceAccessApi.getServiceAccess(payload || {}, "aarnn"),
+    billingAccess: serviceAccessApi.getServiceAccess(payload || {}, "billing")
   };
+}
+function clearRestrictedRuntimeState() {
+  state.runtime.workspaces = [];
+  state.runtime.details.clear();
+  state.runtime.autoscaler = null;
+  state.runtime.activeWorkspace = "";
+  saveActiveWorkspace();
+  state.snapshot = null;
+  state.activity = null;
+  state.graph = null;
+  state.snapshotMeta = {
+    sourceKey: "",
+    savedAtMs: 0
+  };
+  state.lastSnapshotPollAt = 0;
 }
 function applyAuthIdentity(payload) {
   state.identity = normalizeAuthIdentity(payload);
   state.user = state.identity ? state.identity.username : null;
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+    clearRestrictedRuntimeState();
+  }
+}
+function hasAarnnRequestAccess() {
+  return state.authMode === "none" || Boolean(state.identity && state.identity.aarnnAccess && state.identity.aarnnAccess.can_request);
+}
+function hasAarnnObserveAccess() {
+  return state.authMode === "none" || Boolean(state.identity && state.identity.aarnnAccess && state.identity.aarnnAccess.can_observe);
+}
+function hasAarnnUseAccess() {
+  return state.authMode === "none" || Boolean(state.identity && state.identity.aarnnAccess && state.identity.aarnnAccess.can_use);
+}
+function hasAarnnControlAccess() {
+  return state.authMode === "none" || Boolean(state.identity && state.identity.aarnnAccess && state.identity.aarnnAccess.can_control);
+}
+function hasBillingUseAccess() {
+  return Boolean(state.identity && state.identity.billingAccess && state.identity.billingAccess.can_use);
+}
+function hasBillingControlAccess() {
+  return Boolean(state.identity && state.identity.billingAccess && state.identity.billingAccess.can_control);
+}
+function workspaceActionAllowed(action) {
+  if (state.authMode === "none") {
+    return true;
+  }
+  return action === "stop" || action === "reset" || action === "new" ? hasAarnnControlAccess() : hasAarnnUseAccess();
 }
 function userStatusLabel(identity) {
   if (!identity) return "Signed out";
   const parts = [`Signed in as ${identity.username}`];
   if (identity.groups.length) {
     parts.push(`groups: ${identity.groups.join(", ")}`);
+  }
+  if (identity.aarnnAccess && identity.aarnnAccess.visible) {
+    parts.push(`AARNN access: ${identity.aarnnAccess.access_level}`);
+  }
+  if (identity.billingAccess && identity.billingAccess.visible) {
+    parts.push(`billing: ${identity.billingAccess.access_level}`);
   }
   if (identity.activeTeamLabel) {
     parts.push(`team: ${identity.activeTeamLabel}`);
@@ -928,12 +997,12 @@ async function performSignup(username, password) {
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      showAuthError(data.error || "Signup failed.");
+      showAuthError(data.error || "Sign-up failed.");
       return;
     }
-    showAuthError("Signup successful. Please log in.");
+    showAuthError("Sign-up successful. Please sign in.");
   } catch (e) {
-    showAuthError("Signup failed.");
+    showAuthError("Sign-up failed.");
   }
 }
 async function performLogout() {
@@ -1094,6 +1163,7 @@ function cacheWorkspaceDetail(detail) {
   }
 }
 async function loadWorkspaceDetail(workspaceId = state.runtime.activeWorkspace) {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) return null;
   if (!workspaceId) return null;
   try {
     const resp = await runtimeFetch(`/api/runtime/workspaces/${encodeURIComponent(workspaceId)}`);
@@ -1119,6 +1189,9 @@ function activeSource() {
         workspace,
         networkId: workspace.network_id || workspace.workspace_id
       };
+    }
+    if (!clusterModeAllowed()) {
+      return null;
     }
   }
   if (state.active && state.activeNetwork) {
@@ -1211,11 +1284,11 @@ function syncTokenUi() {
   }
   setLinkVisibility(tokenVaultLink, state.token.tokenVaultUrl || state.commerce.tokenVaultUrl);
   setLinkVisibility(tokenBuyLink, state.token.buyTokensUrl || state.commerce.buyTokensUrl);
-  setLinkVisibility(tokenBillingLink, state.token.billingDashboardUrl || state.commerce.billingDashboardUrl);
-  setLinkVisibility(tokenAdminLink, state.identity && state.identity.isAdmin ? state.token.billingAdminUrl || state.commerce.billingAdminUrl : "");
+  setLinkVisibility(tokenBillingLink, hasBillingUseAccess() ? state.token.billingDashboardUrl || state.commerce.billingDashboardUrl : "");
+  setLinkVisibility(tokenAdminLink, hasBillingControlAccess() ? state.token.billingAdminUrl || state.commerce.billingAdminUrl : "");
 }
 async function loadTokenBalance() {
-  if (state.authMode === "none" || !state.user) {
+  if (state.authMode === "none" || !state.user || !hasAarnnRequestAccess()) {
     resetTokenState();
     syncTokenUi();
     return;
@@ -1252,6 +1325,17 @@ async function loadTokenBalance() {
 function refreshWorkspaceSelect() {
   if (!workspaceSelect) return;
   workspaceSelect.innerHTML = "";
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+    const restrictedOpt = document.createElement("option");
+    restrictedOpt.value = "";
+    restrictedOpt.textContent = "Observation access not granted";
+    workspaceSelect.appendChild(restrictedOpt);
+    state.runtime.activeWorkspace = "";
+    saveActiveWorkspace();
+    workspaceSelect.value = "";
+    syncWorkspaceUi();
+    return;
+  }
   if (clusterModeAllowed()) {
     const clusterOpt = document.createElement("option");
     clusterOpt.value = "";
@@ -1278,6 +1362,7 @@ function syncWorkspaceUi() {
   const running = workspace ? Boolean((_detail$summary$runni = detail === null || detail === void 0 || (_detail$summary2 = detail.summary) === null || _detail$summary2 === void 0 ? void 0 : _detail$summary2.running) !== null && _detail$summary$runni !== void 0 ? _detail$summary$runni : workspace.running) : false;
   const simTimeMs = Number((_ref6 = (_detail$status$sim_ti = detail === null || detail === void 0 || (_detail$status = detail.status) === null || _detail$status === void 0 ? void 0 : _detail$status.sim_time_ms) !== null && _detail$status$sim_ti !== void 0 ? _detail$status$sim_ti : workspace === null || workspace === void 0 ? void 0 : workspace.sim_time_ms) !== null && _ref6 !== void 0 ? _ref6 : 0);
   const step = Number((_ref7 = (_detail$status$step = detail === null || detail === void 0 || (_detail$status2 = detail.status) === null || _detail$status2 === void 0 ? void 0 : _detail$status2.step) !== null && _detail$status$step !== void 0 ? _detail$status$step : workspace === null || workspace === void 0 ? void 0 : workspace.step) !== null && _ref7 !== void 0 ? _ref7 : 0);
+  const canObserveRuntime = hasAarnnObserveAccess();
   if (workspaceModeEl) {
     workspaceModeEl.textContent = workspace || !clusterModeAllowed() ? "workspace" : "cluster";
   }
@@ -1288,24 +1373,34 @@ function syncWorkspaceUi() {
     workspaceUserInput.disabled = state.authMode !== "none";
   }
   if (workspaceStatusEl) {
-    workspaceStatusEl.textContent = workspace ? `${running ? "running" : "stopped"} | t=${simTimeMs.toFixed(1)} ms | step ${step}` : "inactive";
+    workspaceStatusEl.textContent = state.authMode !== "none" && !canObserveRuntime ? "Observation access not granted" : workspace ? `${running ? "running" : "stopped"} | t=${simTimeMs.toFixed(1)} ms | step ${step}` : "inactive";
   }
   if (workspaceAutoscalerEl) {
     const autoscaler = state.runtime.autoscaler || {};
-    workspaceAutoscalerEl.textContent = autoscaler.provider ? `${autoscaler.provider}${Number(autoscaler.active_remote_nodes || 0) > 0 ? ` | remote ${Number(autoscaler.active_remote_nodes || 0)}` : ""}${autoscaler.last_action ? ` | ${autoscaler.last_action}` : ""}` : "local";
+    workspaceAutoscalerEl.textContent = state.authMode !== "none" && !canObserveRuntime ? "restricted" : autoscaler.provider ? `${autoscaler.provider}${Number(autoscaler.active_remote_nodes || 0) > 0 ? ` | remote ${Number(autoscaler.active_remote_nodes || 0)}` : ""}${autoscaler.last_action ? ` | ${autoscaler.last_action}` : ""}` : "local";
   }
   if (input) input.disabled = !clusterModeAllowed();
   if (addButton) addButton.disabled = !clusterModeAllowed();
-  if (workspaceDeleteBtn) workspaceDeleteBtn.disabled = !workspace;
-  if (workspacePullBtn) workspacePullBtn.disabled = !workspace;
-  if (workspacePushBtn) workspacePushBtn.disabled = !workspace || !(currentNetworkJson() || currentConfigJson());
-  if (workspaceStartBtn) workspaceStartBtn.disabled = !workspace || running;
-  if (workspaceStopBtn) workspaceStopBtn.disabled = !workspace || !running;
+  if (workspaceSelect) workspaceSelect.disabled = state.authMode !== "none" && !canObserveRuntime;
+  if (workspaceRefreshBtn) workspaceRefreshBtn.disabled = state.authMode !== "none" && !canObserveRuntime;
+  if (workspaceCreateBtn) workspaceCreateBtn.disabled = !hasAarnnUseAccess();
+  if (workspaceDeleteBtn) workspaceDeleteBtn.disabled = !workspace || !hasAarnnControlAccess();
+  if (workspacePullBtn) workspacePullBtn.disabled = !workspace || !canObserveRuntime;
+  if (workspacePushBtn) workspacePushBtn.disabled = !workspace || !hasAarnnUseAccess() || !(currentNetworkJson() || currentConfigJson());
+  if (workspaceStartBtn) workspaceStartBtn.disabled = !workspace || running || !workspaceActionAllowed("start");
+  if (workspaceStopBtn) workspaceStopBtn.disabled = !workspace || !running || !workspaceActionAllowed("stop");
   if (networkSelect) networkSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
   if (nodeSelect) nodeSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
   syncTokenUi();
 }
 async function loadRuntimeStatus() {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+    clearRestrictedRuntimeState();
+    refreshWorkspaceSelect();
+    renderWorkspaceSidebar();
+    refreshControlButtons();
+    return;
+  }
   if (state.authMode !== "none" && !state.user) return;
   if (!pageIsVisible()) return;
   const requestSeq = ++runtimeStatusRequestSeq;
@@ -1349,6 +1444,11 @@ async function loadRuntimeStatus() {
 }
 async function createWorkspaceFromCurrentState() {
   var _modelSelector$queryS, _learningSelector$que;
+  if (!hasAarnnUseAccess()) {
+    setWorkspaceFeedback("AARNN use authorisation is required to create workspaces.", "error");
+    setToolStatus("AARNN use authorisation is required to create workspaces.");
+    return;
+  }
   const name = workspaceNameInput ? workspaceNameInput.value.trim() : "";
   const snapshotJson = currentNetworkJson();
   const configJson = currentConfigJson();
@@ -1398,6 +1498,11 @@ async function createWorkspaceFromCurrentState() {
   }
 }
 async function deleteSelectedWorkspace() {
+  if (!hasAarnnControlAccess()) {
+    setWorkspaceFeedback("AARNN control authorisation is required to delete workspaces.", "error");
+    setToolStatus("AARNN control authorisation is required to delete workspaces.");
+    return;
+  }
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) return;
   try {
@@ -1434,6 +1539,11 @@ async function deleteSelectedWorkspace() {
   }
 }
 async function importWorkspacePayload(raw, kind, extra = {}) {
+  if (!hasAarnnUseAccess()) {
+    setWorkspaceFeedback("AARNN use authorisation is required to update workspaces.", "error");
+    setToolStatus("AARNN use authorisation is required to update workspaces.");
+    return false;
+  }
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) {
     setWorkspaceFeedback("Select a workspace first.", "error");
@@ -1477,6 +1587,12 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
   }
 }
 async function controlWorkspaceAction(action) {
+  if (!workspaceActionAllowed(action)) {
+    const level = action === "stop" || action === "reset" || action === "new" ? "control" : "use";
+    setWorkspaceFeedback(`AARNN ${level} authorisation is required for workspace action ${action}.`, "error");
+    setToolStatus(`AARNN ${level} authorisation is required for workspace action ${action}.`);
+    return false;
+  }
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) return false;
   try {
@@ -1593,6 +1709,19 @@ function setActive(addr) {
 }
 function refreshNetworkSelect() {
   const workspace = getActiveWorkspaceMeta();
+  if (!clusterModeAllowed() && !workspace) {
+    networkSelect.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = hasAarnnObserveAccess() ? "(no workspaces)" : "(observation access not granted)";
+    networkSelect.appendChild(opt);
+    state.activeNetwork = "";
+    saveActiveNetwork();
+    refreshNodeSelect();
+    refreshControlButtons();
+    syncWorkspaceUi();
+    return;
+  }
   if (workspace) {
     const networkId = workspace.network_id || workspace.workspace_id;
     networkSelect.innerHTML = "";
@@ -1812,6 +1941,13 @@ function renderSidebar(nodes, networks, aggregate = null) {
 }
 function renderWorkspaceSidebar() {
   var _detail$summary$runni2, _detail$summary4, _ref8, _detail$status$sim_ti2, _detail$status3, _ref9, _detail$status$step2, _detail$status4, _ref0, _detail$status$total_, _detail$status5, _ref1, _ref10, _detail$status$num_hi, _detail$status6, _state$snapshot3, _ref11, _ref12, _detail$status$desire, _detail$status7, _state$snapshot4;
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+    setPlaceholder();
+    activeTargetEl.textContent = "workspace access pending";
+    clusterNodesEl.innerHTML = "<div class=\"line\">AARNN observation authorisation is not granted for this session.</div>";
+    clusterNetworksEl.innerHTML = "<div class=\"line\">Request observation or use access to view workspace runtime detail.</div>";
+    return;
+  }
   const workspace = getActiveWorkspaceMeta();
   const detail = getActiveWorkspaceDetail();
   if (!workspace) {
@@ -1906,8 +2042,24 @@ function setActiveNetworkPlaying(playing) {
 function refreshControlNote() {
   if (!controlNoteEl) return;
   if (isWorkspaceMode()) {
+    if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+      controlNoteEl.textContent = "AARNN observation authorisation is not granted for this session.";
+      return;
+    }
     const workspace = getActiveWorkspaceMeta();
-    controlNoteEl.textContent = workspace ? `Controls go to workspace runtime ${workspace.workspace_id}.` : "Select a workspace or switch to cluster mode to control a runtime.";
+    if (!workspace) {
+      controlNoteEl.textContent = "Select a workspace or switch to cluster mode to control a runtime.";
+      return;
+    }
+    if (getActivePlaying() && !workspaceActionAllowed("stop")) {
+      controlNoteEl.textContent = `Workspace ${workspace.workspace_id} is running. AARNN control authorisation is required to stop, reset, or replace it.`;
+      return;
+    }
+    if (!getActivePlaying() && !workspaceActionAllowed("start")) {
+      controlNoteEl.textContent = `Workspace ${workspace.workspace_id} is available. AARNN use authorisation is required to start or update it.`;
+      return;
+    }
+    controlNoteEl.textContent = `Controls go to workspace runtime ${workspace.workspace_id}.`;
     return;
   }
   const orchestrator = getActiveOrchestratorAddr();
@@ -1927,10 +2079,10 @@ function refreshControlButtons() {
     const workspace = getActiveWorkspaceMeta();
     const playing = getActivePlaying();
     startStopBtn.textContent = playing ? "Stop" : "Start";
-    startStopBtn.disabled = !workspace;
-    repeatBtn.disabled = !workspace;
-    resetBtn.disabled = !workspace;
-    newBtn.disabled = !workspace;
+    startStopBtn.disabled = !workspace || !workspaceActionAllowed(playing ? "stop" : "start");
+    repeatBtn.disabled = !workspace || !workspaceActionAllowed("repeat");
+    resetBtn.disabled = !workspace || !workspaceActionAllowed("reset");
+    newBtn.disabled = !workspace || !workspaceActionAllowed("new");
     startStopBtn.title = "Start or stop the active workspace runtime";
     repeatBtn.title = "Reset the workspace state and start from t=0";
     resetBtn.title = "Reset the workspace to its startup state and keep it stopped";
@@ -1999,6 +2151,9 @@ async function pollTarget(addr) {
   }
 }
 async function pollAll() {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
+    return;
+  }
   if (state.authMode !== "none" && !state.user) {
     return;
   }
@@ -2064,6 +2219,7 @@ async function pollAll() {
   refreshNetworkSelect();
 }
 async function fetchSnapshotForActive() {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
   if (state.authMode !== "none" && !state.user) return;
   if (!pageIsVisible()) return;
   const source = activeSource();
@@ -2169,6 +2325,7 @@ function snapshotPollIntervalMs() {
   return getActivePlaying() ? SNAPSHOT_POLL_PLAYING_MS : SNAPSHOT_POLL_IDLE_MS;
 }
 function pollSnapshot() {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
   if (state.authMode !== "none" && !state.user) return;
   if (!pageIsVisible()) return;
   if (!activeSource()) return;
@@ -2178,6 +2335,7 @@ function pollSnapshot() {
   fetchSnapshotForActive();
 }
 async function pollActivity() {
+  if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
   if (state.authMode !== "none" && !state.user) return;
   if (!pageIsVisible()) return;
   const source = activeSource();
@@ -3017,6 +3175,10 @@ function pickJsonFile() {
 async function applyRemoteJsonPayload(raw, label) {
   const payloadKind = label.toLowerCase().includes("snapshot") ? "snapshot" : "config";
   if (isWorkspaceMode()) {
+    if (!hasAarnnUseAccess()) {
+      setToolStatus(`AARNN use authorisation is required before loading ${label.toLowerCase()}.`);
+      return false;
+    }
     const workspace = getActiveWorkspaceMeta();
     if (!workspace) {
       setToolStatus(`Select a workspace before loading ${label.toLowerCase()}.`);
@@ -3312,6 +3474,10 @@ function buildAarnnHumanDefaults() {
 async function updateNetworkSettings(options = {}) {
   var _modelSelector$queryS2, _learningSelector$que2, _state$snapshot8;
   if (!activeSource()) return;
+  if (isWorkspaceMode() && !hasAarnnUseAccess()) {
+    setToolStatus("AARNN use authorisation is required to update workspace settings.");
+    return;
+  }
   const forceBaseline = options.forceBaseline === true;
   const activeModel = (_modelSelector$queryS2 = modelSelector.querySelector("button.active")) === null || _modelSelector$queryS2 === void 0 ? void 0 : _modelSelector$queryS2.dataset.model;
   const activeLearning = (_learningSelector$que2 = learningSelector.querySelector("button.active")) === null || _learningSelector$que2 === void 0 ? void 0 : _learningSelector$que2.dataset.learning;
@@ -4184,6 +4350,10 @@ resetBioBtn.addEventListener("click", () => {
 });
 async function exportModel(format) {
   if (isWorkspaceMode()) {
+    if (!hasAarnnObserveAccess()) {
+      setToolStatus("AARNN observation authorisation is required to export a workspace.");
+      return;
+    }
     const workspace = getActiveWorkspaceMeta();
     if (!workspace) return;
     const url = `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/export?format=${encodeURIComponent(format)}`;
