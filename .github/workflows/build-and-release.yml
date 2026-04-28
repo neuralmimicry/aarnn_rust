@@ -71,7 +71,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $UBUNTU_NATIVE_BUILD_DEPS
+          sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -193,7 +193,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends $UBUNTU_NATIVE_BUILD_DEPS
+          apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Install Rust toolchain
         shell: bash
@@ -250,7 +250,7 @@ jobs:
           deb_path="$(readlink -f "$deb_path")"
 
           apt-get update
-          apt-get install -y "$deb_path"
+          apt-get install -y --allow-downgrades "$deb_path"
 
           test -x /usr/bin/aarnn_rust
           test -x /usr/bin/web_ui
