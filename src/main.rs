@@ -925,8 +925,7 @@ fn build_orchestrator_startup_networks(
 fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
     use crate::distributed::proto::{
         ControlUpdate, NetworkUpdateRequest, StatusRequest, control_update,
-        distributed_neuromorphic_client::DistributedNeuromorphicClient,
-        network_update_request,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
     };
     use tonic::Request;
 
@@ -949,7 +948,10 @@ fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
         "reset" => control_update::Action::Reset,
         "repeat" => control_update::Action::Repeat,
         "new" => control_update::Action::New,
-        other => anyhow::bail!("Unknown control action '{}'; accepted: start stop reset repeat new", other),
+        other => anyhow::bail!(
+            "Unknown control action '{}'; accepted: start stop reset repeat new",
+            other
+        ),
     };
 
     let detected_addr = autodetected_orchestrator_addr(args);

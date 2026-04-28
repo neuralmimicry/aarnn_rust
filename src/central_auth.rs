@@ -18,6 +18,8 @@ pub struct CentralSessionResponse {
     pub team_count: Option<i64>,
     pub pending_invitation_count: Option<i64>,
     pub is_admin: Option<bool>,
+    #[serde(default)]
+    pub service_access: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -33,6 +35,8 @@ pub struct CentralLoginResponse {
     pub team_count: Option<i64>,
     pub pending_invitation_count: Option<i64>,
     pub is_admin: Option<bool>,
+    #[serde(default)]
+    pub service_access: Value,
     pub sso_token: Option<String>,
     pub sso_expires_in: Option<i64>,
     pub access_token: Option<String>,

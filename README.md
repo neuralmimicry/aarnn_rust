@@ -136,6 +136,18 @@ When enabled, the web UI:
 - exposes `GET /api/tokens` and `GET /api/tokens/ledger`
 - debits shared user tokens for workspace create/import/start/repeat/step operations
 
+For backend-to-backend calls, prefer Customers-issued service-account bearer tokens. AARNN honours their explicit `service_access.aarnn` grants and does not apply the human authenticated fallback when the principal is a service account.
+
+### Gail mirrored LLM bridge
+
+The web UI now exposes `POST /api/llm/mirror` for Gail's mirrored LLM I/O bridge.
+
+- Present the Gail Customers-issued bearer token when calling the route from Gail or another backend service.
+- The route requires `service_access.aarnn: use`.
+- Each accepted mirrored exchange is written under `<runtime_root>/llm_mirror/<conversation_id>/`.
+- When `network_id` is supplied, AARNN translates the mirrored exchange into an AER batch and stimulates the selected network.
+- Candidate replies are currently a deliberately low-confidence bootstrap echo. Keep Gail on `llm_preferred` until decoded network-output replies are ready.
+
 ## Multi-Network Deployment Modes
 
 The runtime and distributed engine now carry an explicit deployment intent in
@@ -172,7 +184,7 @@ Useful CLI flags:
 --infrastructure-root /home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible
 ```
 
-Scheduling behavior:
+Scheduling behaviour:
 
 - `individual` keeps a network on one engine node.
 - `sharded` allows the existing layer-partitioning rebalance logic to split it across nodes.
@@ -201,7 +213,7 @@ NM_TRACEY_STATUS_FAILURE_BACKOFF_MS=2000
 ```
 
 If no explicit deployment modes are set, the distributed engine keeps its existing
-backward-compatible behavior and shards across worker nodes when orchestrated.
+backward-compatible behaviour and shards across worker nodes when orchestrated.
 
 Infrastructure autodetection:
 

@@ -10,7 +10,7 @@
     <header class="topbar">
       <div class="topbar-left">
         <div class="title">NeuralMimicry</div>
-        <div class="subtitle">Control surface matrix, auth flow, and API contract</div>
+        <div class="subtitle">Control surface matrix, authorisation flow, and API contract</div>
       </div>
       <div class="topbar-right">
         <a class="btn ghost small" href="/">Web UI</a>
@@ -27,7 +27,7 @@
         <p class="hero-subtitle">
           NeuralMimicry ships four complementary surfaces: the browser control surface, this documentation shell,
           Swagger for executable API requests, and the native egui dashboard. The matrix below defines how those
-          surfaces divide responsibility without drifting in language, branding, or runtime behavior.
+          surfaces divide responsibility without drifting in language, branding, or runtime behaviour.
         </p>
         <div class="hero-actions">
           <a class="btn" href="/">Open Web UI</a>
@@ -111,7 +111,7 @@
               <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
             </tr>
             <tr>
-              <td>Topology visualization</td>
+              <td>Topology visualisation</td>
               <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
               <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
               <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
@@ -150,11 +150,12 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">Auth Flow</div>
+        <div class="panel-title">Authorisation Flow</div>
         <div class="docs-list">
           <div>1. Call <code>GET /api/auth/mode</code> or use the session shell above to discover whether the server is running in <code>none</code>, <code>local</code>, or <code>oidc</code> mode.</div>
-          <div>2. In <code>local</code> mode, log in with <code>POST /api/login</code>. In <code>oidc</code> mode, begin browser login with <code>GET /auth/oidc/login</code>.</div>
-          <div>3. Protected API requests then use the same-origin <code>nm_session</code> cookie, which Swagger sends automatically.</div>
+          <div>2. In <code>local</code> mode, sign in with <code>POST /api/login</code>. In <code>oidc</code> mode, begin browser login with <code>GET /auth/oidc/login</code>.</div>
+          <div>3. Protected browser requests then use the same-origin <code>nm_session</code> cookie, which Swagger sends automatically, and must also satisfy the resolved <code>service_access.aarnn</code> grant.</div>
+          <div>4. Backend integrations may instead present a Customers-issued bearer token. <code>POST /api/llm/mirror</code> is designed for that service-account path.</div>
         </div>
         <pre><code>curl -s http://localhost:8080/api/auth/mode
 curl -s -X POST http://localhost:8080/api/login \
@@ -164,34 +165,57 @@ curl -s http://localhost:8080/api/status --cookie "nm_session=&lt;value&gt;"</co
       </section>
 
       <section class="panel">
+        <div class="panel-title">Service Access Tiers</div>
+        <div class="docs-list">
+          <div><strong><code>request</code></strong>: service discovery, token views, and user configuration.</div>
+          <div><strong><code>observe</code></strong>: runtime status, workspace detail, snapshots, activity, and export.</div>
+          <div><strong><code>use</code></strong>: create/import workspaces and run non-destructive workspace actions such as <code>start</code>, <code>repeat</code>, <code>save</code>, and <code>step</code>.</div>
+          <div><strong><code>control</code></strong>: destructive or supervisory actions such as workspace deletion, <code>stop</code>, <code>reset</code>, and <code>new</code>.</div>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-title">Endpoint Matrix</div>
         <table class="docs-table">
           <thead>
             <tr>
               <th>Method</th>
               <th>Path</th>
-              <th>Auth</th>
+              <th>Access</th>
               <th>Purpose</th>
             </tr>
           </thead>
           <tbody>
             <tr><td><span class="method get">GET</span></td><td><code>/api/openapi.json</code></td><td>No</td><td>Machine-readable OpenAPI schema.</td></tr>
             <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>No</td><td>Bootstrap default orchestrator config.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/auth/mode</code></td><td>No</td><td>Auth mode and local signup capability.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/auth/mode</code></td><td>No</td><td>Auth mode and local sign-up capability.</td></tr>
             <tr><td><span class="method get">GET</span></td><td><code>/api/me</code></td><td>No</td><td>Current session/user identity.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/login</code></td><td>No</td><td>Local username/password login.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/login</code></td><td>No</td><td>Local username/password sign-in.</td></tr>
             <tr><td><span class="method post">POST</span></td><td><code>/api/signup</code></td><td>No</td><td>Create a local account when enabled.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/logout</code></td><td>Cookie</td><td>Clear the active session.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/user/config</code></td><td>Cookie</td><td>Read per-user persisted browser UI state.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/user/config</code></td><td>Cookie</td><td>Persist browser UI state.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/status</code></td><td>Cookie</td><td>Cluster and network status snapshot.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/snapshot</code></td><td>Cookie</td><td>Full network snapshot JSON.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/activity</code></td><td>Cookie</td><td>Latest spike activity vectors.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/update_network</code></td><td>Cookie</td><td>Apply config JSON or full snapshot JSON to a managed network.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/control_network</code></td><td>Cookie</td><td>Start, stop, repeat, reset, or create a new network.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/inject</code></td><td>Cookie</td><td>Inject a single AER exchange or spike index frame.</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/stream</code></td><td>Cookie</td><td>Stream NDJSON AER frames over HTTP.</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/export</code></td><td>Cookie</td><td>Export the active network to NeuroML, PyNN, NIR, ONNX, or TFLite.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/logout</code></td><td>Session</td><td>Clear the active session.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/tokens</code></td><td>AARNN <code>request</code></td><td>Read token balance and linked commercial URLs.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/tokens/ledger</code></td><td>AARNN <code>request</code></td><td>Read token ledger history.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/user/config</code></td><td>AARNN <code>request</code></td><td>Read per-user persisted browser UI state.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/user/config</code></td><td>AARNN <code>request</code></td><td>Persist browser UI state.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/status</code></td><td>AARNN <code>observe</code></td><td>Read workspace runtime status and autoscaler context.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces</code></td><td>AARNN <code>observe</code></td><td>List the caller's workspaces.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces</code></td><td>AARNN <code>use</code></td><td>Create a new workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}</code></td><td>AARNN <code>observe</code></td><td>Read a workspace summary and runtime detail.</td></tr>
+            <tr><td><span class="method delete">DELETE</span></td><td><code>/api/runtime/workspaces/{workspace_id}</code></td><td>AARNN <code>control</code></td><td>Delete a workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/snapshot</code></td><td>AARNN <code>observe</code></td><td>Read the latest saved workspace snapshot.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/activity</code></td><td>AARNN <code>observe</code></td><td>Read live workspace activity vectors.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces/{workspace_id}/control</code></td><td>AARNN <code>use</code> or <code>control</code></td><td>Run workspace lifecycle actions. Destructive actions require <code>control</code>.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces/{workspace_id}/import</code></td><td>AARNN <code>use</code></td><td>Import config or snapshot payloads into a workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/export</code></td><td>AARNN <code>observe</code></td><td>Export the active workspace to NeuroML, PyNN, NIR, ONNX, or TFLite.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/status</code></td><td>Disabled for authenticated sessions</td><td>Cluster and network status snapshot.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/snapshot</code></td><td>Disabled for authenticated sessions</td><td>Full network snapshot JSON.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/activity</code></td><td>Disabled for authenticated sessions</td><td>Latest spike activity vectors.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/update_network</code></td><td>Disabled for authenticated sessions</td><td>Apply config JSON or full snapshot JSON to a managed network.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/control_network</code></td><td>Disabled for authenticated sessions</td><td>Start, stop, repeat, reset, or create a new network.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/inject</code></td><td>Disabled for authenticated sessions</td><td>Inject a single AER exchange or spike index frame.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/stream</code></td><td>Disabled for authenticated sessions</td><td>Stream NDJSON AER frames over HTTP.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/llm/mirror</code></td><td>AARNN <code>use</code></td><td>Mirror Gail exchanges into persisted AER stimuli and return an optional bootstrap candidate reply.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/export</code></td><td>Disabled for authenticated sessions</td><td>Export the active network to NeuroML, PyNN, NIR, ONNX, or TFLite.</td></tr>
             <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/login</code></td><td>No</td><td>Start OIDC browser login.</td></tr>
             <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/callback</code></td><td>No</td><td>OIDC callback route.</td></tr>
             <tr><td><span class="method post">POST</span></td><td><code>/auth/oidc/exchange</code></td><td>No</td><td>Token-to-session exchange.</td></tr>
@@ -209,6 +233,7 @@ curl -s http://localhost:8080/api/status --cookie "nm_session=&lt;value&gt;"</co
       </section>
     </main>
 
+    <script src="/service-access.js"></script>
     <script src="/shell.js"></script>
   </body>
 </html>
