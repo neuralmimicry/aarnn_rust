@@ -2322,6 +2322,37 @@ impl App {
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
+                                    snap.sim_step = r.t as u64;
+                                    snap.sim_time_ms = r.t_ms;
+                                    snap.dt_ms = r.lif.dt;
+                                    if snap.v_h.len() != r.v_h.len() {
+                                        snap.v_h.resize_with(r.v_h.len(), Vec::new);
+                                    }
+                                    for (dst, src) in snap.v_h.iter_mut().zip(r.v_h.iter()) {
+                                        if dst.len() != src.len() {
+                                            dst.resize(src.len(), 0.0);
+                                        }
+                                        for (d, s) in dst.iter_mut().zip(src.iter()) {
+                                            *d = *s as f32;
+                                        }
+                                    }
+                                    if snap.v_o.len() != r.v_o.len() {
+                                        snap.v_o.resize(r.v_o.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.v_o.iter_mut().zip(r.v_o.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    if snap.x_pre_in.len() != r.x_pre_in.len() {
+                                        snap.x_pre_in.resize(r.x_pre_in.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.x_pre_in.iter_mut().zip(r.x_pre_in.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    if r.t % 100 == 0 {
+                                        let (lt, tot) = r.calculate_longterm_connections();
+                                        snap.longterm_conn = lt;
+                                        snap.total_conn = tot;
+                                    }
                                     #[cfg(feature = "growth3d")]
                                     {
                                         if r.net.growth_enabled {
@@ -2393,6 +2424,40 @@ impl App {
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
+                                    snap.sim_step = r.t as u64;
+                                    snap.sim_time_ms = r.t_ms;
+                                    snap.dt_ms = r.lif.dt;
+                                    // Membrane potentials: copy as f32 for probe display.
+                                    if snap.v_h.len() != r.v_h.len() {
+                                        snap.v_h.resize_with(r.v_h.len(), Vec::new);
+                                    }
+                                    for (dst, src) in snap.v_h.iter_mut().zip(r.v_h.iter()) {
+                                        if dst.len() != src.len() {
+                                            dst.resize(src.len(), 0.0);
+                                        }
+                                        for (d, s) in dst.iter_mut().zip(src.iter()) {
+                                            *d = *s as f32;
+                                        }
+                                    }
+                                    if snap.v_o.len() != r.v_o.len() {
+                                        snap.v_o.resize(r.v_o.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.v_o.iter_mut().zip(r.v_o.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    // Sensory eligibility traces.
+                                    if snap.x_pre_in.len() != r.x_pre_in.len() {
+                                        snap.x_pre_in.resize(r.x_pre_in.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.x_pre_in.iter_mut().zip(r.x_pre_in.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    // Long-term connection stats: expensive scan, only every 100 steps.
+                                    if r.t % 100 == 0 {
+                                        let (lt, tot) = r.calculate_longterm_connections();
+                                        snap.longterm_conn = lt;
+                                        snap.total_conn = tot;
+                                    }
                                     #[cfg(feature = "growth3d")]
                                     {
                                         if r.net.growth_enabled {
@@ -5101,6 +5166,79 @@ impl App {
         }
     }
 
+    /// Update probes using the lock-free `UiSnapshot`.
+    ///
+    /// Handles Spike and Membrane probes from snapshot data.  Current probes
+    /// that need weight matrices are skipped (produce NaN) when the runner lock
+    /// is unavailable – this is acceptable since probes are purely decorative.
+    fn update_probes_from_ui_snapshot(&mut self, snap: &UiSnapshot) {
+        if self.scope_paused {
+            return;
+        }
+        let dt = (snap.dt_ms as f32).max(0.001);
+        let desired_cap = ((self.scope_time_ms / dt).ceil() as usize).clamp(100, 20000);
+        let bands_guard = self.spectral_bands.try_read().ok();
+        let samples: Vec<f32> = self
+            .probes
+            .iter()
+            .map(|p| {
+                if !p.enabled {
+                    return f32::NAN;
+                }
+                match (p.kind, p.target) {
+                    (ProbeKind::Spike, ProbeTarget::Sensory(i)) => snap
+                        .sensory_spikes
+                        .get(i)
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Spike, ProbeTarget::Hidden(l, j)) => snap
+                        .hidden_spikes
+                        .get(l)
+                        .and_then(|a| a.get(j))
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Spike, ProbeTarget::Output(k)) => snap
+                        .output_spikes
+                        .get(k)
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Membrane, ProbeTarget::Hidden(l, j)) => snap
+                        .v_h
+                        .get(l)
+                        .and_then(|a| a.get(j))
+                        .copied()
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Membrane, ProbeTarget::Output(k)) => {
+                        snap.v_o.get(k).copied().unwrap_or(f32::NAN)
+                    }
+                    (ProbeKind::Level, ProbeTarget::Band(b)) => bands_guard
+                        .as_deref()
+                        .and_then(|bands| bands.get(b).copied())
+                        .unwrap_or(f32::NAN),
+                    // Current probes require weight matrices not held in snapshot.
+                    // Return NAN rather than stalling on the runner lock.
+                    _ => f32::NAN,
+                }
+            })
+            .collect();
+        for (idx, val) in samples.into_iter().enumerate() {
+            let pr = &mut self.probes[idx];
+            if !pr.enabled {
+                continue;
+            }
+            if pr.capacity != desired_cap {
+                pr.data.clear();
+                pr.data.resize(desired_cap, 0.0);
+                pr.capacity = desired_cap;
+                pr.write_idx = 0;
+            }
+            pr.push(val);
+        }
+    }
+
     #[cfg(all(feature = "robot_io", unix))]
     fn apply_ipc_config(&mut self, handshake: IpcHandshake) {
         self.ipc_last_handshake = Some(handshake.clone());
@@ -5429,6 +5567,22 @@ struct UiSnapshot {
     num_sensory: usize,
     num_hidden_layers: usize,
     num_output: usize,
+    /// Membrane potentials per hidden layer (f32 for display only).
+    v_h: Vec<Vec<f32>>,
+    /// Output membrane potentials.
+    v_o: Vec<f32>,
+    /// Sensory eligibility traces (x_pre_in) for activity visualisation.
+    x_pre_in: Vec<f32>,
+    /// Simulation step counter from runner.t.
+    sim_step: u64,
+    /// Simulation wall-clock in ms from runner.t_ms.
+    sim_time_ms: f64,
+    /// LIF dt (ms) – needed for probe buffer capacity calculation.
+    dt_ms: f64,
+    /// Long-term connection count, refreshed every ~100 sim steps.
+    longterm_conn: usize,
+    /// Total connection count, refreshed alongside longterm_conn.
+    total_conn: usize,
     #[cfg(feature = "growth3d")]
     topo_sensory: Vec<crate::topology::Node3D>,
     #[cfg(feature = "growth3d")]
@@ -7441,98 +7595,114 @@ impl eframe::App for App {
         }
 
         // --- 1. Simulation Monitoring & Activity Pull ---
+        // Read exclusively from the lock-free UiSnapshot so the UI thread never
+        // competes with the sim thread's write lock.  The snapshot is populated by
+        // the sim thread after every step and includes spikes, membrane potentials,
+        // eligibility traces, and (every 100 steps) connection statistics.
         if matches!(self.view_source, ViewSource::Standalone) {
-            if let Ok(r) = runner_arc.try_read() {
-                let (lt, tot) = r.calculate_longterm_connections();
-                self.sync_activity_from_standalone(&r);
-                self.update_probes_from_standalone(&r);
-                self.longterm_conn = lt;
-                self.total_conn = tot;
-                self.last_longterm_update = std::time::Instant::now();
+            // Decay existing activity each frame; active neurons will be set to 1.0 below.
+            let decay = 0.95f32;
+            for v in &mut self.sensory_activity {
+                *v *= decay;
+            }
+            for layer in &mut self.hidden_activity {
+                for v in layer {
+                    *v *= decay;
+                }
+            }
+            for v in &mut self.output_activity {
+                *v *= decay;
+            }
+
+            // Collect all snapshot data into owned values; the RwLockReadGuard
+            // is dropped at the end of this block, before any &mut self call.
+            let snap_clone: Option<UiSnapshot> = if let Ok(snap) = self.ui_snapshot.try_read() {
+                // Sensory: prefer eligibility traces; fall back to spike flags.
+                if !snap.x_pre_in.is_empty() {
+                    if self.sensory_activity.len() != snap.x_pre_in.len() {
+                        self.sensory_activity.resize(snap.x_pre_in.len(), 0.0);
+                    }
+                    for (i, &tr) in snap.x_pre_in.iter().enumerate() {
+                        if tr > 0.1 {
+                            self.sensory_activity[i] = 1.0;
+                        }
+                    }
+                } else if !snap.sensory_spikes.is_empty() {
+                    if self.sensory_activity.len() != snap.sensory_spikes.len() {
+                        self.sensory_activity.resize(snap.sensory_spikes.len(), 0.0);
+                    }
+                    for (i, &sv) in snap.sensory_spikes.iter().enumerate() {
+                        if sv != 0 {
+                            self.sensory_activity[i] = 1.0;
+                        }
+                    }
+                }
+                if !snap.sensory_spikes.is_empty() {
+                    self.last_sensory_spikes = snap.sensory_spikes.clone();
+                }
+
+                // Hidden layers.
+                let layers = snap.hidden_spikes.len();
+                self.hidden_activity.resize(layers, Vec::new());
+                self.previous_hidden_spikes.resize(layers, Vec::new());
+                for (li, spk) in snap.hidden_spikes.iter().enumerate() {
+                    if self.hidden_activity[li].len() != spk.len() {
+                        self.hidden_activity[li] = vec![0.0; spk.len()];
+                    }
+                    if self.previous_hidden_spikes[li].len() != spk.len() {
+                        self.previous_hidden_spikes[li] = vec![0; spk.len()];
+                    }
+                    for j in 0..spk.len() {
+                        if spk[j] != 0 {
+                            self.hidden_activity[li][j] = 1.0;
+                            self.previous_hidden_spikes[li][j] = 1;
+                        } else {
+                            self.previous_hidden_spikes[li][j] = 0;
+                        }
+                    }
+                }
+
+                // Output + raster.
+                let num_out = snap.output_spikes.len();
+                if self.output_activity.len() != num_out {
+                    self.output_activity.resize(num_out, 0.0);
+                }
+                let mut col = vec![0i8; num_out];
+                let mut any_out = false;
+                for (k, &sv) in snap.output_spikes.iter().enumerate() {
+                    if sv != 0 {
+                        self.output_activity[k] = 1.0;
+                        col[k] = 1;
+                        any_out = true;
+                    }
+                }
+                if any_out || (snap.sim_step % 5 == 0) {
+                    self.raster_outputs.push_back(col);
+                    if self.raster_outputs.len() > self.raster_cols {
+                        self.raster_outputs.pop_front();
+                    }
+                }
+
+                // Connection statistics (refreshed every 100 steps in sim thread).
+                if snap.total_conn > 0 || snap.longterm_conn > 0 {
+                    self.longterm_conn = snap.longterm_conn;
+                    self.total_conn = snap.total_conn;
+                    self.last_longterm_update = std::time::Instant::now();
+                }
+
+                // Status line.
+                self.status =
+                    format!("Watching Standalone: t={} ms", snap.sim_time_ms as i64);
+
+                Some(snap.clone())
+                // snap (RwLockReadGuard) is dropped here — before the mutable call below
             } else {
-                // If locked by simulation, just decay current UI activity to keep it smooth.
-                let decay = 0.95f32;
-                for v in &mut self.sensory_activity {
-                    *v *= decay;
-                }
-                for layer in &mut self.hidden_activity {
-                    for v in layer {
-                        *v *= decay;
-                    }
-                }
-                for v in &mut self.output_activity {
-                    *v *= decay;
-                }
-                let snap_opt = self
-                    .sensory_spikes_snapshot
-                    .try_read()
-                    .ok()
-                    .map(|s| s.clone());
-                if let Some(snap) = snap_opt {
-                    if !snap.is_empty() {
-                        if self.sensory_activity.len() != snap.len() {
-                            self.sensory_activity.resize(snap.len(), 0.0);
-                        }
-                        self.last_sensory_spikes = snap.clone();
-                        for (i, &sv) in snap.iter().enumerate() {
-                            if sv != 0 {
-                                self.sensory_activity[i] = 1.0;
-                            }
-                        }
-                        self.update_probes_from_snapshot(lif_cloned.dt as f32, snap.as_slice());
-                        self.status = format!(
-                            "Input spikes: {}/{}",
-                            snap.iter().filter(|&&v| v != 0).count(),
-                            snap.len()
-                        );
-                    }
-                }
-                let ui_snap_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
-                if let Some(snap) = ui_snap_opt {
-                    if !snap.hidden_spikes.is_empty() {
-                        self.hidden_activity
-                            .resize(snap.hidden_spikes.len(), Vec::new());
-                        self.previous_hidden_spikes
-                            .resize(snap.hidden_spikes.len(), Vec::new());
-                        for (li, spk) in snap.hidden_spikes.iter().enumerate() {
-                            if self.hidden_activity[li].len() != spk.len() {
-                                self.hidden_activity[li] = vec![0.0; spk.len()];
-                            }
-                            if self.previous_hidden_spikes[li].len() != spk.len() {
-                                self.previous_hidden_spikes[li] = vec![0; spk.len()];
-                            }
-                            for j in 0..spk.len() {
-                                if spk[j] != 0 {
-                                    self.hidden_activity[li][j] = 1.0;
-                                    self.previous_hidden_spikes[li][j] = 1;
-                                } else {
-                                    self.previous_hidden_spikes[li][j] = 0;
-                                }
-                            }
-                        }
-                    }
-                    if !snap.output_spikes.is_empty() {
-                        if self.output_activity.len() != snap.output_spikes.len() {
-                            self.output_activity.resize(snap.output_spikes.len(), 0.0);
-                        }
-                        let mut col = vec![0i8; snap.output_spikes.len()];
-                        let mut any = false;
-                        for (k, &sv) in snap.output_spikes.iter().enumerate() {
-                            if sv != 0 {
-                                self.output_activity[k] = 1.0;
-                                col[k] = 1;
-                                any = true;
-                            }
-                        }
-                        let step = self.sim_step_counter.load(Ordering::Relaxed) as usize;
-                        if any || (step % 5 == 0) {
-                            self.raster_outputs.push_back(col);
-                            if self.raster_outputs.len() > self.raster_cols {
-                                self.raster_outputs.pop_front();
-                            }
-                        }
-                    }
-                }
+                None
+            };
+
+            // Probe oscilloscope update outside the guard scope.
+            if let Some(sc) = snap_clone {
+                self.update_probes_from_ui_snapshot(&sc);
             }
         } else {
             self.pull_activity();
