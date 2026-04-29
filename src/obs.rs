@@ -304,6 +304,23 @@ macro_rules! nm_log {
     };
 }
 
+/// Spin-yield until a Tokio `RwLock` write-guard is obtained.
+///
+/// Unlike `blocking_write()`, this loop never registers writer intent while
+/// waiting, so concurrent `try_read()` calls from the UI thread can still
+/// succeed in the interim.  Call only from blocking (non-async) contexts.
+#[macro_export]
+macro_rules! sim_write_spin {
+    ($lock:expr) => {{
+        loop {
+            if let Ok(g) = $lock.try_write() {
+                break g;
+            }
+            std::thread::yield_now();
+        }
+    }};
+}
+
 /// Macro for logging to stderr, suppressed if SILENT is set.
 #[macro_export]
 macro_rules! nm_err {

@@ -1863,43 +1863,43 @@ impl App {
                                 }
                             }
                             SimControl::ApplyConfig(cfg) => {
-                                sim_runner.blocking_write().apply_config(cfg);
+                                sim_write_spin!(sim_runner).apply_config(cfg);
                             }
                             SimControl::SetModel(m) => {
-                                sim_runner.blocking_write().set_model(m);
+                                sim_write_spin!(sim_runner).set_model(m);
                             }
                             SimControl::SetLearning(l) => {
-                                sim_runner.blocking_write().set_learning(l);
+                                sim_write_spin!(sim_runner).set_learning(l);
                             }
                             SimControl::Reset => {
-                                sim_runner.blocking_write().reset();
+                                sim_write_spin!(sim_runner).reset();
                             }
                             SimControl::SetDt(dt) => {
-                                sim_runner.blocking_write().set_dt(dt);
+                                sim_write_spin!(sim_runner).set_dt(dt);
                                 sim_provider.set_dt(dt as f32);
                             }
                             SimControl::ResizeSensory(n) => {
-                                sim_runner.blocking_write().resize_sensory(n);
+                                sim_write_spin!(sim_runner).resize_sensory(n);
                                 sim_provider.set_num_sensory_neurons(n);
                             }
                             SimControl::ResizeOutput(n) => {
-                                sim_runner.blocking_write().resize_output(n);
+                                sim_write_spin!(sim_runner).resize_output(n);
                             }
                             SimControl::SetFeedback(f) => {
-                                sim_runner.blocking_write().feedback_enabled = f;
+                                sim_write_spin!(sim_runner).feedback_enabled = f;
                             }
                             SimControl::RecreateRunner(lif, stdp, net, model, learning) => {
-                                *sim_runner.blocking_write() =
+                                *sim_write_spin!(sim_runner) =
                                     Runner::new(lif, stdp, net, model, learning);
                             }
                             SimControl::ImportNetwork(json) => {
-                                let _ = sim_runner.blocking_write().import_network_json(&json);
+                                let _ = sim_write_spin!(sim_runner).import_network_json(&json);
                                 if let Ok(r) = sim_runner.try_read() {
                                     sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
                                 }
                             }
                             SimControl::ImportNetworkWithReply(json, tx) => {
-                                let res = sim_runner.blocking_write().import_network_json(&json);
+                                let res = sim_write_spin!(sim_runner).import_network_json(&json);
                                 if let Ok(ref r) = sim_runner.try_read() {
                                     sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
                                     nm_log!(
@@ -1913,7 +1913,7 @@ impl App {
                                 let _ = tx.send(res.map_err(|e| e.to_string()));
                             }
                             SimControl::SetStdpEta(eta) => {
-                                sim_runner.blocking_write().stdp.eta = eta;
+                                sim_write_spin!(sim_runner).stdp.eta = eta;
                             }
                             #[cfg(all(feature = "robot_io", unix))]
                             SimControl::BindIpc(path, s, o) => {
@@ -2092,15 +2092,14 @@ impl App {
                     }
 
                     if sim_playing.load(Ordering::SeqCst) || spikes_source.is_some() {
-                        let batch_steps: usize = {
-                            let r = sim_runner.blocking_read();
+                        // Use try_read to avoid ever blocking the sim thread on lock contention.
+                        // Fall back to sim_batch_steps if the runner is momentarily locked.
+                        let batch_steps: usize = if let Ok(r) = sim_runner.try_read() {
                             let many_layers = r.net.num_hidden_layers > 32;
                             let many_neurons = r.total_neurons() > 5000;
-                            if many_layers || many_neurons {
-                                1
-                            } else {
-                                sim_batch_steps
-                            }
+                            if many_layers || many_neurons { 1 } else { sim_batch_steps }
+                        } else {
+                            sim_batch_steps
                         };
                         if spikes_source.is_some() || ipc_dt.is_some() {
                             #[cfg(all(feature = "robot_io", unix))]
@@ -14130,10 +14129,9 @@ impl eframe::App for App {
                                     detail_managed_guard = Some(guard);
                                     Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 } else {
-                                    let guard =
-                                        detail_managed_arc.as_ref().unwrap().blocking_read();
-                                    detail_managed_guard = Some(guard);
-                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
+                                    // Network is busy; skip detail panel this frame
+                                    // rather than blocking the UI event loop.
+                                    None
                                 }
                             } else {
                                 None
