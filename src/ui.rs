@@ -2439,10 +2439,16 @@ impl App {
                                         }
                                     }
                                     update_ui_snapshot(&r);
+                                    // Write lock is dropped here at end of this block.
+                                    // Yield between batch steps so the UI event loop and
+                                    // any pending try_read() callers can proceed.
                                 } else {
                                     std::thread::sleep(std::time::Duration::from_millis(1));
                                     break;
                                 }
+                                // Explicitly yield after each step within a batch so the UI
+                                // thread gets a window to acquire the read lock between steps.
+                                std::thread::yield_now();
                             }
                             if let Some(bands) = last_bands {
                                 if let Ok(mut b) = sim_spectral.try_write() {
@@ -13935,9 +13941,14 @@ impl eframe::App for App {
             let mut detail_standalone_guard = None;
             let active_runner_opt: Option<&Runner> = match &self.view_source {
                 ViewSource::Standalone | ViewSource::ClusterGlobal(_) => {
-                    let guard = detail_runner_arc.blocking_read();
-                    detail_standalone_guard = Some(guard);
-                    Some(&*detail_standalone_guard.as_ref().unwrap())
+                    if let Ok(guard) = detail_runner_arc.try_read() {
+                        detail_standalone_guard = Some(guard);
+                        Some(&*detail_standalone_guard.as_ref().unwrap())
+                    } else {
+                        // Runner is busy with a simulation step; skip detail panel this frame
+                        // rather than blocking the UI event loop.
+                        None
+                    }
                 }
                 ViewSource::LocalManaged(id) => {
                     if let Some(state_arc) = state_arc.as_ref() {

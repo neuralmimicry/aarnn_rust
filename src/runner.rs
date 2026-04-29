@@ -1027,18 +1027,18 @@ fn sim_parallel_env() -> &'static SimParallelEnv {
             .unwrap_or(1024)
             .max(1),
         light_threshold_cold: parse_env_usize("NM_SIM_PAR_LIGHT_COLD")
-            .unwrap_or(96)
+            .unwrap_or(512)
             .max(2),
-        light_threshold_hot: parse_env_usize("NM_SIM_PAR_LIGHT_HOT").unwrap_or(12).max(2),
+        light_threshold_hot: parse_env_usize("NM_SIM_PAR_LIGHT_HOT").unwrap_or(64).max(2),
         heavy_threshold_cold: parse_env_usize("NM_SIM_PAR_HEAVY_COLD")
-            .unwrap_or(256)
+            .unwrap_or(1024)
             .max(2),
-        heavy_threshold_hot: parse_env_usize("NM_SIM_PAR_HEAVY_HOT").unwrap_or(32).max(2),
+        heavy_threshold_hot: parse_env_usize("NM_SIM_PAR_HEAVY_HOT").unwrap_or(128).max(2),
         matrix_ops_threshold_cold: parse_env_usize("NM_SIM_PAR_MATRIX_COLD")
-            .unwrap_or(32_768)
+            .unwrap_or(65_536)
             .max(1),
         matrix_ops_threshold_hot: parse_env_usize("NM_SIM_PAR_MATRIX_HOT")
-            .unwrap_or(2_048)
+            .unwrap_or(4_096)
             .max(1),
     })
 }
@@ -11126,6 +11126,16 @@ impl Runner {
                                     .for_each(|(j, mut row)| {
                                         let post = if last_spk_h0[j] != 0 { 1.0 } else { 0.0 };
                                         let x_post = x_post_h0[j];
+                                        // Skip rows where neither the post-synaptic neuron fired
+                                        // nor has a meaningful eligibility trace, and learning
+                                        // is not unconditional (Hebb/Oja). This avoids touching
+                                        // cache lines for the ~95% of inactive neurons each step.
+                                        if post == 0.0
+                                            && x_post <= 1e-6
+                                            && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                        {
+                                            return;
+                                        }
                                         if post != 0.0 {
                                             for i in 0..num_sensory_neurons {
                                                 let pre =
@@ -11215,6 +11225,12 @@ impl Runner {
                             .for_each(|(j, mut row)| {
                                 let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
                                 let x_post = x_post_next[j];
+                                if post == 0.0
+                                    && x_post <= 1e-6
+                                    && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                {
+                                    return;
+                                }
                                 for i in 0..num_current_layer_neurons {
                                     let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
                                     let dw = match learning {
@@ -11237,6 +11253,12 @@ impl Runner {
                             .for_each(|(i, mut row)| {
                                 let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
                                 let x_post = x_post_cur[i];
+                                if pre == 0.0
+                                    && x_post <= 1e-6
+                                    && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                {
+                                    return;
+                                }
                                 for j in 0..num_next_layer_neurons {
                                     let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
                                     let dw = match learning {
@@ -11490,6 +11512,12 @@ impl Runner {
                                 .for_each(|(k, mut row)| {
                                     let post = if last_spk_o[k] != 0 { 1.0 } else { 0.0 };
                                     let x_post = x_post_o[k];
+                                    if post == 0.0
+                                        && x_post <= 1e-6
+                                        && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                    {
+                                        return;
+                                    }
                                     for j in 0..num_last_layer_neurons {
                                         let pre = if last_spk_h_last[j] != 0 { 1.0 } else { 0.0 };
                                         let dw = match learning {
