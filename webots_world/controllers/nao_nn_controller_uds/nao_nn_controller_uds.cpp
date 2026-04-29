@@ -232,11 +232,11 @@ public:
       tx_queue_.pop_front();
 
       const bool use_aer = should_use_aer(frame.payload);
-      std::vector<uint8_t> aer_payload;
       const char* send_data = nullptr;
       size_t nbytes = 0;
       if (use_aer) {
-        aer_payload = encode_aer_payload(frame.payload, aer_runtime_packet_bytes_);
+        const std::vector<uint8_t>& aer_payload =
+          encode_aer_payload(frame.payload, aer_runtime_packet_bytes_);
         send_data = reinterpret_cast<const char*>(aer_payload.data());
         nbytes = aer_payload.size();
       } else {
@@ -340,12 +340,14 @@ private:
     return raw_bytes > (size_t)max_raw_payload_bytes_;
   }
 
-  std::vector<uint8_t> encode_aer_payload(
+  const std::vector<uint8_t>& encode_aer_payload(
     const std::vector<float>& payload,
     int packet_budget_bytes
   ) {
     // AER wire format: "AER1" + base_ts_us(u64 LE) + varint(delta_ts, addr, value)...
-    std::vector<uint8_t> out;
+    // aer_out_buf_ is a member reused across calls to avoid per-send heap allocation.
+    std::vector<uint8_t>& out = aer_out_buf_;
+    out.clear();
     out.reserve(64);
     out.push_back('A');
     out.push_back('E');
@@ -478,7 +480,12 @@ private:
   }
 
   int drain_replies(std::vector<float>& rep_out, double now_s, bool& have_reply) {
-    std::vector<char> buf(rep_out.size() * sizeof(float));
+    // Resize recv_buf_ once; avoids per-call heap allocation on the hot path.
+    const size_t expected_bytes = rep_out.size() * sizeof(float);
+    if (recv_buf_.size() != expected_bytes) {
+      recv_buf_.resize(expected_bytes);
+    }
+    std::vector<char>& buf = recv_buf_;
     constexpr int kMaxDrains = 32;
     for (int i = 0; i < kMaxDrains; ++i) {
       struct sockaddr_un from{};
@@ -536,6 +543,8 @@ private:
   std::deque<InflightFrame> inflight_;
   std::string server_path_;
   struct sockaddr_un server_{};
+  std::vector<char> recv_buf_;       // reused across drain_replies() calls
+  std::vector<uint8_t> aer_out_buf_; // reused across encode_aer_payload() calls
 };
 
 struct BrainInstance {
@@ -564,6 +573,7 @@ struct BrainInstance {
     // Buffers for this specific brain
     std::vector<float> s_buf;
     std::vector<float> a_buf;
+    std::vector<float> req_buf;  // reused request frame: [dt_ms, s0, s1, ...]
     std::vector<std::string> s_names;
     std::vector<std::string> o_names;
 };
@@ -861,6 +871,7 @@ int main(int argc, char** argv) {
 
         b.s_buf.assign(b.s_names.size(), 0.0f);
         b.a_buf.assign(b.o_names.size(), 0.5f);
+        b.req_buf.assign(1 + b.s_names.size(), 0.0f); // [dt_ms] + s_buf; pre-allocated
         
         b.cli = std::make_unique<UdsClient>(b.sock_path);
         std::cout << "[nao_nn_controller_uds] Brain '" << b.id << "': S=" << b.s_names.size() << " O=" << b.o_names.size() << " socket=" << b.sock_path << std::endl;
@@ -944,13 +955,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // Request frame: [t_ms] + [S floats]
-            std::vector<float> req;
-            req.reserve(1 + b.s_buf.size());
-            req.push_back(ipc_dt_ms);
-            req.insert(req.end(), b.s_buf.begin(), b.s_buf.end());
+            // Request frame: [t_ms] + [S floats] — reuse pre-allocated req_buf.
+            b.req_buf[0] = ipc_dt_ms;
+            std::copy(b.s_buf.begin(), b.s_buf.end(), b.req_buf.begin() + 1);
 
-            if (b.cli->xfer(req, b.a_buf, now)) {
+            if (b.cli->xfer(b.req_buf, b.a_buf, now)) {
                 if (!b.connected) {
                     std::cout << "[nao_nn_controller_uds] Brain '" << b.id << "': Connected." << std::endl;
                 }
