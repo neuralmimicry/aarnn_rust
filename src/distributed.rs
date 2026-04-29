@@ -3866,36 +3866,43 @@ impl DistributedNode {
                 }
                 any_playing = true;
 
-                // Sync remote spikes into runner before stepping
+                // Sync remote spikes into runner before stepping.
+                // Use copy_from_slice instead of Array1::from_vec to reuse the existing
+                // allocation and avoid per-step heap allocation on the hot path.
                 let fwd_spikes = std::mem::take(&mut net.remote_spikes_fwd);
                 for (l, spikes) in fwd_spikes {
-                    if (l as usize) < net.runner.last_spk_h.len() {
-                        let sz = net.runner.layer_size(l as usize);
+                    let li = l as usize;
+                    if li < net.runner.last_spk_h.len() {
+                        let sz = net.runner.layer_size(li);
                         if spikes.len() == sz {
-                            net.runner.last_spk_h[l as usize] = ndarray::Array1::from_vec(spikes);
-                        } else {
-                            let mut arr = ndarray::Array1::zeros(sz);
-                            let n = sz.min(spikes.len());
-                            for i in 0..n {
-                                arr[i] = spikes[i];
+                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                                dst.copy_from_slice(&spikes);
                             }
-                            net.runner.last_spk_h[l as usize] = arr;
+                        } else {
+                            // Topology mismatch: resize-and-copy (rare path).
+                            let n = sz.min(spikes.len());
+                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                                dst[..n].copy_from_slice(&spikes[..n]);
+                                for v in dst[n..].iter_mut() { *v = 0; }
+                            }
                         }
                     }
                 }
                 let bwd_spikes = std::mem::take(&mut net.remote_spikes_bwd);
                 for (l, spikes) in bwd_spikes {
-                    if (l as usize) < net.runner.last_spk_h.len() {
-                        let sz = net.runner.layer_size(l as usize);
+                    let li = l as usize;
+                    if li < net.runner.last_spk_h.len() {
+                        let sz = net.runner.layer_size(li);
                         if spikes.len() == sz {
-                            net.runner.last_spk_h[l as usize] = ndarray::Array1::from_vec(spikes);
-                        } else {
-                            let mut arr = ndarray::Array1::zeros(sz);
-                            let n = sz.min(spikes.len());
-                            for i in 0..n {
-                                arr[i] = spikes[i];
+                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                                dst.copy_from_slice(&spikes);
                             }
-                            net.runner.last_spk_h[l as usize] = arr;
+                        } else {
+                            let n = sz.min(spikes.len());
+                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                                dst[..n].copy_from_slice(&spikes[..n]);
+                                for v in dst[n..].iter_mut() { *v = 0; }
+                            }
                         }
                     }
                 }

@@ -646,6 +646,18 @@ pub struct Runner {
     pub feedback_map: Vec<i32>,
     pub rng: fastrand::Rng,
 
+    // AARNN delay cache: pre-computed sensory-to-H0 delay steps (flat H0 × S, row-major).
+    // Avoids recomputing sqrt(distance) on every simulation step.
+    // `delay_cache_dirty` is set when topology, velocity, or dt changes.
+    #[cfg(feature = "growth3d")]
+    delay_cache_s_h0: Vec<u16>,
+    #[cfg(feature = "growth3d")]
+    delay_cache_n_h0: usize,
+    #[cfg(feature = "growth3d")]
+    delay_cache_n_s: usize,
+    #[cfg(feature = "growth3d")]
+    delay_cache_dirty: bool,
+
     // Morphology-driven routing caches (built only when morpho+growth3d)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub morph: Morphology,
@@ -3553,6 +3565,14 @@ impl Runner {
             feedback_enabled: false,
             feedback_map,
             rng: fastrand::Rng::new(),
+            #[cfg(feature = "growth3d")]
+            delay_cache_s_h0: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            delay_cache_n_h0: 0,
+            #[cfg(feature = "growth3d")]
+            delay_cache_n_s: 0,
+            #[cfg(feature = "growth3d")]
+            delay_cache_dirty: true,
             decay_m,
             decay_pre,
             decay_post,
@@ -4820,6 +4840,8 @@ impl Runner {
             if self.net.use_morphology {
                 self.rebuild_syn_maps_from_morph();
             }
+            // Velocity, delay flag, or topology may have changed.
+            self.delay_cache_dirty = true;
         }
         self.sync_presence_sizes();
     }
@@ -5003,6 +5025,9 @@ impl Runner {
             return;
         }
         self.lif.dt = dt;
+        // Delay steps depend on dt; invalidate cache.
+        #[cfg(feature = "growth3d")]
+        { self.delay_cache_dirty = true; }
         self.decay_m = (-dt / self.lif.tau_m).exp();
         self.decay_pre = (-dt / self.stdp.tau_pre).exp();
         self.decay_post = (-dt / self.stdp.tau_post).exp();
@@ -5347,6 +5372,9 @@ impl Runner {
                 self.rebuild_morphology();
             }
         }
+        // Sensory count changed → delay cache is stale.
+        #[cfg(feature = "growth3d")]
+        { self.delay_cache_dirty = true; }
     }
 
     /// Resize the number of output neurons at runtime.
@@ -6377,6 +6405,13 @@ impl Runner {
                 }
             }
         }
+        // Rebuild AARNN delay cache if topology, velocity, or dt changed since last step.
+        // Cost: O(H0×S) with sqrt, but amortised to zero on subsequent steps.
+        #[cfg(feature = "growth3d")]
+        if is_aarnn && self.net.use_aarnn_delays && self.delay_cache_dirty {
+            self.rebuild_delay_cache_s_h0();
+        }
+
         if self.is_layer_assigned(0) {
             observe_time!("Runner::step/i_h0");
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -6757,6 +6792,7 @@ impl Runner {
             }
 
             if !gpu_success {
+                observe_time!("Runner::step/i_h0/accum");
                 if can_parallel_light(num_hidden_0_neurons) {
                     // Parallel over postsynaptic neurons j. Accumulate directly into i_h0[j].
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -6830,29 +6866,18 @@ impl Runner {
                                     }
                                 } else if use_aarnn {
                                     if in_l == 0 {
-                                        // Legacy distance-based AARNN path when morphology disabled
-                                        #[allow(unused_variables)]
-                                        let vel = self.net.aarnn_velocity.max(0.0);
+                                        // Legacy AARNN path — use pre-computed delay cache
+                                        // instead of recomputing sqrt every step.
                                         for i in 0..self.net.num_sensory_neurons {
                                             #[cfg(feature = "growth3d")]
-                                            let dist = {
-                                                let snode = &self.topo.sensory_nodes[i];
-                                                if let Some(nodes0) = self.topo.layers.get(0) {
-                                                    if j < nodes0.len() {
-                                                        let dx = snode.x - nodes0[j].x; let dy = snode.y - nodes0[j].y; let dz = snode.z - nodes0[j].z;
-                                                        (dx*dx + dy*dy + dz*dz).sqrt()
-                                                    } else { 1.0 }
-                                                } else { 1.0 }
-                                            };
+                                            let steps_delay = self.cached_delay_s_h0(j, i);
                                             #[cfg(not(feature = "growth3d"))]
-                                            let dist = 1.0f32;
-                                            let dt_ms = self.lif.dt as f32;
-                                            let steps_delay = if self.net.use_aarnn_delays && vel > 0.0 { (dist / (vel * dt_ms)).ceil() as usize } else { 0 };
+                                            let steps_delay: usize = 0;
                                             let s = {
                                                 #[cfg(feature = "growth3d")]
-                                                { let idx = steps_delay.min(self.spk_hist_s.len().saturating_sub(1)); let frame = &self.spk_hist_s[idx]; if frame.len()==0 {0} else { let ii=i.min(frame.len()-1); frame[ii] } }
+                                                { self.hist_s_at(steps_delay, i) }
                                                 #[cfg(not(feature = "growth3d"))]
-                                                { if steps_delay >= 1 { 0 } else { s_t[i] } }
+                                                { s_t[i] }
                                             };
                                             if s != 0 {
                                                 let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
@@ -7042,51 +7067,18 @@ impl Runner {
                                     }
                                 }
                             } else {
-                                // Legacy distance-based AARNN path when morphology disabled
+                                // Legacy AARNN path — use pre-computed delay cache.
                                 if in_l == 0 {
                                     for i in 0..self.net.num_sensory_neurons {
                                         #[cfg(feature = "growth3d")]
-                                        let dist = {
-                                            let snode = &self.topo.sensory_nodes[i];
-                                            if let Some(nodes0) = self.topo.layers.get(0) {
-                                                if j < nodes0.len() {
-                                                    let dx = snode.x - nodes0[j].x;
-                                                    let dy = snode.y - nodes0[j].y;
-                                                    let dz = snode.z - nodes0[j].z;
-                                                    (dx * dx + dy * dy + dz * dz).sqrt()
-                                                } else {
-                                                    1.0
-                                                }
-                                            } else {
-                                                1.0
-                                            }
-                                        };
+                                        let steps_delay = self.cached_delay_s_h0(j, i);
                                         #[cfg(not(feature = "growth3d"))]
-                                        let dist = 1.0f32;
-                                        let dt_ms = self.lif.dt as f32;
-                                        let steps_delay = if self.net.use_aarnn_delays && vel > 0.0
-                                        {
-                                            (dist / (vel * dt_ms)).ceil() as usize
-                                        } else {
-                                            0
-                                        };
+                                        let steps_delay: usize = 0;
                                         let s = {
                                             #[cfg(feature = "growth3d")]
-                                            {
-                                                let idx = steps_delay
-                                                    .min(self.spk_hist_s.len().saturating_sub(1));
-                                                let frame = &self.spk_hist_s[idx];
-                                                if frame.len() == 0 {
-                                                    0
-                                                } else {
-                                                    let ii = i.min(frame.len() - 1);
-                                                    frame[ii]
-                                                }
-                                            }
+                                            { self.hist_s_at(steps_delay, i) }
                                             #[cfg(not(feature = "growth3d"))]
-                                            {
-                                                if steps_delay >= 1 { 0 } else { s_t[i] }
-                                            }
+                                            { s_t[i] }
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
@@ -7101,51 +7093,18 @@ impl Runner {
                             }
                             #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
                             {
-                                // Morphology path unavailable at compile-time; use legacy AARNN
+                                // Morphology unavailable at compile time — use delay cache.
                                 if in_l == 0 {
                                     for i in 0..self.net.num_sensory_neurons {
                                         #[cfg(feature = "growth3d")]
-                                        let dist = {
-                                            let snode = &self.topo.sensory_nodes[i];
-                                            if let Some(nodes0) = self.topo.layers.get(0) {
-                                                if j < nodes0.len() {
-                                                    let dx = snode.x - nodes0[j].x;
-                                                    let dy = snode.y - nodes0[j].y;
-                                                    let dz = snode.z - nodes0[j].z;
-                                                    (dx * dx + dy * dy + dz * dz).sqrt()
-                                                } else {
-                                                    1.0
-                                                }
-                                            } else {
-                                                1.0
-                                            }
-                                        };
+                                        let steps_delay = self.cached_delay_s_h0(j, i);
                                         #[cfg(not(feature = "growth3d"))]
-                                        let dist = 1.0f32;
-                                        let dt_ms = self.lif.dt as f32;
-                                        let steps_delay = if self.net.use_aarnn_delays && vel > 0.0
-                                        {
-                                            (dist / (vel * dt_ms)).ceil() as usize
-                                        } else {
-                                            0
-                                        };
+                                        let steps_delay: usize = 0;
                                         let s = {
                                             #[cfg(feature = "growth3d")]
-                                            {
-                                                let idx = steps_delay
-                                                    .min(self.spk_hist_s.len().saturating_sub(1));
-                                                let frame = &self.spk_hist_s[idx];
-                                                if frame.len() == 0 {
-                                                    0
-                                                } else {
-                                                    let ii = i.min(frame.len() - 1);
-                                                    frame[ii]
-                                                }
-                                            }
+                                            { self.hist_s_at(steps_delay, i) }
                                             #[cfg(not(feature = "growth3d"))]
-                                            {
-                                                if steps_delay >= 1 { 0 } else { s_t[i] }
-                                            }
+                                            { s_t[i] }
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
@@ -7255,7 +7214,9 @@ impl Runner {
             {
                 self.last_i_h0 = Some(i_h0.clone());
             }
+            // --- sub-timers to identify i_h0 post-accumulation bottlenecks ---
             if use_synaptic_filter && num_hidden_0_neurons > 0 && !gpu_filtered_h0 {
+                observe_time!("Runner::step/i_h0/syn_filter");
                 i_h0 = Self::apply_synaptic_filter(
                     self.lif.dt,
                     &self.net.aarnn_bio,
@@ -7273,16 +7234,19 @@ impl Runner {
                 );
             }
             if is_aarnn && num_hidden_0_neurons > 1 {
+                observe_time!("Runner::step/i_h0/gap_junction");
                 let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
                 self.apply_gap_junction_coupling_layer(&mut i_h0, &self.v_h[0], 0, g_gap);
             }
             if let Some(factors_h0) = volume_transmission_factors.get(0) {
+                observe_time!("Runner::step/i_h0/vol_tx");
                 let n = num_hidden_0_neurons.min(factors_h0.len());
                 for j in 0..n {
                     i_h0[j] *= factors_h0[j];
                 }
             }
             if is_aarnn {
+                observe_time!("Runner::step/i_h0/active_dend");
                 self.apply_active_dendritic_compartments_layer(0, &mut i_h0);
             }
             Self::sanitize_current_array(&mut i_h0);
@@ -13902,6 +13866,102 @@ impl Runner {
         } else {
             0
         }
+    }
+
+    /// Rebuild the flat H0×S delay-step cache from current node positions.
+    ///
+    /// The cache stores the integer number of simulation steps a spike from sensory
+    /// neuron `i` takes to reach hidden-layer-0 neuron `j`, based on Euclidean distance
+    /// and axonal velocity.  Stored as `u16` to minimise memory (max ~655ms @ 1ms/step).
+    ///
+    /// Set `delay_cache_dirty = true` whenever topology, velocity, or dt changes.
+    #[cfg(feature = "growth3d")]
+    pub fn rebuild_delay_cache_s_h0(&mut self) {
+        let vel = self.net.aarnn_velocity.max(0.0);
+        let dt_ms = self.lif.dt as f32;
+        let use_delays = self.net.use_aarnn_delays && vel > 0.0;
+        let s = self.net.num_sensory_neurons;
+        // Nothing to cache when there are no sensory neurons.
+        if s == 0 {
+            self.delay_cache_s_h0.clear();
+            self.delay_cache_n_h0 = 0;
+            self.delay_cache_n_s = 0;
+            self.delay_cache_dirty = false;
+            return;
+        }
+        let nodes0 = match self.topo.layers.get(0) {
+            Some(n) => n,
+            None => {
+                self.delay_cache_s_h0.clear();
+                self.delay_cache_n_h0 = 0;
+                self.delay_cache_n_s = s;
+                self.delay_cache_dirty = false;
+                return;
+            }
+        };
+        let h0 = nodes0.len().min(self.layer_size(0));
+        let max_delay = (self.spk_hist_s.len().saturating_sub(1)) as u16;
+
+        self.delay_cache_s_h0.resize(h0 * s, 0u16);
+
+        if use_delays {
+            let sensory_nodes = &self.topo.sensory_nodes;
+            let cache = &mut self.delay_cache_s_h0;
+            // Build in parallel: each row j is independent.
+            #[cfg(feature = "parallel")]
+            {
+                cache.par_chunks_mut(s).zip(nodes0[..h0].par_iter()).for_each(|(row, hnode)| {
+                    for (i, cell) in row.iter_mut().enumerate() {
+                        let dist = if i < sensory_nodes.len() {
+                            let sn = &sensory_nodes[i];
+                            let dx = sn.x - hnode.x;
+                            let dy = sn.y - hnode.y;
+                            let dz = sn.z - hnode.z;
+                            (dx * dx + dy * dy + dz * dz).sqrt()
+                        } else {
+                            1.0
+                        };
+                        let d = (dist / (vel * dt_ms)).ceil() as u16;
+                        *cell = d.min(max_delay);
+                    }
+                });
+            }
+            #[cfg(not(feature = "parallel"))]
+            for j in 0..h0 {
+                let hnode = &nodes0[j];
+                for i in 0..s {
+                    let dist = if i < sensory_nodes.len() {
+                        let sn = &sensory_nodes[i];
+                        let dx = sn.x - hnode.x;
+                        let dy = sn.y - hnode.y;
+                        let dz = sn.z - hnode.z;
+                        (dx * dx + dy * dy + dz * dz).sqrt()
+                    } else {
+                        1.0
+                    };
+                    cache[j * s + i] = ((dist / (vel * dt_ms)).ceil() as u16).min(max_delay);
+                }
+            }
+        } else {
+            // No delays: all zeros.
+            for v in self.delay_cache_s_h0.iter_mut() { *v = 0; }
+        }
+
+        self.delay_cache_n_h0 = h0;
+        self.delay_cache_n_s = s;
+        self.delay_cache_dirty = false;
+    }
+
+    /// Look up the cached delay (in steps) from sensory neuron `i` to H0 neuron `j`.
+    /// Returns 0 if the cache is not built or indices are out of range.
+    #[cfg(feature = "growth3d")]
+    #[inline(always)]
+    pub fn cached_delay_s_h0(&self, j: usize, i: usize) -> usize {
+        if self.delay_cache_n_s == 0 { return 0; }
+        self.delay_cache_s_h0
+            .get(j * self.delay_cache_n_s + i)
+            .copied()
+            .unwrap_or(0) as usize
     }
 
     #[cfg(feature = "growth3d")]
