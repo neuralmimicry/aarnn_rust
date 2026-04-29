@@ -14,6 +14,7 @@
 //!   comparator-like plateau trigger and a controllable current gain stage.
 
 use ndarray::Array1;
+use std::collections::HashMap;
 
 use crate::config::{AarnnBioParams, IzhikevichParams};
 
@@ -253,6 +254,10 @@ pub fn apply_gap_junction_mean_field(curr: &mut Array1<f64>, v: &Array1<f64>, st
 /// back to a coarser approximation. The optional mask lets the caller restrict the
 /// coupling network to inhibitory or otherwise special subpopulations.
 ///
+/// Uses a spatial hash grid (cell side = `radius`) so each neuron only examines the
+/// 27 neighbouring cells instead of all N neurons, reducing the cost from O(N²) to
+/// O(N × k) where k is the average number of neurons within one radius.
+///
 /// In an FPAA this block could be implemented by short programmable resistive links or
 /// transconductance couplers between neighboring cells that share a local routing island.
 pub fn apply_local_gap_junction_coupling<P>(
@@ -270,10 +275,40 @@ where
         return false;
     }
 
-    let mut delta = vec![0.0f64; curr.len()];
-    let mut local_edges = 0usize;
+    let n = curr.len();
 
-    for j in 0..curr.len() {
+    // Collect all positions eagerly so we can reference them without re-calling
+    // the closure (which may mutate external state).
+    let positions: Vec<SpatialPoint3> = (0..n).map(|i| position_of(i)).collect();
+
+    // Build a spatial hash grid with cell side = radius so that all neurons
+    // reachable from j are in j's cell or one of its 26 face/edge/corner neighbours.
+    let inv_r = 1.0 / radius;
+    let cell_key = |p: &SpatialPoint3| -> (i64, i64, i64) {
+        (
+            (p.x * inv_r).floor() as i64,
+            (p.y * inv_r).floor() as i64,
+            (p.z * inv_r).floor() as i64,
+        )
+    };
+
+    let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        if inhibitory_mask
+            .and_then(|mask| mask.get(i))
+            .copied()
+            .is_some_and(|flag| !flag)
+        {
+            continue;
+        }
+        grid.entry(cell_key(&positions[i])).or_default().push(i);
+    }
+
+    let mut delta = vec![0.0f64; n];
+    let mut local_edges = 0usize;
+    let r2 = radius * radius;
+
+    for j in 0..n {
         if inhibitory_mask
             .and_then(|mask| mask.get(j))
             .copied()
@@ -281,30 +316,36 @@ where
         {
             continue;
         }
-        let pj = position_of(j);
+        let pj = &positions[j];
+        let (cx, cy, cz) = cell_key(pj);
         let mut sum = 0.0f64;
         let mut wsum = 0.0f64;
-        for i in 0..curr.len() {
-            if i == j {
-                continue;
-            }
-            if inhibitory_mask
-                .and_then(|mask| mask.get(i))
-                .copied()
-                .is_some_and(|flag| !flag)
-            {
-                continue;
-            }
-            let pi = position_of(i);
-            let dx = pi.x - pj.x;
-            let dy = pi.y - pj.y;
-            let dz = pi.z - pj.z;
-            let d = (dx * dx + dy * dy + dz * dz).sqrt();
-            if d <= radius && d > 1.0e-9 {
-                let w = (1.0 - d / radius).max(0.0);
-                sum += w * (v[i] - v[j]);
-                wsum += w;
-                local_edges += 1;
+
+        // Only examine the 3×3×3 = 27 cells that can contain neurons within `radius`.
+        for ddz in -1i64..=1 {
+            for ddy in -1i64..=1 {
+                for ddx in -1i64..=1 {
+                    let Some(candidates) = grid.get(&(cx + ddx, cy + ddy, cz + ddz)) else {
+                        continue;
+                    };
+                    for &i in candidates {
+                        if i == j {
+                            continue;
+                        }
+                        let pi = &positions[i];
+                        let dx = pi.x - pj.x;
+                        let dy = pi.y - pj.y;
+                        let dz = pi.z - pj.z;
+                        let d2 = dx * dx + dy * dy + dz * dz;
+                        if d2 <= r2 && d2 > 1.0e-18 {
+                            let d = d2.sqrt();
+                            let w = (1.0 - d / radius).max(0.0);
+                            sum += w * (v[i] - v[j]);
+                            wsum += w;
+                            local_edges += 1;
+                        }
+                    }
+                }
             }
         }
         if wsum > 1.0e-9 {
@@ -315,7 +356,7 @@ where
     if local_edges == 0 {
         return false;
     }
-    for j in 0..curr.len() {
+    for j in 0..n {
         curr[j] += delta[j];
     }
     true
