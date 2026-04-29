@@ -379,6 +379,20 @@ pub fn volume_transmission_factors_for_layer<P>(
 where
     P: FnMut(usize) -> SpatialPoint3,
 {
+    // Collect positions once so the inner loop can be parallelised.
+    let positions: Vec<SpatialPoint3> = (0..neuron_count).map(|j| position_of(j)).collect();
+    volume_transmission_factors_from_positions(radius, strength, tone, sources, &positions)
+}
+
+/// Parallel-friendly variant that takes pre-computed positions.
+pub fn volume_transmission_factors_from_positions(
+    radius: f64,
+    strength: f64,
+    tone: f64,
+    sources: &[SpatialPoint3],
+    positions: &[SpatialPoint3],
+) -> Array1<f64> {
+    let neuron_count = positions.len();
     let mut factors = Array1::from_elem(neuron_count, 1.0);
     if neuron_count == 0 || radius <= 0.0 || strength <= 0.0 || sources.is_empty() {
         return factors;
@@ -386,19 +400,56 @@ where
 
     let tone_scale = tone.clamp(0.0, 3.0) / 3.0;
     let two_sigma2 = 2.0 * radius * radius;
-    for j in 0..neuron_count {
-        let p = position_of(j);
+    let r2 = radius * radius;
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        // Use as_slice_mut() to get a standard &mut [f64] so we can zip with rayon.
+        if let Some(slice) = factors.as_slice_mut() {
+            slice.par_iter_mut().zip(positions.par_iter()).for_each(|(f, p)| {
+                let mut field = 0.0f64;
+                for src in sources {
+                    let dx = p.x - src.x;
+                    let dy = p.y - src.y;
+                    let dz = p.z - src.z;
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    if d2 <= r2 {
+                        field += (-(d2 / two_sigma2)).exp();
+                    }
+                }
+                *f = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
+            });
+        } else {
+            // Non-contiguous layout fallback (rare).
+            for (f, p) in factors.iter_mut().zip(positions.iter()) {
+                let mut field = 0.0f64;
+                for src in sources {
+                    let dx = p.x - src.x;
+                    let dy = p.y - src.y;
+                    let dz = p.z - src.z;
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    if d2 <= r2 {
+                        field += (-(d2 / two_sigma2)).exp();
+                    }
+                }
+                *f = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
+            }
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    for (f, p) in factors.iter_mut().zip(positions.iter()) {
         let mut field = 0.0f64;
         for src in sources {
             let dx = p.x - src.x;
             let dy = p.y - src.y;
             let dz = p.z - src.z;
             let d2 = dx * dx + dy * dy + dz * dz;
-            if d2 <= radius * radius {
+            if d2 <= r2 {
                 field += (-(d2 / two_sigma2)).exp();
             }
         }
-        factors[j] = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
+        *f = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
     }
     factors
 }

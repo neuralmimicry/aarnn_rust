@@ -6036,63 +6036,53 @@ impl Runner {
         }
 
         if use_adaptive_threshold {
-            for l in 0..num_hidden_layers {
-                for j in 0..self.v_h[l].len() {
-                    let d = {
-                        #[cfg(feature = "growth3d")]
-                        {
-                            Self::get_decays_static(self.lif.dt, &self.bio_h[l][j]).thr_decay
-                        }
-                        #[cfg(not(feature = "growth3d"))]
-                        {
-                            thr_decay
-                        }
-                    };
-                    self.thr_offset_h[l][j] *= d;
-                }
+            #[cfg(not(feature = "growth3d"))]
+            {
+                // Scalar decay: parallel across layers; mapv_inplace is SIMD-vectorized.
+                #[cfg(feature = "parallel")]
+                self.thr_offset_h.par_iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
+                #[cfg(not(feature = "parallel"))]
+                self.thr_offset_h.iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
+                self.thr_offset_o.mapv_inplace(|v| v * thr_decay);
             }
-            for k in 0..num_output_neurons {
-                let d = {
-                    #[cfg(feature = "growth3d")]
-                    {
-                        Self::get_decays_static(self.lif.dt, &self.bio_o[k]).thr_decay
-                    }
-                    #[cfg(not(feature = "growth3d"))]
-                    {
-                        thr_decay
-                    }
-                };
-                self.thr_offset_o[k] *= d;
+            #[cfg(feature = "growth3d")]
+            {
+                let lif_dt = self.lif.dt;
+                for l in 0..num_hidden_layers {
+                    let bio_l = &self.bio_h[l];
+                    self.thr_offset_h[l].iter_mut().zip(bio_l.iter()).for_each(|(v, b)| {
+                        *v *= Self::get_decays_static(lif_dt, b).thr_decay;
+                    });
+                }
+                let bio_o = &self.bio_o;
+                self.thr_offset_o.iter_mut().zip(bio_o.iter()).for_each(|(v, b)| {
+                    *v *= Self::get_decays_static(lif_dt, b).thr_decay;
+                });
             }
         }
         if use_homeostasis {
-            for l in 0..num_hidden_layers {
-                for j in 0..self.v_h[l].len() {
-                    let d = {
-                        #[cfg(feature = "growth3d")]
-                        {
-                            Self::get_decays_static(self.lif.dt, &self.bio_h[l][j]).homeo_decay
-                        }
-                        #[cfg(not(feature = "growth3d"))]
-                        {
-                            homeo_decay
-                        }
-                    };
-                    self.rate_ema_h[l][j] *= d;
-                }
+            #[cfg(not(feature = "growth3d"))]
+            {
+                // Scalar decay: parallel across layers.
+                #[cfg(feature = "parallel")]
+                self.rate_ema_h.par_iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
+                #[cfg(not(feature = "parallel"))]
+                self.rate_ema_h.iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
+                self.rate_ema_o.mapv_inplace(|v| v * homeo_decay);
             }
-            for k in 0..num_output_neurons {
-                let d = {
-                    #[cfg(feature = "growth3d")]
-                    {
-                        Self::get_decays_static(self.lif.dt, &self.bio_o[k]).homeo_decay
-                    }
-                    #[cfg(not(feature = "growth3d"))]
-                    {
-                        homeo_decay
-                    }
-                };
-                self.rate_ema_o[k] *= d;
+            #[cfg(feature = "growth3d")]
+            {
+                let lif_dt = self.lif.dt;
+                for l in 0..num_hidden_layers {
+                    let bio_l = &self.bio_h[l];
+                    self.rate_ema_h[l].iter_mut().zip(bio_l.iter()).for_each(|(v, b)| {
+                        *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
+                    });
+                }
+                let bio_o = &self.bio_o;
+                self.rate_ema_o.iter_mut().zip(bio_o.iter()).for_each(|(v, b)| {
+                    *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
+                });
             }
         }
 
