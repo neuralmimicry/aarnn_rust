@@ -57,7 +57,7 @@ concurrency:
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 90
     steps:
       - name: Checkout repository
@@ -100,7 +100,7 @@ jobs:
   release-meta:
     name: Release Metadata
     needs: verify
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     outputs:
       artifact_version: ${{ steps.meta.outputs.artifact_version }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
@@ -150,7 +150,7 @@ jobs:
     needs:
       - verify
       - release-meta
-    runs-on: ${{ matrix.host_runner }}
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     timeout-minutes: 120
     container:
       image: ubuntu:${{ matrix.ubuntu_series }}
@@ -158,28 +158,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - host_runner: ubuntu-24.04
+          - runner_arch: X64
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             deb_arch: amd64
             container_platform: amd64
-          - host_runner: ubuntu-24.04
+          - runner_arch: X64
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             deb_arch: amd64
             container_platform: amd64
-          - host_runner: ubuntu-24.04-arm
+          - runner_arch: ARM64
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: aarch64-unknown-linux-gnu
             platform: linux-aarch64
             deb_arch: arm64
             container_platform: arm64
-          - host_runner: ubuntu-24.04-arm
+          - runner_arch: ARM64
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: aarch64-unknown-linux-gnu
@@ -272,7 +272,7 @@ jobs:
     needs:
       - release-meta
       - package-linux
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     if: >-
       always() &&
       needs.release-meta.outputs.publish_release == 'true' &&

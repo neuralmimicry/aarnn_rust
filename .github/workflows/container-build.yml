@@ -200,7 +200,7 @@ jobs:
   manifest:
     if: github.event_name == 'push'
     needs: build
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
 
@@ -332,7 +332,7 @@ jobs:
 
   promote:
     if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
 

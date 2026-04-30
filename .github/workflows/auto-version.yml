@@ -23,7 +23,7 @@ concurrency:
 jobs:
   version-bump:
     name: Bump version and create tag
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     # Skip commits that are themselves version bumps to prevent re-triggering.
     if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
     permissions:
