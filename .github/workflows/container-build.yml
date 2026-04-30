@@ -99,6 +99,18 @@ jobs:
           printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
 
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          # Self-hosted runners can retain stale rootless Podman pause-process
+          # state across jobs. Probe first, then migrate only when needed.
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
 
@@ -241,6 +253,19 @@ jobs:
           fi
           printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          # Self-hosted runners can retain stale rootless Podman pause-process
+          # state across jobs. Probe first, then migrate only when needed.
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
 
@@ -373,6 +398,19 @@ jobs:
           fi
           printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
           echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          # Self-hosted runners can retain stale rootless Podman pause-process
+          # state across jobs. Probe first, then migrate only when needed.
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
           echo "OCI runtime: ${oci_runtime}"
           echo "RunRoot: ${runtime_dir}/containers"
 
