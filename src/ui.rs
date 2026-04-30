@@ -7690,8 +7690,7 @@ impl eframe::App for App {
                 }
 
                 // Status line.
-                self.status =
-                    format!("Watching Standalone: t={} ms", snap.sim_time_ms as i64);
+                self.status = format!("Watching Standalone: t={} ms", snap.sim_time_ms as i64);
 
                 Some(snap.clone())
                 // snap (RwLockReadGuard) is dropped here — before the mutable call below

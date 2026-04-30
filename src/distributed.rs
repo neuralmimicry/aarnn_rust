@@ -3883,7 +3883,9 @@ impl DistributedNode {
                             let n = sz.min(spikes.len());
                             if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
                                 dst[..n].copy_from_slice(&spikes[..n]);
-                                for v in dst[n..].iter_mut() { *v = 0; }
+                                for v in dst[n..].iter_mut() {
+                                    *v = 0;
+                                }
                             }
                         }
                     }
@@ -3901,7 +3903,9 @@ impl DistributedNode {
                             let n = sz.min(spikes.len());
                             if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
                                 dst[..n].copy_from_slice(&spikes[..n]);
-                                for v in dst[n..].iter_mut() { *v = 0; }
+                                for v in dst[n..].iter_mut() {
+                                    *v = 0;
+                                }
                             }
                         }
                     }
