@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{RwLock, Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, Semaphore, watch};
 use tokio::time::{Duration, MissedTickBehavior};
 use tonic::Request;
 
@@ -122,6 +122,26 @@ fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
     let data = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read '{}'", path.display()))?;
     Ok(Some(data))
+}
+
+fn read_dir_paths(root: &Path, label: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let entries =
+        std::fs::read_dir(root).with_context(|| format!("failed to scan '{}'", root.display()))?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(err) => {
+                nm_err!(
+                    "[warn] failed reading {} dir entry from '{}': {}",
+                    label,
+                    root.display(),
+                    err
+                );
+            }
+        }
+    }
+    Ok(paths)
 }
 
 fn file_modified_ms(path: &Path) -> anyhow::Result<Option<u64>> {
@@ -888,6 +908,8 @@ pub struct RuntimeManager {
     semaphore: Arc<Semaphore>,
     autoscaler: Arc<dyn RuntimeAutoscaler>,
     autoscaler_report: RwLock<AutoscalerReport>,
+    load_existing_lock: AsyncMutex<()>,
+    scheduler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     last_reconcile_ms: AtomicU64,
     last_autoscaler_ms: AtomicU64,
     #[cfg(feature = "sysinfo")]
@@ -950,6 +972,8 @@ impl RuntimeManager {
             semaphore: Arc::new(Semaphore::new(config.local_worker_limit.max(1))),
             workspaces: RwLock::new(HashMap::new()),
             autoscaler,
+            load_existing_lock: AsyncMutex::new(()),
+            scheduler_task: Mutex::new(None),
             last_reconcile_ms: AtomicU64::new(0),
             last_autoscaler_ms: AtomicU64::new(0),
             #[cfg(feature = "sysinfo")]
@@ -969,6 +993,14 @@ impl RuntimeManager {
 
     pub async fn shutdown(&self) {
         let _ = self.stop_tx.send(true);
+        let scheduler_task = self
+            .scheduler_task
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(task) = scheduler_task {
+            let _ = task.await;
+        }
     }
 
     pub async fn runtime_status(&self, user_id: &str) -> anyhow::Result<RuntimeStatusResponse> {
@@ -1438,7 +1470,7 @@ impl RuntimeManager {
 
     fn spawn_scheduler(self: &Arc<Self>, mut stop_rx: watch::Receiver<bool>) {
         let manager = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_millis(
                 manager.config.tick_interval_ms.max(1),
             ));
@@ -1458,6 +1490,9 @@ impl RuntimeManager {
                 }
             }
         });
+        if let Ok(mut guard) = self.scheduler_task.lock() {
+            *guard = Some(task);
+        }
     }
 
     async fn scheduler_tick(&self) -> anyhow::Result<()> {
@@ -1879,28 +1914,20 @@ impl RuntimeManager {
     }
 
     async fn load_existing_workspaces(&self) -> anyhow::Result<()> {
+        let _load_guard = self.load_existing_lock.lock().await;
         let users_root = self.config.root_dir.join("users");
         if !users_root.exists() {
             return Ok(());
         }
 
         let mut loaded = HashMap::new();
-        for user_entry in std::fs::read_dir(&users_root)
-            .with_context(|| format!("failed to scan '{}'", users_root.display()))?
-        {
-            let user_entry = match user_entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    nm_err!("[warn] failed reading runtime user dir entry: {}", err);
-                    continue;
-                }
-            };
-            let workspaces_root = user_entry.path().join("workspaces");
+        for user_dir in read_dir_paths(&users_root, "runtime user")? {
+            let workspaces_root = user_dir.join("workspaces");
             if !workspaces_root.exists() {
                 continue;
             }
-            for workspace_entry in match std::fs::read_dir(&workspaces_root) {
-                Ok(entries) => entries,
+            for workspace_dir in match read_dir_paths(&workspaces_root, "runtime workspace") {
+                Ok(paths) => paths,
                 Err(err) => {
                     nm_err!(
                         "[warn] failed reading runtime workspaces dir '{}': {}",
@@ -1910,14 +1937,6 @@ impl RuntimeManager {
                     continue;
                 }
             } {
-                let workspace_entry = match workspace_entry {
-                    Ok(entry) => entry,
-                    Err(err) => {
-                        nm_err!("[warn] failed reading workspace entry: {}", err);
-                        continue;
-                    }
-                };
-                let workspace_dir = workspace_entry.path();
                 let manifest_path = workspace_dir.join(MANIFEST_FILE);
                 if !manifest_path.exists() {
                     continue;
