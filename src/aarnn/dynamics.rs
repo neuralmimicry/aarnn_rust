@@ -407,19 +407,22 @@ pub fn volume_transmission_factors_from_positions(
         use rayon::prelude::*;
         // Use as_slice_mut() to get a standard &mut [f64] so we can zip with rayon.
         if let Some(slice) = factors.as_slice_mut() {
-            slice.par_iter_mut().zip(positions.par_iter()).for_each(|(f, p)| {
-                let mut field = 0.0f64;
-                for src in sources {
-                    let dx = p.x - src.x;
-                    let dy = p.y - src.y;
-                    let dz = p.z - src.z;
-                    let d2 = dx * dx + dy * dy + dz * dz;
-                    if d2 <= r2 {
-                        field += (-(d2 / two_sigma2)).exp();
+            slice
+                .par_iter_mut()
+                .zip(positions.par_iter())
+                .for_each(|(f, p)| {
+                    let mut field = 0.0f64;
+                    for src in sources {
+                        let dx = p.x - src.x;
+                        let dy = p.y - src.y;
+                        let dz = p.z - src.z;
+                        let d2 = dx * dx + dy * dy + dz * dz;
+                        if d2 <= r2 {
+                            field += (-(d2 / two_sigma2)).exp();
+                        }
                     }
-                }
-                *f = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
-            });
+                    *f = (1.0 + strength * tone_scale * field).clamp(0.5, 2.5);
+                });
         } else {
             // Non-contiguous layout fallback (rare).
             for (f, p) in factors.iter_mut().zip(positions.iter()) {

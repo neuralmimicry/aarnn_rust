@@ -1045,7 +1045,9 @@ fn sim_parallel_env() -> &'static SimParallelEnv {
         heavy_threshold_cold: parse_env_usize("NM_SIM_PAR_HEAVY_COLD")
             .unwrap_or(1024)
             .max(2),
-        heavy_threshold_hot: parse_env_usize("NM_SIM_PAR_HEAVY_HOT").unwrap_or(128).max(2),
+        heavy_threshold_hot: parse_env_usize("NM_SIM_PAR_HEAVY_HOT")
+            .unwrap_or(128)
+            .max(2),
         matrix_ops_threshold_cold: parse_env_usize("NM_SIM_PAR_MATRIX_COLD")
             .unwrap_or(65_536)
             .max(1),
@@ -5027,7 +5029,9 @@ impl Runner {
         self.lif.dt = dt;
         // Delay steps depend on dt; invalidate cache.
         #[cfg(feature = "growth3d")]
-        { self.delay_cache_dirty = true; }
+        {
+            self.delay_cache_dirty = true;
+        }
         self.decay_m = (-dt / self.lif.tau_m).exp();
         self.decay_pre = (-dt / self.stdp.tau_pre).exp();
         self.decay_post = (-dt / self.stdp.tau_post).exp();
@@ -5374,7 +5378,9 @@ impl Runner {
         }
         // Sensory count changed → delay cache is stale.
         #[cfg(feature = "growth3d")]
-        { self.delay_cache_dirty = true; }
+        {
+            self.delay_cache_dirty = true;
+        }
     }
 
     /// Resize the number of output neurons at runtime.
@@ -6068,9 +6074,13 @@ impl Runner {
             {
                 // Scalar decay: parallel across layers; mapv_inplace is SIMD-vectorized.
                 #[cfg(feature = "parallel")]
-                self.thr_offset_h.par_iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
+                self.thr_offset_h
+                    .par_iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
                 #[cfg(not(feature = "parallel"))]
-                self.thr_offset_h.iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
+                self.thr_offset_h
+                    .iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
                 self.thr_offset_o.mapv_inplace(|v| v * thr_decay);
             }
             #[cfg(feature = "growth3d")]
@@ -6078,14 +6088,20 @@ impl Runner {
                 let lif_dt = self.lif.dt;
                 for l in 0..num_hidden_layers {
                     let bio_l = &self.bio_h[l];
-                    self.thr_offset_h[l].iter_mut().zip(bio_l.iter()).for_each(|(v, b)| {
-                        *v *= Self::get_decays_static(lif_dt, b).thr_decay;
-                    });
+                    self.thr_offset_h[l]
+                        .iter_mut()
+                        .zip(bio_l.iter())
+                        .for_each(|(v, b)| {
+                            *v *= Self::get_decays_static(lif_dt, b).thr_decay;
+                        });
                 }
                 let bio_o = &self.bio_o;
-                self.thr_offset_o.iter_mut().zip(bio_o.iter()).for_each(|(v, b)| {
-                    *v *= Self::get_decays_static(lif_dt, b).thr_decay;
-                });
+                self.thr_offset_o
+                    .iter_mut()
+                    .zip(bio_o.iter())
+                    .for_each(|(v, b)| {
+                        *v *= Self::get_decays_static(lif_dt, b).thr_decay;
+                    });
             }
         }
         if use_homeostasis {
@@ -6093,9 +6109,13 @@ impl Runner {
             {
                 // Scalar decay: parallel across layers.
                 #[cfg(feature = "parallel")]
-                self.rate_ema_h.par_iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
+                self.rate_ema_h
+                    .par_iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
                 #[cfg(not(feature = "parallel"))]
-                self.rate_ema_h.iter_mut().for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
+                self.rate_ema_h
+                    .iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
                 self.rate_ema_o.mapv_inplace(|v| v * homeo_decay);
             }
             #[cfg(feature = "growth3d")]
@@ -6103,14 +6123,20 @@ impl Runner {
                 let lif_dt = self.lif.dt;
                 for l in 0..num_hidden_layers {
                     let bio_l = &self.bio_h[l];
-                    self.rate_ema_h[l].iter_mut().zip(bio_l.iter()).for_each(|(v, b)| {
-                        *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
-                    });
+                    self.rate_ema_h[l]
+                        .iter_mut()
+                        .zip(bio_l.iter())
+                        .for_each(|(v, b)| {
+                            *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
+                        });
                 }
                 let bio_o = &self.bio_o;
-                self.rate_ema_o.iter_mut().zip(bio_o.iter()).for_each(|(v, b)| {
-                    *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
-                });
+                self.rate_ema_o
+                    .iter_mut()
+                    .zip(bio_o.iter())
+                    .for_each(|(v, b)| {
+                        *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
+                    });
             }
         }
 
@@ -7076,9 +7102,13 @@ impl Runner {
                                         let steps_delay: usize = 0;
                                         let s = {
                                             #[cfg(feature = "growth3d")]
-                                            { self.hist_s_at(steps_delay, i) }
+                                            {
+                                                self.hist_s_at(steps_delay, i)
+                                            }
                                             #[cfg(not(feature = "growth3d"))]
-                                            { s_t[i] }
+                                            {
+                                                s_t[i]
+                                            }
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
@@ -7102,9 +7132,13 @@ impl Runner {
                                         let steps_delay: usize = 0;
                                         let s = {
                                             #[cfg(feature = "growth3d")]
-                                            { self.hist_s_at(steps_delay, i) }
+                                            {
+                                                self.hist_s_at(steps_delay, i)
+                                            }
                                             #[cfg(not(feature = "growth3d"))]
-                                            { s_t[i] }
+                                            {
+                                                s_t[i]
+                                            }
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
@@ -13910,21 +13944,24 @@ impl Runner {
             // Build in parallel: each row j is independent.
             #[cfg(feature = "parallel")]
             {
-                cache.par_chunks_mut(s).zip(nodes0[..h0].par_iter()).for_each(|(row, hnode)| {
-                    for (i, cell) in row.iter_mut().enumerate() {
-                        let dist = if i < sensory_nodes.len() {
-                            let sn = &sensory_nodes[i];
-                            let dx = sn.x - hnode.x;
-                            let dy = sn.y - hnode.y;
-                            let dz = sn.z - hnode.z;
-                            (dx * dx + dy * dy + dz * dz).sqrt()
-                        } else {
-                            1.0
-                        };
-                        let d = (dist / (vel * dt_ms)).ceil() as u16;
-                        *cell = d.min(max_delay);
-                    }
-                });
+                cache
+                    .par_chunks_mut(s)
+                    .zip(nodes0[..h0].par_iter())
+                    .for_each(|(row, hnode)| {
+                        for (i, cell) in row.iter_mut().enumerate() {
+                            let dist = if i < sensory_nodes.len() {
+                                let sn = &sensory_nodes[i];
+                                let dx = sn.x - hnode.x;
+                                let dy = sn.y - hnode.y;
+                                let dz = sn.z - hnode.z;
+                                (dx * dx + dy * dy + dz * dz).sqrt()
+                            } else {
+                                1.0
+                            };
+                            let d = (dist / (vel * dt_ms)).ceil() as u16;
+                            *cell = d.min(max_delay);
+                        }
+                    });
             }
             #[cfg(not(feature = "parallel"))]
             for j in 0..h0 {
@@ -13944,7 +13981,9 @@ impl Runner {
             }
         } else {
             // No delays: all zeros.
-            for v in self.delay_cache_s_h0.iter_mut() { *v = 0; }
+            for v in self.delay_cache_s_h0.iter_mut() {
+                *v = 0;
+            }
         }
 
         self.delay_cache_n_h0 = h0;
@@ -13957,7 +13996,9 @@ impl Runner {
     #[cfg(feature = "growth3d")]
     #[inline(always)]
     pub fn cached_delay_s_h0(&self, j: usize, i: usize) -> usize {
-        if self.delay_cache_n_s == 0 { return 0; }
+        if self.delay_cache_n_s == 0 {
+            return 0;
+        }
         self.delay_cache_s_h0
             .get(j * self.delay_cache_n_s + i)
             .copied()
