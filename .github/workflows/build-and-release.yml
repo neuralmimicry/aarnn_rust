@@ -59,9 +59,15 @@ jobs:
     name: Verify
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: repo-build-release
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -71,10 +77,13 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
+          # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "repo-build-release -> target"
 
       - name: Check formatting
         run: cargo fmt --check
@@ -101,6 +110,9 @@ jobs:
     name: Release Metadata
     needs: verify
     runs-on: [self-hosted, Linux, X64]
+    defaults:
+      run:
+        working-directory: repo-build-release
     outputs:
       artifact_version: ${{ steps.meta.outputs.artifact_version }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
@@ -108,6 +120,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
 
       - name: Compute artifact metadata
         id: meta
@@ -141,9 +156,11 @@ jobs:
             exit 1
           fi
 
-          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "artifact_version=$artifact_version" >> "$GITHUB_OUTPUT"
-          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+          {
+            echo "release_tag=$release_tag"
+            echo "artifact_version=$artifact_version"
+            echo "publish_release=$publish_release"
+          } >> "$GITHUB_OUTPUT"
 
   package-linux:
     name: Package Linux (${{ matrix.ubuntu_label }} ${{ matrix.deb_arch }})
@@ -186,13 +203,23 @@ jobs:
             platform: linux-aarch64
             deb_arch: arm64
             container_platform: arm64
+    defaults:
+      run:
+        working-directory: repo-build-release
+    env:
+      PACKAGE_OUTPUT_DIR: /tmp/release-assets/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+      CARGO_TARGET_DIR: /tmp/cargo-target/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
 
       - name: Install native build dependencies
         run: |
           apt-get update
+          # shellcheck disable=SC2086
           apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Install Rust toolchain
@@ -208,10 +235,11 @@ jobs:
         run: |
           set -euo pipefail
           . "$HOME/.cargo/env"
+          mkdir -p "$PACKAGE_OUTPUT_DIR" "$CARGO_TARGET_DIR"
           chmod +x scripts/package-release.sh
           ./scripts/package-release.sh \
             --version "${{ needs.release-meta.outputs.artifact_version }}" \
-            --output-dir ./dist \
+            --output-dir "$PACKAGE_OUTPUT_DIR" \
             --target-triple "${{ matrix.rust_target }}" \
             --platform "${{ matrix.platform }}" \
             --artifact-suffix "${{ matrix.ubuntu_label }}" \
@@ -223,9 +251,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find dist -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
           if [[ -z "$deb_path" ]]; then
-            echo "::error::Expected a Debian package under dist/"
+            echo "::error::Expected a Debian package under $PACKAGE_OUTPUT_DIR"
             exit 1
           fi
 
@@ -246,7 +274,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find dist -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
           deb_path="$(readlink -f "$deb_path")"
 
           apt-get update
@@ -263,9 +291,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-${{ matrix.platform }}-${{ matrix.ubuntu_label }}
-          path: dist/*
+          path: ${{ env.PACKAGE_OUTPUT_DIR }}/*
           if-no-files-found: error
           retention-days: 14
+
+      - name: Restore workspace ownership
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e "$GITHUB_WORKSPACE/repo-build-release" ]]; then
+            chown -R 1000:1000 "$GITHUB_WORKSPACE/repo-build-release"
+          fi
 
   publish-release:
     name: Publish Release

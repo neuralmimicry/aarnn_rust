@@ -57,9 +57,11 @@ jobs:
             patch) patch=$((patch + 1)) ;;
           esac
           next="${major}.${minor}.${patch}"
-          echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "next=$next"       >> "$GITHUB_OUTPUT"
-          echo "tag=v${next}"     >> "$GITHUB_OUTPUT"
+          {
+            echo "current=$current"
+            echo "next=$next"
+            echo "tag=v${next}"
+          } >> "$GITHUB_OUTPUT"
           echo "Bumping $current -> $next ($bump)"
 
       - name: Check tag does not already exist

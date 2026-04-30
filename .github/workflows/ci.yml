@@ -27,6 +27,9 @@ jobs:
     name: Verify (${{ matrix.runner_arch }})
     runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: repo-ci
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +37,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-ci
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -43,10 +49,13 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
+          # shellcheck disable=SC2086
           sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "repo-ci -> target"
 
       - name: Check formatting
         run: cargo fmt --check
