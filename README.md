@@ -148,6 +148,7 @@ The web UI now exposes `POST /api/llm/mirror` for Gail's mirrored LLM I/O bridge
 - When `network_id` is supplied, AARNN translates the mirrored exchange into an AER batch and stimulates the selected network.
 - Candidate replies are currently a deliberately low-confidence bootstrap echo. Keep Gail on `llm_preferred` until decoded network-output replies are ready.
 
+
 ## Multi-Network Deployment Modes
 
 The runtime and distributed engine now carry an explicit deployment intent in
