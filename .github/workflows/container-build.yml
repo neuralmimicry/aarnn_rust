@@ -42,10 +42,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    defaults:
+      run:
+        working-directory: repo-container-build
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-container-build
 
       - name: Verify Podman is available
         run: |
