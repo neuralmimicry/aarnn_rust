@@ -35,26 +35,100 @@ struct State {
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 
-fn parse_config(json: &str) -> anyhow::Result<(IoMapping, Runner, f32)> {
-    // Schema: {"sensory":S, "output":O, "threshold":optional_f32, "s_names":[], "o_names":[]}
+fn parse_config(json: &str) -> anyhow::Result<(IoMapping, Runner, Quantizer)> {
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(json) {
+        let net = snapshot.net.clone();
+        let mut map = IoMapping::new(net.num_sensory_neurons, net.num_output_neurons);
+        map.add_port(PortSpec::new(
+            "__S_ALL__",
+            PortKind::Sensor,
+            0,
+            net.num_sensory_neurons,
+        ));
+        map.add_port(PortSpec::new(
+            "__O_ALL__",
+            PortKind::Actuator,
+            0,
+            net.num_output_neurons,
+        ));
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut runner = Runner::new(
+            lif,
+            stdp,
+            net.clone(),
+            crate::sim::NeuronModel::Lif,
+            crate::sim::Learning::Stdp,
+        );
+        let _ = runner.import_network_json(json);
+        let quant = Quantizer {
+            threshold: net.spike_io.threshold,
+            probabilistic: true,
+            spike_io: Some(net.spike_io),
+        };
+        return Ok((map, runner, quant));
+    }
+
+    // Schema:
+    // - Minimal FFI: {"sensory":S, "output":O, "threshold":optional_f32, "s_names":[], "o_names":[]}
+    // - Full config: a top-level NetworkConfig JSON with optional `spike_io`
     #[derive(serde::Deserialize)]
+    #[serde(default)]
     struct Cfg {
-        sensory: usize,
-        output: usize,
+        #[serde(flatten)]
+        net: NetworkConfig,
+        sensory: Option<usize>,
+        output: Option<usize>,
         #[allow(dead_code)]
         threshold: Option<f32>,
         s_names: Option<Vec<String>>,
         o_names: Option<Vec<String>>,
     }
-    let cfg: Cfg = serde_json::from_str(json)?;
-    let mut map = IoMapping::new(cfg.sensory, cfg.output);
+
+    impl Default for Cfg {
+        fn default() -> Self {
+            let net = NetworkConfig {
+                num_hidden_layers: 2,
+                num_hidden_per_layer_initial: 32,
+                ..NetworkConfig::default()
+            };
+            Self {
+                net,
+                sensory: None,
+                output: None,
+                threshold: None,
+                s_names: None,
+                o_names: None,
+            }
+        }
+    }
+
+    let raw: serde_json::Value = serde_json::from_str(json)?;
+    let has_spike_io = raw.get("spike_io").is_some()
+        || raw.get("net").and_then(|net| net.get("spike_io")).is_some();
+    let mut cfg: Cfg = serde_json::from_value(raw)?;
+    if let Some(sensory) = cfg.sensory {
+        cfg.net.num_sensory_neurons = sensory;
+    }
+    if let Some(output) = cfg.output {
+        cfg.net.num_output_neurons = output;
+    }
+    if let Some(threshold) = cfg.threshold {
+        cfg.net.spike_io.threshold = threshold;
+    }
+    let mut map = IoMapping::new(cfg.net.num_sensory_neurons, cfg.net.num_output_neurons);
 
     if let Some(names) = cfg.s_names {
         for (i, name) in names.iter().enumerate() {
             map.add_port(PortSpec::new(name, PortKind::Sensor, i, 1));
         }
     } else {
-        map.add_port(PortSpec::new("__S_ALL__", PortKind::Sensor, 0, cfg.sensory));
+        map.add_port(PortSpec::new(
+            "__S_ALL__",
+            PortKind::Sensor,
+            0,
+            cfg.net.num_sensory_neurons,
+        ));
     }
 
     if let Some(names) = cfg.o_names {
@@ -66,32 +140,29 @@ fn parse_config(json: &str) -> anyhow::Result<(IoMapping, Runner, f32)> {
             "__O_ALL__",
             PortKind::Actuator,
             0,
-            cfg.output,
+            cfg.net.num_output_neurons,
         ));
     }
 
-    // Build a small fixed Runner
+    // Build a small fixed Runner unless a full config overrides those defaults.
     let lif = LIFParams::default();
     let stdp = STDPParams::default();
-    let net = NetworkConfig {
-        num_sensory_neurons: cfg.sensory,
-        num_hidden_layers: 2,
-        num_hidden_per_layer_initial: 32,
-        num_output_neurons: cfg.output,
-        ..NetworkConfig::default()
-    };
     let runner = Runner::new(
         lif,
         stdp,
-        net,
+        cfg.net.clone(),
         crate::sim::NeuronModel::Lif,
         crate::sim::Learning::Stdp,
     );
-    let thr = cfg.threshold.unwrap_or(Quantizer::default().threshold);
-    Ok((map, runner, thr))
+    let quant = Quantizer {
+        threshold: cfg.threshold.unwrap_or(Quantizer::default().threshold),
+        probabilistic: true,
+        spike_io: has_spike_io.then_some(cfg.net.spike_io.clone()),
+    };
+    Ok((map, runner, quant))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
     if config_json.is_null() {
         return -1;
@@ -101,16 +172,12 @@ pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
         Ok(x) => x,
         Err(_) => return -2,
     };
-    let (map, runner, threshold) = match parse_config(json) {
+    let (map, runner, quant) = match parse_config(json) {
         Ok(t) => t,
         Err(_) => return -3,
     };
     let sensor = InMemoryAdapter::new(map.clone());
     let actuator = InMemoryAdapter::new(map.clone());
-    let quant = Quantizer {
-        threshold,
-        probabilistic: true,
-    };
     let bridge = ExternalRunnerBridge::new(runner, map.clone(), sensor, actuator, quant);
     let state_instance = State {
         map: map.clone(),
@@ -122,7 +189,7 @@ pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -141,7 +208,7 @@ pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f3
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -160,7 +227,7 @@ pub extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) 
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_step(t_ms: f64) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -172,7 +239,7 @@ pub extern "C" fn nm_step(t_ms: f64) -> c_int {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_set_quantizer_threshold(threshold: f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
@@ -180,10 +247,13 @@ pub extern "C" fn nm_set_quantizer_threshold(threshold: f32) -> c_int {
     };
     let mut guard = state_mutex.lock().unwrap();
     guard.bridge.quant.threshold = threshold;
+    if let Some(io_cfg) = guard.bridge.quant.spike_io.as_mut() {
+        io_cfg.threshold = threshold;
+    }
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn nm_shutdown() {
     // Drop state by replacing with a fresh OnceLock (not supported); simply leak for process lifetime
 }

@@ -1,6 +1,7 @@
 # Build outputs and caches
 target
 logs
+.container-cache
 **/__pycache__
 *.pyc
 
@@ -15,6 +16,12 @@ logs
 outputs
 *.log
 *.tmp
+
+# Stage only the current container package into the build context.
+dist/*
+!dist/container/
+dist/container/*
+!dist/container/*.deb
 
 # Large local/generated content not needed for the container build
 webots_world/controllers/**/build

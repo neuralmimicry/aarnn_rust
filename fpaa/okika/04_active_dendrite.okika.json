@@ -1,0 +1,52 @@
+{
+  "id": "active_dendrite",
+  "title": "AARNN Active Dendritic Nonlinearity",
+  "analog_class": "analog_core",
+  "rust_modules": ["src/aarnn/dynamics.rs"],
+  "rust_functions": ["apply_active_dendritic_compartment"],
+  "defaults": {
+    "dendritic_ca_tau_ms": 120.0,
+    "dendritic_plateau_tau_ms": 350.0,
+    "dendritic_ca_influx_gain": 0.10,
+    "dendritic_plateau_threshold": 1.0,
+    "dendritic_plateau_gain": 0.40
+  },
+  "xcos_workspace": {
+    "inputs": ["active_dendrite_input", "active_dendrite_local_stimulus"],
+    "outputs": ["active_dendrite_output", "active_dendrite_ca", "active_dendrite_plateau"],
+    "script": "../xcos/04_active_dendrite.sce"
+  },
+  "hasler_xcos_blocks": [
+    "OTA",
+    "Capacitor",
+    "Common-Source",
+    "Common-Drain",
+    "Buffer",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "04_active_dendrite.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Excitatory current prefilter",
+      "Calcium-like integrator",
+      "Threshold / trigger element for plateau recruitment",
+      "Plateau-state leaky memory",
+      "Current gain path from dendrite node to soma node"
+    ],
+    "limitations": [
+      "Branching gain is best modeled as a programmable bias rather than physically changing topology.",
+      "Negative-current handling is an approximation to the software asymmetry."
+    ]
+  }
+}

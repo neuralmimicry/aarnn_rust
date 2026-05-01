@@ -1,0 +1,57 @@
+{
+  "id": "synaptic_filter",
+  "title": "AARNN Synaptic Front-End Filter",
+  "analog_class": "analog_core",
+  "rust_modules": ["src/aarnn/dynamics.rs"],
+  "rust_functions": ["apply_synaptic_filter"],
+  "defaults": {
+    "ampa_tau_ms": 5.0,
+    "nmda_tau_ms": 100.0,
+    "gaba_tau_ms": 10.0,
+    "nmda_ratio": 0.25,
+    "synaptic_gain": 1.0,
+    "nmda_voltage_sensitivity": 0.04,
+    "acetylcholine_gain": 1.0
+  },
+  "xcos_workspace": {
+    "inputs": ["synaptic_filter_raw", "synaptic_filter_vmem"],
+    "outputs": ["synaptic_filter_expected", "synaptic_filter_ampa", "synaptic_filter_nmda", "synaptic_filter_gaba"],
+    "script": "../xcos/01_synaptic_filter.sce"
+  },
+  "hasler_xcos_blocks": [
+    "Arbitrary Generator",
+    "Measure Voltage",
+    "OTA Low-Pass Filter",
+    "OTA",
+    "Buffer",
+    "Capacitor",
+    "Join",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "01_synaptic_filter.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Input gain stage",
+      "Fast low-pass branch for AMPA",
+      "Slow low-pass branch for NMDA",
+      "Inhibitory low-pass branch for GABA",
+      "Weighted summing node",
+      "Bias-controlled nonlinear gate for NMDA voltage sensitivity",
+      "Output buffer / measurement stage"
+    ],
+    "limitations": [
+      "The voltage-sensitive NMDA term is best treated as an analog approximation, not a full conductance model.",
+      "Time constants are local analog states; online retuning requires host supervision."
+    ]
+  }
+}

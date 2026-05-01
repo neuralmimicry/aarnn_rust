@@ -1,0 +1,602 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "../protos/CelegansRobot.proto"
+
+WorldInfo {
+  # Slightly larger time step to keep Webots responsive with articulated
+  # multi-robot scenes and clustered controller traffic.
+  basicTimeStep 32
+  gravity 9.81
+}
+Viewpoint {
+  fieldOfView 0.92
+  # Zero-roll camera: pitched downward only, so horizon and ground remain level.
+  orientation 0.999 0.045 0 1.18
+  position 0 15.30 17.85
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+# Historical manual reference world; the generated multi-world launcher uses
+# `scripts/build_webots_multi_world.py` instead of this file.
+RectangleArena {
+  floorSize 34.00 34.00
+  wallHeight 1.5
+}
+Solid {
+  translation 0 0.005 0
+  name "ground_base"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.36 0.32 0.26
+        roughness 0.93
+        metalness 0
+      }
+      geometry Box {
+        size 42.00 0.01 42.00
+      }
+    }
+  ]
+  boundingObject Box {
+    size 42.00 0.01 42.00
+  }
+}
+Solid {
+  translation 0 0.011 0
+  name "grass_meadow"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.31 0.42 0.27
+        roughness 0.88
+      }
+      geometry Box {
+        size 25.50 0.002 25.50
+      }
+    }
+  ]
+  boundingObject Box {
+    size 25.50 0.002 25.50
+  }
+}
+Transform {
+  translation 0 0.0125 0
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.46 0.33
+        roughness 0.70
+        metalness 0
+      }
+      geometry Cylinder {
+        radius 3.62
+        height 0.001
+      }
+    }
+  ]
+}
+# Shallow water pools for C. elegans swimming/slithering
+Solid {
+  translation -4.29 0.025 3.67
+  name "water_pool_nw"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.28 0.52 0.72
+        roughness 0.12
+        metalness 0.05
+        transparency 0.65
+      }
+      geometry Cylinder {
+        radius 1.8
+        height 0.05
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 1.8
+    height 0.05
+  }
+}
+Solid {
+  translation 4.90 0.020 -4.29
+  name "water_pool_se"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.26 0.50 0.70
+        roughness 0.14
+        metalness 0.05
+        transparency 0.68
+      }
+      geometry Cylinder {
+        radius 1.5
+        height 0.04
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 1.5
+    height 0.04
+  }
+}
+# Underwater/substrate features for C. elegans navigation
+Solid {
+  translation -4.29 0.015 3.67
+  name "substrate_rocks_nw"
+  children [
+    Transform { translation 0.3 0 0.4 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.38 0.32 roughness 0.82 } geometry Sphere { radius 0.12 } } ] }
+    Transform { translation -0.5 0 -0.2 children [ Shape { appearance PBRAppearance { baseColor 0.44 0.39 0.33 roughness 0.80 } geometry Sphere { radius 0.15 } } ] }
+    Transform { translation 0.2 0 -0.6 children [ Shape { appearance PBRAppearance { baseColor 0.40 0.36 0.30 roughness 0.84 } geometry Sphere { radius 0.10 } } ] }
+  ]
+}
+# Logs and natural obstacles
+Solid {
+  translation -5.46 0.12 2.73
+  rotation 0 1 0 1.57
+  name "log_nw"
+  children [ Shape { appearance PBRAppearance { baseColor 0.46 0.33 0.22 roughness 0.70 } geometry Capsule { radius 0.20 height 2.6 } } ]
+  boundingObject Capsule { radius 0.20 height 2.6 }
+}
+Solid {
+  translation 5.46 0.12 -2.73
+  rotation 0 1 0 1.57
+  name "log_se"
+  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.32 0.21 roughness 0.72 } geometry Capsule { radius 0.19 height 2.4 } } ]
+  boundingObject Capsule { radius 0.19 height 2.4 }
+}
+# Perimeter berms
+Solid {
+  translation 0 0.09 -15.64
+  name "berm_north"
+  children [ Shape { appearance PBRAppearance { baseColor 0.45 0.36 0.24 roughness 0.84 } geometry Box { size 28.90 0.18 0.32 } } ]
+  boundingObject Box { size 28.90 0.18 0.32 }
+}
+Solid {
+  translation 0 0.09 15.64
+  name "berm_south"
+  children [ Shape { appearance PBRAppearance { baseColor 0.45 0.36 0.24 roughness 0.84 } geometry Box { size 28.90 0.18 0.32 } } ]
+  boundingObject Box { size 28.90 0.18 0.32 }
+}
+Solid {
+  translation -15.64 0.09 0
+  name "berm_west"
+  children [ Shape { appearance PBRAppearance { baseColor 0.45 0.36 0.24 roughness 0.84 } geometry Box { size 0.32 0.18 28.90 } } ]
+  boundingObject Box { size 0.32 0.18 28.90 }
+}
+Solid {
+  translation 15.64 0.09 0
+  name "berm_east"
+  children [ Shape { appearance PBRAppearance { baseColor 0.45 0.36 0.24 roughness 0.84 } geometry Box { size 0.32 0.18 28.90 } } ]
+  boundingObject Box { size 0.32 0.18 28.90 }
+}
+# Environmental lighting for visual appeal and navigation
+PointLight {
+  location 4.46 1.8 4.46
+  color 1.00 0.92 0.78
+  intensity 3.5
+  attenuation 0 0 0.025
+  radius 8.5
+  castShadows TRUE
+}
+PointLight {
+  location -4.46 1.6 -4.46
+  color 0.82 0.94 1.00
+  intensity 3.2
+  attenuation 0 0 0.028
+  radius 8.0
+  castShadows TRUE
+}
+
+Solid {
+  translation -1.0271 0.0800 0.0890
+  name "stim_c_elegans_01_01_00"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.34 0.17
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation -1.3390 0.0800 0.2229
+  name "stim_c_elegans_01_01_01"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.66 0.15
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation -1.4729 0.0800 -0.0890
+  name "stim_c_elegans_01_01_02"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.72 0.21 0.13
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation -1.1610 0.0800 -0.2229
+  name "stim_c_elegans_01_01_03"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.36 0.64 0.20
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation -1.1463 0.0800 0.0928
+  name "stim_c_elegans_01_01_core"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.97 0.82 0.31
+        roughness 0.35
+      }
+      geometry Sphere {
+        radius 0.0520
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0520
+  }
+}
+PointLight {
+  location -0.9700 0.32 -0.2200
+  color 1.00 0.58 0.25
+  intensity 2.7
+  attenuation 0 0 0.2770
+  radius 1.9
+  castShadows FALSE
+}
+PointLight {
+  location -1.5100 0.30 0.2400
+  color 0.74 0.88 1.00
+  intensity 2.1
+  attenuation 0 0 0.3460
+  radius 1.7
+  castShadows FALSE
+}
+Solid {
+  translation -1.0500 0.022 0.0000
+  name "stim_c_elegans_01_taste_01"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.74 0.28
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation -1.0700 0.022 0.0900
+  name "stim_c_elegans_01_taste_02"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.82 0.56 0.23
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation -1.0700 0.022 -0.0900
+  name "stim_c_elegans_01_taste_03"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.78 0.50 0.22
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation -1.6100 0.058 0.1600
+  linearVelocity 1.35 0 -0.95
+  angularVelocity 0 2.2 0
+  name "stim_c_elegans_01_vibration_pellet"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.84 0.33
+        roughness 0.36
+      }
+      geometry Sphere {
+        radius 0.058
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.058
+  }
+  physics Physics {
+    density -1
+    mass 0.045
+  }
+}
+Solid {
+  translation 1.4240 0.0800 0.1653
+  name "stim_c_elegans_02_02_00"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.34 0.17
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation 1.0847 0.0800 0.1740
+  name "stim_c_elegans_02_02_01"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.66 0.15
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation 1.0760 0.0800 -0.1653
+  name "stim_c_elegans_02_02_02"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.72 0.21 0.13
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation 1.4153 0.0800 -0.1740
+  name "stim_c_elegans_02_02_03"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.36 0.64 0.20
+        roughness 0.52
+      }
+      geometry Cylinder {
+        radius 0.0300
+        height 0.1600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0300
+    height 0.1600
+  }
+}
+Solid {
+  translation 1.3119 0.0800 0.1247
+  name "stim_c_elegans_02_02_core"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.97 0.82 0.31
+        roughness 0.35
+      }
+      geometry Sphere {
+        radius 0.0520
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0520
+  }
+}
+PointLight {
+  location 1.5300 0.32 -0.2200
+  color 1.00 0.58 0.25
+  intensity 2.7
+  attenuation 0 0 0.2770
+  radius 1.9
+  castShadows FALSE
+}
+PointLight {
+  location 0.9900 0.30 0.2400
+  color 0.74 0.88 1.00
+  intensity 2.1
+  attenuation 0 0 0.3460
+  radius 1.7
+  castShadows FALSE
+}
+Solid {
+  translation 1.4500 0.022 0.0000
+  name "stim_c_elegans_02_taste_01"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.74 0.28
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation 1.4300 0.022 0.0900
+  name "stim_c_elegans_02_taste_02"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.82 0.56 0.23
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation 1.4300 0.022 -0.0900
+  name "stim_c_elegans_02_taste_03"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.78 0.50 0.22
+        roughness 0.45
+      }
+      geometry Sphere {
+        radius 0.0320
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0320
+  }
+}
+Solid {
+  translation 0.8900 0.058 0.1600
+  linearVelocity 1.35 0 -0.95
+  angularVelocity 0 2.2 0
+  name "stim_c_elegans_02_vibration_pellet"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.90 0.84 0.33
+        roughness 0.36
+      }
+      geometry Sphere {
+        radius 0.058
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.058
+  }
+  physics Physics {
+    density -1
+    mass 0.045
+  }
+}
+
+CelegansRobot {
+  translation -1.2500 0.0320 0.0000
+  rotation 0 1 0 1.45080
+  name "C_ELEGANS_01"
+  controller "nao_nn_controller_uds"
+  controllerArgs [
+    "NM_BRAINS=celegans_01"
+    "NM_SENSORS_celegans_01=^celegans_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_celegans_01=^celegans_o_[0-9]{3}_.*$"
+  ]
+}
+CelegansRobot {
+  translation 1.2500 0.0320 0.0000
+  rotation 0 1 0 -1.63080
+  name "C_ELEGANS_02"
+  controller "nao_nn_controller_uds"
+  controllerArgs [
+    "NM_BRAINS=celegans_02"
+    "NM_SENSORS_celegans_02=^celegans_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_celegans_02=^celegans_o_[0-9]{3}_.*$"
+  ]
+}

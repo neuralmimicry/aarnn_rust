@@ -9,7 +9,8 @@
 //!
 //! Run (release recommended):
 //!   cargo run --release --features ui,robot_io --example nn_uds_server -- \
-//!     --socket /tmp/aarnn_rust.nn --sensory 25 --output 11 --threshold 0.2 [--ui]
+//!     --socket /tmp/aarnn_rust.nn --sensory 25 --output 11 --threshold 0.2 \
+//!     [--config config.json] [--network network_celegans.json] [--ui]
 //!
 //! The optional --ui flag opens a lightweight window (eframe) showing last inputs/outputs.
 
@@ -54,6 +55,8 @@ struct ServerArgs {
     socket_path: String,
     num_sensory_neurons: usize,
     num_output_neurons: usize,
+    config_path: Option<String>,
+    network_path: Option<String>,
     spike_threshold: f32,
     enable_ui: bool,
     aer_sensory_base: u32,
@@ -66,6 +69,8 @@ fn parse_server_args() -> ServerArgs {
     let mut socket_path = "/tmp/aarnn_rust.nn".to_string();
     let mut num_sensory_neurons = 25usize;
     let mut num_output_neurons = 11usize;
+    let mut config_path: Option<String> = None;
+    let mut network_path: Option<String> = None;
     let mut spike_threshold = 0.5f32;
     let mut enable_ui = false;
     let mut aer_sensory_base = 4096u32;
@@ -93,6 +98,16 @@ fn parse_server_args() -> ServerArgs {
                     spike_threshold = value.parse().unwrap_or(spike_threshold);
                 }
             }
+            "--config" => {
+                if let Some(value) = args_iterator.next() {
+                    config_path = Some(value);
+                }
+            }
+            "--network" => {
+                if let Some(value) = args_iterator.next() {
+                    network_path = Some(value);
+                }
+            }
             "--aer-sensory-base" => {
                 if let Some(value) = args_iterator.next() {
                     aer_sensory_base = value.parse().unwrap_or(aer_sensory_base);
@@ -111,6 +126,8 @@ fn parse_server_args() -> ServerArgs {
         socket_path,
         num_sensory_neurons,
         num_output_neurons,
+        config_path,
+        network_path,
         spike_threshold,
         enable_ui,
         aer_sensory_base,
@@ -216,55 +233,157 @@ fn unlink_if_exists(path: &str) {
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
-fn build_runner(num_sensory_neurons: usize, num_output_neurons: usize) -> Runner {
-    let lif_params = LIFParams::default();
-    let stdp_params = STDPParams::default();
-    let network_config = NetworkConfig {
-        num_sensory_neurons: num_sensory_neurons,
+fn load_startup_model(server_args: &ServerArgs) -> (NetworkConfig, Option<String>, usize, usize) {
+    let mut startup_snapshot_json: Option<String> = None;
+    let mut net_cfg = NetworkConfig {
+        num_sensory_neurons: server_args.num_sensory_neurons,
         num_hidden_layers: 2,
         num_hidden_per_layer_initial: 32,
-        num_output_neurons: num_output_neurons,
+        num_output_neurons: server_args.num_output_neurons,
         ..NetworkConfig::default()
     };
-    Runner::new(
+
+    if let Some(config_path) = server_args.config_path.as_deref() {
+        if std::path::Path::new(config_path).exists() {
+            match std::fs::read_to_string(config_path) {
+                Ok(raw) => {
+                    if server_args.network_path.is_none() {
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<aarnn_rust::runner::Snapshot>(&raw)
+                        {
+                            startup_snapshot_json = Some(raw);
+                            net_cfg = snapshot.net;
+                        } else if let Ok(parsed) = serde_json::from_str::<NetworkConfig>(&raw) {
+                            net_cfg = parsed;
+                        } else {
+                            eprintln!(
+                                "[nn_uds_server] unable to parse config JSON from {}",
+                                config_path
+                            );
+                        }
+                    } else if let Ok(parsed) = serde_json::from_str::<NetworkConfig>(&raw) {
+                        net_cfg = parsed;
+                    } else {
+                        eprintln!(
+                            "[nn_uds_server] unable to parse config JSON from {}",
+                            config_path
+                        );
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[nn_uds_server] failed reading config {}: {}",
+                        config_path, err
+                    );
+                }
+            }
+        } else {
+            eprintln!(
+                "[nn_uds_server] config file not found (continuing with defaults): {}",
+                config_path
+            );
+        }
+    }
+
+    if let Some(network_path) = server_args.network_path.as_deref() {
+        match std::fs::read_to_string(network_path) {
+            Ok(raw) => match serde_json::from_str::<aarnn_rust::runner::Snapshot>(&raw) {
+                Ok(snapshot) => {
+                    startup_snapshot_json = Some(raw);
+                    net_cfg = snapshot.net;
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[nn_uds_server] failed parsing snapshot {}: {}",
+                        network_path, err
+                    );
+                }
+            },
+            Err(err) => {
+                eprintln!(
+                    "[nn_uds_server] failed reading snapshot {}: {}",
+                    network_path, err
+                );
+            }
+        }
+    }
+
+    let use_model_dims = server_args.config_path.is_some() || server_args.network_path.is_some();
+    let initial_s = if use_model_dims {
+        net_cfg.num_sensory_neurons
+    } else {
+        server_args.num_sensory_neurons
+    };
+    let initial_o = if use_model_dims {
+        net_cfg.num_output_neurons
+    } else {
+        server_args.num_output_neurons
+    };
+
+    (
+        net_cfg,
+        startup_snapshot_json,
+        initial_s.max(1),
+        initial_o.max(1),
+    )
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io"))]
+fn build_runner(base_config: &NetworkConfig, snapshot_json: Option<&str>) -> Runner {
+    let lif_params = LIFParams::default();
+    let stdp_params = STDPParams::default();
+    let mut runner = Runner::new(
         lif_params,
         stdp_params,
-        network_config,
+        base_config.clone(),
         aarnn_rust::sim::NeuronModel::Lif,
         aarnn_rust::sim::Learning::Stdp,
-    )
+    );
+    if let Some(json) = snapshot_json {
+        if let Err(err) = runner.import_network_json(json) {
+            eprintln!("[nn_uds_server] startup snapshot import failed: {}", err);
+        }
+    }
+    runner
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
 fn main() -> io::Result<()> {
     let server_args = parse_server_args();
+    let (startup_cfg, startup_snapshot_json, initial_s, initial_o) =
+        load_startup_model(&server_args);
     eprintln!(
-        "[nn_uds_server] socket={}, S={}, O={}, thr={}, ui={}, aer_s_base={}, aer_o_base={}",
+        "[nn_uds_server] socket={}, S={} O={} thr={} ui={} aer_s_base={} aer_o_base={} config={} network={}",
         server_args.socket_path,
-        server_args.num_sensory_neurons,
-        server_args.num_output_neurons,
+        initial_s,
+        initial_o,
         server_args.spike_threshold,
         server_args.enable_ui,
         server_args.aer_sensory_base,
-        server_args.aer_output_base
+        server_args.aer_output_base,
+        server_args.config_path.as_deref().unwrap_or("none"),
+        server_args.network_path.as_deref().unwrap_or("none"),
     );
 
     let quantizer = Quantizer {
         threshold: server_args.spike_threshold,
         probabilistic: true,
+        ..Quantizer::default()
     };
 
     // Shared state for optional visualization
-    let last_inputs = Arc::new(Mutex::new(vec![0f32; server_args.num_sensory_neurons]));
-    let last_outputs = Arc::new(Mutex::new(vec![0f32; server_args.num_output_neurons]));
+    let last_inputs = Arc::new(Mutex::new(vec![0f32; initial_s]));
+    let last_outputs = Arc::new(Mutex::new(vec![0f32; initial_o]));
 
     // Socket server thread
     let socket_path = server_args.socket_path.clone();
-    let s_count = server_args.num_sensory_neurons;
-    let o_count = server_args.num_output_neurons;
+    let s_count = initial_s;
+    let o_count = initial_o;
     let aer_s_base = server_args.aer_sensory_base;
     let aer_o_base = server_args.aer_output_base;
     let quantizer_srv = quantizer;
+    let startup_cfg_srv = startup_cfg.clone();
+    let startup_snapshot_srv = startup_snapshot_json.clone();
     let last_inputs_for_viz = last_inputs.clone();
     let last_outputs_for_viz = last_outputs.clone();
     std::thread::spawn(move || {
@@ -275,8 +394,14 @@ fn main() -> io::Result<()> {
 
         let mut active_s_names: Vec<String> = Vec::new();
         let mut active_o_names: Vec<String> = Vec::new();
-        let mut io_mapping_srv = build_mapping(s_count.max(1), o_count.max(1));
-        let mut runner = build_runner(io_mapping_srv.sensory_size, io_mapping_srv.output_size);
+        let mut io_mapping_srv = build_mapping(s_count, o_count);
+        let mut runner = build_runner(&startup_cfg_srv, startup_snapshot_srv.as_deref());
+        if runner.net.num_sensory_neurons != io_mapping_srv.sensory_size {
+            runner.resize_sensory(io_mapping_srv.sensory_size);
+        }
+        if runner.net.num_output_neurons != io_mapping_srv.output_size {
+            runner.resize_output(io_mapping_srv.output_size);
+        }
         let mut expected_bytes = (1 + io_mapping_srv.sensory_size) * 4;
         let mut request_buffer = vec![0u8; expected_bytes.max(8192)];
         let mut output_buffer = vec![0u8; io_mapping_srv.output_size * 4];
@@ -340,10 +465,12 @@ fn main() -> io::Result<()> {
                                 &active_s_names,
                                 &active_o_names,
                             );
-                            runner = build_runner(
-                                io_mapping_srv.sensory_size,
-                                io_mapping_srv.output_size,
-                            );
+                            if runner.net.num_sensory_neurons != io_mapping_srv.sensory_size {
+                                runner.resize_sensory(io_mapping_srv.sensory_size);
+                            }
+                            if runner.net.num_output_neurons != io_mapping_srv.output_size {
+                                runner.resize_output(io_mapping_srv.output_size);
+                            }
                             expected_bytes = (1 + io_mapping_srv.sensory_size) * 4;
                             request_buffer.resize(expected_bytes.max(8192), 0);
                             output_buffer.resize(io_mapping_srv.output_size * 4, 0);
@@ -485,7 +612,7 @@ fn main() -> io::Result<()> {
     if server_args.enable_ui {
         // Minimal eframe window to show last inputs/outputs as bars
         {
-            use eframe::{egui, NativeOptions};
+            use eframe::{NativeOptions, egui};
             let li = last_inputs.clone();
             let lo = last_outputs.clone();
             let options = NativeOptions::default();
@@ -498,8 +625,8 @@ fn main() -> io::Result<()> {
                         lo: Arc<Mutex<Vec<f32>>>,
                     }
                     impl eframe::App for Viz {
-                        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+                            egui::CentralPanel::default().show_inside(ui, |ui| {
                                 ui.heading("Inputs (S) and Outputs (O)");
                                 if let Ok(li) = self.li.lock() {
                                     draw_bars(ui, &li, "Inputs");
@@ -508,7 +635,7 @@ fn main() -> io::Result<()> {
                                     draw_bars(ui, &lo, "Outputs");
                                 }
                             });
-                            ctx.request_repaint_after(Duration::from_millis(33));
+                            ui.ctx().request_repaint_after(Duration::from_millis(33));
                         }
                     }
                     fn draw_bars(ui: &mut egui::Ui, vals: &[f32], title: &str) {

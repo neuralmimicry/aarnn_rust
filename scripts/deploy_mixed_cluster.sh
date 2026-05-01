@@ -1,18 +1,47 @@
 #!/usr/bin/env bash
-set -euo pipefail
-trap 'printf "[deploy-mixed-cluster] ERROR at line %s\n" "$LINENO" >&2' ERR
+# shellcheck disable=SC2016
+#
+# Deploy or tear down a mixed-architecture k3s cluster.
+#
+# Topology:
+#   - k3s server (control plane) runs on localhost
+#   - k3s agents run on remote worker hosts over SSH
+#   - application workloads are deployed into the selected namespace
+#
+# This script intentionally favours:
+#   - strict error handling
+#   - idempotent operations where practical
+#   - verbose, actionable diagnostics on failure
+#   - explicit validation of user input
+#   - careful cleanup for both deploy and delete workflows
 
-# Deploy a mixed-architecture k3s cluster:
-# - Control plane on localhost
-# - Worker agents over SSH
-# - Orchestrator deployment pinned to localhost
+set -Eeuo pipefail
 
-WORKER_HOSTS=("192.168.1.60" "192.168.72")
-SSH_USER="${SSH_USER:-$USER}"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+readonly LOG_PREFIX="[deploy-mixed-cluster]"
+# shellcheck source=scripts/container_workloads.sh
+source "${SCRIPT_DIR}/container_workloads.sh"
+
+# ------------------------------------------------------------------------------
+# Default configuration
+# ------------------------------------------------------------------------------
+
+# Worker hosts are stored in an array to preserve host boundaries safely.
+WORKER_HOSTS=("192.168.1.60" "192.168.1.72")
+
+SSH_USER="${SSH_USER:-${USER}}"
 SSH_PORT="${SSH_PORT:-22}"
-SSH_OPTS=(-p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL:-stable}"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/neuralmimicry/aarnn_rust:main}"
+AARNN_IMAGE_REPO="${AARNN_IMAGE_REPO:-ghcr.io/neuralmimicry/aarnn_rust}"
+AARNN_IMAGE_TAG="${AARNN_IMAGE_TAG:-engine}"
+AARNN_IMAGE_BASE="${AARNN_IMAGE_BASE:-${AARNN_IMAGE:-}}"
+AARNN_ORCHESTRATOR_IMAGE="${AARNN_ORCHESTRATOR_IMAGE:-${ORCHESTRATOR_IMAGE:-}}"
+AARNN_WEB_UI_IMAGE="${AARNN_WEB_UI_IMAGE:-${WEB_UI_IMAGE:-}}"
+AARNN_NODE_IMAGE="${AARNN_NODE_IMAGE:-${NODE_IMAGE:-}}"
+ORCHESTRATOR_IMAGE=""
+WEB_UI_IMAGE=""
+NODE_IMAGE=""
 NAMESPACE="${NAMESPACE:-default}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-300}"
 INTERACTIVE_SUDO="${INTERACTIVE_SUDO:-true}"
@@ -25,26 +54,85 @@ GHCR_USERNAME="${GHCR_USERNAME:-}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
 GHCR_EMAIL="${GHCR_EMAIL:-noreply@localhost}"
 GHCR_PULL_SECRET_NAME="${GHCR_PULL_SECRET_NAME:-ghcr-pull-secret}"
-USE_GHCR_PULL_SECRET="false"
 ROLLOUT_TIMEOUT_SECONDS="${ROLLOUT_TIMEOUT_SECONDS:-600}"
 K3S_KUBELET_CPU_FLAGS="${K3S_KUBELET_CPU_FLAGS:---kubelet-arg=cpu-cfs-quota=false --kubelet-arg=cpu-manager-policy=none}"
 ENABLE_GPU_PASSTHROUGH="${ENABLE_GPU_PASSTHROUGH:-true}"
+
+# When ACTION=deploy the script installs/updates the cluster.
+# When ACTION=delete the script tears down workloads and k3s components.
+ACTION="deploy"
+
+# Global SSH options are refreshed after argument parsing because SSH_PORT can
+# change at runtime.
+SSH_OPTS=()
+
+# A small amount of process-global state is used for cleanup and diagnostics.
+PORT_FORWARD_PID=""
+PORT_FORWARD_LOG=""
+STATUS_LOG=""
+KUBECONFIG_CONFIGURED="false"
+
+# ------------------------------------------------------------------------------
+# Logging, diagnostics and generic helpers
+# ------------------------------------------------------------------------------
+
+log() {
+  printf '%s %s\n' "${LOG_PREFIX}" "$*"
+}
+
+warn() {
+  printf '%s WARNING: %s\n' "${LOG_PREFIX}" "$*" >&2
+}
+
+fail() {
+  printf '%s ERROR: %s\n' "${LOG_PREFIX}" "$*" >&2
+  exit 1
+}
+
+on_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  printf '%s ERROR at line %s (exit=%s)\n' "${LOG_PREFIX}" "${line_no}" "${exit_code}" >&2
+}
+
+cleanup() {
+  # Cleanup is intentionally best-effort. Failures here must not hide the
+  # original error that triggered EXIT.
+  if [[ -n "${PORT_FORWARD_PID}" ]]; then
+    kill "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
+    wait "${PORT_FORWARD_PID}" 2>/dev/null || true
+  fi
+
+  [[ -n "${PORT_FORWARD_LOG}" ]] && rm -f "${PORT_FORWARD_LOG}" || true
+  [[ -n "${STATUS_LOG}" ]] && rm -f "${STATUS_LOG}" || true
+}
+
+trap 'on_error "$?" "$LINENO"' ERR
+trap cleanup EXIT
 
 usage() {
   cat <<'USAGE'
 Usage: scripts/deploy_mixed_cluster.sh [options]
 
+Actions:
+  --delete                    Tear down the running mixed k3s cluster instead of deploying it.
+
 Options:
   --workers <host1,host2>     Comma-separated worker hosts/IPs.
   --ssh-user <user>           SSH user for worker hosts (default: current user).
   --ssh-port <port>           SSH port for worker hosts (default: 22).
-  --image <image:tag>         Orchestrator image (default: ghcr.io/neuralmimicry/aarnn_rust:main).
-  --namespace <ns>            Kubernetes namespace for orchestrator (default: default).
+  --image <repo:tag>          Base AARNN image ref used to derive workload tags.
+  --image-repo <repo>         Workload image repository (default: ghcr.io/neuralmimicry/aarnn_rust).
+  --image-tag <tag>           Shared workload image base tag (default: engine).
+  --orchestrator-image <ref>  Override the orchestrator image ref.
+  --web-ui-image <ref>        Override the web-ui image ref.
+  --node-image <ref>          Override the engine node image ref.
+  --namespace <ns>            Kubernetes namespace for application workloads (default: default).
   --k3s-channel <channel>     k3s release channel (default: stable).
   --wait-timeout <seconds>    Wait timeout for node readiness (default: 300).
   --no-interactive-sudo       Require passwordless sudo on worker hosts.
   --web-ui-local-port <port>  Local port for web-ui operational probe (default: 18080).
-  --remote-timeout <seconds>  Timeout for each remote k3s agent install (default: 900).
+  --remote-timeout <seconds>  Timeout for each remote k3s agent install/remove (default: 900).
   --node-wait <seconds>       Timeout waiting for AARNN node registration (default: 180).
   --keep-system-kubelet       Do not stop existing kubelet.service on localhost.
   --keep-remote-system-kubelet
@@ -61,17 +149,15 @@ Options:
   --help                      Show this help.
 
 Environment overrides are supported for the same fields:
-  SSH_USER, SSH_PORT, ORCHESTRATOR_IMAGE, NAMESPACE, INSTALL_K3S_CHANNEL, WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO, WEB_UI_LOCAL_PORT, REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS, STOP_SYSTEM_KUBELET, STOP_REMOTE_SYSTEM_KUBELET, GHCR_USERNAME, GHCR_TOKEN, GHCR_EMAIL, GHCR_PULL_SECRET_NAME, ROLLOUT_TIMEOUT_SECONDS, K3S_KUBELET_CPU_FLAGS, ENABLE_GPU_PASSTHROUGH
+  SSH_USER, SSH_PORT, AARNN_IMAGE_BASE, AARNN_IMAGE, AARNN_IMAGE_REPO,
+  AARNN_IMAGE_TAG, AARNN_ORCHESTRATOR_IMAGE, ORCHESTRATOR_IMAGE,
+  AARNN_WEB_UI_IMAGE, WEB_UI_IMAGE, AARNN_NODE_IMAGE, NODE_IMAGE,
+  NAMESPACE, INSTALL_K3S_CHANNEL, WAIT_TIMEOUT_SECONDS, INTERACTIVE_SUDO,
+  WEB_UI_LOCAL_PORT, REMOTE_INSTALL_TIMEOUT_SECONDS, AARNN_NODE_WAIT_SECONDS,
+  STOP_SYSTEM_KUBELET, STOP_REMOTE_SYSTEM_KUBELET, GHCR_USERNAME, GHCR_TOKEN,
+  GHCR_EMAIL, GHCR_PULL_SECRET_NAME, ROLLOUT_TIMEOUT_SECONDS,
+  K3S_KUBELET_CPU_FLAGS, ENABLE_GPU_PASSTHROUGH
 USAGE
-}
-
-log() {
-  printf '[deploy-mixed-cluster] %s\n' "$*"
-}
-
-fail() {
-  printf '[deploy-mixed-cluster] ERROR: %s\n' "$*" >&2
-  exit 1
 }
 
 require_cmd() {
@@ -79,28 +165,137 @@ require_cmd() {
   command -v "${cmd}" >/dev/null 2>&1 || fail "Required command not found: ${cmd}"
 }
 
+refresh_ssh_opts() {
+  SSH_OPTS=(
+    -p "${SSH_PORT}"
+    -o BatchMode=yes
+    -o ConnectTimeout=10
+    -o StrictHostKeyChecking=accept-new
+  )
+}
+
+is_positive_integer() {
+  [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" > 0 ))
+}
+
+validate_bool() {
+  case "$1" in
+    true|false) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_positive_integer() {
+  local value="$1"
+  local field_name="$2"
+  is_positive_integer "${value}" || fail "${field_name} must be a positive integer (got: ${value})"
+}
+
 normalize_arch() {
   local raw="$1"
   case "${raw}" in
-    x86_64|amd64)
-      echo "amd64"
-      ;;
-    aarch64|arm64)
-      echo "arm64"
-      ;;
-    *)
-      echo "unknown(${raw})"
-      ;;
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) echo "unknown(${raw})" ;;
   esac
+}
+
+join_by() {
+  local sep="$1"
+  shift || true
+  local first="true"
+  local item
+  for item in "$@"; do
+    if [[ "${first}" == "true" ]]; then
+      printf '%s' "${item}"
+      first="false"
+    else
+      printf '%s%s' "${sep}" "${item}"
+    fi
+  done
+}
+
+parse_repo_tag_ref() {
+  local ref="$1"
+  local last_path_segment=""
+  local repo_part=""
+  local tag_part=""
+
+  [[ -n "${ref}" ]] || return 1
+  [[ "${ref}" != *@sha256:* ]] || return 1
+  last_path_segment="${ref##*/}"
+  [[ "${last_path_segment}" == *:* ]] || return 1
+
+  repo_part="${ref%:*}"
+  tag_part="${ref##*:}"
+  [[ -n "${repo_part}" && -n "${tag_part}" && "${repo_part}" != "${ref}" ]] || return 1
+
+  printf '%s\t%s\n' "${repo_part}" "${tag_part}"
+}
+
+resolve_workload_image() {
+  local workload="$1"
+  local explicit_ref="$2"
+
+  if [[ -n "${explicit_ref}" ]]; then
+    printf '%s' "${explicit_ref}"
+    return 0
+  fi
+
+  printf '%s:%s' "${AARNN_IMAGE_REPO}" "$(aarnn_container_workload_tag "${AARNN_IMAGE_TAG}" "${workload}")"
+}
+
+resolve_workload_images() {
+  local parsed_base=""
+
+  if [[ -n "${AARNN_IMAGE_BASE}" ]]; then
+    parsed_base="$(parse_repo_tag_ref "${AARNN_IMAGE_BASE}")" || fail "--image / AARNN_IMAGE_BASE must be a repo:tag ref without a digest."
+    AARNN_IMAGE_REPO="${parsed_base%%$'\t'*}"
+    AARNN_IMAGE_TAG="${parsed_base##*$'\t'}"
+  fi
+
+  ORCHESTRATOR_IMAGE="$(resolve_workload_image orchestrator "${AARNN_ORCHESTRATOR_IMAGE}")"
+  WEB_UI_IMAGE="$(resolve_workload_image web-ui "${AARNN_WEB_UI_IMAGE}")"
+  NODE_IMAGE="$(resolve_workload_image node "${AARNN_NODE_IMAGE}")"
+}
+
+image_ref_is_mutable() {
+  local image_ref="$1"
+  [[ "${image_ref}" != *@sha256:* ]]
+}
+
+any_workload_image_matches_prefix() {
+  local prefix="$1"
+  [[ "${ORCHESTRATOR_IMAGE}" == "${prefix}"* ]] \
+    || [[ "${WEB_UI_IMAGE}" == "${prefix}"* ]] \
+    || [[ "${NODE_IMAGE}" == "${prefix}"* ]]
+}
+
+parse_workers_csv() {
+  local csv="$1"
+  local -a parsed=()
+  local host
+
+  IFS=',' read -r -a parsed <<<"${csv}"
+  ((${#parsed[@]} > 0)) || fail "--workers requires at least one host"
+
+  for host in "${parsed[@]}"; do
+    [[ -n "${host}" ]] || fail "--workers contains an empty host entry"
+  done
+
+  WORKER_HOSTS=("${parsed[@]}")
 }
 
 parse_args() {
   while (($# > 0)); do
     case "$1" in
+      --delete)
+        ACTION="delete"
+        ;;
       --workers)
         shift
         [[ $# -gt 0 ]] || fail "--workers requires a value"
-        IFS=',' read -r -a WORKER_HOSTS <<<"$1"
+        parse_workers_csv "$1"
         ;;
       --ssh-user)
         shift
@@ -111,12 +306,36 @@ parse_args() {
         shift
         [[ $# -gt 0 ]] || fail "--ssh-port requires a value"
         SSH_PORT="$1"
-        SSH_OPTS=(-p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
         ;;
       --image)
         shift
         [[ $# -gt 0 ]] || fail "--image requires a value"
-        ORCHESTRATOR_IMAGE="$1"
+        AARNN_IMAGE_BASE="$1"
+        ;;
+      --image-repo)
+        shift
+        [[ $# -gt 0 ]] || fail "--image-repo requires a value"
+        AARNN_IMAGE_REPO="$1"
+        ;;
+      --image-tag)
+        shift
+        [[ $# -gt 0 ]] || fail "--image-tag requires a value"
+        AARNN_IMAGE_TAG="$1"
+        ;;
+      --orchestrator-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--orchestrator-image requires a value"
+        AARNN_ORCHESTRATOR_IMAGE="$1"
+        ;;
+      --web-ui-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--web-ui-image requires a value"
+        AARNN_WEB_UI_IMAGE="$1"
+        ;;
+      --node-image)
+        shift
+        [[ $# -gt 0 ]] || fail "--node-image requires a value"
+        AARNN_NODE_IMAGE="$1"
         ;;
       --namespace)
         shift
@@ -202,63 +421,159 @@ parse_args() {
   done
 }
 
+validate_config() {
+  resolve_workload_images
+
+  ensure_positive_integer "${SSH_PORT}" "SSH port"
+  ensure_positive_integer "${WAIT_TIMEOUT_SECONDS}" "Wait timeout"
+  ensure_positive_integer "${WEB_UI_LOCAL_PORT}" "Web UI local port"
+  ensure_positive_integer "${REMOTE_INSTALL_TIMEOUT_SECONDS}" "Remote install timeout"
+  ensure_positive_integer "${AARNN_NODE_WAIT_SECONDS}" "Node wait timeout"
+  ensure_positive_integer "${ROLLOUT_TIMEOUT_SECONDS}" "Rollout timeout"
+
+  validate_bool "${INTERACTIVE_SUDO}" || fail "INTERACTIVE_SUDO must be true or false"
+  validate_bool "${STOP_SYSTEM_KUBELET}" || fail "STOP_SYSTEM_KUBELET must be true or false"
+  validate_bool "${STOP_REMOTE_SYSTEM_KUBELET}" || fail "STOP_REMOTE_SYSTEM_KUBELET must be true or false"
+  validate_bool "${ENABLE_GPU_PASSTHROUGH}" || fail "ENABLE_GPU_PASSTHROUGH must be true or false"
+
+  [[ -n "${SSH_USER}" ]] || fail "SSH user must not be empty"
+  [[ -n "${NAMESPACE}" ]] || fail "Namespace must not be empty"
+  [[ -n "${INSTALL_K3S_CHANNEL}" ]] || fail "k3s channel must not be empty"
+  [[ -n "${AARNN_IMAGE_REPO}" ]] || fail "AARNN image repo must not be empty"
+  [[ -n "${AARNN_IMAGE_TAG}" ]] || fail "AARNN image tag must not be empty"
+  [[ -n "${ORCHESTRATOR_IMAGE}" ]] || fail "Orchestrator image must not be empty"
+  [[ -n "${WEB_UI_IMAGE}" ]] || fail "Web UI image must not be empty"
+  [[ -n "${NODE_IMAGE}" ]] || fail "Node image must not be empty"
+
+  refresh_ssh_opts
+}
+
+run_with_optional_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_seconds}" "$@"
+  else
+    "$@"
+  fi
+}
+
+remote_sudo_mode() {
+  local host="$1"
+  if ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "LC_ALL=C LANG=C sudo -n true" >/dev/null 2>&1; then
+    echo "nopass"
+  else
+    echo "password"
+  fi
+}
+
+prompt_for_remote_sudo_password() {
+  local host="$1"
+  local password=""
+  local attempt
+
+  if [[ "${INTERACTIVE_SUDO}" != "true" ]]; then
+    fail "Host ${host} requires a sudo password. Re-run without --no-interactive-sudo or configure passwordless sudo."
+  fi
+
+  for attempt in 1 2 3; do
+    read -rsp "${LOG_PREFIX} sudo password for ${SSH_USER}@${host}: " password
+    echo
+    if printf '%s\n' "${password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "LC_ALL=C LANG=C sudo -S -p '' -k true" >/dev/null 2>&1; then
+      printf '%s' "${password}"
+      return 0
+    fi
+    warn "Incorrect sudo password for ${host} (attempt ${attempt}/3)."
+  done
+
+  fail "Failed to validate sudo password on ${host} after 3 attempts."
+}
+
+run_remote_as_root() {
+  local host="$1"
+  local script_body="$2"
+  local timeout_seconds="${3:-0}"
+
+  local mode=""
+  local quoted_script=""
+  local remote_cmd=""
+  local sudo_password=""
+
+  printf -v quoted_script "%q" "${script_body}"
+  mode="$(remote_sudo_mode "${host}")"
+
+  if [[ "${mode}" == "nopass" ]]; then
+    printf -v remote_cmd 'LC_ALL=C LANG=C sudo -n bash -lc %s' "${quoted_script}"
+    if (( timeout_seconds > 0 )); then
+      run_with_optional_timeout "${timeout_seconds}" ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd}"
+    else
+      ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd}"
+    fi
+    return 0
+  fi
+
+  sudo_password="$(prompt_for_remote_sudo_password "${host}")"
+  printf -v remote_cmd 'LC_ALL=C LANG=C sudo -S -p "" bash -lc %s' "${quoted_script}"
+  if (( timeout_seconds > 0 )); then
+    printf '%s\n' "${sudo_password}" | run_with_optional_timeout "${timeout_seconds}" ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd}"
+  else
+    printf '%s\n' "${sudo_password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd}"
+  fi
+}
+
+kubectl_available() {
+  command -v kubectl >/dev/null 2>&1
+}
+
+configure_local_kubeconfig() {
+  # k3s writes the canonical kubeconfig as root. We copy it into the user's
+  # home directory so subsequent kubectl operations can run unprivileged.
+  [[ -f /etc/rancher/k3s/k3s.yaml ]] || fail "Expected kubeconfig at /etc/rancher/k3s/k3s.yaml was not found"
+
+  mkdir -p "${HOME}/.kube"
+  sudo cp /etc/rancher/k3s/k3s.yaml "${HOME}/.kube/config"
+  sudo chown "${USER}:${USER}" "${HOME}/.kube/config"
+  chmod 600 "${HOME}/.kube/config"
+  export KUBECONFIG="${HOME}/.kube/config"
+  KUBECONFIG_CONFIGURED="true"
+}
+
+try_configure_local_kubeconfig() {
+  if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
+    configure_local_kubeconfig
+    return 0
+  fi
+  return 1
+}
+
+k3s_server_installed_local() {
+  [[ -x /usr/local/bin/k3s-uninstall.sh ]] || command -v k3s >/dev/null 2>&1 || systemctl list-unit-files | grep -q '^k3s\.service'
+}
+
+k3s_agent_installed_remote() {
+  local host="$1"
+  ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" \
+    "test -x /usr/local/bin/k3s-agent-uninstall.sh || test -f /etc/systemd/system/k3s-agent.service || systemctl list-unit-files 2>/dev/null | grep -q '^k3s-agent\.service'" \
+    >/dev/null 2>&1
+}
+
 get_control_plane_ip() {
   if [[ -n "${CONTROL_PLANE_IP:-}" ]]; then
-    echo "${CONTROL_PLANE_IP}"
+    printf '%s\n' "${CONTROL_PLANE_IP}"
     return 0
   fi
 
   ip -4 route get 1.1.1.1 2>/dev/null | awk '
     {
-      for (i=1; i<=NF; i++) {
-        if ($i == "src" && (i+1) <= NF) {
-          print $(i+1)
+      for (i = 1; i <= NF; i++) {
+        if ($i == "src" && (i + 1) <= NF) {
+          print $(i + 1)
           exit
         }
       }
     }
   '
-}
-
-install_k3s_server_local() {
-  local node_name
-  node_name="$(hostname -s)"
-
-  if command -v k3s >/dev/null 2>&1; then
-    log "k3s already installed on localhost; refreshing service config and ensuring it is running."
-    curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644 ${K3S_KUBELET_CPU_FLAGS}" sh -
-    sudo systemctl enable k3s >/dev/null 2>&1 || true
-    if ! sudo systemctl restart k3s; then
-      log "Initial local k3s start failed."
-      show_local_k3s_diagnostics
-      recover_local_k3s_conflicts
-      if ! sudo systemctl restart k3s; then
-        show_local_k3s_diagnostics
-        fail "Local k3s failed to start after recovery attempt."
-      fi
-    fi
-    return 0
-  fi
-
-  log "Installing k3s server on localhost (${node_name}) via channel '${INSTALL_K3S_CHANNEL}'."
-  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644 ${K3S_KUBELET_CPU_FLAGS}" sh -
-  sudo systemctl enable k3s >/dev/null 2>&1 || true
-  if ! sudo systemctl restart k3s; then
-    log "Initial local k3s start failed."
-    show_local_k3s_diagnostics
-    recover_local_k3s_conflicts
-    if ! sudo systemctl restart k3s; then
-      show_local_k3s_diagnostics
-      fail "Local k3s failed to start after recovery attempt."
-    fi
-  fi
-}
-
-configure_local_kubeconfig() {
-  mkdir -p "${HOME}/.kube"
-  sudo cp /etc/rancher/k3s/k3s.yaml "${HOME}/.kube/config"
-  sudo chown "${USER}:${USER}" "${HOME}/.kube/config"
-  export KUBECONFIG="${HOME}/.kube/config"
 }
 
 show_local_k3s_diagnostics() {
@@ -325,27 +640,47 @@ detect_remote_arch() {
   ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "LC_ALL=C LANG=C uname -m"
 }
 
+install_k3s_server_local() {
+  local node_name=""
+  node_name="$(hostname -s)"
+
+  log "Installing or refreshing k3s server on localhost (${node_name}) via channel '${INSTALL_K3S_CHANNEL}'."
+  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL}" \
+    INSTALL_K3S_EXEC="server --node-name ${node_name} --write-kubeconfig-mode 644 ${K3S_KUBELET_CPU_FLAGS}" sh -
+
+  sudo systemctl enable k3s >/dev/null 2>&1 || true
+  if ! sudo systemctl restart k3s; then
+    log "Initial local k3s start failed."
+    show_local_k3s_diagnostics
+    recover_local_k3s_conflicts
+    if ! sudo systemctl restart k3s; then
+      show_local_k3s_diagnostics
+      fail "Local k3s failed to start after recovery attempt."
+    fi
+  fi
+}
+
 install_k3s_agent_remote() {
   local host="$1"
   local control_plane_ip="$2"
   local node_token="$3"
-  local remote_cmd_no_pass
-  local remote_cmd_with_pass
-  local remote_script
-  local remote_script_q
-  local remote_diag_cmd_no_pass
-  local remote_diag_cmd_with_pass
-  local sudo_password
-  local validated=0
-  local attempt
+  local remote_script=""
 
-  log "Installing/refreshing k3s agent on ${host}."
-  remote_script="$(cat <<'REMOTE'
-set -euo pipefail
+  log "Installing or refreshing k3s agent on ${host}."
+
+  remote_script="$(cat <<REMOTE
+set -Eeuo pipefail
+
+export INSTALL_K3S_CHANNEL=$(printf '%q' "${INSTALL_K3S_CHANNEL}")
+export K3S_URL=$(printf '%q' "https://${control_plane_ip}:6443")
+export K3S_TOKEN=$(printf '%q' "${node_token}")
+export STOP_REMOTE_SYSTEM_KUBELET=$(printf '%q' "${STOP_REMOTE_SYSTEM_KUBELET}")
+export K3S_KUBELET_CPU_FLAGS=$(printf '%q' "${K3S_KUBELET_CPU_FLAGS}")
+
 command -v curl >/dev/null 2>&1 || { echo "curl is required on worker host." >&2; exit 1; }
 
 if systemctl is-active --quiet kubelet; then
-  if [ "${STOP_REMOTE_SYSTEM_KUBELET:-true}" = "true" ]; then
+  if [[ "\${STOP_REMOTE_SYSTEM_KUBELET}" == "true" ]]; then
     systemctl stop kubelet || true
   else
     echo "kubelet.service is active on worker and conflicts with k3s-agent ports 10248/10250." >&2
@@ -355,26 +690,28 @@ fi
 
 systemctl stop k3s-agent >/dev/null 2>&1 || true
 
-# Clear any stale listeners that would block kubelet inside k3s-agent.
 if ss -lntp '( sport = :10248 or sport = :10250 )' 2>/dev/null | grep -q LISTEN; then
-  if [ "${STOP_REMOTE_SYSTEM_KUBELET:-true}" = "true" ]; then
+  if [[ "\${STOP_REMOTE_SYSTEM_KUBELET}" == "true" ]]; then
     systemctl stop kubelet >/dev/null 2>&1 || true
   fi
 fi
 
 k3s_exec="agent"
-if [ -n "${K3S_KUBELET_CPU_FLAGS:-}" ]; then
-  k3s_exec="${k3s_exec} ${K3S_KUBELET_CPU_FLAGS}"
+if [[ -n "\${K3S_KUBELET_CPU_FLAGS}" ]]; then
+  k3s_exec="\${k3s_exec} \${K3S_KUBELET_CPU_FLAGS}"
 fi
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="${k3s_exec}" sh -
+
+curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL="\${INSTALL_K3S_CHANNEL}" INSTALL_K3S_EXEC="\${k3s_exec}" sh -
 systemctl enable --now k3s-agent || true
-for _ in $(seq 1 30); do
+
+for _ in \$(seq 1 30); do
   if systemctl is-active --quiet k3s-agent; then
     exit 0
   fi
   systemctl start k3s-agent || true
   sleep 2
 done
+
 echo "k3s-agent did not become active in time." >&2
 ss -lntp '( sport = :10248 or sport = :10250 )' || true
 systemctl status kubelet --no-pager -l || true
@@ -383,75 +720,15 @@ journalctl -u k3s-agent -n 120 --no-pager || true
 exit 1
 REMOTE
 )"
-  printf -v remote_script_q "%q" "${remote_script}"
 
-  printf -v remote_cmd_no_pass \
-    "LC_ALL=C LANG=C sudo -n env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q K3S_KUBELET_CPU_FLAGS=%q bash -lc %s" \
-    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${K3S_KUBELET_CPU_FLAGS}" "${remote_script_q}"
-  printf -v remote_diag_cmd_no_pass \
-    "LC_ALL=C LANG=C sudo -n bash -lc %q" \
-    "ss -lntp '( sport = :10248 or sport = :10250 )' || true; systemctl status kubelet --no-pager -l || true; systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true"
-
-  if ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "LC_ALL=C LANG=C sudo -n true" >/dev/null 2>&1; then
-    if command -v timeout >/dev/null 2>&1; then
-      if ! timeout "${REMOTE_INSTALL_TIMEOUT_SECONDS}" ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd_no_pass}"; then
-        log "Failed to install/start k3s-agent on ${host}; collecting diagnostics."
-        ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_diag_cmd_no_pass}" || true
-        fail "k3s-agent installation failed on ${host}."
-      fi
-    else
-      if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd_no_pass}"; then
-        log "Failed to install/start k3s-agent on ${host}; collecting diagnostics."
-        ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_diag_cmd_no_pass}" || true
-        fail "k3s-agent installation failed on ${host}."
-      fi
-    fi
-    log "k3s agent ready on ${host}."
-    return 0
+  if ! run_remote_as_root "${host}" "${remote_script}" "${REMOTE_INSTALL_TIMEOUT_SECONDS}"; then
+    warn "Failed to install/start k3s-agent on ${host}; collecting diagnostics."
+    run_remote_as_root "${host}" \
+      "ss -lntp '( sport = :10248 or sport = :10250 )' || true; systemctl status kubelet --no-pager -l || true; systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true" \
+      60 || true
+    fail "k3s-agent installation failed on ${host}."
   fi
 
-  if [[ "${INTERACTIVE_SUDO}" != "true" ]]; then
-    fail "Host ${host} requires sudo password. Re-run without --no-interactive-sudo or configure passwordless sudo."
-  fi
-
-  for attempt in 1 2 3; do
-    log "Host ${host} requires sudo password; enter it locally (hidden input)."
-    read -rsp "[deploy-mixed-cluster] sudo password for ${SSH_USER}@${host}: " sudo_password
-    echo
-
-    if printf '%s\n' "${sudo_password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "LC_ALL=C LANG=C sudo -S -p '' -k true" >/dev/null 2>&1; then
-      validated=1
-      break
-    fi
-    log "Incorrect sudo password for ${host} (attempt ${attempt}/3)."
-  done
-
-  if [[ ${validated} -ne 1 ]]; then
-    fail "Failed to validate sudo password on ${host} after 3 attempts."
-  fi
-
-  printf -v remote_cmd_with_pass \
-    "LC_ALL=C LANG=C sudo -S -p '' env INSTALL_K3S_CHANNEL=%q K3S_URL=%q K3S_TOKEN=%q STOP_REMOTE_SYSTEM_KUBELET=%q K3S_KUBELET_CPU_FLAGS=%q bash -lc %s" \
-    "${INSTALL_K3S_CHANNEL}" "https://${control_plane_ip}:6443" "${node_token}" "${STOP_REMOTE_SYSTEM_KUBELET}" "${K3S_KUBELET_CPU_FLAGS}" "${remote_script_q}"
-  printf -v remote_diag_cmd_with_pass \
-    "LC_ALL=C LANG=C sudo -S -p '' bash -lc %q" \
-    "ss -lntp '( sport = :10248 or sport = :10250 )' || true; systemctl status kubelet --no-pager -l || true; systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true"
-
-  if command -v timeout >/dev/null 2>&1; then
-    if ! printf '%s\n' "${sudo_password}" | timeout "${REMOTE_INSTALL_TIMEOUT_SECONDS}" ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd_with_pass}"; then
-      log "Failed to install/start k3s-agent on ${host}; collecting diagnostics."
-      printf '%s\n' "${sudo_password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_diag_cmd_with_pass}" || true
-      fail "k3s-agent installation failed on ${host}."
-    fi
-  else
-    if ! printf '%s\n' "${sudo_password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_cmd_with_pass}"; then
-      log "Failed to install/start k3s-agent on ${host}; collecting diagnostics."
-      printf '%s\n' "${sudo_password}" | ssh "${SSH_OPTS[@]}" "${SSH_USER}@${host}" "${remote_diag_cmd_with_pass}" || true
-      fail "k3s-agent installation failed on ${host}."
-    fi
-  fi
-
-  unset sudo_password
   log "k3s agent ready on ${host}."
 }
 
@@ -460,12 +737,13 @@ wait_for_nodes_ready() {
   local elapsed=0
 
   while (( elapsed < WAIT_TIMEOUT_SECONDS )); do
-    local nodes_output
-    local count
-    local ready
+    local nodes_output=""
+    local count=0
+    local ready=0
+
     nodes_output="$(kubectl get nodes --no-headers 2>/dev/null || true)"
-    count="$(awk 'NF>0 {c++} END{print c+0}' <<<"${nodes_output}")"
-    ready="$(awk '$2 ~ /^Ready/ {c++} END{print c+0}' <<<"${nodes_output}")"
+    count="$(awk 'NF > 0 { c++ } END { print c + 0 }' <<<"${nodes_output}")"
+    ready="$(awk '$2 ~ /^Ready/ { c++ } END { print c + 0 }' <<<"${nodes_output}")"
 
     if (( count >= expected_count && ready >= expected_count )); then
       log "Cluster is ready (${ready}/${count} Ready, expected >= ${expected_count})."
@@ -491,12 +769,8 @@ configure_registry_auth() {
       --docker-password="${GHCR_TOKEN}" \
       --docker-email="${GHCR_EMAIL}" \
       --dry-run=client -o yaml | kubectl apply -f -
-    USE_GHCR_PULL_SECRET="true"
-  else
-    USE_GHCR_PULL_SECRET="false"
-    if [[ "${ORCHESTRATOR_IMAGE}" == ghcr.io/* ]]; then
-      log "No GHCR credentials provided. If image is private, set GHCR_USERNAME and GHCR_TOKEN (or use --ghcr-username/--ghcr-token)."
-    fi
+  elif any_workload_image_matches_prefix "ghcr.io/"; then
+    warn "No GHCR credentials provided. If the image is private, set GHCR_USERNAME and GHCR_TOKEN (or use --ghcr-username/--ghcr-token)."
   fi
 }
 
@@ -544,7 +818,7 @@ def tcp_check(host: str, port: int) -> str:
     try:
         sock.connect((host, port))
         return "ok"
-    except Exception as exc:  # pragma: no cover - diagnostic path
+    except Exception as exc:
         return f"fail({exc})"
     finally:
         sock.close()
@@ -555,24 +829,15 @@ def dns_check(name: str) -> str:
         infos = socket.getaddrinfo(name, 50051, socket.AF_UNSPEC, socket.SOCK_STREAM)
         addrs = sorted({item[4][0] for item in infos if item and len(item) >= 5})
         return "ok->" + ",".join(addrs)
-    except Exception as exc:  # pragma: no cover - diagnostic path
+    except Exception as exc:
         return f"fail({exc})"
 
 
 print("dns(orchestrator)=" + dns_check("orchestrator"))
 print("tcp(orchestrator:50051)=" + tcp_check("orchestrator", 50051))
-print(
-    "tcp(ORCH_CLUSTER_IP:50051)="
-    + tcp_check(os.environ.get("ORCH_CLUSTER_IP", ""), 50051)
-)
-print(
-    "tcp(WEBUI_CLUSTER_IP:8080)="
-    + tcp_check(os.environ.get("WEBUI_CLUSTER_IP", ""), 8080)
-)
-print(
-    "tcp(KUBEDNS_CLUSTER_IP:53)="
-    + tcp_check(os.environ.get("KUBEDNS_CLUSTER_IP", ""), 53)
-)
+print("tcp(ORCH_CLUSTER_IP:50051)=" + tcp_check(os.environ.get("ORCH_CLUSTER_IP", ""), 50051))
+print("tcp(WEBUI_CLUSTER_IP:8080)=" + tcp_check(os.environ.get("WEBUI_CLUSTER_IP", ""), 8080))
+print("tcp(KUBEDNS_CLUSTER_IP:53)=" + tcp_check(os.environ.get("KUBEDNS_CLUSTER_IP", ""), 53))
 PY' || true
     kubectl -n "${NAMESPACE}" logs "${pod_name}" --tail=80 || true
   done < <(kubectl -n "${NAMESPACE}" get pods -l role=node -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{" "}{.status.podIP}{"\n"}{end}' || true)
@@ -590,22 +855,33 @@ rollout_or_fail() {
 }
 
 deploy_orchestrator() {
-  local control_plane_node_name
+  local control_plane_node_name=""
   local sa_pull_secret_yaml=""
   local pod_pull_secret_yaml=""
-  local image_pull_policy="IfNotPresent"
+  local orchestrator_image_pull_policy="IfNotPresent"
+  local web_ui_image_pull_policy="IfNotPresent"
+  local node_image_pull_policy="IfNotPresent"
   local force_rollout_restart="false"
   local gpu_pod_volumes_yaml=""
   local gpu_container_mounts_yaml=""
   local gpu_container_security_yaml=""
+
   control_plane_node_name="$(hostname -s)"
 
-  if [[ "${ORCHESTRATOR_IMAGE}" != *@sha256:* ]]; then
-    image_pull_policy="Always"
+  if image_ref_is_mutable "${ORCHESTRATOR_IMAGE}"; then
+    orchestrator_image_pull_policy="Always"
+    force_rollout_restart="true"
+  fi
+  if image_ref_is_mutable "${WEB_UI_IMAGE}"; then
+    web_ui_image_pull_policy="Always"
+    force_rollout_restart="true"
+  fi
+  if image_ref_is_mutable "${NODE_IMAGE}"; then
+    node_image_pull_policy="Always"
     force_rollout_restart="true"
   fi
 
-  if [[ "${USE_GHCR_PULL_SECRET}" == "true" ]]; then
+  if [[ -n "${GHCR_USERNAME}" && -n "${GHCR_TOKEN}" ]]; then
     sa_pull_secret_yaml=$'imagePullSecrets:\n  - name: '"${GHCR_PULL_SECRET_NAME}"
     pod_pull_secret_yaml=$'      imagePullSecrets:\n        - name: '"${GHCR_PULL_SECRET_NAME}"
   fi
@@ -616,7 +892,7 @@ deploy_orchestrator() {
     gpu_pod_volumes_yaml=$'      volumes:\n        - name: host-dev\n          hostPath:\n            path: /dev\n            type: Directory\n        - name: host-sys\n          hostPath:\n            path: /sys\n            type: Directory'
   fi
 
-  log "Deploying orchestrator (${ORCHESTRATOR_IMAGE}) to namespace '${NAMESPACE}', pinned to ${control_plane_node_name}."
+  log "Deploying workloads to namespace '${NAMESPACE}' with orchestrator=${ORCHESTRATOR_IMAGE}, web-ui=${WEB_UI_IMAGE}, node=${NODE_IMAGE}, pinned to ${control_plane_node_name}."
   cat <<EOF | kubectl -n "${NAMESPACE}" apply -f -
 apiVersion: v1
 kind: ServiceAccount
@@ -676,7 +952,7 @@ ${pod_pull_secret_yaml}
       containers:
         - name: neuromorphic
           image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          imagePullPolicy: ${orchestrator_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
@@ -738,8 +1014,8 @@ ${pod_pull_secret_yaml}
           effect: NoSchedule
       containers:
         - name: web-ui
-          image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          image: ${WEB_UI_IMAGE}
+          imagePullPolicy: ${web_ui_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
@@ -782,8 +1058,8 @@ ${pod_pull_secret_yaml}
                     operator: DoesNotExist
       containers:
         - name: neuromorphic-node
-          image: ${ORCHESTRATOR_IMAGE}
-          imagePullPolicy: ${image_pull_policy}
+          image: ${NODE_IMAGE}
+          imagePullPolicy: ${node_image_pull_policy}
 ${gpu_container_security_yaml}
           command: ["/bin/sh", "-lc"]
           args:
@@ -810,17 +1086,14 @@ EOF
 }
 
 verify_aarnn_network_operational() {
-  local orchestrator_eps
-  local webui_eps
-  local pf_pid=""
-  local pf_log
-  local status_log
+  local orchestrator_eps=""
+  local webui_eps=""
   local probe_ok=0
   local config_probe_ok=0
   local elapsed=0
-  local expected_nodes
+  local expected_nodes=0
   local registered_nodes=-1
-  local status_preview
+  local status_preview=""
 
   require_cmd curl
   require_cmd python3
@@ -832,23 +1105,23 @@ verify_aarnn_network_operational() {
   [[ -n "${orchestrator_eps// /}" ]] || fail "Orchestrator service has no endpoints."
   [[ -n "${webui_eps// /}" ]] || fail "Web UI service has no endpoints."
 
-  pf_log="$(mktemp)"
-  status_log="$(mktemp)"
+  PORT_FORWARD_LOG="$(mktemp)"
+  STATUS_LOG="$(mktemp)"
 
-  kubectl -n "${NAMESPACE}" port-forward svc/web-ui "${WEB_UI_LOCAL_PORT}:8080" >"${pf_log}" 2>&1 &
-  pf_pid=$!
+  kubectl -n "${NAMESPACE}" port-forward svc/web-ui "${WEB_UI_LOCAL_PORT}:8080" >"${PORT_FORWARD_LOG}" 2>&1 &
+  PORT_FORWARD_PID=$!
 
   while (( elapsed < AARNN_NODE_WAIT_SECONDS )); do
-    if curl -fsS --max-time 5 "http://127.0.0.1:${WEB_UI_LOCAL_PORT}/api/status" >"${status_log}" 2>/dev/null; then
+    if curl -fsS --max-time 5 "http://127.0.0.1:${WEB_UI_LOCAL_PORT}/api/status" >"${STATUS_LOG}" 2>/dev/null; then
       probe_ok=1
-      registered_nodes="$(python3 - "${status_log}" <<'PY'
+      registered_nodes="$(python3 - "${STATUS_LOG}" <<'PY'
 import json
 import sys
 
 path = sys.argv[1]
 try:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
     nodes = data.get("nodes", [])
     if isinstance(nodes, list):
         print(len(nodes))
@@ -869,37 +1142,149 @@ PY
     elapsed=$((elapsed + 2))
   done
 
-  if [[ -n "${pf_pid}" ]]; then
-    kill "${pf_pid}" >/dev/null 2>&1 || true
-    wait "${pf_pid}" 2>/dev/null || true
-  fi
-
   if [[ ${probe_ok} -ne 1 ]]; then
-    cat "${pf_log}" >&2 || true
-    rm -f "${pf_log}" "${status_log}"
+    [[ -n "${PORT_FORWARD_LOG}" ]] && cat "${PORT_FORWARD_LOG}" >&2 || true
     fail "AARNN operational probe failed: GET /api/status from web-ui did not succeed."
   fi
 
   if [[ ! "${registered_nodes}" =~ ^[0-9]+$ ]] || (( registered_nodes < expected_nodes )); then
-    status_preview="$(head -c 320 "${status_log}" | tr '\n' ' ')"
-    rm -f "${pf_log}" "${status_log}"
+    status_preview="$(head -c 320 "${STATUS_LOG}" | tr '\n' ' ')"
     kubectl -n "${NAMESPACE}" get pods -l role=node -o wide || true
     show_node_connectivity_debug
     fail "AARNN node registration incomplete: expected >= ${expected_nodes}, observed=${registered_nodes}. Status sample: ${status_preview}"
   fi
 
-  status_preview="$(head -c 320 "${status_log}" | tr '\n' ' ')"
-  rm -f "${pf_log}" "${status_log}"
-
+  status_preview="$(head -c 320 "${STATUS_LOG}" | tr '\n' ' ')"
   log "AARNN operational probe succeeded via web-ui (/api/status), registered nodes=${registered_nodes}."
   log "Status sample: ${status_preview}"
   if [[ ${config_probe_ok} -ne 1 ]]; then
-    log "Warning: web-ui /api/config endpoint is unavailable in the deployed image; dashboard auto-connect may fail until workloads are updated."
+    warn "web-ui /api/config endpoint is unavailable in the deployed image; dashboard auto-connect may fail until workloads are updated."
   fi
 }
 
-main() {
-  parse_args "$@"
+# ------------------------------------------------------------------------------
+# Delete / teardown workflow
+# ------------------------------------------------------------------------------
+
+delete_workloads_if_present() {
+  # Workload deletion is intentionally tolerant of a partially-dead control
+  # plane. If kubectl or the API is unavailable we log and continue with the
+  # host-level teardown.
+  if ! kubectl_available; then
+    warn "kubectl is not available locally; skipping workload deletion."
+    return 0
+  fi
+
+  if [[ "${KUBECONFIG_CONFIGURED}" != "true" ]]; then
+    try_configure_local_kubeconfig || {
+      warn "Local kubeconfig was not found; skipping workload deletion."
+      return 0
+    }
+  fi
+
+  if ! kubectl get --raw='/readyz' >/dev/null 2>&1; then
+    warn "Kubernetes API is not reachable; skipping workload deletion."
+    return 0
+  fi
+
+  log "Deleting neuromorphic workloads from namespace '${NAMESPACE}' (best-effort)."
+  kubectl -n "${NAMESPACE}" delete deployment/orchestrator deployment/web-ui daemonset/aarnn-node --ignore-not-found --wait=false || true
+  kubectl -n "${NAMESPACE}" delete service/orchestrator service/web-ui serviceaccount/neuromorphic --ignore-not-found --wait=false || true
+  kubectl -n "${NAMESPACE}" delete secret/"${GHCR_PULL_SECRET_NAME}" --ignore-not-found --wait=false || true
+}
+
+remove_remote_k3s_agent() {
+  local host="$1"
+  local remote_script=""
+
+  if ! k3s_agent_installed_remote "${host}"; then
+    log "Remote worker ${host} does not appear to have k3s-agent installed; nothing to remove."
+    return 0
+  fi
+
+  log "Removing k3s agent from ${host}."
+
+  remote_script='
+set -Eeuo pipefail
+
+if [[ -x /usr/local/bin/k3s-agent-uninstall.sh ]]; then
+  /usr/local/bin/k3s-agent-uninstall.sh
+else
+  systemctl disable --now k3s-agent >/dev/null 2>&1 || true
+  if [[ -x /usr/local/bin/k3s-killall.sh ]]; then
+    /usr/local/bin/k3s-killall.sh || true
+  fi
+  rm -f /etc/systemd/system/k3s-agent.service || true
+  systemctl daemon-reload || true
+fi
+'
+
+  if ! run_remote_as_root "${host}" "${remote_script}" "${REMOTE_INSTALL_TIMEOUT_SECONDS}"; then
+    warn "Failed to remove k3s-agent cleanly from ${host}; collecting diagnostics."
+    run_remote_as_root "${host}" \
+      "systemctl status k3s-agent --no-pager -l || true; journalctl -u k3s-agent -n 120 --no-pager || true" \
+      60 || true
+    fail "k3s-agent teardown failed on ${host}."
+  fi
+
+  log "k3s agent removed from ${host}."
+}
+
+remove_local_k3s_server() {
+  if ! k3s_server_installed_local; then
+    log "Local k3s server does not appear to be installed; nothing to remove."
+    return 0
+  fi
+
+  log "Removing local k3s server."
+
+  if [[ -x /usr/local/bin/k3s-uninstall.sh ]]; then
+    sudo /usr/local/bin/k3s-uninstall.sh
+  else
+    sudo systemctl disable --now k3s >/dev/null 2>&1 || true
+    sudo systemctl disable --now k3s-agent >/dev/null 2>&1 || true
+    if [[ -x /usr/local/bin/k3s-killall.sh ]]; then
+      sudo /usr/local/bin/k3s-killall.sh || true
+    fi
+    sudo rm -f /etc/systemd/system/k3s.service /etc/systemd/system/k3s-agent.service || true
+    sudo systemctl daemon-reload || true
+  fi
+
+  log "Local k3s server removed."
+}
+
+delete_cluster() {
+  local host=""
+
+  log "Starting mixed-cluster teardown."
+
+  # Workloads are removed first while the API may still be reachable.
+  delete_workloads_if_present
+
+  # Remote workers are torn down before the control plane so that uninstall
+  # scripts can still talk to systemd cleanly and we keep the shutdown order
+  # intuitive.
+  for host in "${WORKER_HOSTS[@]}"; do
+    [[ -n "${host}" ]] || continue
+    remove_remote_k3s_agent "${host}"
+  done
+
+  remove_local_k3s_server
+  log "Teardown complete."
+}
+
+# ------------------------------------------------------------------------------
+# Deploy workflow
+# ------------------------------------------------------------------------------
+
+deploy_cluster() {
+  local local_raw_arch=""
+  local local_norm_arch=""
+  local control_plane_ip=""
+  local node_token=""
+  local host=""
+  local remote_raw_arch=""
+  local remote_norm_arch=""
 
   require_cmd curl
   require_cmd ssh
@@ -907,12 +1292,10 @@ main() {
   require_cmd ip
   require_cmd awk
 
-  local local_raw_arch
-  local local_norm_arch
   local_raw_arch="$(uname -m)"
   local_norm_arch="$(normalize_arch "${local_raw_arch}")"
-
   log "Localhost architecture: ${local_raw_arch} -> ${local_norm_arch}"
+
   for host in "${WORKER_HOSTS[@]}"; do
     [[ -n "${host}" ]] || continue
     log "Detecting architecture on ${host} ..."
@@ -928,11 +1311,9 @@ main() {
   require_cmd kubectl
   wait_for_local_k3s_api
 
-  local control_plane_ip
   control_plane_ip="$(get_control_plane_ip)"
   [[ -n "${control_plane_ip}" ]] || fail "Unable to determine control plane IPv4 address. Set CONTROL_PLANE_IP explicitly."
 
-  local node_token
   node_token="$(sudo cat /var/lib/rancher/k3s/server/node-token)"
   [[ -n "${node_token}" ]] || fail "Unable to read k3s node token."
 
@@ -954,6 +1335,27 @@ main() {
   log "Orchestrator + web-ui status:"
   kubectl -n "${NAMESPACE}" get deploy,pods,svc -l app=neuromorphic -o wide
   log "To open the UI locally: kubectl -n ${NAMESPACE} port-forward svc/web-ui ${WEB_UI_LOCAL_PORT}:8080"
+}
+
+main() {
+  parse_args "$@"
+  validate_config
+
+  case "${ACTION}" in
+    deploy)
+      deploy_cluster
+      ;;
+    delete)
+      # Deletion only needs SSH and sudo locally, plus kubectl if we can reach
+      # the control plane for workload cleanup.
+      require_cmd ssh
+      require_cmd sudo
+      delete_cluster
+      ;;
+    *)
+      fail "Unsupported action: ${ACTION}"
+      ;;
+  esac
 }
 
 main "$@"

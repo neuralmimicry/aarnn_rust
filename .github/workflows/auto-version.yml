@@ -1,0 +1,122 @@
+name: Auto Version and Tag
+
+on:
+  push:
+    branches: [engine, main, master]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version component to bump"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      branch:
+        description: "Branch to bump and tag (defaults to default branch)"
+        required: false
+        default: ""
+
+concurrency:
+  group: auto-version
+  cancel-in-progress: false
+
+jobs:
+  version-bump:
+    name: Bump version and create tag
+    runs-on: [self-hosted, Linux, X64]
+    # Skip commits that are themselves version bumps to prevent re-triggering.
+    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use PAT so the pushed tag triggers downstream workflows (github.token
+          # pushes are intentionally ignored by GitHub to avoid recursive runs).
+          token: ${{ secrets.X_GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref }}
+          path: repo
+
+      - name: Compute next version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          bump="${{ inputs.bump_type || 'patch' }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="${major}.${minor}.${patch}"
+          {
+            echo "current=$current"
+            echo "next=$next"
+            echo "tag=v${next}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Bumping $current -> $next ($bump)"
+
+      - name: Check tag does not already exist
+        shell: bash
+        run: |
+          if git ls-remote --tags origin "${{ steps.ver.outputs.tag }}" | grep -q .; then
+            echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists — skipping bump."
+            exit 1
+          fi
+
+      - name: Update Cargo.toml version
+        shell: bash
+        run: |
+          sed -i \
+            's/^version = "${{ steps.ver.outputs.current }}"$/version = "${{ steps.ver.outputs.next }}"/' \
+            Cargo.toml
+
+      - name: Update Cargo.lock version entry
+        shell: bash
+        run: |
+          # Cargo.lock records each [[package]] version; update the aarnn_rust entry.
+          sed -i \
+            '/^name = "aarnn_rust"$/{n;s/^version = "${{ steps.ver.outputs.current }}"$/version = "${{ steps.ver.outputs.next }}"/}' \
+            Cargo.lock
+
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          toml_ver="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          lock_ver="$(awk '/^name = "aarnn_rust"$/{getline; sub(/^version = "/, ""); sub(/"$/, ""); print; exit}' Cargo.lock)"
+          if [[ "$toml_ver" != "${{ steps.ver.outputs.next }}" ]]; then
+            echo "::error::Cargo.toml version is '$toml_ver', expected '${{ steps.ver.outputs.next }}'"
+            exit 1
+          fi
+          if [[ "$lock_ver" != "${{ steps.ver.outputs.next }}" ]]; then
+            echo "::error::Cargo.lock version is '$lock_ver', expected '${{ steps.ver.outputs.next }}'"
+            exit 1
+          fi
+          echo "Version ${{ steps.ver.outputs.next }} verified in Cargo.toml and Cargo.lock"
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version ${{ steps.ver.outputs.current }} -> ${{ steps.ver.outputs.next }}"
+
+      - name: Create and push tag
+        shell: bash
+        run: |
+          git tag "${{ steps.ver.outputs.tag }}"
+          # Force-update the floating 'latest' tag to this commit.
+          git tag -f latest
+          git push origin HEAD:"${GITHUB_REF_NAME}" "${{ steps.ver.outputs.tag }}"
+          git push origin -f refs/tags/latest
+          echo "Tagged and pushed ${{ steps.ver.outputs.tag }} and latest"

@@ -47,10 +47,10 @@ name = "ibverbs_sys"
 path = "src/lib.rs"
 
 [build-dependencies.bindgen]
-version = "0.71.1"
+version = "0.72"
 
 [build-dependencies.cmake]
-version = "0.1.50"
+version = "0.1"
 
 [target."cfg(any())".dependencies.proc-macro2]
 version = "1.0.80"

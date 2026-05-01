@@ -252,7 +252,7 @@ cdef class Mlx5Flow(Flow):
                 self.qp = (<Mlx5FlowActionAttr>attr).qp
             elif (<Mlx5FlowActionAttr>attr).attr.type not in [dv.MLX5DV_FLOW_ACTION_IBV_FLOW_ACTION]:
                raise PyverbsUserError(f'Unsupported action type: '
-                                      f'{<Mlx5FlowActionAttr>attr).attr.type}.')
+                                      f'{(<Mlx5FlowActionAttr>attr).attr.type}.')
             memcpy(tmp_addr, &(<Mlx5FlowActionAttr>attr).attr,
                    sizeof(dv.mlx5dv_flow_action_attr))
             tmp_addr += sizeof(dv.mlx5dv_flow_action_attr)

@@ -1,0 +1,56 @@
+{
+  "id": "morphology_transmission",
+  "title": "AARNN Morphology-Aware Transmission",
+  "analog_class": "analog_core_with_coarse_delay",
+  "rust_modules": ["src/aarnn/transmission.rs"],
+  "rust_functions": ["compute_delay_and_attenuation", "deterministic_jitter_steps"],
+  "defaults": {
+    "aarnn_distance_attenuation_per_unit": 0.15,
+    "bouton_jitter_ms": 0.2,
+    "aarnn_myelin_min_conduction_gain": 0.8,
+    "aarnn_myelin_max_conduction_gain": 2.2,
+    "fatigue_axon_atp": 0.35,
+    "fatigue_dendrite_atp": 0.40
+  },
+  "xcos_workspace": {
+    "inputs": ["morphology_transmission_input"],
+    "outputs": [
+      "morphology_transmission_generic",
+      "morphology_transmission_apical",
+      "morphology_transmission_myelinated",
+      "morphology_transmission_fatigued"
+    ],
+    "script": "../xcos/06_morphology_transmission.sce"
+  },
+  "hasler_xcos_blocks": [
+    "OTA Low-Pass Filter",
+    "OTA",
+    "Capacitor",
+    "Buffer",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "06_morphology_transmission.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Programmable attenuation path",
+      "Coarse analog delay line or cascaded filter approximation",
+      "Selectable myelination gain path",
+      "Slow fatigue-controlled bias modulation"
+    ],
+    "limitations": [
+      "This flow supports coarse analog delay, not arbitrary long digital delay queues.",
+      "Deterministic jitter is easiest to emulate with host-updated bias perturbations."
+    ]
+  }
+}

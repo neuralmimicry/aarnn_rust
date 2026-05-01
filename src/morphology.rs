@@ -47,13 +47,9 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(feature = "opencl")]
 use crate::cl_compute::OpenCLManager;
 #[cfg(feature = "opencl")]
-use opencl3::error_codes::ClError;
-#[cfg(feature = "opencl")]
-use opencl3::kernel::ExecuteKernel;
-#[cfg(feature = "opencl")]
-use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
-#[cfg(feature = "opencl")]
-use opencl3::types::CL_TRUE;
+use crate::cl_compute::{
+    Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ExecuteKernel,
+};
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Point3 {
@@ -101,11 +97,7 @@ impl Point3 {
     }
     pub fn normalize(&self) -> Point3 {
         let m = self.mag();
-        if m > 1e-9 {
-            self.mul(1.0 / m)
-        } else {
-            *self
-        }
+        if m > 1e-9 { self.mul(1.0 / m) } else { *self }
     }
     pub fn lerp(&self, other: Point3, t: f32) -> Point3 {
         Point3 {
@@ -288,7 +280,7 @@ fn near_colinear_overlap(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> bool
     hi - lo > 0.05
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SynKind {
     In,
     HiddenFwd,
@@ -297,7 +289,21 @@ pub enum SynKind {
     Out,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DendriteType {
+    Generic,
+    Apical,
+    Basal,
+}
+
+impl Default for DendriteType {
+    fn default() -> Self {
+        Self::Generic
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum OrganelleKind {
     Mitochondria,
     Nucleus,
@@ -321,14 +327,14 @@ pub struct SkullMembrane {
     pub energy_fluctuation: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Organelle {
     pub kind: OrganelleKind,
     pub pos: Point3,
     pub activity: f32, // 0.0 to 1.0
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Soma {
     pub id: usize,    // neuron index within its hidden layer
     pub layer: usize, // hidden layer index
@@ -342,7 +348,7 @@ pub struct Soma {
     pub type_name: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AxonSeg {
     pub from: Point3,
     pub to: Point3,
@@ -375,7 +381,7 @@ impl Default for AxonSeg {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Axon {
     pub neuron_layer: usize,
     pub neuron_id: usize,
@@ -386,11 +392,15 @@ pub struct Axon {
     pub organelles: Vec<Organelle>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DendSeg {
     pub from: Point3,
     pub to: Point3,
     pub length: f32,
+    /// Branch compartment type (apical, basal, or generic).
+    pub dendrite_type: DendriteType,
+    /// Initial trunk distance from soma for this branch lineage.
+    pub trunk_len_from_soma: f32,
     pub stimuli: f32,
     pub parent_idx: Option<usize>,
     pub syn_index: Option<usize>,
@@ -411,6 +421,8 @@ impl Default for DendSeg {
                 z: 0.0,
             },
             length: 0.0,
+            dendrite_type: DendriteType::Generic,
+            trunk_len_from_soma: 0.0,
             stimuli: 0.0,
             parent_idx: None,
             syn_index: None,
@@ -419,12 +431,12 @@ impl Default for DendSeg {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DendriticTree {
     pub branches: Vec<DendSeg>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Dendrite {
     pub neuron_layer: usize,
     pub neuron_id: usize,
@@ -435,7 +447,7 @@ pub struct Dendrite {
     pub organelles: Vec<Organelle>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Synapse {
     pub kind: SynKind,
     pub pre_layer: isize, // -1 for sensory, L for output sinks
@@ -458,7 +470,7 @@ pub struct Synapse {
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ReleasedKind {
     In,
     Fwd { layer: usize },
@@ -468,7 +480,7 @@ pub enum ReleasedKind {
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReleasedEvent {
     pub kind: ReleasedKind,
     #[allow(dead_code)]
@@ -480,7 +492,7 @@ pub struct ReleasedEvent {
     pub syn_idx: Option<usize>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Morphology {
     pub somas: Vec<Vec<Soma>>,         // per hidden layer
     pub axons: Vec<Vec<Axon>>,         // per hidden layer
@@ -496,6 +508,7 @@ pub struct Morphology {
 
     pub synapses: Vec<Synapse>, // flat list of synapses
     /// Spatial index for fast proximity lookups (grid or octree, populated on demand)
+    #[serde(skip, default)]
     pub(crate) spatial_index: Option<SpatialIndex>,
     pub skull_membrane: Option<SkullMembrane>,
     pub skull_center_integral: Point3,
@@ -1220,6 +1233,66 @@ fn morpho_energy_tuning() -> &'static Mutex<MorphoEnergyTuning> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DendriteLayout {
+    apical_trunks: usize,
+    basal_trunks: usize,
+}
+
+impl DendriteLayout {
+    #[inline]
+    fn total_trunks(&self) -> usize {
+        self.apical_trunks + self.basal_trunks
+    }
+
+    #[inline]
+    fn trunk_type(&self, idx: usize) -> DendriteType {
+        if idx < self.apical_trunks {
+            DendriteType::Apical
+        } else if idx < self.total_trunks() {
+            DendriteType::Basal
+        } else {
+            DendriteType::Generic
+        }
+    }
+}
+
+#[inline]
+fn is_apical_basal_cell_type(type_name: Option<&str>) -> bool {
+    let Some(name) = type_name else {
+        return false;
+    };
+    let n = name.to_ascii_lowercase();
+    n.contains("pyramidal")
+        || n.contains("corticothalamic")
+        || n.contains("purkinje")
+        || n.contains("projection_pn")
+}
+
+#[inline]
+fn dendrite_layout_for_type(type_name: Option<&str>) -> DendriteLayout {
+    if is_apical_basal_cell_type(type_name) {
+        DendriteLayout {
+            apical_trunks: 1,
+            basal_trunks: 2,
+        }
+    } else {
+        DendriteLayout {
+            apical_trunks: 0,
+            basal_trunks: 2,
+        }
+    }
+}
+
+#[inline]
+fn trunk_scale_for(dend_type: DendriteType, config: &crate::config::NetworkConfig) -> f32 {
+    match dend_type {
+        DendriteType::Apical => config.aarnn_apical_trunk_scale.max(0.05),
+        DendriteType::Basal => config.aarnn_basal_trunk_scale.max(0.05),
+        DendriteType::Generic => 1.0,
+    }
+}
+
 impl Morphology {
     pub fn new() -> Self {
         Self::default()
@@ -1242,6 +1315,7 @@ impl Morphology {
         }
 
         let seed = ((l as u64) << 32) ^ (j as u64) ^ 0x01020304;
+        let dend_layout = dendrite_layout_for_type(type_name.as_deref());
         let mut organelles = Vec::new();
         organelles.push(Organelle {
             kind: OrganelleKind::Nucleus,
@@ -1303,7 +1377,9 @@ impl Morphology {
         // Add Dendrite with initial trunks unless starting empty
         let mut dendrite_branches = Vec::new();
         if !start_empty {
-            for trunk_i in 0..2 {
+            let total_trunks = dend_layout.total_trunks().max(1);
+            for trunk_i in 0..total_trunks {
+                let dend_type = dend_layout.trunk_type(trunk_i);
                 let d_seed = (j as u64) ^ (0xD1D2D3D4 + trunk_i as u64);
                 let (jx, jy) = (
                     ((d_seed.wrapping_mul(4101842887655102017).rotate_left(11)) & 0xffff) as f32
@@ -1314,16 +1390,43 @@ impl Morphology {
                         - 0.5,
                 );
                 let nz = ((d_seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                let mag_d = (synapse_offset * 0.6).max(0.0035);
+                let dir = match dend_type {
+                    DendriteType::Apical => Point3 {
+                        x: 0.85 + 0.15 * jx,
+                        y: 0.6 * jy,
+                        z: 0.6 * nz,
+                    }
+                    .normalize(),
+                    DendriteType::Basal => Point3 {
+                        x: -0.2 + 0.5 * jx,
+                        y: jy,
+                        z: nz,
+                    }
+                    .normalize(),
+                    DendriteType::Generic => Point3 {
+                        x: jx,
+                        y: jy,
+                        z: nz,
+                    }
+                    .normalize(),
+                };
+                let scale = match dend_type {
+                    DendriteType::Apical => 1.35,
+                    DendriteType::Basal => 0.75,
+                    DendriteType::Generic => 1.0,
+                };
+                let mag_d = (synapse_offset * 0.6 * scale).max(0.0035);
                 let from = Point3 {
-                    x: (pos.x + jx * mag_d).clamp(-1.0, 1.0),
-                    y: (pos.y + jy * mag_d).clamp(-1.0, 1.0),
-                    z: (pos.z + nz * mag_d).clamp(-1.0, 1.0),
+                    x: (pos.x + dir.x * mag_d).clamp(-1.0, 1.0),
+                    y: (pos.y + dir.y * mag_d).clamp(-1.0, 1.0),
+                    z: (pos.z + dir.z * mag_d).clamp(-1.0, 1.0),
                 };
                 dendrite_branches.push(DendSeg {
                     from,
                     to: pos,
                     length: mag_d,
+                    dendrite_type: dend_type,
+                    trunk_len_from_soma: mag_d,
                     stimuli: 1.0,
                     parent_idx: None,
                     syn_index: None,
@@ -1605,9 +1708,14 @@ impl Morphology {
                                 y: n.y,
                                 z: n.z,
                             };
+                            let layout = dendrite_layout_for_type(n.type_name.as_deref());
                             let mut branches = Vec::new();
-                            for trunk_i in 0..3 {
-                                let seed = ((l as u64) << 32) ^ (j as u64) ^ (0xB1B2B3B4 + trunk_i);
+                            let total_trunks = layout.total_trunks().max(1);
+                            for trunk_i in 0..total_trunks {
+                                let dend_type = layout.trunk_type(trunk_i);
+                                let seed = ((l as u64) << 32)
+                                    ^ (j as u64)
+                                    ^ (0xB1B2B3B4u64 + trunk_i as u64);
                                 let (jx, jy) = (
                                     ((seed.wrapping_mul(4101842887655102017).rotate_left(11))
                                         & 0xffff) as f32
@@ -1619,17 +1727,41 @@ impl Morphology {
                                         - 0.5,
                                 );
                                 let nz = ((seed >> 9) & 0xffff) as f32 / 32768.0 - 0.5;
-                                let mag = (synapse_offset * 0.6).max(0.0035);
+                                let dir = match dend_type {
+                                    DendriteType::Apical => Point3 {
+                                        x: 0.85 + 0.15 * jx,
+                                        y: 0.6 * jy,
+                                        z: 0.6 * nz,
+                                    }
+                                    .normalize(),
+                                    DendriteType::Basal => Point3 {
+                                        x: -0.2 + 0.5 * jx,
+                                        y: jy,
+                                        z: nz,
+                                    }
+                                    .normalize(),
+                                    DendriteType::Generic => Point3 {
+                                        x: jx,
+                                        y: jy,
+                                        z: nz,
+                                    }
+                                    .normalize(),
+                                };
+                                let mag =
+                                    (synapse_offset * 0.6 * trunk_scale_for(dend_type, config))
+                                        .max(0.0035);
                                 let mut q = Point3 {
-                                    x: (p.x + jx * mag).clamp(-1.0, 1.0),
-                                    y: (p.y + jy * mag).clamp(-1.0, 1.0),
-                                    z: (p.z + nz * mag).clamp(-1.0, 1.0),
+                                    x: (p.x + dir.x * mag).clamp(-1.0, 1.0),
+                                    y: (p.y + dir.y * mag).clamp(-1.0, 1.0),
+                                    z: (p.z + dir.z * mag).clamp(-1.0, 1.0),
                                 };
                                 q = ensure_unique_point(q, seed);
                                 branches.push(DendSeg {
                                     from: q,
                                     to: p,
                                     length: mag,
+                                    dendrite_type: dend_type,
+                                    trunk_len_from_soma: mag,
                                     stimuli: 1.0,
                                     parent_idx: None,
                                     syn_index: None,
@@ -1941,6 +2073,8 @@ impl Morphology {
                         from: q,
                         to: p,
                         length: mag,
+                        dendrite_type: DendriteType::Generic,
+                        trunk_len_from_soma: mag,
                         stimuli: 1.0,
                         parent_idx: None,
                         syn_index: None,
@@ -2027,6 +2161,8 @@ impl Morphology {
                         from: q,
                         to: p,
                         length: mag,
+                        dendrite_type: DendriteType::Generic,
+                        trunk_len_from_soma: mag,
                         stimuli: 1.0,
                         parent_idx: None,
                         syn_index: None,
@@ -2046,11 +2182,7 @@ impl Morphology {
 
         let num_layers = topo_layers.len();
         let in_l = if is_aarnn {
-            if num_layers > 1 {
-                1
-            } else {
-                0
-            }
+            if num_layers > 1 { 1 } else { 0 }
         } else {
             0
         };
@@ -2455,9 +2587,11 @@ impl Morphology {
                         let pts = &incoming[l][j];
                         let mut branches: Vec<DendSeg> = Vec::new();
                         if !pts.is_empty() {
-                            // Distribute incoming sites among multiple trunks (e.g. 2)
-                            let num_trunks = 2;
+                            // Distribute incoming sites among trunks based on neuron cell structure.
+                            let layout = dendrite_layout_for_type(nodes[j].type_name.as_deref());
+                            let num_trunks = layout.total_trunks().max(1);
                             for trunk_i in 0..num_trunks {
+                                let dend_type = layout.trunk_type(trunk_i);
                                 let group: Vec<_> = pts
                                     .iter()
                                     .enumerate()
@@ -2482,7 +2616,8 @@ impl Morphology {
                                 cz *= invn;
 
                                 // Hub between soma and centroid
-                                let alpha = 0.35f32;
+                                let alpha =
+                                    (0.35f32 * trunk_scale_for(dend_type, config)).clamp(0.1, 0.85);
                                 let mut hub = Point3 {
                                     x: soma.x * (1.0 - alpha) + cx * alpha,
                                     y: soma.y * (1.0 - alpha) + cy * alpha,
@@ -2502,6 +2637,8 @@ impl Morphology {
                                     from: hub,
                                     to: soma,
                                     length: len,
+                                    dendrite_type: dend_type,
+                                    trunk_len_from_soma: len,
                                     stimuli: 1.0,
                                     parent_idx: None,
                                     syn_index: None,
@@ -2520,11 +2657,14 @@ impl Morphology {
                                     let dy = hub.y - start.y;
                                     let dz = hub.z - start.z;
                                     let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    let trunk_len = branches[trunk_idx].trunk_len_from_soma;
                                     let dsi = branches.len();
                                     branches.push(DendSeg {
                                         from: start,
                                         to: hub,
                                         length: len,
+                                        dendrite_type: dend_type,
+                                        trunk_len_from_soma: trunk_len,
                                         stimuli: 1.0,
                                         parent_idx: Some(trunk_idx),
                                         syn_index: Some(si),
@@ -3122,6 +3262,7 @@ impl Morphology {
         } else {
             0.0
         };
+        let region_scale = crate::config::brain_region_space_scale(&config.brain_regions);
         let column_spacing = config.columnar_spacing.max(0.01);
         let column_jitter = config.columnar_jitter.clamp(0.0, 1.0);
         if repulsion_strength <= 0.0 && clumping_strength <= 0.0 && column_strength <= 0.0 {
@@ -3207,9 +3348,9 @@ impl Morphology {
                                 config.brain_regions.iter().find(|r| &r.name == rname)
                             {
                                 clump_target = Some(Point3 {
-                                    x: region.center[0],
-                                    y: region.center[1],
-                                    z: region.center[2],
+                                    x: region.center[0] * region_scale,
+                                    y: region.center[1] * region_scale,
+                                    z: region.center[2] * region_scale,
                                 });
                                 found_region = true;
                             }
@@ -3360,6 +3501,11 @@ impl Morphology {
 
             // PID Control
             soma.integral_err = soma.integral_err.add(error.mul(dt));
+            let max_integral = (min_sep * 4.0).clamp(0.02, 0.2);
+            let integ_mag = soma.integral_err.mag();
+            if integ_mag > max_integral {
+                soma.integral_err = soma.integral_err.mul(max_integral / integ_mag);
+            }
             let derivative = error.sub(soma.prev_err).mul(1.0 / dt.max(0.001));
 
             let mut smoothed_disp = error
@@ -3368,7 +3514,7 @@ impl Morphology {
                 .add(derivative.mul(kd));
 
             // Clamp max displacement per step to avoid runaway drift
-            let max_move = 0.15f32;
+            let max_move = (min_sep * 0.25).clamp(0.001, 0.01);
             if smoothed_disp.mag() > max_move {
                 smoothed_disp = smoothed_disp.normalize().mul(max_move);
             }
@@ -3839,11 +3985,7 @@ impl Morphology {
 
         let num_layers = self.dendrites.len();
         let in_l = if is_aarnn {
-            if num_layers > 1 {
-                1
-            } else {
-                0
-            }
+            if num_layers > 1 { 1 } else { 0 }
         } else {
             0
         };
@@ -3868,7 +4010,10 @@ impl Morphology {
 
         let decay_base = if config.component_decay_rate < 0.1 {
             if is_trace && should_log {
-                nm_log!("[trace] WARNING: component_decay_rate ({:.6}) is very low, connections will prune almost immediately. Consider values > 0.9", config.component_decay_rate);
+                nm_log!(
+                    "[trace] WARNING: component_decay_rate ({:.6}) is very low, connections will prune almost immediately. Consider values > 0.9",
+                    config.component_decay_rate
+                );
             }
             config.component_decay_rate
         } else {
@@ -3876,8 +4021,13 @@ impl Morphology {
         };
         let decay = decay_base.powf(dt);
         if is_trace && should_log {
-            nm_log!("[trace] morphology evolve: dt={:.2}ms, decay_base={:.6}, decay_factor={:.6}, aarnn={}", 
-                dt, decay_base, decay, is_aarnn);
+            nm_log!(
+                "[trace] morphology evolve: dt={:.2}ms, decay_base={:.6}, decay_factor={:.6}, aarnn={}",
+                dt,
+                decay_base,
+                decay,
+                is_aarnn
+            );
         }
         let sprout_p = config.dendrite_sprout_prob * dt;
         let attraction_r = config.energy_attraction_radius;
@@ -3893,6 +4043,7 @@ impl Morphology {
         let consolidation = config.synaptic_consolidation_factor;
 
         // Attempt batched energy evaluation on GPU for stimuli updates
+        #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
         let mut stimuli_updated_via_gpu = false;
         #[cfg(feature = "opencl")]
         if let Some(cl) = _cl {
@@ -5502,6 +5653,38 @@ impl Morphology {
                                 len = step;
                             }
                             if len > 0.001 {
+                                let (dend_type, trunk_len_from_soma) = if is_trunk {
+                                    let layout =
+                                        dendrite_layout_for_type(soma.type_name.as_deref());
+                                    let dtype = if layout.apical_trunks > 0 {
+                                        if fastrand::f32() < 0.35 {
+                                            DendriteType::Apical
+                                        } else {
+                                            DendriteType::Basal
+                                        }
+                                    } else if layout.basal_trunks > 0 {
+                                        DendriteType::Basal
+                                    } else {
+                                        DendriteType::Generic
+                                    };
+                                    (dtype, len)
+                                } else if let Some(pi) = parent_idx {
+                                    let dtype = dend
+                                        .tree
+                                        .branches
+                                        .get(pi)
+                                        .map(|s| s.dendrite_type)
+                                        .unwrap_or(DendriteType::Generic);
+                                    let trunk_len = dend
+                                        .tree
+                                        .branches
+                                        .get(pi)
+                                        .map(|s| s.trunk_len_from_soma.max(1.0e-6))
+                                        .unwrap_or(len);
+                                    (dtype, trunk_len)
+                                } else {
+                                    (DendriteType::Generic, len)
+                                };
                                 stats.dendrite_sprout_successes += 1;
                                 if is_trace {
                                     let name = if is_sensory {
@@ -5511,8 +5694,14 @@ impl Morphology {
                                     } else {
                                         format!("hidden {}", l_idx)
                                     };
-                                    nm_log!("[trace] dendrite sprouted: {}:{} at {:?} -> {:?} - energy {:.4}", 
-                                        name, j, best_p, base_pos, local_e);
+                                    nm_log!(
+                                        "[trace] dendrite sprouted: {}:{} at {:?} -> {:?} - energy {:.4}",
+                                        name,
+                                        j,
+                                        best_p,
+                                        base_pos,
+                                        local_e
+                                    );
                                 }
                                 // Sprout a new branch/trunk towards the energy peak
                                 new_dendrite_branches.push((
@@ -5522,6 +5711,8 @@ impl Morphology {
                                         from: best_p,
                                         to: base_pos,
                                         length: len,
+                                        dendrite_type: dend_type,
+                                        trunk_len_from_soma,
                                         stimuli: 0.5,
                                         parent_idx,
                                         syn_index: None,
@@ -5785,11 +5976,27 @@ impl Morphology {
                                                     });
 
                                                     if al == -1 {
-                                                        nm_log!("[info] sensory connection migration planned (soma): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                        nm_log!(
+                                                            "[info] sensory connection migration planned (soma): sensory:{} moves to hidden {}:{} (closer target)",
+                                                            aj,
+                                                            l_idx,
+                                                            j
+                                                        );
                                                     } else if is_output {
-                                                        nm_log!("[info] output connection migration planned (soma): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                        nm_log!(
+                                                            "[info] output connection migration planned (soma): hidden {}:{} moves to output:{} (closer target)",
+                                                            al,
+                                                            aj,
+                                                            j
+                                                        );
                                                     } else {
-                                                        nm_log!("[info] synapse migration planned (soma): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                        nm_log!(
+                                                            "[info] synapse migration planned (soma): {}:{} -> {}:{} (closer target)",
+                                                            al,
+                                                            aj,
+                                                            l_idx,
+                                                            j
+                                                        );
                                                     }
                                                 }
 
@@ -5819,8 +6026,13 @@ impl Morphology {
                                                     } else {
                                                         format!("hidden {}", l_idx)
                                                     };
-                                                    nm_log!("[trace] synapse made (soma-probe): {}:{} -> {}:{} - soma proximity", 
-                                                        pre_name, aj, post_name, j);
+                                                    nm_log!(
+                                                        "[trace] synapse made (soma-probe): {}:{} -> {}:{} - soma proximity",
+                                                        pre_name,
+                                                        aj,
+                                                        post_name,
+                                                        j
+                                                    );
                                                 }
                                                 observe_hit!("morphology/synapse_formed");
                                                 new_syns.push(Synapse {
@@ -5956,8 +6168,15 @@ impl Morphology {
                                                 migration_idx = Some(si);
                                                 true
                                             } else {
-                                                nm_log!("[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            aj, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                nm_log!(
+                                                    "[DEBUG] sensory migration rejected: aj={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})",
+                                                    aj,
+                                                    si,
+                                                    tip_e,
+                                                    new_d2,
+                                                    near_thresh,
+                                                    max_d2 * 0.7
+                                                );
                                                 false
                                             }
                                         } else {
@@ -5993,8 +6212,15 @@ impl Morphology {
                                                 migration_idx = Some(si);
                                                 true
                                             } else {
-                                                nm_log!("[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})", 
-                                                            j, si, tip_e, new_d2, near_thresh, max_d2 * 0.7);
+                                                nm_log!(
+                                                    "[DEBUG] output migration rejected: j={}, si={}, tip_e={:.4}, new_d2={:.4}, thresh={:.4} (max_d2*0.7={:.4})",
+                                                    j,
+                                                    si,
+                                                    tip_e,
+                                                    new_d2,
+                                                    near_thresh,
+                                                    max_d2 * 0.7
+                                                );
                                                 false
                                             }
                                         } else {
@@ -6079,11 +6305,27 @@ impl Morphology {
                                             });
 
                                             if al == -1 {
-                                                nm_log!("[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] sensory connection migration planned: sensory:{} moves to hidden {}:{} (closer target)",
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             } else if is_output {
-                                                nm_log!("[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                nm_log!(
+                                                    "[info] output connection migration planned: hidden {}:{} moves to output:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    j
+                                                );
                                             } else {
-                                                nm_log!("[info] synapse migration planned: {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] synapse migration planned: {}:{} -> {}:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             }
                                         }
 
@@ -6113,8 +6355,13 @@ impl Morphology {
                                             } else {
                                                 format!("hidden {}", l_idx)
                                             };
-                                            nm_log!("[trace] synapse made (distributed): {}:{} -> {}:{} - contact", 
-                                                pre_name, aj, post_name, j);
+                                            nm_log!(
+                                                "[trace] synapse made (distributed): {}:{} -> {}:{} - contact",
+                                                pre_name,
+                                                aj,
+                                                post_name,
+                                                j
+                                            );
                                         }
                                         observe_hit!("morphology/synapse_formed");
                                         new_syns.push(Synapse {
@@ -6413,11 +6660,27 @@ impl Morphology {
                                         });
 
                                         if al == -1 {
-                                            nm_log!("[info] sensory connection migration planned (spatial): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                            nm_log!(
+                                                "[info] sensory connection migration planned (spatial): sensory:{} moves to hidden {}:{} (closer target)",
+                                                aj,
+                                                l_idx,
+                                                j
+                                            );
                                         } else if is_output {
-                                            nm_log!("[info] output connection migration planned (spatial): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                            nm_log!(
+                                                "[info] output connection migration planned (spatial): hidden {}:{} moves to output:{} (closer target)",
+                                                al,
+                                                aj,
+                                                j
+                                            );
                                         } else {
-                                            nm_log!("[info] synapse migration planned (spatial): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                            nm_log!(
+                                                "[info] synapse migration planned (spatial): {}:{} -> {}:{} (closer target)",
+                                                al,
+                                                aj,
+                                                l_idx,
+                                                j
+                                            );
                                         }
                                     }
 
@@ -6457,8 +6720,13 @@ impl Morphology {
                                 } else {
                                     format!("hidden {}", l_idx)
                                 };
-                                nm_log!("[trace] synapse made: {}:{} -> {}:{} - physical contact detected", 
-                                    pre_name, aj, post_name, j);
+                                nm_log!(
+                                    "[trace] synapse made: {}:{} -> {}:{} - physical contact detected",
+                                    pre_name,
+                                    aj,
+                                    post_name,
+                                    j
+                                );
 
                                 observe_hit!("morphology/synapse_formed");
                                 new_syns.push(Synapse {
@@ -6760,11 +7028,27 @@ impl Morphology {
                                             });
 
                                             if al == -1 {
-                                                nm_log!("[info] sensory connection migration planned (exploratory): sensory:{} moves to hidden {}:{} (closer target)", aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] sensory connection migration planned (exploratory): sensory:{} moves to hidden {}:{} (closer target)",
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             } else if is_output {
-                                                nm_log!("[info] output connection migration planned (exploratory): hidden {}:{} moves to output:{} (closer target)", al, aj, j);
+                                                nm_log!(
+                                                    "[info] output connection migration planned (exploratory): hidden {}:{} moves to output:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    j
+                                                );
                                             } else {
-                                                nm_log!("[info] synapse migration planned (exploratory): {}:{} -> {}:{} (closer target)", al, aj, l_idx, j);
+                                                nm_log!(
+                                                    "[info] synapse migration planned (exploratory): {}:{} -> {}:{} (closer target)",
+                                                    al,
+                                                    aj,
+                                                    l_idx,
+                                                    j
+                                                );
                                             }
                                         }
 
@@ -6796,8 +7080,13 @@ impl Morphology {
                                         } else {
                                             format!("hidden {}", l_idx)
                                         };
-                                        nm_log!("[trace] synapse made (probe): {}:{} -> {}:{} - exploratory contact", 
-                                            pre_name, aj, post_name, j);
+                                        nm_log!(
+                                            "[trace] synapse made (probe): {}:{} -> {}:{} - exploratory contact",
+                                            pre_name,
+                                            aj,
+                                            post_name,
+                                            j
+                                        );
                                     }
                                     observe_hit!("morphology/synapse_formed");
                                     new_syns.push(Synapse {
@@ -7023,7 +7312,14 @@ impl Morphology {
                             } else {
                                 self.somas[in_l][best_j].pos
                             };
-                            nm_log!("[info] post-fallback planned sensory migration: si={} post {}->{} (d2 {:.6}->{:.6})", si, cur_post, best_j, cur_d2, best_d2);
+                            nm_log!(
+                                "[info] post-fallback planned sensory migration: si={} post {}->{} (d2 {:.6}->{:.6})",
+                                si,
+                                cur_post,
+                                best_j,
+                                cur_d2,
+                                best_d2
+                            );
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
                                 new_pre_l: -1,
@@ -7121,7 +7417,14 @@ impl Morphology {
                             } else {
                                 self.somas[pre_l][best_i].pos
                             };
-                            nm_log!("[info] post-fallback planned output migration: si={} pre {}->{} (d2 {:.6}->{:.6})", si, pre_id, best_i, cur_d2, best_d2);
+                            nm_log!(
+                                "[info] post-fallback planned output migration: si={} pre {}->{} (d2 {:.6}->{:.6})",
+                                si,
+                                pre_id,
+                                best_i,
+                                cur_d2,
+                                best_d2
+                            );
                             res.migrations.push(MigrationInfo {
                                 syn_idx: si,
                                 new_pre_l: pre_l as isize,
@@ -7207,10 +7510,40 @@ impl Morphology {
             } else {
                 (0.0, 0.0, 0.0, 0.0)
             };
-            nm_log!("[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})", 
-                unsafe { CALL_COUNT }, total_axons, stats.axon_sprout_successes, stats.axon_sprout_attempts, 
-                total_dendrites, stats.dendrite_sprout_successes, stats.dendrite_sprout_attempts, stats.dendrite_sprout_too_near, stats.dendrite_sprout_low_energy,
-                self.synapses.len(), stats.contact_checks, stats.contact_candidates, stats.contact_incompatible, stats.contact_too_far, stats.contact_successes, stats.contact_rejected_cap, stats.contact_rejected_close, stats.contact_self_skips, stats.contact_existing_skips, stats.contact_post_cap_skips, stats.contact_probe_checks, stats.contact_skipped_low_energy, stats.contact_tip_cap_hits, tip_avg, stats.contact_tip_energy_min, stats.contact_tip_energy_max, t_ema, t_dev, t_cap, t_skip, pair_cap);
+            nm_log!(
+                "[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})",
+                unsafe { CALL_COUNT },
+                total_axons,
+                stats.axon_sprout_successes,
+                stats.axon_sprout_attempts,
+                total_dendrites,
+                stats.dendrite_sprout_successes,
+                stats.dendrite_sprout_attempts,
+                stats.dendrite_sprout_too_near,
+                stats.dendrite_sprout_low_energy,
+                self.synapses.len(),
+                stats.contact_checks,
+                stats.contact_candidates,
+                stats.contact_incompatible,
+                stats.contact_too_far,
+                stats.contact_successes,
+                stats.contact_rejected_cap,
+                stats.contact_rejected_close,
+                stats.contact_self_skips,
+                stats.contact_existing_skips,
+                stats.contact_post_cap_skips,
+                stats.contact_probe_checks,
+                stats.contact_skipped_low_energy,
+                stats.contact_tip_cap_hits,
+                tip_avg,
+                stats.contact_tip_energy_min,
+                stats.contact_tip_energy_max,
+                t_ema,
+                t_dev,
+                t_cap,
+                t_skip,
+                pair_cap
+            );
 
             if is_trace {
                 let avg_stimuli = if self.synapses.is_empty() {
@@ -7783,5 +8116,136 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dendrite_compartments_reflect_cell_structure_types() {
+        use crate::topology::Node3D;
+
+        let topo: Vec<Vec<Node3D>> = vec![
+            vec![Node3D {
+                x: -0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                type_name: Some("L5_Pyramidal".to_string()),
+                ..Default::default()
+            }],
+            vec![Node3D {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 1,
+                type_name: Some("Interneuron".to_string()),
+                ..Default::default()
+            }],
+        ];
+
+        let w_in = ndarray::Array2::<f64>::from_elem((1, 3), 0.25);
+        let w_hh_fwd = vec![ndarray::Array2::<f64>::from_elem((1, 1), 0.35)];
+        let w_hh_bwd = vec![ndarray::Array2::<f64>::zeros((1, 1))];
+        let w_out = ndarray::Array2::<f64>::from_elem((1, 1), 0.20);
+
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_sensory_neurons = 3;
+        config.num_output_neurons = 1;
+        config.synapse_offset = 0.05;
+        config.enforce_unique_geometry = false;
+
+        let m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &w_out,
+            &config,
+            false,
+        );
+
+        let pyr = &m.dendrites[0][0];
+        let pyr_trunks: Vec<_> = pyr.tree.branches.iter().filter(|s| s.is_trunk).collect();
+        assert!(
+            pyr_trunks
+                .iter()
+                .any(|s| s.dendrite_type == DendriteType::Apical),
+            "pyramidal neuron should include apical trunk"
+        );
+        assert!(
+            pyr_trunks
+                .iter()
+                .any(|s| s.dendrite_type == DendriteType::Basal),
+            "pyramidal neuron should include basal trunk"
+        );
+
+        let intn = &m.dendrites[1][0];
+        let intn_trunks: Vec<_> = intn.tree.branches.iter().filter(|s| s.is_trunk).collect();
+        assert!(
+            intn_trunks
+                .iter()
+                .all(|s| s.dendrite_type != DendriteType::Apical),
+            "interneuron should not force apical trunks"
+        );
+        assert!(
+            intn_trunks.iter().all(|s| s.trunk_len_from_soma > 0.0),
+            "initial trunk length from soma should be tracked"
+        );
+    }
+
+    #[test]
+    fn spatial_forces_limit_single_step_soma_motion() {
+        use crate::config::BrainRegionConfig;
+        use crate::topology::Node3D;
+
+        let topo: Vec<Vec<Node3D>> = vec![vec![Node3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            region_name: Some("HugeRegion".to_string()),
+            ..Default::default()
+        }]];
+        let w_in = ndarray::Array2::<f64>::zeros((1, 0));
+        let w_hh_fwd: Vec<ndarray::Array2<f64>> = Vec::new();
+        let w_hh_bwd: Vec<ndarray::Array2<f64>> = Vec::new();
+        let w_out = ndarray::Array2::<f64>::zeros((0, 1));
+
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_sensory_neurons = 0;
+        config.num_output_neurons = 0;
+        config.min_node_sep = 0.02;
+        config.spatial_repulsion_strength = 0.0;
+        config.spatial_clumping_strength = 1.0;
+        config.columnar_enabled = false;
+        config.brain_regions.push(BrainRegionConfig {
+            name: "HugeRegion".to_string(),
+            shape: None,
+            center: [35.0, 0.0, 25.0],
+            radii: [35.0, 55.0, 30.0],
+            type_distribution: Vec::new(),
+        });
+
+        let mut m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &w_out,
+            &config,
+            false,
+        );
+        let p0 = m.somas[0][0].pos;
+        m.apply_spatial_forces(&config, true, 1.0);
+        let p1 = m.somas[0][0].pos;
+
+        let moved = p0.dist(p1);
+        let max_move = (config.min_node_sep * 0.25).clamp(0.001, 0.01) + 1e-6;
+        assert!(
+            moved <= max_move,
+            "Soma moved too far in one step: moved={moved:.6}, limit={max_move:.6}"
+        );
     }
 }

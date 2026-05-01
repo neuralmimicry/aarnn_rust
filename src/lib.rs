@@ -17,16 +17,33 @@
 /// Observability tools for logging, probing, and data export.
 pub mod obs;
 
+/// AARNN-specific algorithm kernels partitioned into replaceable modules.
+pub mod aarnn;
 /// Address-Event Representation (AER) encoding/decoding.
 pub mod aer;
 /// Optional AER <-> CAN conversion helpers for robotic endpoints.
 pub mod aer_can;
+/// Shared filesystem-backed auth/session stores used by scaled frontends.
+pub mod auth_store;
+/// Shared Refiner/Postgres-backed auth and token client helpers.
+pub mod central_auth;
 /// Configuration structures for neurons, learning rules, and network topology.
 pub mod config;
+/// Deployment modes, topology intent, and infrastructure autodetection helpers.
+pub mod deployment;
+/// User-agnostic engine facade around `Runner`.
+pub mod engine;
+/// FPAA discovery, verification, and routing helpers.
+pub mod fpaa;
 /// Core neural network data structures including layers, neurons, and synapses.
 pub mod network;
+pub mod nmchain;
+/// Shared service-visibility and authorisation helpers used across browser and API surfaces.
+pub mod service_access;
 /// Simulation engine responsible for time-stepping and state updates.
 pub mod sim;
+/// Shared spike input/output encoders, transports, and profile-specific adapters.
+pub mod spike_io;
 /// UDP-based AER stimuli IO bridge.
 pub mod stimuli;
 
@@ -43,6 +60,12 @@ pub mod openmpi_runtime;
 pub mod rdma;
 /// Orchestration logic for running simulations in various modes.
 pub mod runner;
+/// Persistent runtime middleware for multi-user workspaces and scheduling.
+pub mod runtime;
+/// Shared request/response models and clients for runtime-facing frontends.
+pub mod runtime_api;
+/// Shared file/lease primitives for runtime coordination on PVC-backed deployments.
+pub mod shared_fs;
 
 #[cfg(feature = "growth3d")]
 /// Topological and spatial layout definitions for 3D neural growth.
@@ -59,6 +82,10 @@ pub mod providers;
 #[cfg(feature = "ui")]
 /// Real-time visualization interface.
 pub mod ui;
+
+#[cfg(feature = "opencl")]
+/// Backend-agnostic GPU runtime facade used by OpenCL/CUDA execution.
+pub mod gpu_api;
 
 #[cfg(feature = "opencl")]
 /// OpenCL kernels and host-side drivers for GPGPU acceleration.

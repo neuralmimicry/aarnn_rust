@@ -3,183 +3,160 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Neuromorphic API Documentation</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        --bg: #16181b;
-        --panel: #1f242a;
-        --line: #2d3640;
-        --text: #dbe4ee;
-        --muted: #9fb0c1;
-        --accent: #41c98a;
-        --warn: #ffcc66;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: "Noto Sans", "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        line-height: 1.5;
-      }
-      .topbar {
-        position: sticky;
-        top: 0;
-        z-index: 10;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 20px;
-        border-bottom: 1px solid var(--line);
-        background: rgba(22, 24, 27, 0.95);
-        backdrop-filter: blur(6px);
-      }
-      .title { font-weight: 700; font-size: 16px; }
-      .links {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      .links a {
-        color: var(--text);
-        text-decoration: none;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 6px 10px;
-        font-size: 13px;
-      }
-      .links a:hover { border-color: var(--accent); color: var(--accent); }
-      main {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
-      }
-      .hero {
-        background: linear-gradient(145deg, #212a33, #1c2229);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 18px;
-        margin-bottom: 16px;
-      }
-      .hero h1 {
-        margin: 0 0 10px;
-        font-size: 24px;
-      }
-      .hero p { margin: 0 0 10px; color: var(--muted); }
-      .callout {
-        border-left: 3px solid var(--warn);
-        background: #27231a;
-        padding: 10px 12px;
-        border-radius: 4px;
-        color: #f3ddb0;
-        margin-top: 12px;
-      }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 14px;
-      }
-      .panel h2 {
-        margin: 0 0 10px;
-        font-size: 18px;
-      }
-      code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        background: #13171d;
-        border: 1px solid #2b3540;
-        border-radius: 4px;
-        padding: 1px 5px;
-        color: #c3ffe4;
-      }
-      pre {
-        margin: 8px 0;
-        padding: 10px;
-        border: 1px solid #2b3540;
-        border-radius: 8px;
-        background: #13171d;
-        overflow: auto;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-      }
-      th, td {
-        border-bottom: 1px solid #2a323a;
-        text-align: left;
-        padding: 8px;
-        vertical-align: top;
-      }
-      th { color: #c5d8eb; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-      .method {
-        display: inline-block;
-        min-width: 52px;
-        text-align: center;
-        border-radius: 4px;
-        padding: 2px 6px;
-        font-weight: 700;
-        font-size: 11px;
-      }
-      .get { background: #1f3a25; color: #8fffbd; }
-      .post { background: #223449; color: #9fd4ff; }
-      .auth { color: #9fd4ff; }
-      .noauth { color: #a6b5c3; }
-      .footer-note {
-        color: var(--muted);
-        font-size: 12px;
-      }
-      @media (max-width: 900px) {
-        table, thead, tbody, tr, th, td { display: block; }
-        thead { display: none; }
-        tr {
-          margin-bottom: 10px;
-          border: 1px solid #2a323a;
-          border-radius: 8px;
-          padding: 8px;
-        }
-        td {
-          border: none;
-          padding: 4px 0;
-        }
-      }
-    </style>
+    <title>NeuralMimicry Interface Docs</title>
+    <link rel="stylesheet" href="/style.css" />
   </head>
-  <body>
+  <body class="page-docs" data-page-kind="docs">
     <header class="topbar">
-      <div class="title">Neuromorphic API Documentation</div>
-      <nav class="links">
-        <a href="/">Web UI</a>
-        <a href="/docs/swagger">Swagger UI</a>
-        <a href="/api/openapi.json">OpenAPI JSON</a>
-      </nav>
+      <div class="topbar-left">
+        <div class="title">NeuralMimicry</div>
+        <div class="subtitle">Control surface matrix, authorisation flow, and API contract</div>
+      </div>
+      <div class="topbar-right">
+        <a class="btn ghost small" href="/">Web UI</a>
+        <a class="btn ghost small" href="/docs/swagger">Swagger</a>
+        <a class="btn ghost small" href="/api/openapi.json">OpenAPI JSON</a>
+        <span id="shell-user-status">Signed out</span>
+        <button class="btn ghost small hidden" id="shell-logout-btn" type="button">Logout</button>
+      </div>
     </header>
 
-    <main>
-      <section class="hero">
-        <h1>Full API Reference</h1>
-        <p>
-          This server exposes REST endpoints used by the web UI for authentication, cluster orchestration,
-          status streaming, control actions, and model export. The canonical machine-readable schema is available at
-          <code>/api/openapi.json</code>, and interactive execution is available at <code>/docs/swagger</code>.
+    <main class="docs-layout">
+      <section class="hero-panel">
+        <h1 class="hero-title">Interface Matrix</h1>
+        <p class="hero-subtitle">
+          NeuralMimicry ships four complementary surfaces: the browser control surface, this documentation shell,
+          Swagger for executable API requests, and the native egui dashboard. The matrix below defines how those
+          surfaces divide responsibility without drifting in language, branding, or runtime behaviour.
         </p>
+        <div class="hero-actions">
+          <a class="btn" href="/">Open Web UI</a>
+          <a class="btn ghost" href="/docs/swagger">Open Swagger</a>
+          <a class="btn ghost" href="/api/openapi.json">Download OpenAPI</a>
+        </div>
         <div class="callout">
-          Best-practice usage: call <code>GET /api/auth/mode</code> first, authenticate if required,
-          then call protected APIs with the <code>nm_session</code> cookie on the same origin.
+          Design rule: every browser surface shares one auth/session shell and one runtime vocabulary.
+          Web UI is operational, Docs is explanatory, Swagger is executable, and Native UI remains the deepest local surface.
         </div>
       </section>
 
       <section class="panel">
-        <h2>Authentication Flow</h2>
-        <p>
-          1. Discover mode via <code>GET /api/auth/mode</code>.
-          2. If <code>mode=local</code>, call <code>POST /api/login</code> with username/password.
-          3. If <code>mode=oidc</code>, use browser redirect via <code>GET /auth/oidc/login</code>.
-          4. Session cookie <code>nm_session</code> is then used for protected APIs.
-        </p>
+        <div class="panel-title">Runtime Session</div>
+        <div class="runtime-grid">
+          <div class="runtime-card">
+            <div class="runtime-label">Auth Mode</div>
+            <div class="runtime-value" id="shell-auth-mode">Loading...</div>
+          </div>
+          <div class="runtime-card">
+            <div class="runtime-label">Session</div>
+            <div class="runtime-value" id="shell-session-state">Checking...</div>
+          </div>
+          <div class="runtime-card">
+            <div class="runtime-label">Default Orchestrator</div>
+            <div class="runtime-value" id="shell-default-orchestrator">Loading...</div>
+          </div>
+        </div>
+        <form id="shell-login-form" class="auth-inline hidden">
+          <div class="auth-inline-field">
+            <label for="shell-login-username">Username</label>
+            <input id="shell-login-username" type="text" autocomplete="username" />
+          </div>
+          <div class="auth-inline-field">
+            <label for="shell-login-password">Password</label>
+            <input id="shell-login-password" type="password" autocomplete="current-password" />
+          </div>
+          <div class="auth-inline-actions">
+            <button class="btn" id="shell-login-submit" type="submit">Login</button>
+            <button class="btn ghost hidden" id="shell-signup-btn" type="button">Sign up</button>
+          </div>
+        </form>
+        <div class="auth-inline-actions">
+          <a class="btn hidden" id="shell-oidc-link" href="/auth/oidc/login">Continue with SSO</a>
+        </div>
+        <div class="shell-auth-error" id="shell-auth-error"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Function Matrix</div>
+        <table class="matrix-table">
+          <thead>
+            <tr>
+              <th>Function</th>
+              <th>Web UI</th>
+              <th>Docs</th>
+              <th>Swagger</th>
+              <th>Native UI</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Session and auth flow</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Companion</span></td>
+            </tr>
+            <tr>
+              <td>Runtime target and cluster status</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Context</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Context</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Network control lifecycle</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Try It Out</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Topology visualisation</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Probes, EQ, scope, raster</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Architecture and bio tuning</td>
+              <td><span class="matrix-pill matrix-pill-context">Contextual</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Request Tests</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Save, load, import, export</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td><span class="matrix-pill matrix-pill-context">API Tests</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+            </tr>
+            <tr>
+              <td>Schema and endpoint discovery</td>
+              <td><span class="matrix-pill matrix-pill-context">Companion</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td><span class="matrix-pill matrix-pill-context">Companion</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Authorisation Flow</div>
+        <div class="docs-list">
+          <div>1. Call <code>GET /api/auth/mode</code> or use the session shell above to discover whether the server is running in <code>none</code>, <code>local</code>, or <code>oidc</code> mode.</div>
+          <div>2. In <code>local</code> mode, sign in with <code>POST /api/login</code>. In <code>oidc</code> mode, begin browser login with <code>GET /auth/oidc/login</code>.</div>
+          <div>3. Protected browser requests then use the same-origin <code>nm_session</code> cookie, which Swagger sends automatically, and must also satisfy the resolved <code>service_access.aarnn</code> grant.</div>
+          <div>4. Backend integrations may instead present a Customers-issued bearer token. <code>POST /api/llm/mirror</code> is designed for that service-account path.</div>
+        </div>
         <pre><code>curl -s http://localhost:8080/api/auth/mode
 curl -s -X POST http://localhost:8080/api/login \
   -H 'content-type: application/json' \
@@ -188,51 +165,75 @@ curl -s http://localhost:8080/api/status --cookie "nm_session=&lt;value&gt;"</co
       </section>
 
       <section class="panel">
-        <h2>Endpoint Matrix</h2>
-        <table>
+        <div class="panel-title">Service Access Tiers</div>
+        <div class="docs-list">
+          <div><strong><code>request</code></strong>: service discovery, token views, and user configuration.</div>
+          <div><strong><code>observe</code></strong>: runtime status, workspace detail, snapshots, activity, and export.</div>
+          <div><strong><code>use</code></strong>: create/import workspaces and run non-destructive workspace actions such as <code>start</code>, <code>repeat</code>, <code>save</code>, and <code>step</code>.</div>
+          <div><strong><code>control</code></strong>: destructive or supervisory actions such as workspace deletion, <code>stop</code>, <code>reset</code>, and <code>new</code>.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Endpoint Matrix</div>
+        <table class="docs-table">
           <thead>
             <tr>
               <th>Method</th>
               <th>Path</th>
-              <th>Auth</th>
+              <th>Access</th>
               <th>Purpose</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/openapi.json</code></td><td class="noauth">No</td><td>OpenAPI schema</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td class="noauth">No</td><td>Default orchestrator bootstrap config</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/auth/mode</code></td><td class="noauth">No</td><td>Auth mode and signup capability</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/me</code></td><td class="noauth">No</td><td>Current session/user status</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/login</code></td><td class="noauth">No</td><td>Local username/password login</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/signup</code></td><td class="noauth">No</td><td>Create local account (if enabled)</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/logout</code></td><td class="auth">Cookie</td><td>Clear active session</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/user/config</code></td><td class="auth">Cookie</td><td>Get per-user persisted UI config</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/user/config</code></td><td class="auth">Cookie</td><td>Save per-user UI config</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/status</code></td><td class="auth">Cookie</td><td>Cluster and network status snapshot</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/snapshot</code></td><td class="auth">Cookie</td><td>Network JSON snapshot</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/activity</code></td><td class="auth">Cookie</td><td>Latest spiking activity vectors</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/inject</code></td><td class="auth">Cookie</td><td>Inject a single AER exchange (hex payload or spike indices)</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/stream</code></td><td class="auth">Cookie</td><td>Stream NDJSON AER frames over HTTP(S) to a running network</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/update_network</code></td><td class="auth">Cookie</td><td>Apply config/model/rule updates</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/api/control_network</code></td><td class="auth">Cookie</td><td>Start/stop/repeat/reset/new controls</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/api/export</code></td><td class="auth">Cookie</td><td>Export to NeuroML/PyNN/NIR/ONNX/TFLite</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/login</code></td><td class="noauth">No</td><td>Start OIDC browser login</td></tr>
-            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/callback</code></td><td class="noauth">No</td><td>OIDC callback endpoint</td></tr>
-            <tr><td><span class="method post">POST</span></td><td><code>/auth/oidc/exchange</code></td><td class="noauth">No</td><td>Token-to-session exchange</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/openapi.json</code></td><td>No</td><td>Machine-readable OpenAPI schema.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>No</td><td>Bootstrap default orchestrator config.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/auth/mode</code></td><td>No</td><td>Auth mode and local sign-up capability.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/me</code></td><td>No</td><td>Current session/user identity.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/login</code></td><td>No</td><td>Local username/password sign-in.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/signup</code></td><td>No</td><td>Create a local account when enabled.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/logout</code></td><td>Session</td><td>Clear the active session.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/tokens</code></td><td>AARNN <code>request</code></td><td>Read token balance and linked commercial URLs.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/tokens/ledger</code></td><td>AARNN <code>request</code></td><td>Read token ledger history.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/user/config</code></td><td>AARNN <code>request</code></td><td>Read per-user persisted browser UI state.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/user/config</code></td><td>AARNN <code>request</code></td><td>Persist browser UI state.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/status</code></td><td>AARNN <code>observe</code></td><td>Read workspace runtime status and autoscaler context.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces</code></td><td>AARNN <code>observe</code></td><td>List the caller's workspaces.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces</code></td><td>AARNN <code>use</code></td><td>Create a new workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}</code></td><td>AARNN <code>observe</code></td><td>Read a workspace summary and runtime detail.</td></tr>
+            <tr><td><span class="method delete">DELETE</span></td><td><code>/api/runtime/workspaces/{workspace_id}</code></td><td>AARNN <code>control</code></td><td>Delete a workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/snapshot</code></td><td>AARNN <code>observe</code></td><td>Read the latest saved workspace snapshot.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/activity</code></td><td>AARNN <code>observe</code></td><td>Read live workspace activity vectors.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces/{workspace_id}/control</code></td><td>AARNN <code>use</code> or <code>control</code></td><td>Run workspace lifecycle actions. Destructive actions require <code>control</code>.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/runtime/workspaces/{workspace_id}/import</code></td><td>AARNN <code>use</code></td><td>Import config or snapshot payloads into a workspace.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/runtime/workspaces/{workspace_id}/export</code></td><td>AARNN <code>observe</code></td><td>Export the active workspace to NeuroML, PyNN, NIR, ONNX, or TFLite.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/status</code></td><td>Disabled for authenticated sessions</td><td>Cluster and network status snapshot.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/snapshot</code></td><td>Disabled for authenticated sessions</td><td>Full network snapshot JSON.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/activity</code></td><td>Disabled for authenticated sessions</td><td>Latest spike activity vectors.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/update_network</code></td><td>Disabled for authenticated sessions</td><td>Apply config JSON or full snapshot JSON to a managed network.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/control_network</code></td><td>Disabled for authenticated sessions</td><td>Start, stop, repeat, reset, or create a new network.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/inject</code></td><td>Disabled for authenticated sessions</td><td>Inject a single AER exchange or spike index frame.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/aer/stream</code></td><td>Disabled for authenticated sessions</td><td>Stream NDJSON AER frames over HTTP.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/api/llm/mirror</code></td><td>AARNN <code>use</code></td><td>Mirror Gail exchanges into persisted AER stimuli and return an optional bootstrap candidate reply.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/api/export</code></td><td>Disabled for authenticated sessions</td><td>Export the active network to NeuroML, PyNN, NIR, ONNX, or TFLite.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/login</code></td><td>No</td><td>Start OIDC browser login.</td></tr>
+            <tr><td><span class="method get">GET</span></td><td><code>/auth/oidc/callback</code></td><td>No</td><td>OIDC callback route.</td></tr>
+            <tr><td><span class="method post">POST</span></td><td><code>/auth/oidc/exchange</code></td><td>No</td><td>Token-to-session exchange.</td></tr>
           </tbody>
         </table>
       </section>
 
       <section class="panel">
-        <h2>Interactive Usage</h2>
-        <p>
-          Use <a href="/docs/swagger" style="color: var(--accent)">Swagger UI</a> to test requests directly in-browser.
-          It is preconfigured for same-origin cookies so you can login and invoke protected endpoints in one session.
-        </p>
-        <p class="footer-note">
-          If OIDC mode is enabled, complete browser login first, then open Swagger UI to run authenticated API calls.
-        </p>
+        <div class="panel-title">Companion Surfaces</div>
+        <div class="docs-list">
+          <div><strong>Web UI</strong>: remote target selection, cluster status, topology rendering, probes, browser save/load, and export.</div>
+          <div><strong>Swagger</strong>: direct request execution using the same session cookie as the browser shell.</div>
+          <div><strong>Native UI</strong>: richest local simulation surface for morphology, deep biology, GA search, and local import/export workflows.</div>
+        </div>
       </section>
     </main>
+
+    <script src="/service-access.js"></script>
+    <script src="/shell.js"></script>
   </body>
 </html>

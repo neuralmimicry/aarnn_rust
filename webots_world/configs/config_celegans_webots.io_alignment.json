@@ -1,0 +1,610 @@
+{
+  "dataset": null,
+  "brain_id": "default",
+  "sensor_regex": "^celegans_s_[0-9]{2}_.*$",
+  "actuator_regex": "^celegans_o_[0-9]{3}_.*$",
+  "sensory_channels": [
+    {
+      "channel_index": 0,
+      "connectome_node_id": "celegans_s_00_vibration_accel.x",
+      "device_port": "celegans_s_00_vibration_accel.x"
+    },
+    {
+      "channel_index": 1,
+      "connectome_node_id": "celegans_s_00_vibration_accel.y",
+      "device_port": "celegans_s_00_vibration_accel.y"
+    },
+    {
+      "channel_index": 2,
+      "connectome_node_id": "celegans_s_00_vibration_accel.z",
+      "device_port": "celegans_s_00_vibration_accel.z"
+    },
+    {
+      "channel_index": 3,
+      "connectome_node_id": "celegans_s_03_vibration_gyro.x",
+      "device_port": "celegans_s_03_vibration_gyro.x"
+    },
+    {
+      "channel_index": 4,
+      "connectome_node_id": "celegans_s_03_vibration_gyro.y",
+      "device_port": "celegans_s_03_vibration_gyro.y"
+    },
+    {
+      "channel_index": 5,
+      "connectome_node_id": "celegans_s_03_vibration_gyro.z",
+      "device_port": "celegans_s_03_vibration_gyro.z"
+    },
+    {
+      "channel_index": 6,
+      "connectome_node_id": "celegans_s_06_touch_front",
+      "device_port": "celegans_s_06_touch_front"
+    },
+    {
+      "channel_index": 7,
+      "connectome_node_id": "celegans_s_07_touch_rear",
+      "device_port": "celegans_s_07_touch_rear"
+    },
+    {
+      "channel_index": 8,
+      "connectome_node_id": "celegans_s_08_light_left",
+      "device_port": "celegans_s_08_light_left"
+    },
+    {
+      "channel_index": 9,
+      "connectome_node_id": "celegans_s_09_light_right",
+      "device_port": "celegans_s_09_light_right"
+    },
+    {
+      "channel_index": 10,
+      "connectome_node_id": "celegans_s_10_heat_left",
+      "device_port": "celegans_s_10_heat_left"
+    },
+    {
+      "channel_index": 11,
+      "connectome_node_id": "celegans_s_11_heat_right",
+      "device_port": "celegans_s_11_heat_right"
+    },
+    {
+      "channel_index": 12,
+      "connectome_node_id": "celegans_s_12_taste_front_center",
+      "device_port": "celegans_s_12_taste_front_center"
+    },
+    {
+      "channel_index": 13,
+      "connectome_node_id": "celegans_s_13_taste_front_left",
+      "device_port": "celegans_s_13_taste_front_left"
+    },
+    {
+      "channel_index": 14,
+      "connectome_node_id": "celegans_s_14_taste_front_right",
+      "device_port": "celegans_s_14_taste_front_right"
+    },
+    {
+      "channel_index": 15,
+      "connectome_node_id": "celegans_s_15_chem_left",
+      "device_port": "celegans_s_15_chem_left"
+    },
+    {
+      "channel_index": 16,
+      "connectome_node_id": "celegans_s_16_chem_right",
+      "device_port": "celegans_s_16_chem_right"
+    },
+    {
+      "channel_index": 17,
+      "connectome_node_id": "celegans_s_17_chem_rear_left",
+      "device_port": "celegans_s_17_chem_rear_left"
+    },
+    {
+      "channel_index": 18,
+      "connectome_node_id": "celegans_s_18_chem_rear_right",
+      "device_port": "celegans_s_18_chem_rear_right"
+    },
+    {
+      "channel_index": 19,
+      "connectome_node_id": "celegans_s_19_flow_front",
+      "device_port": "celegans_s_19_flow_front"
+    },
+    {
+      "channel_index": 20,
+      "connectome_node_id": "celegans_s_20_flow_rear",
+      "device_port": "celegans_s_20_flow_rear"
+    },
+    {
+      "channel_index": 21,
+      "connectome_node_id": "celegans_s_21_far_front_left",
+      "device_port": "celegans_s_21_far_front_left"
+    },
+    {
+      "channel_index": 22,
+      "connectome_node_id": "celegans_s_22_far_front_right",
+      "device_port": "celegans_s_22_far_front_right"
+    },
+    {
+      "channel_index": 23,
+      "connectome_node_id": "celegans_s_23_far_rear",
+      "device_port": "celegans_s_23_far_rear"
+    }
+  ],
+  "output_channels": [
+    {
+      "channel_index": 0,
+      "connectome_node_id": "MDL01",
+      "actuator_name": "celegans_o_000_MDL01"
+    },
+    {
+      "channel_index": 1,
+      "connectome_node_id": "MDL02",
+      "actuator_name": "celegans_o_001_MDL02"
+    },
+    {
+      "channel_index": 2,
+      "connectome_node_id": "MDL03",
+      "actuator_name": "celegans_o_002_MDL03"
+    },
+    {
+      "channel_index": 3,
+      "connectome_node_id": "MDL04",
+      "actuator_name": "celegans_o_003_MDL04"
+    },
+    {
+      "channel_index": 4,
+      "connectome_node_id": "MDL05",
+      "actuator_name": "celegans_o_004_MDL05"
+    },
+    {
+      "channel_index": 5,
+      "connectome_node_id": "MDL06",
+      "actuator_name": "celegans_o_005_MDL06"
+    },
+    {
+      "channel_index": 6,
+      "connectome_node_id": "MDL07",
+      "actuator_name": "celegans_o_006_MDL07"
+    },
+    {
+      "channel_index": 7,
+      "connectome_node_id": "MDL08",
+      "actuator_name": "celegans_o_007_MDL08"
+    },
+    {
+      "channel_index": 8,
+      "connectome_node_id": "MDL09",
+      "actuator_name": "celegans_o_008_MDL09"
+    },
+    {
+      "channel_index": 9,
+      "connectome_node_id": "MDL10",
+      "actuator_name": "celegans_o_009_MDL10"
+    },
+    {
+      "channel_index": 10,
+      "connectome_node_id": "MDL11",
+      "actuator_name": "celegans_o_010_MDL11"
+    },
+    {
+      "channel_index": 11,
+      "connectome_node_id": "MDL12",
+      "actuator_name": "celegans_o_011_MDL12"
+    },
+    {
+      "channel_index": 12,
+      "connectome_node_id": "MDL13",
+      "actuator_name": "celegans_o_012_MDL13"
+    },
+    {
+      "channel_index": 13,
+      "connectome_node_id": "MDL14",
+      "actuator_name": "celegans_o_013_MDL14"
+    },
+    {
+      "channel_index": 14,
+      "connectome_node_id": "MDL15",
+      "actuator_name": "celegans_o_014_MDL15"
+    },
+    {
+      "channel_index": 15,
+      "connectome_node_id": "MDL16",
+      "actuator_name": "celegans_o_015_MDL16"
+    },
+    {
+      "channel_index": 16,
+      "connectome_node_id": "MDL17",
+      "actuator_name": "celegans_o_016_MDL17"
+    },
+    {
+      "channel_index": 17,
+      "connectome_node_id": "MDL18",
+      "actuator_name": "celegans_o_017_MDL18"
+    },
+    {
+      "channel_index": 18,
+      "connectome_node_id": "MDL19",
+      "actuator_name": "celegans_o_018_MDL19"
+    },
+    {
+      "channel_index": 19,
+      "connectome_node_id": "MDL20",
+      "actuator_name": "celegans_o_019_MDL20"
+    },
+    {
+      "channel_index": 20,
+      "connectome_node_id": "MDL21",
+      "actuator_name": "celegans_o_020_MDL21"
+    },
+    {
+      "channel_index": 21,
+      "connectome_node_id": "MDL22",
+      "actuator_name": "celegans_o_021_MDL22"
+    },
+    {
+      "channel_index": 22,
+      "connectome_node_id": "MDL23",
+      "actuator_name": "celegans_o_022_MDL23"
+    },
+    {
+      "channel_index": 23,
+      "connectome_node_id": "MDL24",
+      "actuator_name": "celegans_o_023_MDL24"
+    },
+    {
+      "channel_index": 24,
+      "connectome_node_id": "MDR01",
+      "actuator_name": "celegans_o_024_MDR01"
+    },
+    {
+      "channel_index": 25,
+      "connectome_node_id": "MDR02",
+      "actuator_name": "celegans_o_025_MDR02"
+    },
+    {
+      "channel_index": 26,
+      "connectome_node_id": "MDR03",
+      "actuator_name": "celegans_o_026_MDR03"
+    },
+    {
+      "channel_index": 27,
+      "connectome_node_id": "MDR04",
+      "actuator_name": "celegans_o_027_MDR04"
+    },
+    {
+      "channel_index": 28,
+      "connectome_node_id": "MDR05",
+      "actuator_name": "celegans_o_028_MDR05"
+    },
+    {
+      "channel_index": 29,
+      "connectome_node_id": "MDR06",
+      "actuator_name": "celegans_o_029_MDR06"
+    },
+    {
+      "channel_index": 30,
+      "connectome_node_id": "MDR07",
+      "actuator_name": "celegans_o_030_MDR07"
+    },
+    {
+      "channel_index": 31,
+      "connectome_node_id": "MDR08",
+      "actuator_name": "celegans_o_031_MDR08"
+    },
+    {
+      "channel_index": 32,
+      "connectome_node_id": "MDR09",
+      "actuator_name": "celegans_o_032_MDR09"
+    },
+    {
+      "channel_index": 33,
+      "connectome_node_id": "MDR10",
+      "actuator_name": "celegans_o_033_MDR10"
+    },
+    {
+      "channel_index": 34,
+      "connectome_node_id": "MDR11",
+      "actuator_name": "celegans_o_034_MDR11"
+    },
+    {
+      "channel_index": 35,
+      "connectome_node_id": "MDR12",
+      "actuator_name": "celegans_o_035_MDR12"
+    },
+    {
+      "channel_index": 36,
+      "connectome_node_id": "MDR13",
+      "actuator_name": "celegans_o_036_MDR13"
+    },
+    {
+      "channel_index": 37,
+      "connectome_node_id": "MDR14",
+      "actuator_name": "celegans_o_037_MDR14"
+    },
+    {
+      "channel_index": 38,
+      "connectome_node_id": "MDR15",
+      "actuator_name": "celegans_o_038_MDR15"
+    },
+    {
+      "channel_index": 39,
+      "connectome_node_id": "MDR16",
+      "actuator_name": "celegans_o_039_MDR16"
+    },
+    {
+      "channel_index": 40,
+      "connectome_node_id": "MDR17",
+      "actuator_name": "celegans_o_040_MDR17"
+    },
+    {
+      "channel_index": 41,
+      "connectome_node_id": "MDR18",
+      "actuator_name": "celegans_o_041_MDR18"
+    },
+    {
+      "channel_index": 42,
+      "connectome_node_id": "MDR19",
+      "actuator_name": "celegans_o_042_MDR19"
+    },
+    {
+      "channel_index": 43,
+      "connectome_node_id": "MDR20",
+      "actuator_name": "celegans_o_043_MDR20"
+    },
+    {
+      "channel_index": 44,
+      "connectome_node_id": "MDR21",
+      "actuator_name": "celegans_o_044_MDR21"
+    },
+    {
+      "channel_index": 45,
+      "connectome_node_id": "MDR22",
+      "actuator_name": "celegans_o_045_MDR22"
+    },
+    {
+      "channel_index": 46,
+      "connectome_node_id": "MDR23",
+      "actuator_name": "celegans_o_046_MDR23"
+    },
+    {
+      "channel_index": 47,
+      "connectome_node_id": "MDR24",
+      "actuator_name": "celegans_o_047_MDR24"
+    },
+    {
+      "channel_index": 48,
+      "connectome_node_id": "MVL01",
+      "actuator_name": "celegans_o_048_MVL01"
+    },
+    {
+      "channel_index": 49,
+      "connectome_node_id": "MVL02",
+      "actuator_name": "celegans_o_049_MVL02"
+    },
+    {
+      "channel_index": 50,
+      "connectome_node_id": "MVL03",
+      "actuator_name": "celegans_o_050_MVL03"
+    },
+    {
+      "channel_index": 51,
+      "connectome_node_id": "MVL04",
+      "actuator_name": "celegans_o_051_MVL04"
+    },
+    {
+      "channel_index": 52,
+      "connectome_node_id": "MVL05",
+      "actuator_name": "celegans_o_052_MVL05"
+    },
+    {
+      "channel_index": 53,
+      "connectome_node_id": "MVL06",
+      "actuator_name": "celegans_o_053_MVL06"
+    },
+    {
+      "channel_index": 54,
+      "connectome_node_id": "MVL07",
+      "actuator_name": "celegans_o_054_MVL07"
+    },
+    {
+      "channel_index": 55,
+      "connectome_node_id": "MVL08",
+      "actuator_name": "celegans_o_055_MVL08"
+    },
+    {
+      "channel_index": 56,
+      "connectome_node_id": "MVL09",
+      "actuator_name": "celegans_o_056_MVL09"
+    },
+    {
+      "channel_index": 57,
+      "connectome_node_id": "MVL10",
+      "actuator_name": "celegans_o_057_MVL10"
+    },
+    {
+      "channel_index": 58,
+      "connectome_node_id": "MVL11",
+      "actuator_name": "celegans_o_058_MVL11"
+    },
+    {
+      "channel_index": 59,
+      "connectome_node_id": "MVL12",
+      "actuator_name": "celegans_o_059_MVL12"
+    },
+    {
+      "channel_index": 60,
+      "connectome_node_id": "MVL13",
+      "actuator_name": "celegans_o_060_MVL13"
+    },
+    {
+      "channel_index": 61,
+      "connectome_node_id": "MVL14",
+      "actuator_name": "celegans_o_061_MVL14"
+    },
+    {
+      "channel_index": 62,
+      "connectome_node_id": "MVL15",
+      "actuator_name": "celegans_o_062_MVL15"
+    },
+    {
+      "channel_index": 63,
+      "connectome_node_id": "MVL16",
+      "actuator_name": "celegans_o_063_MVL16"
+    },
+    {
+      "channel_index": 64,
+      "connectome_node_id": "MVL17",
+      "actuator_name": "celegans_o_064_MVL17"
+    },
+    {
+      "channel_index": 65,
+      "connectome_node_id": "MVL18",
+      "actuator_name": "celegans_o_065_MVL18"
+    },
+    {
+      "channel_index": 66,
+      "connectome_node_id": "MVL19",
+      "actuator_name": "celegans_o_066_MVL19"
+    },
+    {
+      "channel_index": 67,
+      "connectome_node_id": "MVL20",
+      "actuator_name": "celegans_o_067_MVL20"
+    },
+    {
+      "channel_index": 68,
+      "connectome_node_id": "MVL21",
+      "actuator_name": "celegans_o_068_MVL21"
+    },
+    {
+      "channel_index": 69,
+      "connectome_node_id": "MVL22",
+      "actuator_name": "celegans_o_069_MVL22"
+    },
+    {
+      "channel_index": 70,
+      "connectome_node_id": "MVL23",
+      "actuator_name": "celegans_o_070_MVL23"
+    },
+    {
+      "channel_index": 71,
+      "connectome_node_id": "MVR01",
+      "actuator_name": "celegans_o_071_MVR01"
+    },
+    {
+      "channel_index": 72,
+      "connectome_node_id": "MVR02",
+      "actuator_name": "celegans_o_072_MVR02"
+    },
+    {
+      "channel_index": 73,
+      "connectome_node_id": "MVR03",
+      "actuator_name": "celegans_o_073_MVR03"
+    },
+    {
+      "channel_index": 74,
+      "connectome_node_id": "MVR04",
+      "actuator_name": "celegans_o_074_MVR04"
+    },
+    {
+      "channel_index": 75,
+      "connectome_node_id": "MVR05",
+      "actuator_name": "celegans_o_075_MVR05"
+    },
+    {
+      "channel_index": 76,
+      "connectome_node_id": "MVR06",
+      "actuator_name": "celegans_o_076_MVR06"
+    },
+    {
+      "channel_index": 77,
+      "connectome_node_id": "MVR07",
+      "actuator_name": "celegans_o_077_MVR07"
+    },
+    {
+      "channel_index": 78,
+      "connectome_node_id": "MVR08",
+      "actuator_name": "celegans_o_078_MVR08"
+    },
+    {
+      "channel_index": 79,
+      "connectome_node_id": "MVR09",
+      "actuator_name": "celegans_o_079_MVR09"
+    },
+    {
+      "channel_index": 80,
+      "connectome_node_id": "MVR10",
+      "actuator_name": "celegans_o_080_MVR10"
+    },
+    {
+      "channel_index": 81,
+      "connectome_node_id": "MVR11",
+      "actuator_name": "celegans_o_081_MVR11"
+    },
+    {
+      "channel_index": 82,
+      "connectome_node_id": "MVR12",
+      "actuator_name": "celegans_o_082_MVR12"
+    },
+    {
+      "channel_index": 83,
+      "connectome_node_id": "MVR13",
+      "actuator_name": "celegans_o_083_MVR13"
+    },
+    {
+      "channel_index": 84,
+      "connectome_node_id": "MVR14",
+      "actuator_name": "celegans_o_084_MVR14"
+    },
+    {
+      "channel_index": 85,
+      "connectome_node_id": "MVR15",
+      "actuator_name": "celegans_o_085_MVR15"
+    },
+    {
+      "channel_index": 86,
+      "connectome_node_id": "MVR16",
+      "actuator_name": "celegans_o_086_MVR16"
+    },
+    {
+      "channel_index": 87,
+      "connectome_node_id": "MVR17",
+      "actuator_name": "celegans_o_087_MVR17"
+    },
+    {
+      "channel_index": 88,
+      "connectome_node_id": "MVR18",
+      "actuator_name": "celegans_o_088_MVR18"
+    },
+    {
+      "channel_index": 89,
+      "connectome_node_id": "MVR19",
+      "actuator_name": "celegans_o_089_MVR19"
+    },
+    {
+      "channel_index": 90,
+      "connectome_node_id": "MVR20",
+      "actuator_name": "celegans_o_090_MVR20"
+    },
+    {
+      "channel_index": 91,
+      "connectome_node_id": "MVR21",
+      "actuator_name": "celegans_o_091_MVR21"
+    },
+    {
+      "channel_index": 92,
+      "connectome_node_id": "MVR22",
+      "actuator_name": "celegans_o_092_MVR22"
+    },
+    {
+      "channel_index": 93,
+      "connectome_node_id": "MVR23",
+      "actuator_name": "celegans_o_093_MVR23"
+    },
+    {
+      "channel_index": 94,
+      "connectome_node_id": "MVR24",
+      "actuator_name": "celegans_o_094_MVR24"
+    },
+    {
+      "channel_index": 95,
+      "connectome_node_id": "MVULVA",
+      "actuator_name": "celegans_o_095_MVULVA"
+    }
+  ]
+}

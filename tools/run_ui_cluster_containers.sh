@@ -28,7 +28,8 @@ case "${ARCH_RAW}" in
   *) IMAGE_ARCH="${ARCH_RAW}" ;;
 esac
 
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:brainregions-${IMAGE_ARCH}}"
+ORCH_IMAGE_NAME="${ORCH_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}}"
+NODE_IMAGE_NAME="${NODE_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-node-${IMAGE_ARCH}}"
 BRAIN_ID_ORCH="${BRAIN_ID_ORCH:-cluster_master}"
 NODE_COUNT="${NODE_COUNT:-2}"
 
@@ -37,8 +38,10 @@ NETWORK_PATH="${NETWORK_PATH:-network_aarnn_6layer.json}"
 
 OUTPUT_DIR="${OUTPUT_DIR:-$PWD/outputs}"
 LOG_DIR="${LOG_DIR:-$PWD/logs}"
+UI_CACHE_DIR="${UI_CACHE_DIR:-$PWD/.container-cache/desktop-ui}"
+UI_RENDERER="${NM_UI_RENDERER:-glow}"
 
-mkdir -p "$OUTPUT_DIR" "$LOG_DIR" "$HOME/.cache"
+mkdir -p "$OUTPUT_DIR" "$LOG_DIR" "$UI_CACHE_DIR"
 
 # ----- X11 auth setup -----
 XAUTH=/tmp/.podman.xauth
@@ -112,21 +115,31 @@ fi
 
 COMMON_OPTS=(
   --network=host
+  --ipc=host
+  --userns=keep-id
   --cpus=8
   --user "$(id -u):$(id -g)"
   -e DISPLAY="$DISPLAY"
   -e XAUTHORITY=/tmp/.Xauthority
   -e XDG_CACHE_HOME=/tmp/cache
+  -e MESA_SHADER_CACHE_DIR=/tmp/cache/mesa_shader_cache
   -e FONTCONFIG_PATH=/etc/fonts
+  -e NM_UI_RENDERER="$UI_RENDERER"
+  -e WINIT_UNIX_BACKEND=x11
   -e LIBGL_ALWAYS_SOFTWARE=1
+  -e LIBGL_DRI3_DISABLE=1
   -e MESA_GL_VERSION_OVERRIDE=3.3
   -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
   -e NMD_TFLITE_ALLOW_LARGE=1
   -v "$XAUTH:/tmp/.Xauthority:ro"
-  -v "$HOME/.cache:/tmp/cache:Z"
+  -v "$UI_CACHE_DIR:/tmp/cache:Z"
   -v "$OUTPUT_DIR:/app/outputs:Z"
   -v "$LOG_DIR:/app/logs:Z"
 )
+
+if [ -d /tmp/.X11-unix ]; then
+  COMMON_OPTS+=( -v /tmp/.X11-unix:/tmp/.X11-unix:ro )
+fi
 
 RUN_ID="$(date +%s)"
 ORCH_NAME="nm-orch-${RUN_ID}"
@@ -157,7 +170,7 @@ CONTAINERS+=("$ORCH_NAME")
 
 podman run --rm --name "$ORCH_NAME" \
   "${COMMON_OPTS[@]}" \
-  "$IMAGE_NAME" \
+  "$ORCH_IMAGE_NAME" \
   --orchestrator --brain-id "$BRAIN_ID_ORCH" \
   --grpc-addr "0.0.0.0:$ORCH_PORT" \
   "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" \
@@ -179,7 +192,7 @@ for i in $(seq 1 "$NODE_COUNT"); do
 
   podman run --rm --name "$NODE_NAME" \
     "${COMMON_OPTS[@]}" \
-    "$IMAGE_NAME" \
+    "$NODE_IMAGE_NAME" \
     --node --brain-id "node_${i}" \
     --grpc-addr "0.0.0.0:$NODE_PORT" \
     --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" --quiet \

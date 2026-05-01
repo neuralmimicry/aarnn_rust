@@ -1,0 +1,49 @@
+{
+  "id": "short_term_plasticity",
+  "title": "AARNN Short-Term Plasticity",
+  "analog_class": "analog_core",
+  "rust_modules": ["src/aarnn/plasticity.rs"],
+  "rust_functions": ["stp_step", "stp_update_slice"],
+  "defaults": {
+    "stp_u": 0.2,
+    "stp_tau_rec_ms": 800.0,
+    "stp_tau_facil_ms": 200.0
+  },
+  "xcos_workspace": {
+    "inputs": ["stp_pre_spikes"],
+    "outputs": ["stp_release", "stp_utilization", "stp_resources"],
+    "script": "../xcos/02_short_term_plasticity.sce"
+  },
+  "hasler_xcos_blocks": [
+    "Arbitrary Generator",
+    "OTA",
+    "Capacitor",
+    "Buffer",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "02_short_term_plasticity.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Pulse detector on presynaptic input",
+      "Leaky integrator for utilization state u",
+      "Leaky integrator for resource pool x",
+      "Multiplier / translinear stage for u*x",
+      "Output gain / hold stage"
+    ],
+    "limitations": [
+      "Exact spike-synchronous clamping at u and x bounds is easiest as a mixed-signal supervisory trim.",
+      "The state variables are local and map well to floating-gate or capacitor storage."
+    ]
+  }
+}
