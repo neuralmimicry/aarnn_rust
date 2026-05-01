@@ -1,7 +1,7 @@
 #[cfg(feature = "core_affinity")]
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(feature = "core_affinity")]
 use std::sync::OnceLock;
+#[cfg(feature = "core_affinity")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "core_affinity")]
 fn parse_env_bool(name: &str, default: bool) -> bool {
@@ -28,11 +28,7 @@ fn parse_env_usize_list(name: &str) -> Option<Vec<usize>> {
             out.push(v);
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 #[cfg(feature = "core_affinity")]

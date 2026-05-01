@@ -13,19 +13,20 @@
 //!
 //! The UI Runner (`runner.rs`) implements detailed AARNN per‑segment conduction
 //! using morphology when built with `growth3d+morpho` features.
-use ndarray::{s, Array1, Array2};
+use ndarray::{Array1, Array2, s};
 use rand::{Rng, RngExt};
 
+use crate::aarnn::dynamics::{
+    SynapticDriveParams, apply_synaptic_filter as apply_aarnn_synaptic_filter,
+};
+use crate::aarnn::plasticity::{ShortTermPlasticityParams, stp_update_slice};
 #[cfg(feature = "opencl")]
-use crate::cl_compute::{get_global_cl_manager, OpenCLManager};
+use crate::cl_compute::{
+    Buffer, CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ClResult,
+    ExecuteKernel, OpenCLManager, get_global_cl_manager,
+};
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
 use crate::network::BuiltNetwork;
-#[cfg(feature = "opencl")]
-use opencl3::kernel::ExecuteKernel;
-#[cfg(feature = "opencl")]
-use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
-#[cfg(feature = "opencl")]
-use opencl3::types::CL_TRUE;
 #[cfg(feature = "opencl")]
 use std::ptr;
 #[cfg(feature = "opencl")]
@@ -242,17 +243,14 @@ fn apply_synaptic_filter(
     nmda_ratio: f64,
     syn_gain: f64,
 ) -> Array1<f64> {
-    let mut out = Array1::<f64>::zeros(raw.len());
-    for i in 0..raw.len() {
-        let val = raw[i];
-        let exc = val.max(0.0);
-        let inh = (-val).max(0.0);
-        ampa[i] = ampa[i] * decay_ampa + exc * (1.0 - nmda_ratio);
-        nmda[i] = nmda[i] * decay_nmda + exc * nmda_ratio;
-        gaba[i] = gaba[i] * decay_gaba + inh;
-        out[i] = (ampa[i] + nmda[i] - gaba[i]) * syn_gain;
-    }
-    out
+    apply_aarnn_synaptic_filter(raw, ampa, nmda, gaba, None, 0.0, |_| SynapticDriveParams {
+        nmda_ratio,
+        synaptic_gain: syn_gain,
+        decay_ampa,
+        decay_nmda,
+        decay_gaba,
+        neuromod_excitability_gain: 1.0,
+    })
 }
 
 fn stp_update_cpu(
@@ -264,18 +262,17 @@ fn stp_update_cpu(
     stp_rec_decay: f64,
     stp_facil_decay: f64,
 ) {
-    for i in 0..pre_spks.len() {
-        u[i] = u[i] * stp_facil_decay + stp_u * (1.0 - stp_facil_decay);
-        x[i] = x[i] * stp_rec_decay + (1.0 - stp_rec_decay);
-        if pre_spks[i] != 0 {
-            let rel = (u[i] * x[i]).clamp(0.0, 1.0);
-            x[i] = (x[i] - rel).max(0.0);
-            u[i] = (u[i] + stp_u * (1.0 - u[i])).clamp(0.0, 1.0);
-            release[i] = rel;
-        } else {
-            release[i] = 0.0;
-        }
-    }
+    stp_update_slice(
+        pre_spks,
+        u.as_slice_mut().expect("contiguous STP utilization"),
+        x.as_slice_mut().expect("contiguous STP resources"),
+        release.as_slice_mut().expect("contiguous STP release"),
+        |_| ShortTermPlasticityParams {
+            baseline_utilization: stp_u,
+            recovery_decay: stp_rec_decay,
+            facilitation_decay: stp_facil_decay,
+        },
+    );
 }
 
 #[cfg(feature = "opencl")]
@@ -299,7 +296,7 @@ impl ClStpContext {
         num_hidden: usize,
         num_hidden_layers: usize,
         stp_u: f64,
-    ) -> opencl3::Result<Self> {
+    ) -> ClResult<Self> {
         let pre_spk_s = unsafe {
             Buffer::create(
                 &cl.context,
@@ -405,7 +402,7 @@ impl ClStpContext {
         stp_u: f64,
         stp_rec_decay: f64,
         stp_facil_decay: f64,
-    ) -> opencl3::Result<()> {
+    ) -> ClResult<()> {
         cl_stp_update(
             &self.cl,
             &mut self.pre_spk_s,
@@ -428,16 +425,19 @@ impl ClStpContext {
         stp_u: f64,
         stp_rec_decay: f64,
         stp_facil_decay: f64,
-    ) -> opencl3::Result<()> {
-        let u_buf = self.u_h.get_mut(layer).ok_or_else(|| {
-            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
-        })?;
-        let x_buf = self.x_h.get_mut(layer).ok_or_else(|| {
-            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
-        })?;
-        let rel_buf = self.rel_h.get_mut(layer).ok_or_else(|| {
-            opencl3::error_codes::ClError::from(opencl3::error_codes::CL_INVALID_VALUE)
-        })?;
+    ) -> ClResult<()> {
+        let u_buf = self
+            .u_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
+        let x_buf = self
+            .x_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
+        let rel_buf = self
+            .rel_h
+            .get_mut(layer)
+            .ok_or_else(|| ClError::from(CL_INVALID_VALUE))?;
         cl_stp_update(
             &self.cl,
             &mut self.pre_spk_h,
@@ -458,7 +458,7 @@ impl ClStpContext {
         x_s: &mut Array1<f64>,
         u_h: &mut [Array1<f64>],
         x_h: &mut [Array1<f64>],
-    ) -> opencl3::Result<()> {
+    ) -> ClResult<()> {
         if let (Some(u_s_slice), Some(x_s_slice)) = (u_s.as_slice_mut(), x_s.as_slice_mut()) {
             unsafe {
                 self.cl
@@ -507,7 +507,7 @@ fn cl_stp_update(
     stp_u: f64,
     stp_rec_decay: f64,
     stp_facil_decay: f64,
-) -> opencl3::Result<()> {
+) -> ClResult<()> {
     unsafe {
         cl.queue
             .enqueue_write_buffer(pre_buf, CL_TRUE, 0, pre_spks, &[])?;
@@ -516,7 +516,7 @@ fn cl_stp_update(
             .set_arg(u_buf)
             .set_arg(x_buf)
             .set_arg(pre_buf)
-            .set_arg(rel_buf)
+            .set_arg(&mut *rel_buf)
             .set_arg(&stp_u)
             .set_arg(&stp_rec_decay)
             .set_arg(&stp_facil_decay)
@@ -607,11 +607,7 @@ pub fn run_snn(
         .sensory_target_layer
         .unwrap_or_else(|| {
             if matches!(neuron_model, NeuronModel::Aarnn) {
-                if num_hidden_layers > 1 {
-                    1
-                } else {
-                    0
-                }
+                if num_hidden_layers > 1 { 1 } else { 0 }
             } else {
                 0
             }

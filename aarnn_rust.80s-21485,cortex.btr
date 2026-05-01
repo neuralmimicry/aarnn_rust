@@ -1,0 +1,6 @@
+
+aarnn_rust:21485 terminated with signal 11 at PC=797899c4f854 SP=797891bf9c40.  Backtrace:
+/lib/x86_64-linux-gnu/libnvidia-glcore.so.575.57.08(+0xe4f854) [0x797899c4f854]
+/lib/x86_64-linux-gnu/libnvidia-glcore.so.575.57.08(+0xa1ecf4) [0x79789981ecf4]
+/lib/x86_64-linux-gnu/libc.so.6(+0xa27f1) [0x79791baa27f1]
+/lib/x86_64-linux-gnu/libc.so.6(+0x133b5c) [0x79791bb33b5c]

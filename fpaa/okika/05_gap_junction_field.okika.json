@@ -1,0 +1,54 @@
+{
+  "id": "gap_junction_field",
+  "title": "AARNN Gap Junction and Volume Transmission",
+  "analog_class": "analog_core",
+  "rust_modules": ["src/aarnn/dynamics.rs"],
+  "rust_functions": [
+    "apply_gap_junction_mean_field",
+    "apply_local_gap_junction_coupling",
+    "volume_transmission_factors_for_layer"
+  ],
+  "defaults": {
+    "aarnn_gap_junction_strength": 0.03,
+    "aarnn_gap_junction_radius": 0.12,
+    "volume_transmission_radius": 0.12,
+    "volume_transmission_strength": 0.10,
+    "tone": 1.5
+  },
+  "xcos_workspace": {
+    "inputs": ["gap_field_membrane"],
+    "outputs": ["gap_field_delta", "gap_field_volume"],
+    "script": "../xcos/05_gap_junction_field.sce"
+  },
+  "hasler_xcos_blocks": [
+    "OTA",
+    "Buffer",
+    "Join",
+    "Input-to-Input",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "05_gap_junction_field.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "stages": [
+      "Local transconductance or resistive couplers between neighboring membrane nodes",
+      "Shared bias mesh for diffusive volume-transmission tone",
+      "Optional inhibitory-only routing partition",
+      "Output observation buffers"
+    ],
+    "limitations": [
+      "Spatial locality still comes from floorplanning and routing; the FPAA does not infer geometry itself.",
+      "The Gaussian field is approximated by local bias diffusion rather than an exact software kernel."
+    ]
+  }
+}

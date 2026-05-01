@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[cfg(feature = "ui")]
-use rustfft::{num_complex::Complex32, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex32};
 
 #[cfg(feature = "ui")]
 pub trait SensoryProvider {
@@ -716,11 +716,7 @@ impl SensoryProvider for ImageFileProvider {
         vals.into_iter()
             .map(|v| {
                 let p = if self.invert { 1.0 - v } else { v };
-                if p >= thr {
-                    1
-                } else {
-                    0
-                }
+                if p >= thr { 1 } else { 0 }
             })
             .collect()
     }
@@ -864,11 +860,7 @@ impl SensoryProvider for VideoFileProvider {
         vals.into_iter()
             .map(|v| {
                 let p = if self.invert { 1.0 - v } else { v };
-                if p >= thr {
-                    1
-                } else {
-                    0
-                }
+                if p >= thr { 1 } else { 0 }
             })
             .collect()
     }
@@ -925,9 +917,9 @@ unsafe impl Sync for WebcamCaptureProvider {}
 impl WebcamCaptureProvider {
     pub fn new(index: u32, num_sensory_neurons: usize) -> anyhow::Result<Self> {
         use nokhwa::{
+            Camera,
             pixel_format::RgbFormat,
             utils::{CameraIndex, RequestedFormat, RequestedFormatType},
-            Camera,
         };
         let requested =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
@@ -1034,11 +1026,7 @@ impl SensoryProvider for WebcamCaptureProvider {
         vals.into_iter()
             .map(|v| {
                 let p = if self.invert { 1.0 - v } else { v };
-                if p >= thr {
-                    1
-                } else {
-                    0
-                }
+                if p >= thr { 1 } else { 0 }
             })
             .collect()
     }

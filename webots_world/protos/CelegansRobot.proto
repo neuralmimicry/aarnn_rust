@@ -1,0 +1,4421 @@
+#VRML_SIM R2025a utf8
+
+PROTO CelegansRobot [
+  field SFVec3f     translation 0 0.038 0
+  field SFRotation  rotation 0 1 0 0
+  field SFString    name "celegans_robot"
+  field SFString    controller "nao_nn_controller_uds"
+  field MFString    controllerArgs [
+    "NM_BRAINS=default"
+    "NM_SENSORS_default=^celegans_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_default=^celegans_o_[0-9]{3}_.*$"
+  ]
+  field MFNode      extensionSlot [ ]
+]
+{
+  Robot {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+    controller IS controller
+    controllerArgs IS controllerArgs
+    customData "{\"network\":\"../../network_celegans.json\",\"config\":\"../configs/config_celegans_webots.json\"}"
+    children [
+      # Segmented spine (driven indirectly from output muscle channels).
+      HingeJoint {
+        jointParameters HingeJointParameters {
+          anchor 0.0 0.0 0.0
+          axis 0 1 0
+        }
+        device [
+          RotationalMotor {
+            name "celegans_spine_root_lock"
+            minPosition 0
+            maxPosition 0
+            maxVelocity 2.0
+            maxTorque 3.5
+          }
+        ]
+        endPoint
+      Solid {
+        name "celegans_spine_seg_01"
+        translation -0.17000 0.0 0.0
+        children [
+          Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.90 0.66 0.44
+                  roughness 0.72
+                  metalness 0
+                }
+                geometry Capsule {
+                  radius 0.01386
+                  height 0.01303
+                }
+              }
+            ]
+          }
+          # Lateral alae-like ridges improve directional traction during
+          # dorsoventral undulation on flat surfaces.
+          Transform {
+            translation 0.0 0.0 0.01109
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.85 0.62 0.40
+                  roughness 0.68
+                  metalness 0
+                }
+                geometry Box {
+                  size 0.01105 0.00222 0.00333
+                }
+              }
+            ]
+          }
+          Transform {
+            translation 0.0 0.0 -0.01109
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.85 0.62 0.40
+                  roughness 0.68
+                  metalness 0
+                }
+                geometry Box {
+                  size 0.01105 0.00222 0.00333
+                }
+              }
+            ]
+          }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_01"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_02"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01448
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01158
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00232 0.00348
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01158
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00232 0.00348
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_02"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_03"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01510
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01208
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00242 0.00362
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01208
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00242 0.00362
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_03"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_04"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01572
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01258
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00252 0.00377
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01258
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00252 0.00377
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_04"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_05"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01634
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01307
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00261 0.00392
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01307
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00261 0.00392
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_05"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_06"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01696
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01357
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00271 0.00407
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01357
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00271 0.00407
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_06"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_07"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01759
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01407
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00281 0.00422
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01407
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00281 0.00422
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_07"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_08"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01821
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01456
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00291 0.00437
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01456
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00291 0.00437
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_08"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_09"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01883
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01506
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00301 0.00452
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01506
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00301 0.00452
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_09"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_10"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01945
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01556
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00311 0.00467
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01556
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00311 0.00467
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_10"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_11"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.02007
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01605
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00321 0.00482
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01605
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00321 0.00482
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_11"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_12"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.02069
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01655
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00331 0.00497
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01655
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00331 0.00497
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_12"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_13"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.02069
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01655
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00331 0.00497
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01655
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00331 0.00497
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_13"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_14"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.02007
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01605
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00321 0.00482
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01605
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00321 0.00482
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_14"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_15"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01945
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01556
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00311 0.00467
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01556
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00311 0.00467
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_15"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_16"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01883
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01506
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00301 0.00452
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01506
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00301 0.00452
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_16"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_17"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01821
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01456
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00291 0.00437
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01456
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00291 0.00437
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_17"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_18"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01759
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01407
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00281 0.00422
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01407
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00281 0.00422
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_18"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_19"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01696
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01357
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00271 0.00407
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01357
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00271 0.00407
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_19"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_20"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01634
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01307
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00261 0.00392
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01307
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00261 0.00392
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_20"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_21"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01572
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01258
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00252 0.00377
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01258
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00252 0.00377
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_21"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_22"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01510
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01208
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00242 0.00362
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01208
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00242 0.00362
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_22"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_23"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01448
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01158
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00232 0.00348
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01158
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00232 0.00348
+                  }
+                }
+              ]
+            }
+
+        HingeJoint {
+          jointParameters HingeJointParameters {
+            anchor 0.00708 0.0 0.0
+            axis 0 1 0
+          }
+          device [
+            RotationalMotor {
+              name "celegans_spine_23"
+              minPosition -0.85
+              maxPosition 0.85
+              maxVelocity 5.2
+              maxTorque 0.24
+            }
+          ]
+          endPoint
+        Solid {
+          name "celegans_spine_seg_24"
+          translation 0.01417 0.0 0.0
+          children [
+            Transform {
+              rotation 0 0 1 1.5708
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.90 0.66 0.44
+                    roughness 0.72
+                    metalness 0
+                  }
+                  geometry Capsule {
+                    radius 0.01386
+                    height 0.01303
+                  }
+                }
+              ]
+            }
+            # Lateral alae-like ridges improve directional traction during
+            # dorsoventral undulation on flat surfaces.
+            Transform {
+              translation 0.0 0.0 0.01109
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00222 0.00333
+                  }
+                }
+              ]
+            }
+            Transform {
+              translation 0.0 0.0 -0.01109
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.85 0.62 0.40
+                    roughness 0.68
+                    metalness 0
+                  }
+                  geometry Box {
+                    size 0.01105 0.00222 0.00333
+                  }
+                }
+              ]
+            }
+
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01386
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00449
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01448
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00469
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01510
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00489
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01572
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00509
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01634
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00529
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01696
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00549
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01759
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00569
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01821
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00590
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01883
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00610
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01945
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00630
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.02007
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00650
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.02069
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00670
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.02069
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00670
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.02007
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00650
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01945
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00630
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01883
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00610
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01821
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00590
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01759
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00569
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01696
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00549
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01634
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00529
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01572
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00509
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01510
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00489
+          }
+        }
+        }
+          ]
+          boundingObject Transform {
+            rotation 0 0 1 1.5708
+            children [
+              Capsule {
+                radius 0.01448
+                height 0.01332
+              }
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.00469
+          }
+        }
+        }
+        ]
+        boundingObject Transform {
+          rotation 0 0 1 1.5708
+          children [
+            Capsule {
+              radius 0.01386
+              height 0.01332
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.00449
+        }
+      }
+      }
+      # Sensory pathways mapped to celegans_s_* channels.
+      # Inertial + contact sensing
+      Accelerometer {
+        name "celegans_s_00_vibration_accel"
+      }
+      Gyro {
+        name "celegans_s_03_vibration_gyro"
+      }
+      TouchSensor {
+        name "celegans_s_06_touch_front"
+        type "bumper"
+        translation 0.19 0.0 0.0
+      }
+      TouchSensor {
+        name "celegans_s_07_touch_rear"
+        type "bumper"
+        translation -0.19 0.0 0.0
+      }
+      # Phototaxis channels.
+      LightSensor {
+        name "celegans_s_08_light_left"
+        translation 0.172 0.012 0.030
+      }
+      LightSensor {
+        name "celegans_s_09_light_right"
+        translation 0.172 0.012 -0.030
+      }
+      # Thermotaxis equivalents (modeled as warm-spectrum irradiance sensors).
+      LightSensor {
+        name "celegans_s_10_heat_left"
+        translation 0.095 0.016 0.040
+      }
+      LightSensor {
+        name "celegans_s_11_heat_right"
+        translation 0.095 0.016 -0.040
+      }
+      # Multi-directional taste/chemical/flow proximity sensing.
+      DistanceSensor {
+        name "celegans_s_12_taste_front_center"
+        type "infra-red"
+        translation 0.18200 0.0 0.00000
+        lookupTable [
+          0 1000 0
+          0.26 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_13_taste_front_left"
+        type "infra-red"
+        translation 0.16800 0.0 0.03000
+        rotation 0 1 0 0.36000
+        lookupTable [
+          0 1000 0
+          0.23 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_14_taste_front_right"
+        type "infra-red"
+        translation 0.16800 0.0 -0.03000
+        rotation 0 1 0 -0.36000
+        lookupTable [
+          0 1000 0
+          0.23 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_15_chem_left"
+        type "infra-red"
+        translation 0.06000 0.0 0.04600
+        rotation 0 1 0 1.20000
+        lookupTable [
+          0 1000 0
+          0.38 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_16_chem_right"
+        type "infra-red"
+        translation 0.06000 0.0 -0.04600
+        rotation 0 1 0 -1.20000
+        lookupTable [
+          0 1000 0
+          0.38 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_17_chem_rear_left"
+        type "infra-red"
+        translation -0.07400 0.0 0.03000
+        rotation 0 1 0 2.46000
+        lookupTable [
+          0 1000 0
+          0.36 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_18_chem_rear_right"
+        type "infra-red"
+        translation -0.07400 0.0 -0.03000
+        rotation 0 1 0 -2.46000
+        lookupTable [
+          0 1000 0
+          0.36 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_19_flow_front"
+        type "infra-red"
+        translation 0.12600 0.0 0.00000
+        lookupTable [
+          0 1000 0
+          0.92 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_20_flow_rear"
+        type "infra-red"
+        translation -0.12600 0.0 0.00000
+        rotation 0 1 0 3.14159
+        lookupTable [
+          0 1000 0
+          0.92 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_21_far_front_left"
+        type "infra-red"
+        translation 0.11000 0.0 0.07800
+        rotation 0 1 0 0.95000
+        lookupTable [
+          0 1000 0
+          1.28 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_22_far_front_right"
+        type "infra-red"
+        translation 0.11000 0.0 -0.07800
+        rotation 0 1 0 -0.95000
+        lookupTable [
+          0 1000 0
+          1.28 0 0
+        ]
+      }
+      DistanceSensor {
+        name "celegans_s_23_far_rear"
+        type "infra-red"
+        translation -0.16800 0.0 0.00000
+        rotation 0 1 0 3.14159
+        lookupTable [
+          0 1000 0
+          1.30 0 0
+        ]
+      }
+
+      # Output muscle channels mapped one-to-one to celegans_o_* motors.
+    DEF MUSCLE_JOINT_0_CELEGANS_O_000_MDL01 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.17000 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_000_MDL01"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_0_CELEGANS_O_000_MDL01 Solid {
+        name "MUSCLE_SEGMENT_0_CELEGANS_O_000_MDL01"
+        translation -0.17000 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_1_CELEGANS_O_001_MDL02 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.15522 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_001_MDL02"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_1_CELEGANS_O_001_MDL02 Solid {
+        name "MUSCLE_SEGMENT_1_CELEGANS_O_001_MDL02"
+        translation -0.15522 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_2_CELEGANS_O_002_MDL03 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.14043 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_002_MDL03"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_2_CELEGANS_O_002_MDL03 Solid {
+        name "MUSCLE_SEGMENT_2_CELEGANS_O_002_MDL03"
+        translation -0.14043 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_3_CELEGANS_O_003_MDL04 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.12565 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_003_MDL04"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_3_CELEGANS_O_003_MDL04 Solid {
+        name "MUSCLE_SEGMENT_3_CELEGANS_O_003_MDL04"
+        translation -0.12565 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_4_CELEGANS_O_004_MDL05 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.11087 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_004_MDL05"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_4_CELEGANS_O_004_MDL05 Solid {
+        name "MUSCLE_SEGMENT_4_CELEGANS_O_004_MDL05"
+        translation -0.11087 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_5_CELEGANS_O_005_MDL06 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.09609 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_005_MDL06"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_5_CELEGANS_O_005_MDL06 Solid {
+        name "MUSCLE_SEGMENT_5_CELEGANS_O_005_MDL06"
+        translation -0.09609 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_6_CELEGANS_O_006_MDL07 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.08130 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_006_MDL07"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_6_CELEGANS_O_006_MDL07 Solid {
+        name "MUSCLE_SEGMENT_6_CELEGANS_O_006_MDL07"
+        translation -0.08130 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_7_CELEGANS_O_007_MDL08 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.06652 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_007_MDL08"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_7_CELEGANS_O_007_MDL08 Solid {
+        name "MUSCLE_SEGMENT_7_CELEGANS_O_007_MDL08"
+        translation -0.06652 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_8_CELEGANS_O_008_MDL09 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.05174 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_008_MDL09"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_8_CELEGANS_O_008_MDL09 Solid {
+        name "MUSCLE_SEGMENT_8_CELEGANS_O_008_MDL09"
+        translation -0.05174 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_9_CELEGANS_O_009_MDL10 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.03696 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_009_MDL10"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_9_CELEGANS_O_009_MDL10 Solid {
+        name "MUSCLE_SEGMENT_9_CELEGANS_O_009_MDL10"
+        translation -0.03696 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_10_CELEGANS_O_010_MDL11 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.02217 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_010_MDL11"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_10_CELEGANS_O_010_MDL11 Solid {
+        name "MUSCLE_SEGMENT_10_CELEGANS_O_010_MDL11"
+        translation -0.02217 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_11_CELEGANS_O_011_MDL12 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00739 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_011_MDL12"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_11_CELEGANS_O_011_MDL12 Solid {
+        name "MUSCLE_SEGMENT_11_CELEGANS_O_011_MDL12"
+        translation -0.00739 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_12_CELEGANS_O_012_MDL13 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00739 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_012_MDL13"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_12_CELEGANS_O_012_MDL13 Solid {
+        name "MUSCLE_SEGMENT_12_CELEGANS_O_012_MDL13"
+        translation 0.00739 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_13_CELEGANS_O_013_MDL14 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.02217 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_013_MDL14"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_13_CELEGANS_O_013_MDL14 Solid {
+        name "MUSCLE_SEGMENT_13_CELEGANS_O_013_MDL14"
+        translation 0.02217 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_14_CELEGANS_O_014_MDL15 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.03696 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_014_MDL15"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_14_CELEGANS_O_014_MDL15 Solid {
+        name "MUSCLE_SEGMENT_14_CELEGANS_O_014_MDL15"
+        translation 0.03696 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_15_CELEGANS_O_015_MDL16 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.05174 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_015_MDL16"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_15_CELEGANS_O_015_MDL16 Solid {
+        name "MUSCLE_SEGMENT_15_CELEGANS_O_015_MDL16"
+        translation 0.05174 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_16_CELEGANS_O_016_MDL17 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.06652 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_016_MDL17"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_16_CELEGANS_O_016_MDL17 Solid {
+        name "MUSCLE_SEGMENT_16_CELEGANS_O_016_MDL17"
+        translation 0.06652 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_17_CELEGANS_O_017_MDL18 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.08130 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_017_MDL18"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_17_CELEGANS_O_017_MDL18 Solid {
+        name "MUSCLE_SEGMENT_17_CELEGANS_O_017_MDL18"
+        translation 0.08130 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_18_CELEGANS_O_018_MDL19 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.09609 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_018_MDL19"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_18_CELEGANS_O_018_MDL19 Solid {
+        name "MUSCLE_SEGMENT_18_CELEGANS_O_018_MDL19"
+        translation 0.09609 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_19_CELEGANS_O_019_MDL20 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.11087 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_019_MDL20"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_19_CELEGANS_O_019_MDL20 Solid {
+        name "MUSCLE_SEGMENT_19_CELEGANS_O_019_MDL20"
+        translation 0.11087 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_20_CELEGANS_O_020_MDL21 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.12565 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_020_MDL21"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_20_CELEGANS_O_020_MDL21 Solid {
+        name "MUSCLE_SEGMENT_20_CELEGANS_O_020_MDL21"
+        translation 0.12565 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_21_CELEGANS_O_021_MDL22 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.14043 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_021_MDL22"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_21_CELEGANS_O_021_MDL22 Solid {
+        name "MUSCLE_SEGMENT_21_CELEGANS_O_021_MDL22"
+        translation 0.14043 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_22_CELEGANS_O_022_MDL23 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.15522 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_022_MDL23"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_22_CELEGANS_O_022_MDL23 Solid {
+        name "MUSCLE_SEGMENT_22_CELEGANS_O_022_MDL23"
+        translation 0.15522 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_23_CELEGANS_O_023_MDL24 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.17000 0.01400 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_023_MDL24"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_23_CELEGANS_O_023_MDL24 Solid {
+        name "MUSCLE_SEGMENT_23_CELEGANS_O_023_MDL24"
+        translation 0.17000 0.01400 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_24_CELEGANS_O_024_MDR01 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.17000 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_024_MDR01"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_24_CELEGANS_O_024_MDR01 Solid {
+        name "MUSCLE_SEGMENT_24_CELEGANS_O_024_MDR01"
+        translation -0.17000 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_25_CELEGANS_O_025_MDR02 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.15522 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_025_MDR02"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_25_CELEGANS_O_025_MDR02 Solid {
+        name "MUSCLE_SEGMENT_25_CELEGANS_O_025_MDR02"
+        translation -0.15522 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_26_CELEGANS_O_026_MDR03 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.14043 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_026_MDR03"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_26_CELEGANS_O_026_MDR03 Solid {
+        name "MUSCLE_SEGMENT_26_CELEGANS_O_026_MDR03"
+        translation -0.14043 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_27_CELEGANS_O_027_MDR04 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.12565 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_027_MDR04"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_27_CELEGANS_O_027_MDR04 Solid {
+        name "MUSCLE_SEGMENT_27_CELEGANS_O_027_MDR04"
+        translation -0.12565 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_28_CELEGANS_O_028_MDR05 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.11087 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_028_MDR05"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_28_CELEGANS_O_028_MDR05 Solid {
+        name "MUSCLE_SEGMENT_28_CELEGANS_O_028_MDR05"
+        translation -0.11087 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_29_CELEGANS_O_029_MDR06 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.09609 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_029_MDR06"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_29_CELEGANS_O_029_MDR06 Solid {
+        name "MUSCLE_SEGMENT_29_CELEGANS_O_029_MDR06"
+        translation -0.09609 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_30_CELEGANS_O_030_MDR07 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.08130 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_030_MDR07"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_30_CELEGANS_O_030_MDR07 Solid {
+        name "MUSCLE_SEGMENT_30_CELEGANS_O_030_MDR07"
+        translation -0.08130 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_31_CELEGANS_O_031_MDR08 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.06652 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_031_MDR08"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_31_CELEGANS_O_031_MDR08 Solid {
+        name "MUSCLE_SEGMENT_31_CELEGANS_O_031_MDR08"
+        translation -0.06652 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_32_CELEGANS_O_032_MDR09 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.05174 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_032_MDR09"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_32_CELEGANS_O_032_MDR09 Solid {
+        name "MUSCLE_SEGMENT_32_CELEGANS_O_032_MDR09"
+        translation -0.05174 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_33_CELEGANS_O_033_MDR10 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.03696 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_033_MDR10"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_33_CELEGANS_O_033_MDR10 Solid {
+        name "MUSCLE_SEGMENT_33_CELEGANS_O_033_MDR10"
+        translation -0.03696 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_34_CELEGANS_O_034_MDR11 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.02217 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_034_MDR11"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_34_CELEGANS_O_034_MDR11 Solid {
+        name "MUSCLE_SEGMENT_34_CELEGANS_O_034_MDR11"
+        translation -0.02217 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_35_CELEGANS_O_035_MDR12 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00739 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_035_MDR12"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_35_CELEGANS_O_035_MDR12 Solid {
+        name "MUSCLE_SEGMENT_35_CELEGANS_O_035_MDR12"
+        translation -0.00739 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_36_CELEGANS_O_036_MDR13 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00739 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_036_MDR13"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_36_CELEGANS_O_036_MDR13 Solid {
+        name "MUSCLE_SEGMENT_36_CELEGANS_O_036_MDR13"
+        translation 0.00739 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_37_CELEGANS_O_037_MDR14 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.02217 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_037_MDR14"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_37_CELEGANS_O_037_MDR14 Solid {
+        name "MUSCLE_SEGMENT_37_CELEGANS_O_037_MDR14"
+        translation 0.02217 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_38_CELEGANS_O_038_MDR15 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.03696 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_038_MDR15"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_38_CELEGANS_O_038_MDR15 Solid {
+        name "MUSCLE_SEGMENT_38_CELEGANS_O_038_MDR15"
+        translation 0.03696 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_39_CELEGANS_O_039_MDR16 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.05174 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_039_MDR16"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_39_CELEGANS_O_039_MDR16 Solid {
+        name "MUSCLE_SEGMENT_39_CELEGANS_O_039_MDR16"
+        translation 0.05174 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_40_CELEGANS_O_040_MDR17 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.06652 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_040_MDR17"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_40_CELEGANS_O_040_MDR17 Solid {
+        name "MUSCLE_SEGMENT_40_CELEGANS_O_040_MDR17"
+        translation 0.06652 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_41_CELEGANS_O_041_MDR18 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.08130 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_041_MDR18"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_41_CELEGANS_O_041_MDR18 Solid {
+        name "MUSCLE_SEGMENT_41_CELEGANS_O_041_MDR18"
+        translation 0.08130 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_42_CELEGANS_O_042_MDR19 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.09609 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_042_MDR19"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_42_CELEGANS_O_042_MDR19 Solid {
+        name "MUSCLE_SEGMENT_42_CELEGANS_O_042_MDR19"
+        translation 0.09609 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_43_CELEGANS_O_043_MDR20 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.11087 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_043_MDR20"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_43_CELEGANS_O_043_MDR20 Solid {
+        name "MUSCLE_SEGMENT_43_CELEGANS_O_043_MDR20"
+        translation 0.11087 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_44_CELEGANS_O_044_MDR21 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.12565 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_044_MDR21"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_44_CELEGANS_O_044_MDR21 Solid {
+        name "MUSCLE_SEGMENT_44_CELEGANS_O_044_MDR21"
+        translation 0.12565 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_45_CELEGANS_O_045_MDR22 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.14043 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_045_MDR22"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_45_CELEGANS_O_045_MDR22 Solid {
+        name "MUSCLE_SEGMENT_45_CELEGANS_O_045_MDR22"
+        translation 0.14043 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_46_CELEGANS_O_046_MDR23 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.15522 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_046_MDR23"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_46_CELEGANS_O_046_MDR23 Solid {
+        name "MUSCLE_SEGMENT_46_CELEGANS_O_046_MDR23"
+        translation 0.15522 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_47_CELEGANS_O_047_MDR24 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.17000 0.01400 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_047_MDR24"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_47_CELEGANS_O_047_MDR24 Solid {
+        name "MUSCLE_SEGMENT_47_CELEGANS_O_047_MDR24"
+        translation 0.17000 0.01400 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_48_CELEGANS_O_048_MVL01 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.17000 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_048_MVL01"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_48_CELEGANS_O_048_MVL01 Solid {
+        name "MUSCLE_SEGMENT_48_CELEGANS_O_048_MVL01"
+        translation -0.17000 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_49_CELEGANS_O_049_MVL02 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.15522 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_049_MVL02"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_49_CELEGANS_O_049_MVL02 Solid {
+        name "MUSCLE_SEGMENT_49_CELEGANS_O_049_MVL02"
+        translation -0.15522 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_50_CELEGANS_O_050_MVL03 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.14043 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_050_MVL03"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_50_CELEGANS_O_050_MVL03 Solid {
+        name "MUSCLE_SEGMENT_50_CELEGANS_O_050_MVL03"
+        translation -0.14043 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_51_CELEGANS_O_051_MVL04 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.12565 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_051_MVL04"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_51_CELEGANS_O_051_MVL04 Solid {
+        name "MUSCLE_SEGMENT_51_CELEGANS_O_051_MVL04"
+        translation -0.12565 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_52_CELEGANS_O_052_MVL05 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.11087 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_052_MVL05"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_52_CELEGANS_O_052_MVL05 Solid {
+        name "MUSCLE_SEGMENT_52_CELEGANS_O_052_MVL05"
+        translation -0.11087 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_53_CELEGANS_O_053_MVL06 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.09609 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_053_MVL06"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_53_CELEGANS_O_053_MVL06 Solid {
+        name "MUSCLE_SEGMENT_53_CELEGANS_O_053_MVL06"
+        translation -0.09609 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_54_CELEGANS_O_054_MVL07 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.08130 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_054_MVL07"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_54_CELEGANS_O_054_MVL07 Solid {
+        name "MUSCLE_SEGMENT_54_CELEGANS_O_054_MVL07"
+        translation -0.08130 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_55_CELEGANS_O_055_MVL08 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.06652 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_055_MVL08"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_55_CELEGANS_O_055_MVL08 Solid {
+        name "MUSCLE_SEGMENT_55_CELEGANS_O_055_MVL08"
+        translation -0.06652 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_56_CELEGANS_O_056_MVL09 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.05174 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_056_MVL09"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_56_CELEGANS_O_056_MVL09 Solid {
+        name "MUSCLE_SEGMENT_56_CELEGANS_O_056_MVL09"
+        translation -0.05174 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_57_CELEGANS_O_057_MVL10 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.03696 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_057_MVL10"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_57_CELEGANS_O_057_MVL10 Solid {
+        name "MUSCLE_SEGMENT_57_CELEGANS_O_057_MVL10"
+        translation -0.03696 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_58_CELEGANS_O_058_MVL11 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.02217 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_058_MVL11"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_58_CELEGANS_O_058_MVL11 Solid {
+        name "MUSCLE_SEGMENT_58_CELEGANS_O_058_MVL11"
+        translation -0.02217 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_59_CELEGANS_O_059_MVL12 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00739 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_059_MVL12"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_59_CELEGANS_O_059_MVL12 Solid {
+        name "MUSCLE_SEGMENT_59_CELEGANS_O_059_MVL12"
+        translation -0.00739 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_60_CELEGANS_O_060_MVL13 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00739 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_060_MVL13"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_60_CELEGANS_O_060_MVL13 Solid {
+        name "MUSCLE_SEGMENT_60_CELEGANS_O_060_MVL13"
+        translation 0.00739 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_61_CELEGANS_O_061_MVL14 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.02217 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_061_MVL14"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_61_CELEGANS_O_061_MVL14 Solid {
+        name "MUSCLE_SEGMENT_61_CELEGANS_O_061_MVL14"
+        translation 0.02217 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_62_CELEGANS_O_062_MVL15 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.03696 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_062_MVL15"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_62_CELEGANS_O_062_MVL15 Solid {
+        name "MUSCLE_SEGMENT_62_CELEGANS_O_062_MVL15"
+        translation 0.03696 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_63_CELEGANS_O_063_MVL16 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.05174 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_063_MVL16"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_63_CELEGANS_O_063_MVL16 Solid {
+        name "MUSCLE_SEGMENT_63_CELEGANS_O_063_MVL16"
+        translation 0.05174 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_64_CELEGANS_O_064_MVL17 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.06652 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_064_MVL17"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_64_CELEGANS_O_064_MVL17 Solid {
+        name "MUSCLE_SEGMENT_64_CELEGANS_O_064_MVL17"
+        translation 0.06652 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_65_CELEGANS_O_065_MVL18 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.08130 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_065_MVL18"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_65_CELEGANS_O_065_MVL18 Solid {
+        name "MUSCLE_SEGMENT_65_CELEGANS_O_065_MVL18"
+        translation 0.08130 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_66_CELEGANS_O_066_MVL19 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.09609 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_066_MVL19"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_66_CELEGANS_O_066_MVL19 Solid {
+        name "MUSCLE_SEGMENT_66_CELEGANS_O_066_MVL19"
+        translation 0.09609 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_67_CELEGANS_O_067_MVL20 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.11087 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_067_MVL20"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_67_CELEGANS_O_067_MVL20 Solid {
+        name "MUSCLE_SEGMENT_67_CELEGANS_O_067_MVL20"
+        translation 0.11087 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_68_CELEGANS_O_068_MVL21 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.12565 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_068_MVL21"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_68_CELEGANS_O_068_MVL21 Solid {
+        name "MUSCLE_SEGMENT_68_CELEGANS_O_068_MVL21"
+        translation 0.12565 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_69_CELEGANS_O_069_MVL22 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.14043 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_069_MVL22"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_69_CELEGANS_O_069_MVL22 Solid {
+        name "MUSCLE_SEGMENT_69_CELEGANS_O_069_MVL22"
+        translation 0.14043 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_70_CELEGANS_O_070_MVL23 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.15522 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_070_MVL23"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_70_CELEGANS_O_070_MVL23 Solid {
+        name "MUSCLE_SEGMENT_70_CELEGANS_O_070_MVL23"
+        translation 0.15522 -0.01000 0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_71_CELEGANS_O_071_MVR01 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.17000 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_071_MVR01"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_71_CELEGANS_O_071_MVR01 Solid {
+        name "MUSCLE_SEGMENT_71_CELEGANS_O_071_MVR01"
+        translation -0.17000 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_72_CELEGANS_O_072_MVR02 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.15522 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_072_MVR02"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_72_CELEGANS_O_072_MVR02 Solid {
+        name "MUSCLE_SEGMENT_72_CELEGANS_O_072_MVR02"
+        translation -0.15522 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_73_CELEGANS_O_073_MVR03 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.14043 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_073_MVR03"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_73_CELEGANS_O_073_MVR03 Solid {
+        name "MUSCLE_SEGMENT_73_CELEGANS_O_073_MVR03"
+        translation -0.14043 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_74_CELEGANS_O_074_MVR04 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.12565 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_074_MVR04"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_74_CELEGANS_O_074_MVR04 Solid {
+        name "MUSCLE_SEGMENT_74_CELEGANS_O_074_MVR04"
+        translation -0.12565 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_75_CELEGANS_O_075_MVR05 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.11087 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_075_MVR05"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_75_CELEGANS_O_075_MVR05 Solid {
+        name "MUSCLE_SEGMENT_75_CELEGANS_O_075_MVR05"
+        translation -0.11087 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_76_CELEGANS_O_076_MVR06 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.09609 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_076_MVR06"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_76_CELEGANS_O_076_MVR06 Solid {
+        name "MUSCLE_SEGMENT_76_CELEGANS_O_076_MVR06"
+        translation -0.09609 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_77_CELEGANS_O_077_MVR07 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.08130 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_077_MVR07"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_77_CELEGANS_O_077_MVR07 Solid {
+        name "MUSCLE_SEGMENT_77_CELEGANS_O_077_MVR07"
+        translation -0.08130 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_78_CELEGANS_O_078_MVR08 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.06652 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_078_MVR08"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_78_CELEGANS_O_078_MVR08 Solid {
+        name "MUSCLE_SEGMENT_78_CELEGANS_O_078_MVR08"
+        translation -0.06652 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_79_CELEGANS_O_079_MVR09 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.05174 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_079_MVR09"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_79_CELEGANS_O_079_MVR09 Solid {
+        name "MUSCLE_SEGMENT_79_CELEGANS_O_079_MVR09"
+        translation -0.05174 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_80_CELEGANS_O_080_MVR10 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.03696 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_080_MVR10"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_80_CELEGANS_O_080_MVR10 Solid {
+        name "MUSCLE_SEGMENT_80_CELEGANS_O_080_MVR10"
+        translation -0.03696 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_81_CELEGANS_O_081_MVR11 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.02217 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_081_MVR11"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_81_CELEGANS_O_081_MVR11 Solid {
+        name "MUSCLE_SEGMENT_81_CELEGANS_O_081_MVR11"
+        translation -0.02217 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_82_CELEGANS_O_082_MVR12 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00739 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_082_MVR12"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_82_CELEGANS_O_082_MVR12 Solid {
+        name "MUSCLE_SEGMENT_82_CELEGANS_O_082_MVR12"
+        translation -0.00739 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_83_CELEGANS_O_083_MVR13 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.00739 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_083_MVR13"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_83_CELEGANS_O_083_MVR13 Solid {
+        name "MUSCLE_SEGMENT_83_CELEGANS_O_083_MVR13"
+        translation 0.00739 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_84_CELEGANS_O_084_MVR14 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.02217 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_084_MVR14"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_84_CELEGANS_O_084_MVR14 Solid {
+        name "MUSCLE_SEGMENT_84_CELEGANS_O_084_MVR14"
+        translation 0.02217 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_85_CELEGANS_O_085_MVR15 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.03696 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_085_MVR15"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_85_CELEGANS_O_085_MVR15 Solid {
+        name "MUSCLE_SEGMENT_85_CELEGANS_O_085_MVR15"
+        translation 0.03696 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_86_CELEGANS_O_086_MVR16 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.05174 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_086_MVR16"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_86_CELEGANS_O_086_MVR16 Solid {
+        name "MUSCLE_SEGMENT_86_CELEGANS_O_086_MVR16"
+        translation 0.05174 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_87_CELEGANS_O_087_MVR17 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.06652 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_087_MVR17"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_87_CELEGANS_O_087_MVR17 Solid {
+        name "MUSCLE_SEGMENT_87_CELEGANS_O_087_MVR17"
+        translation 0.06652 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_88_CELEGANS_O_088_MVR18 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.08130 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_088_MVR18"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_88_CELEGANS_O_088_MVR18 Solid {
+        name "MUSCLE_SEGMENT_88_CELEGANS_O_088_MVR18"
+        translation 0.08130 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_89_CELEGANS_O_089_MVR19 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.09609 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_089_MVR19"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_89_CELEGANS_O_089_MVR19 Solid {
+        name "MUSCLE_SEGMENT_89_CELEGANS_O_089_MVR19"
+        translation 0.09609 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_90_CELEGANS_O_090_MVR20 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.11087 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_090_MVR20"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_90_CELEGANS_O_090_MVR20 Solid {
+        name "MUSCLE_SEGMENT_90_CELEGANS_O_090_MVR20"
+        translation 0.11087 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_91_CELEGANS_O_091_MVR21 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.12565 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_091_MVR21"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_91_CELEGANS_O_091_MVR21 Solid {
+        name "MUSCLE_SEGMENT_91_CELEGANS_O_091_MVR21"
+        translation 0.12565 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_92_CELEGANS_O_092_MVR22 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.14043 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_092_MVR22"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_92_CELEGANS_O_092_MVR22 Solid {
+        name "MUSCLE_SEGMENT_92_CELEGANS_O_092_MVR22"
+        translation 0.14043 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_93_CELEGANS_O_093_MVR23 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.15522 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_093_MVR23"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_93_CELEGANS_O_093_MVR23 Solid {
+        name "MUSCLE_SEGMENT_93_CELEGANS_O_093_MVR23"
+        translation 0.15522 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_94_CELEGANS_O_094_MVR24 HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor 0.17000 -0.01000 -0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_094_MVR24"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_94_CELEGANS_O_094_MVR24 Solid {
+        name "MUSCLE_SEGMENT_94_CELEGANS_O_094_MVR24"
+        translation 0.17000 -0.01000 -0.03000
+        children [ ]
+      }
+    }
+    DEF MUSCLE_JOINT_95_CELEGANS_O_095_MVULVA HingeJoint {
+      jointParameters HingeJointParameters {
+        anchor -0.00739 -0.01000 0.03000
+        axis 0 1 0
+      }
+      device [
+        RotationalMotor {
+          name "celegans_o_095_MVULVA"
+          maxVelocity 6
+          minPosition -1.2
+          maxPosition 1.2
+          maxTorque 0.001
+        }
+      ]
+      # Channel-only muscle output joint: no collision body/physics.
+      # It exists so celegans_o_* outputs are discoverable by DeviceMapper,
+      # while bend mechanics are applied through celegans_spine_* motors.
+      endPoint DEF MUSCLE_SEGMENT_95_CELEGANS_O_095_MVULVA Solid {
+        name "MUSCLE_SEGMENT_95_CELEGANS_O_095_MVULVA"
+        translation -0.00739 -0.01000 0.03000
+        children [ ]
+      }
+    }
+
+      Group {
+        children IS extensionSlot
+      }
+    ]
+    # Keep the robot root collision minimal; articulated spine segments carry
+    # the main body collision/physics.
+    boundingObject Sphere {
+      radius 0.006
+    }
+    physics Physics {
+      density -1
+      mass 0.002
+    }
+  }
+}

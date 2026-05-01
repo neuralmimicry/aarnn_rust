@@ -1,0 +1,91 @@
+{
+  "supported": [
+    {
+      "id": "synaptic_filter",
+      "class": "analog_core",
+      "rust_modules": ["src/aarnn/dynamics.rs"],
+      "rust_functions": ["apply_synaptic_filter"],
+      "aarnn_depth_min": 1,
+      "xcos_script": "xcos/01_synaptic_filter.sce",
+      "okika_manifest": "okika/01_synaptic_filter.okika.json",
+      "pika_wrapper": "okika/program_01_synaptic_filter.py"
+    },
+    {
+      "id": "short_term_plasticity",
+      "class": "analog_core",
+      "rust_modules": ["src/aarnn/plasticity.rs"],
+      "rust_functions": ["stp_step", "stp_update_slice"],
+      "aarnn_depth_min": 1,
+      "xcos_script": "xcos/02_short_term_plasticity.sce",
+      "okika_manifest": "okika/02_short_term_plasticity.okika.json",
+      "pika_wrapper": "okika/program_02_short_term_plasticity.py"
+    },
+    {
+      "id": "adaptive_threshold_homeostasis",
+      "class": "analog_core",
+      "rust_modules": ["src/sim.rs", "src/runner.rs", "src/aarnn/dynamics.rs"],
+      "rust_functions": ["adaptive_threshold_update", "homeostasis_rate_ema"],
+      "aarnn_depth_min": 2,
+      "xcos_script": "xcos/03_adaptive_threshold_homeostasis.sce",
+      "okika_manifest": "okika/03_adaptive_threshold_homeostasis.okika.json",
+      "pika_wrapper": "okika/program_03_adaptive_threshold_homeostasis.py"
+    },
+    {
+      "id": "active_dendrite",
+      "class": "analog_core",
+      "rust_modules": ["src/aarnn/dynamics.rs"],
+      "rust_functions": ["apply_active_dendritic_compartment"],
+      "aarnn_depth_min": 2,
+      "xcos_script": "xcos/04_active_dendrite.sce",
+      "okika_manifest": "okika/04_active_dendrite.okika.json",
+      "pika_wrapper": "okika/program_04_active_dendrite.py"
+    },
+    {
+      "id": "gap_junction_field",
+      "class": "analog_core",
+      "rust_modules": ["src/aarnn/dynamics.rs"],
+      "rust_functions": [
+        "apply_gap_junction_mean_field",
+        "apply_local_gap_junction_coupling",
+        "volume_transmission_factors_for_layer"
+      ],
+      "aarnn_depth_min": 2,
+      "xcos_script": "xcos/05_gap_junction_field.sce",
+      "okika_manifest": "okika/05_gap_junction_field.okika.json",
+      "pika_wrapper": "okika/program_05_gap_junction_field.py"
+    },
+    {
+      "id": "morphology_transmission",
+      "class": "analog_core_with_coarse_delay",
+      "rust_modules": ["src/aarnn/transmission.rs"],
+      "rust_functions": ["compute_delay_and_attenuation", "deterministic_jitter_steps"],
+      "aarnn_depth_min": 2,
+      "xcos_script": "xcos/06_morphology_transmission.sce",
+      "okika_manifest": "okika/06_morphology_transmission.okika.json",
+      "pika_wrapper": "okika/program_06_morphology_transmission.py"
+    },
+    {
+      "id": "triplet_scaling_dale_hybrid",
+      "class": "hybrid_supervised",
+      "rust_modules": ["src/aarnn/plasticity.rs"],
+      "rust_functions": [
+        "triplet_eta_scale",
+        "apply_synaptic_scaling_matrix_rows",
+        "enforce_dale_matrix_cols",
+        "release_probability"
+      ],
+      "aarnn_depth_min": 3,
+      "xcos_script": "xcos/07_triplet_scaling_dale_hybrid.sce",
+      "okika_manifest": "okika/07_triplet_scaling_dale_hybrid.okika.json",
+      "pika_wrapper": "okika/program_07_triplet_scaling_dale_hybrid.py"
+    }
+  ],
+  "software_only": [
+    "growth_pruning_migration",
+    "sleep_dream_replay",
+    "perceptual_prediction_error_loop",
+    "world_model_state",
+    "import_topology_rewire",
+    "distributed_orchestration"
+  ]
+}

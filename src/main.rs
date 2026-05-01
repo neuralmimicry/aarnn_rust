@@ -14,6 +14,7 @@
 //!   Rust batch path mirrors those outputs for convenience.
 #[macro_use]
 mod obs;
+mod aarnn;
 mod aer;
 mod affinity;
 #[cfg(feature = "robot_io")]
@@ -21,8 +22,13 @@ mod bridge;
 #[cfg(feature = "opencl")]
 mod cl_compute;
 mod config;
+mod deployment;
 mod distributed;
+mod engine;
+mod fpaa;
 mod ga;
+#[cfg(feature = "opencl")]
+mod gpu_api;
 mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
@@ -33,7 +39,12 @@ mod openmpi_runtime;
 mod providers;
 mod rdma;
 mod runner;
+mod runtime;
+mod runtime_api;
+mod shared_fs;
 mod sim;
+#[allow(dead_code)]
+mod spike_io;
 mod stimuli;
 #[cfg(feature = "growth3d")]
 mod topology;
@@ -41,15 +52,37 @@ mod topology;
 mod ui;
 mod viz;
 
+use anyhow::Context;
 use clap::{Parser, ValueEnum};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use serde::Deserialize;
 
-use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, STDPParams};
+use crate::config::{
+    FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference, IzhikevichParams, LIFParams,
+    NetworkConfig, STDPParams, apply_clumping_layer_defaults,
+};
+use crate::deployment::{
+    DeploymentConfig, ExecutionMode, ExecutionScope, default_infrastructure_roots,
+    detect_infrastructure,
+};
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
+use crate::runtime_api::{
+    BlockingRuntimeClient, WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceImportRequest,
+};
 use crate::stimuli::{AerIoConfig, AerLink};
 use std::sync::atomic::AtomicBool;
+
+fn grpc_max_message_bytes() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    const MIN: usize = 4 * 1024 * 1024;
+    std::env::var("NM_GRPC_MAX_MESSAGE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= MIN)
+        .unwrap_or(DEFAULT)
+}
 
 /// Supported neuron models for simulation.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -92,6 +125,116 @@ impl LearningRule {
             Self::Hebb => "hebb",
             Self::Oja => "oja",
             Self::Aarnn => "aarnn",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum RuntimeAction {
+    Status,
+    Create,
+    Delete,
+    Load,
+    Save,
+    Snapshot,
+    Start,
+    Stop,
+    Reset,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum RuntimePayloadKindArg {
+    Auto,
+    Config,
+    Snapshot,
+}
+
+impl RuntimePayloadKindArg {
+    fn to_payload_kind(self) -> crate::engine::EnginePayloadKind {
+        match self {
+            Self::Auto => crate::engine::EnginePayloadKind::Auto,
+            Self::Config => crate::engine::EnginePayloadKind::Config,
+            Self::Snapshot => crate::engine::EnginePayloadKind::Snapshot,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum DeploymentModeArg {
+    Individual,
+    Distributed,
+    Sharded,
+    Grouped,
+    Combined,
+    Federated,
+}
+
+impl From<DeploymentModeArg> for ExecutionMode {
+    fn from(value: DeploymentModeArg) -> Self {
+        match value {
+            DeploymentModeArg::Individual => ExecutionMode::Individual,
+            DeploymentModeArg::Distributed => ExecutionMode::Distributed,
+            DeploymentModeArg::Sharded => ExecutionMode::Sharded,
+            DeploymentModeArg::Grouped => ExecutionMode::Grouped,
+            DeploymentModeArg::Combined => ExecutionMode::Combined,
+            DeploymentModeArg::Federated => ExecutionMode::Federated,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum DeploymentScopeArg {
+    Auto,
+    Node,
+    Container,
+    System,
+    Cluster,
+    FederatedCluster,
+}
+
+impl From<DeploymentScopeArg> for ExecutionScope {
+    fn from(value: DeploymentScopeArg) -> Self {
+        match value {
+            DeploymentScopeArg::Auto => ExecutionScope::Auto,
+            DeploymentScopeArg::Node => ExecutionScope::Node,
+            DeploymentScopeArg::Container => ExecutionScope::Container,
+            DeploymentScopeArg::System => ExecutionScope::System,
+            DeploymentScopeArg::Cluster => ExecutionScope::Cluster,
+            DeploymentScopeArg::FederatedCluster => ExecutionScope::FederatedCluster,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum FpaaModeArg {
+    Auto,
+    Disabled,
+    Required,
+}
+
+impl From<FpaaModeArg> for FpaaStartupMode {
+    fn from(value: FpaaModeArg) -> Self {
+        match value {
+            FpaaModeArg::Auto => FpaaStartupMode::Auto,
+            FpaaModeArg::Disabled => FpaaStartupMode::Disabled,
+            FpaaModeArg::Required => FpaaStartupMode::Required,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum FpaaTransportArg {
+    Auto,
+    Pihat,
+    Usb,
+}
+
+impl From<FpaaTransportArg> for FpaaTransportPreference {
+    fn from(value: FpaaTransportArg) -> Self {
+        match value {
+            FpaaTransportArg::Auto => FpaaTransportPreference::Auto,
+            FpaaTransportArg::Pihat => FpaaTransportPreference::PiHat,
+            FpaaTransportArg::Usb => FpaaTransportPreference::Usb,
         }
     }
 }
@@ -176,9 +319,100 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     node: bool,
 
-    /// Address of the orchestrator (if running as a node)
+    /// Address of the orchestrator (if running as a node or sending cluster control).
+    /// For cluster control this is auto-detected from infrastructure metadata when available.
     #[arg(long)]
     orchestrator_addr: Option<String>,
+
+    /// Network ID to send a control command to via the orchestrator.
+    /// Optional only when the orchestrator currently exposes exactly one network.
+    /// Example: --orchestrator-addr http://localhost:50051 \
+    ///          --cluster-control-network celegans_01 \
+    ///          --cluster-control-action stop
+    #[arg(long)]
+    cluster_control_network: Option<String>,
+
+    /// Control action to send to the network specified by --cluster-control-network.
+    /// Accepted values: start, stop, reset, repeat, new
+    #[arg(long, value_parser = ["start", "stop", "reset", "repeat", "new"])]
+    cluster_control_action: Option<String>,
+
+    /// Execution modes for this network or network set.
+    #[arg(long = "execution-mode", value_enum, value_delimiter = ',', num_args = 1..)]
+    execution_modes: Vec<DeploymentModeArg>,
+
+    /// Placement scope for execution planning.
+    #[arg(long = "execution-scope", value_enum, default_value_t = DeploymentScopeArg::Auto)]
+    execution_scope: DeploymentScopeArg,
+
+    /// Related network id for grouped, combined, or federated placement.
+    #[arg(long = "execution-related-network")]
+    execution_related_networks: Vec<String>,
+
+    /// Combined placement group identifier.
+    #[arg(long = "execution-combined-group")]
+    execution_combined_group: Option<String>,
+
+    /// Federated placement group identifier.
+    #[arg(long = "execution-federation-group")]
+    execution_federation_group: Option<String>,
+
+    /// Enable infrastructure autodetection when resolving execution modes.
+    #[arg(long = "execution-autodetect", default_value_t = true)]
+    execution_autodetect: bool,
+
+    /// Allow live deployment transitions without stopping or restarting the network.
+    #[arg(
+        long = "execution-live-transition",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_live_transition: Option<bool>,
+
+    /// Allow the orchestrator to transition deployment modes autonomously.
+    #[arg(
+        long = "execution-autonomous-transition",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_autonomous_transition: Option<bool>,
+
+    /// Modes the live transition controller may enter autonomously.
+    #[arg(
+        long = "execution-transition-mode",
+        value_enum,
+        value_delimiter = ',',
+        num_args = 1..
+    )]
+    execution_transition_modes: Vec<DeploymentModeArg>,
+
+    /// Preferred per-network target step time in milliseconds for autonomous transitions.
+    #[arg(long = "execution-target-step-ms")]
+    execution_target_step_ms: Option<f32>,
+
+    /// Minimum cooldown in milliseconds between autonomous deployment transitions.
+    #[arg(long = "execution-transition-cooldown-ms")]
+    execution_transition_cooldown_ms: Option<u64>,
+
+    /// Allow this network to share execution infrastructure with multiple users.
+    #[arg(
+        long = "execution-allow-multi-user",
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    execution_allow_multi_user: Option<bool>,
+
+    /// Maximum concurrent networks an engine target should host for this deployment.
+    #[arg(long = "execution-max-concurrent-networks")]
+    execution_max_concurrent_networks: Option<usize>,
+
+    /// Preferred shard fan-out when cross-node sharding is enabled.
+    #[arg(long = "execution-desired-shards")]
+    execution_desired_shards: Option<usize>,
+
+    /// Optional infrastructure root to scan for deployment hints.
+    #[arg(long)]
+    infrastructure_root: Option<String>,
 
     /// Listen address for gRPC
     #[arg(long, default_value = "0.0.0.0:50051")]
@@ -203,6 +437,78 @@ struct Cli {
     /// Path to network snapshot JSON file (weights + config)
     #[arg(long)]
     network: Option<String>,
+
+    /// FPAA startup policy: auto-detect, disable, or require hardware readiness.
+    #[arg(long, value_enum)]
+    fpaa_mode: Option<FpaaModeArg>,
+
+    /// Preferred FPAA host transport to probe first.
+    #[arg(long, value_enum)]
+    fpaa_transport: Option<FpaaTransportArg>,
+
+    /// Override one kernel route, e.g. --fpaa-route synaptic_filter=fpaa
+    #[arg(long = "fpaa-route")]
+    fpaa_routes: Vec<String>,
+
+    /// Force startup FPAA sample tests on when probing hardware.
+    #[arg(long, default_value_t = false)]
+    fpaa_self_test: bool,
+
+    /// Override the SPI device used for Pi.HAT probing.
+    #[arg(long)]
+    fpaa_spi_device: Option<String>,
+
+    /// Optional USB device path or product-name hint for USB probing.
+    #[arg(long)]
+    fpaa_usb_hint: Option<String>,
+
+    /// Print full FPAA status JSON at startup and continue.
+    #[arg(long, default_value_t = false)]
+    fpaa_print_status: bool,
+
+    /// Print full FPAA status JSON at startup and exit.
+    #[arg(long, default_value_t = false)]
+    fpaa_status_only: bool,
+
+    /// Runtime middleware URL (for workspace-backed UI/CLI flows).
+    #[arg(long)]
+    runtime_url: Option<String>,
+
+    /// Runtime user identity used for workspace isolation.
+    #[arg(long)]
+    runtime_user: Option<String>,
+
+    /// Runtime password used when the runtime API is in local-auth mode.
+    #[arg(long)]
+    runtime_password: Option<String>,
+
+    /// Shared commercial access token used to exchange a runtime session cookie.
+    #[arg(long)]
+    runtime_access_token: Option<String>,
+
+    /// Runtime workspace identifier.
+    #[arg(long)]
+    runtime_workspace: Option<String>,
+
+    /// Human-friendly runtime workspace name used during create.
+    #[arg(long)]
+    runtime_workspace_name: Option<String>,
+
+    /// Runtime management action to execute against the middleware API.
+    #[arg(long, value_enum)]
+    runtime_action: Option<RuntimeAction>,
+
+    /// Payload interpretation for runtime load operations.
+    #[arg(long, value_enum, default_value_t = RuntimePayloadKindArg::Auto)]
+    runtime_payload_kind: RuntimePayloadKindArg,
+
+    /// Create the runtime workspace on demand if it does not already exist.
+    #[arg(long, default_value_t = false)]
+    runtime_create_if_missing: bool,
+
+    /// Push the current UI snapshot back to the runtime workspace when the UI exits.
+    #[arg(long, default_value_t = false)]
+    runtime_save_on_exit: bool,
 
     /// Disable all console/logging output for maximum performance.
     #[arg(long, short, default_value_t = false)]
@@ -241,7 +547,7 @@ struct Cli {
     aer_max_packet_bytes: usize,
 }
 
-fn configure_openmp_runtime_env() {
+unsafe fn configure_openmp_runtime_env() {
     let auto_enabled = std::env::var("NM_OPENMP_AUTO")
         .ok()
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
@@ -256,14 +562,733 @@ fn configure_openmp_runtime_env() {
         .max(1);
 
     if std::env::var_os("OMP_NUM_THREADS").is_none() {
-        std::env::set_var("OMP_NUM_THREADS", threads.to_string());
+        unsafe { std::env::set_var("OMP_NUM_THREADS", threads.to_string()) };
     }
     if std::env::var_os("OMP_PROC_BIND").is_none() {
-        std::env::set_var("OMP_PROC_BIND", "close");
+        unsafe { std::env::set_var("OMP_PROC_BIND", "close") };
     }
     if std::env::var_os("OMP_PLACES").is_none() {
-        std::env::set_var("OMP_PLACES", "cores");
+        unsafe { std::env::set_var("OMP_PLACES", "cores") };
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct OrchestratorNetworkSpec {
+    network_id: String,
+    #[serde(default)]
+    config_path: Option<String>,
+    #[serde(default)]
+    network_path: Option<String>,
+    #[serde(default)]
+    neuron_model: Option<String>,
+    #[serde(default)]
+    learning_rule: Option<String>,
+    #[serde(default)]
+    execution_modes: Vec<ExecutionMode>,
+    #[serde(default)]
+    execution_scope: Option<ExecutionScope>,
+    #[serde(default)]
+    related_network_ids: Vec<String>,
+    #[serde(default)]
+    combined_group: Option<String>,
+    #[serde(default)]
+    federation_group: Option<String>,
+    #[serde(default)]
+    autodetect_infrastructure: Option<bool>,
+    #[serde(default)]
+    allow_live_transition: Option<bool>,
+    #[serde(default)]
+    autonomous_transition: Option<bool>,
+    #[serde(default)]
+    permitted_transition_modes: Vec<ExecutionMode>,
+    #[serde(default)]
+    target_step_time_ms: Option<f32>,
+    #[serde(default)]
+    transition_cooldown_ms: Option<u64>,
+    #[serde(default)]
+    allow_multi_user: Option<bool>,
+    #[serde(default)]
+    max_concurrent_networks: Option<usize>,
+    #[serde(default)]
+    desired_shards: Option<usize>,
+    #[serde(default)]
+    infrastructure_roots: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OrchestratorStartupNetwork {
+    network_id: String,
+    num_layers: u32,
+    desired_aarnn_depth: u32,
+    config_json: String,
+    snapshot_json: Option<String>,
+    neuron_model: String,
+    learning_rule: String,
+}
+
+fn selected_infrastructure_roots(
+    args: &Cli,
+    deployment: &DeploymentConfig,
+) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = deployment
+        .infrastructure_roots
+        .iter()
+        .filter_map(|root| {
+            let trimmed = root.trim();
+            (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed))
+        })
+        .collect();
+    if roots.is_empty() {
+        if let Some(root) = args.infrastructure_root.as_deref() {
+            let trimmed = root.trim();
+            if !trimmed.is_empty() {
+                roots.push(std::path::PathBuf::from(trimmed));
+            }
+        }
+    }
+    if roots.is_empty() {
+        roots = default_infrastructure_roots();
+    }
+    roots
+}
+
+fn apply_cli_deployment_overrides(net_cfg: &mut NetworkConfig, args: &Cli) {
+    let deployment = &mut net_cfg.deployment;
+    if !args.execution_modes.is_empty() {
+        deployment.modes = args
+            .execution_modes
+            .iter()
+            .copied()
+            .map(ExecutionMode::from)
+            .collect();
+    }
+    if args.execution_scope != DeploymentScopeArg::Auto {
+        deployment.scope = args.execution_scope.into();
+    }
+    if !args.execution_related_networks.is_empty() {
+        deployment.related_network_ids = args.execution_related_networks.clone();
+    }
+    if let Some(group) = args.execution_combined_group.as_deref() {
+        deployment.combined_group = Some(group.to_string());
+    }
+    if let Some(group) = args.execution_federation_group.as_deref() {
+        deployment.federation_group = Some(group.to_string());
+    }
+    deployment.autodetect_infrastructure = args.execution_autodetect;
+    if let Some(allow_live_transition) = args.execution_live_transition {
+        deployment.transition_policy.allow_live_transition = allow_live_transition;
+    }
+    if let Some(autonomous_transition) = args.execution_autonomous_transition {
+        deployment.transition_policy.autonomous = autonomous_transition;
+    }
+    if !args.execution_transition_modes.is_empty() {
+        deployment.transition_policy.permitted_modes = args
+            .execution_transition_modes
+            .iter()
+            .copied()
+            .map(ExecutionMode::from)
+            .collect();
+    }
+    if let Some(target_step_time_ms) = args.execution_target_step_ms {
+        deployment.transition_policy.target_step_time_ms = Some(target_step_time_ms);
+    }
+    if let Some(transition_cooldown_ms) = args.execution_transition_cooldown_ms {
+        deployment.transition_policy.cooldown_ms = transition_cooldown_ms;
+    }
+    if let Some(allow_multi_user) = args.execution_allow_multi_user {
+        deployment.allow_multi_user = allow_multi_user;
+    }
+    if let Some(max_concurrent_networks) = args.execution_max_concurrent_networks {
+        deployment.max_concurrent_networks = max_concurrent_networks;
+    }
+    if let Some(desired_shards) = args.execution_desired_shards {
+        deployment.desired_shards = desired_shards;
+    }
+    if let Some(root) = args.infrastructure_root.as_deref() {
+        let trimmed = root.trim();
+        if !trimmed.is_empty() {
+            deployment.infrastructure_roots = vec![trimmed.to_string()];
+        }
+    }
+    if args.orchestrator || args.node {
+        deployment.add_mode(ExecutionMode::Distributed);
+    }
+    if args.orchestrator {
+        deployment.add_mode(ExecutionMode::Sharded);
+    }
+    deployment.normalize();
+}
+
+fn apply_spec_deployment_overrides(net_cfg: &mut NetworkConfig, spec: &OrchestratorNetworkSpec) {
+    let deployment = &mut net_cfg.deployment;
+    if !spec.execution_modes.is_empty() {
+        deployment.modes = spec.execution_modes.clone();
+    }
+    if let Some(scope) = spec.execution_scope {
+        deployment.scope = scope;
+    }
+    if !spec.related_network_ids.is_empty() {
+        deployment.related_network_ids = spec.related_network_ids.clone();
+    }
+    if let Some(group) = spec.combined_group.as_deref() {
+        deployment.combined_group = Some(group.to_string());
+    }
+    if let Some(group) = spec.federation_group.as_deref() {
+        deployment.federation_group = Some(group.to_string());
+    }
+    if let Some(autodetect) = spec.autodetect_infrastructure {
+        deployment.autodetect_infrastructure = autodetect;
+    }
+    if let Some(allow_live_transition) = spec.allow_live_transition {
+        deployment.transition_policy.allow_live_transition = allow_live_transition;
+    }
+    if let Some(autonomous_transition) = spec.autonomous_transition {
+        deployment.transition_policy.autonomous = autonomous_transition;
+    }
+    if !spec.permitted_transition_modes.is_empty() {
+        deployment.transition_policy.permitted_modes = spec.permitted_transition_modes.clone();
+    }
+    if let Some(target_step_time_ms) = spec.target_step_time_ms {
+        deployment.transition_policy.target_step_time_ms = Some(target_step_time_ms);
+    }
+    if let Some(transition_cooldown_ms) = spec.transition_cooldown_ms {
+        deployment.transition_policy.cooldown_ms = transition_cooldown_ms;
+    }
+    if let Some(allow_multi_user) = spec.allow_multi_user {
+        deployment.allow_multi_user = allow_multi_user;
+    }
+    if let Some(max_concurrent_networks) = spec.max_concurrent_networks {
+        deployment.max_concurrent_networks = max_concurrent_networks;
+    }
+    if let Some(desired_shards) = spec.desired_shards {
+        deployment.desired_shards = desired_shards;
+    }
+    if !spec.infrastructure_roots.is_empty() {
+        deployment.infrastructure_roots = spec.infrastructure_roots.clone();
+    }
+    deployment.normalize();
+}
+
+fn apply_deployment_autodetect(net_cfg: &mut NetworkConfig, args: &Cli) {
+    let roots = selected_infrastructure_roots(args, &net_cfg.deployment);
+    if !net_cfg.deployment.autodetect_infrastructure || roots.is_empty() {
+        net_cfg.deployment.normalize();
+        return;
+    }
+
+    match detect_infrastructure(&roots) {
+        Ok(infra) => {
+            net_cfg.deployment.apply_infrastructure_hint(&infra);
+            if args.trace {
+                nm_log!("[trace] Infrastructure fingerprint: {:?}", infra);
+            }
+        }
+        Err(err) => {
+            nm_err!(
+                "[warn] failed to autodetect infrastructure from {:?}: {}",
+                roots,
+                err
+            );
+            net_cfg.deployment.normalize();
+        }
+    }
+}
+
+fn resolve_deployment(net_cfg: &mut NetworkConfig, args: &Cli) {
+    apply_cli_deployment_overrides(net_cfg, args);
+    apply_deployment_autodetect(net_cfg, args);
+}
+
+fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig, Option<String>)> {
+    let payload = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read startup network payload: {}", path))?;
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
+        Ok((snapshot.net, Some(payload)))
+    } else {
+        let mut cfg: NetworkConfig = serde_json::from_str(&payload)
+            .with_context(|| format!("Failed to parse network config JSON: {}", path))?;
+        if cfg.clumping_design != crate::config::ClumpingDesign::None && cfg.num_hidden_layers <= 1
+        {
+            apply_clumping_layer_defaults(&mut cfg);
+        }
+        Ok((cfg, None))
+    }
+}
+
+fn build_orchestrator_startup_networks(
+    args: &Cli,
+    fallback_cfg: &NetworkConfig,
+    fallback_config_json: Option<&str>,
+    fallback_snapshot_json: Option<&str>,
+) -> anyhow::Result<Vec<OrchestratorStartupNetwork>> {
+    let default_model = args.neuron_model.to_str().to_string();
+    let default_learning = args.learning.to_str().to_string();
+
+    let mut startup_networks = Vec::new();
+    if let Ok(raw_specs) = std::env::var("NM_ORCHESTRATOR_NETWORK_SPECS") {
+        let trimmed = raw_specs.trim();
+        if !trimmed.is_empty() {
+            let specs: Vec<OrchestratorNetworkSpec> = serde_json::from_str(trimmed)
+                .context("Failed to parse NM_ORCHESTRATOR_NETWORK_SPECS JSON payload")?;
+            let mut seen = std::collections::HashSet::new();
+            for spec in specs {
+                let network_id = spec.network_id.trim().to_string();
+                if network_id.is_empty() {
+                    continue;
+                }
+                if !seen.insert(network_id.clone()) {
+                    return Err(anyhow::anyhow!(
+                        "Duplicate network_id '{}' in NM_ORCHESTRATOR_NETWORK_SPECS",
+                        network_id
+                    ));
+                }
+
+                let mut loaded: Option<(NetworkConfig, Option<String>)> = None;
+                if let Some(path) = spec.network_path.as_deref().map(str::trim) {
+                    if !path.is_empty() {
+                        loaded =
+                            Some(load_network_config_or_snapshot(path).with_context(|| {
+                                format!(
+                                    "Failed loading network_path for startup network '{}': {}",
+                                    network_id, path
+                                )
+                            })?);
+                    }
+                }
+                if loaded.is_none() {
+                    if let Some(path) = spec.config_path.as_deref().map(str::trim) {
+                        if !path.is_empty() {
+                            loaded =
+                                Some(load_network_config_or_snapshot(path).with_context(|| {
+                                    format!(
+                                        "Failed loading config_path for startup network '{}': {}",
+                                        network_id, path
+                                    )
+                                })?);
+                        }
+                    }
+                }
+
+                let (mut cfg, snapshot_json) = if let Some((cfg, snapshot_json)) = loaded {
+                    (cfg, snapshot_json)
+                } else {
+                    (
+                        fallback_cfg.clone(),
+                        fallback_snapshot_json.map(ToOwned::to_owned),
+                    )
+                };
+                apply_cli_deployment_overrides(&mut cfg, args);
+                apply_spec_deployment_overrides(&mut cfg, &spec);
+                apply_deployment_autodetect(&mut cfg, args);
+
+                let cfg_json = serde_json::to_string(&cfg).unwrap_or_default();
+                startup_networks.push(OrchestratorStartupNetwork {
+                    network_id,
+                    num_layers: (cfg.num_hidden_layers + 1) as u32,
+                    desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
+                    config_json: cfg_json,
+                    snapshot_json,
+                    neuron_model: spec.neuron_model.unwrap_or_else(|| default_model.clone()),
+                    learning_rule: spec
+                        .learning_rule
+                        .unwrap_or_else(|| default_learning.clone()),
+                });
+            }
+        }
+    }
+
+    if startup_networks.is_empty() {
+        let mut cfg = fallback_cfg.clone();
+        apply_cli_deployment_overrides(&mut cfg, args);
+        apply_deployment_autodetect(&mut cfg, args);
+        startup_networks.push(OrchestratorStartupNetwork {
+            network_id: args.brain_id.clone(),
+            num_layers: (cfg.num_hidden_layers + 1) as u32,
+            desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
+            config_json: fallback_config_json
+                .filter(|_| cfg == *fallback_cfg)
+                .map(ToOwned::to_owned)
+                .or_else(|| serde_json::to_string(&cfg).ok())
+                .unwrap_or_default(),
+            snapshot_json: fallback_snapshot_json.map(ToOwned::to_owned),
+            neuron_model: default_model,
+            learning_rule: default_learning,
+        });
+    }
+
+    Ok(startup_networks)
+}
+
+/// Send a single control command to a cluster network via the orchestrator gRPC
+/// and exit. Used by `--cluster-control-action` and, when needed,
+/// `--cluster-control-network`.
+fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
+    use crate::distributed::proto::{
+        ControlUpdate, NetworkUpdateRequest, StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+    };
+    use tonic::Request;
+
+    let explicit_network_id = args
+        .cluster_control_network
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let action_str = args
+        .cluster_control_action
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--cluster-control-action is required"))?;
+
+    let action = match action_str {
+        "start" => control_update::Action::Start,
+        "stop" => control_update::Action::Stop,
+        "reset" => control_update::Action::Reset,
+        "repeat" => control_update::Action::Repeat,
+        "new" => control_update::Action::New,
+        other => anyhow::bail!(
+            "Unknown control action '{}'; accepted: start stop reset repeat new",
+            other
+        ),
+    };
+
+    let detected_addr = autodetected_orchestrator_addr(args);
+    let addr = args
+        .orchestrator_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(normalize_runtime_url)
+        .or_else(|| detected_addr.as_deref().map(normalize_runtime_url))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--orchestrator-addr is required for cluster control unless infrastructure detection can resolve it"
+            )
+        })?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let mut client = DistributedNeuromorphicClient::connect(addr.clone())
+            .await
+            .with_context(|| format!("Failed to connect to orchestrator at {}", addr))?;
+        let network_id = match explicit_network_id {
+            Some(id) => id,
+            None => {
+                let status = client
+                    .get_system_status(Request::new(StatusRequest {}))
+                    .await
+                    .map_err(|s| anyhow::anyhow!("gRPC status error: {}", s))?
+                    .into_inner();
+                let mut network_ids = status
+                    .networks
+                    .into_iter()
+                    .map(|network| network.network_id.trim().to_string())
+                    .filter(|id| !id.is_empty())
+                    .collect::<Vec<_>>();
+                network_ids.sort();
+                network_ids.dedup();
+                match network_ids.len() {
+                    0 => anyhow::bail!(
+                        "No cluster networks are currently registered on orchestrator {}",
+                        addr
+                    ),
+                    1 => {
+                        let only = network_ids.pop().unwrap_or_default();
+                        println!(
+                            "Auto-selected network '{}' from orchestrator {}",
+                            only, addr
+                        );
+                        only
+                    }
+                    _ => anyhow::bail!(
+                        "--cluster-control-network is required when orchestrator {} exposes multiple networks: {}",
+                        addr,
+                        network_ids.join(", ")
+                    ),
+                }
+            }
+        };
+        let req = NetworkUpdateRequest {
+            network_id: network_id.clone(),
+            update: Some(network_update_request::Update::Control(ControlUpdate {
+                action: action as i32,
+            })),
+        };
+        client
+            .update_network(Request::new(req))
+            .await
+            .map_err(|s| anyhow::anyhow!("gRPC error: {}", s))?;
+        println!(
+            "Sent {} to network '{}' via {}",
+            action_str, network_id, addr
+        );
+        anyhow::Ok(())
+    })
+}
+
+fn normalize_runtime_url(raw: &str) -> String {
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{}", raw)
+    }
+}
+
+fn autodetected_orchestrator_addr(args: &Cli) -> Option<String> {
+    let roots = if let Some(root) = args.infrastructure_root.as_deref() {
+        let trimmed = root.trim();
+        if trimmed.is_empty() {
+            default_infrastructure_roots()
+        } else {
+            vec![std::path::PathBuf::from(trimmed)]
+        }
+    } else {
+        default_infrastructure_roots()
+    };
+    if roots.is_empty() {
+        return None;
+    }
+    detect_infrastructure(&roots)
+        .ok()
+        .and_then(|infra| infra.recommended_orchestrator_addr())
+}
+
+fn build_runtime_client(args: &Cli) -> anyhow::Result<BlockingRuntimeClient> {
+    let url = args
+        .runtime_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("--runtime-url is required for runtime actions"))?;
+    BlockingRuntimeClient::new(
+        normalize_runtime_url(url),
+        args.runtime_user.clone(),
+        args.runtime_password.clone(),
+        runtime_access_token(args),
+    )
+}
+
+fn runtime_access_token(args: &Cli) -> Option<String> {
+    args.runtime_access_token.clone().or_else(|| {
+        std::env::var("NM_RUNTIME_ACCESS_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn read_runtime_seed_file(path: &str) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read runtime payload file: {}", path))?;
+    if crate::runner::decode_snapshot_with_profile_backfill(&raw).is_ok() {
+        Ok((None, Some(raw)))
+    } else {
+        Ok((Some(raw), None))
+    }
+}
+
+fn runtime_workspace_required(args: &Cli) -> anyhow::Result<String> {
+    args.runtime_workspace
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--runtime-workspace is required for this action"))
+}
+
+fn print_json_pretty<T: serde::Serialize>(value: &T) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
+    let action = match args.runtime_action {
+        Some(action) => action,
+        None => return Ok(()),
+    };
+    let mut client = build_runtime_client(args)?;
+
+    match action {
+        RuntimeAction::Status => {
+            if let Some(workspace_id) = args.runtime_workspace.as_deref() {
+                let detail = client.workspace_detail(workspace_id)?;
+                print_json_pretty(&detail)?;
+            } else {
+                let status = client.runtime_status()?;
+                print_json_pretty(&status)?;
+            }
+        }
+        RuntimeAction::Create => {
+            let mut req = WorkspaceCreateRequest {
+                workspace_id: args.runtime_workspace.clone(),
+                name: args.runtime_workspace_name.clone(),
+                config_json: None,
+                snapshot_json: None,
+                neuron_model: Some(args.neuron_model.to_str().to_string()),
+                learning_rule: Some(args.learning.to_str().to_string()),
+                auto_start: Some(false),
+            };
+            if let Some(network_path) = args.network.as_deref() {
+                req.snapshot_json =
+                    Some(std::fs::read_to_string(network_path).with_context(|| {
+                        format!("Failed to read runtime network payload: {}", network_path)
+                    })?);
+            } else if std::path::Path::new(&args.config).exists() {
+                let (config_json, snapshot_json) = read_runtime_seed_file(&args.config)?;
+                req.config_json = config_json;
+                req.snapshot_json = snapshot_json;
+            }
+            let detail = client.create_workspace(&req)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Delete => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let resp = client.delete_workspace(&workspace_id)?;
+            print_json_pretty(&resp)?;
+        }
+        RuntimeAction::Load => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let (payload_json, kind) = if let Some(network_path) = args.network.as_deref() {
+                (
+                    std::fs::read_to_string(network_path).with_context(|| {
+                        format!("Failed to read runtime network payload: {}", network_path)
+                    })?,
+                    crate::engine::EnginePayloadKind::Snapshot,
+                )
+            } else {
+                let path = args.config.as_str();
+                let raw = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read runtime config payload: {}", path))?;
+                let kind = if args.runtime_payload_kind == RuntimePayloadKindArg::Auto {
+                    if crate::runner::decode_snapshot_with_profile_backfill(&raw).is_ok() {
+                        crate::engine::EnginePayloadKind::Snapshot
+                    } else {
+                        crate::engine::EnginePayloadKind::Config
+                    }
+                } else {
+                    args.runtime_payload_kind.to_payload_kind()
+                };
+                (raw, kind)
+            };
+            let detail = client.import_workspace(
+                &workspace_id,
+                &WorkspaceImportRequest {
+                    payload_json,
+                    kind: Some(kind),
+                    replace_baseline: Some(true),
+                    auto_start: Some(false),
+                    neuron_model: Some(args.neuron_model.to_str().to_string()),
+                    learning_rule: Some(args.learning.to_str().to_string()),
+                },
+            )?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Save => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Save)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Snapshot => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let snapshot = client.workspace_snapshot(&workspace_id)?;
+            if let Some(path) = args.network.as_deref() {
+                std::fs::write(path, snapshot.snapshot_json.as_bytes())
+                    .with_context(|| format!("Failed to write runtime snapshot to {}", path))?;
+                println!("wrote {}", path);
+            } else {
+                println!("{}", snapshot.snapshot_json);
+            }
+        }
+        RuntimeAction::Start => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Start)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Stop => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Stop)?;
+            print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Reset => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Reset)?;
+            print_json_pretty(&detail)?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_fpaa_route_assignment(
+    raw: &str,
+) -> anyhow::Result<(crate::fpaa::FpaaKernel, FpaaKernelRoute)> {
+    let (kernel_raw, route_raw) = raw.split_once('=').ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --fpaa-route '{}', expected kernel=software|fpaa",
+            raw
+        )
+    })?;
+    let kernel = crate::fpaa::FpaaKernel::parse_id(kernel_raw)
+        .ok_or_else(|| anyhow::anyhow!("unknown FPAA kernel '{}'", kernel_raw))?;
+    let route = match route_raw.trim().to_ascii_lowercase().as_str() {
+        "software" | "sw" => FpaaKernelRoute::Software,
+        "fpaa" => FpaaKernelRoute::Fpaa,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unknown FPAA route '{}', expected software or fpaa",
+                other
+            ));
+        }
+    };
+    Ok((kernel, route))
+}
+
+fn apply_fpaa_cli_overrides(net_cfg: &mut NetworkConfig, args: &Cli) -> anyhow::Result<()> {
+    if let Some(mode) = args.fpaa_mode {
+        net_cfg.fpaa.startup_mode = mode.into();
+    }
+    if let Some(transport) = args.fpaa_transport {
+        net_cfg.fpaa.transport_preference = transport.into();
+    }
+    if args.fpaa_self_test {
+        net_cfg.fpaa.run_self_test_on_startup = true;
+    }
+    if let Some(spi_device) = args.fpaa_spi_device.as_deref() {
+        net_cfg.fpaa.spi_device = spi_device.to_string();
+    }
+    if let Some(usb_hint) = args.fpaa_usb_hint.as_deref() {
+        net_cfg.fpaa.usb_device_hint = usb_hint.to_string();
+    }
+    for assignment in &args.fpaa_routes {
+        let (kernel, route) = parse_fpaa_route_assignment(assignment)?;
+        *kernel.route_mut(&mut net_cfg.fpaa.routing) = route;
+    }
+    Ok(())
+}
+
+fn log_fpaa_status(status: &crate::fpaa::FpaaRuntimeStatus) {
+    nm_log!("[info] {}", status.summary);
+    if let Some(err) = status.startup_error.as_deref() {
+        nm_log!("[warn] FPAA startup: {}", err);
+    }
+    for kernel in &status.kernels {
+        if kernel.requested_route == FpaaKernelRoute::Fpaa
+            || kernel.effective_route == FpaaKernelRoute::Fpaa
+        {
+            nm_log!(
+                "[info] FPAA kernel {} requested={:?} effective={:?} verification={} self_test={} note={}",
+                kernel.kernel.id(),
+                kernel.requested_route,
+                kernel.effective_route,
+                kernel.verification.label(),
+                kernel.sample_test.label(),
+                kernel.note
+            );
+        }
+    }
+}
+
+fn distributed_autostart_enabled() -> bool {
+    std::env::var("NM_DISTRIBUTED_AUTOSTART")
+        .ok()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
 }
 
 #[cfg(feature = "openmpi")]
@@ -355,8 +1380,18 @@ fn main() -> anyhow::Result<()> {
         crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    if args.runtime_action.is_some() {
+        return handle_runtime_action(&args);
+    }
+
+    if args.cluster_control_network.is_some() || args.cluster_control_action.is_some() {
+        return handle_cluster_control(&args);
+    }
+
     maybe_apply_openmpi_bootstrap(&mut args)?;
-    configure_openmp_runtime_env();
+    unsafe {
+        configure_openmp_runtime_env();
+    }
     if !crate::obs::is_silent() {
         let log_path = std::env::var("NM_LOG_PATH").ok();
         if let Some(path) = log_path.as_deref() {
@@ -384,7 +1419,7 @@ fn main() -> anyhow::Result<()> {
         if Path::new(&args.config).exists() {
             let s = fs::read_to_string(&args.config)?;
             if args.network.is_none() {
-                if let Ok(snap) = serde_json::from_str::<crate::runner::Snapshot>(&s) {
+                if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
                     startup_snapshot_json = Some(s);
                     snap.net
                 } else {
@@ -409,7 +1444,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(network_path) = args.network.as_deref() {
         let s = std::fs::read_to_string(network_path)?;
-        let snap: crate::runner::Snapshot = serde_json::from_str(&s)?;
+        let snap = crate::runner::decode_snapshot_with_profile_backfill(&s)?;
         startup_snapshot_json = Some(s);
         net_cfg = snap.net;
     }
@@ -421,18 +1456,79 @@ fn main() -> anyhow::Result<()> {
         net_cfg.sleep_enabled = true;
     }
 
-    // AARNN-specific overrides. AARNN mode implicitly requires morphology and growth.
-    if matches!(args.neuron_model, NeuronModel::Aarnn) {
+    let loaded_from_snapshot = startup_snapshot_json.is_some();
+
+    // AARNN-specific bootstrap defaults are only forced when we are not loading
+    // an explicit snapshot payload. Snapshot/config values should remain authoritative.
+    if matches!(args.neuron_model, NeuronModel::Aarnn) && !loaded_from_snapshot {
         net_cfg.growth_enabled = true;
         net_cfg.use_morphology = true;
         net_cfg.aarnn_layer_depth = 5;
     }
+    resolve_deployment(&mut net_cfg, &args);
+    apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
     startup_config_json = serde_json::to_string(&net_cfg).ok();
+
+    let mut remote_workspace_binding: Option<crate::runtime_api::RemoteWorkspaceBinding> = None;
+    if let (Some(runtime_url), Some(workspace_id)) = (
+        args.runtime_url.as_deref(),
+        args.runtime_workspace.as_deref(),
+    ) {
+        let binding = crate::runtime_api::RemoteWorkspaceBinding {
+            base_url: normalize_runtime_url(runtime_url),
+            user_id: args.runtime_user.clone(),
+            password: args.runtime_password.clone(),
+            access_token: runtime_access_token(&args),
+            workspace_id: workspace_id.to_string(),
+            save_on_exit: args.runtime_save_on_exit,
+        };
+        let mut client = binding.client()?;
+        if args.runtime_create_if_missing {
+            if client.workspace_detail(workspace_id).is_err() {
+                let _ = client.create_workspace(&WorkspaceCreateRequest {
+                    workspace_id: Some(workspace_id.to_string()),
+                    name: args.runtime_workspace_name.clone(),
+                    config_json: startup_config_json.clone(),
+                    snapshot_json: startup_snapshot_json.clone(),
+                    neuron_model: Some(args.neuron_model.to_str().to_string()),
+                    learning_rule: Some(args.learning.to_str().to_string()),
+                    auto_start: Some(false),
+                })?;
+            }
+        }
+        let snapshot = client.workspace_snapshot(workspace_id).with_context(|| {
+            format!(
+                "failed to fetch runtime workspace '{}' from {}",
+                workspace_id, binding.base_url
+            )
+        })?;
+        let snap = crate::runner::decode_snapshot_with_profile_backfill(&snapshot.snapshot_json)?;
+        net_cfg = snap.net;
+        resolve_deployment(&mut net_cfg, &args);
+        apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
+        startup_snapshot_json = Some(snapshot.snapshot_json);
+        startup_config_json = serde_json::to_string(&net_cfg).ok();
+        remote_workspace_binding = Some(binding);
+    }
+
+    let fpaa_status = crate::fpaa::startup_probe(&net_cfg.fpaa);
+    if args.fpaa_print_status || args.fpaa_status_only {
+        print_json_pretty(&fpaa_status)?;
+    }
+    log_fpaa_status(&fpaa_status);
+    if let Some(err) = fpaa_status.unmet_requirement() {
+        return Err(anyhow::anyhow!(err));
+    }
+    if args.fpaa_status_only {
+        return Ok(());
+    }
 
     // Initialize tracing/logging if requested via CLI.
     if args.trace {
         nm_log!("[trace] NetworkConfig initialized: {:#?}", net_cfg);
-        std::env::set_var("NM_TRACE", "1");
+        unsafe {
+            std::env::set_var("NM_TRACE", "1");
+        }
     }
 
     // Initialize a shared Tokio runtime for async background tasks.
@@ -450,31 +1546,55 @@ fn main() -> anyhow::Result<()> {
         distributed_node = Some(rt.block_on(async { start_distributed(&args).await })?);
         if args.orchestrator {
             if let Some(node) = distributed_node.clone() {
-                let net_cfg_clone = net_cfg.clone();
-                let config_json = startup_config_json
-                    .clone()
-                    .or_else(|| serde_json::to_string(&net_cfg_clone).ok())
-                    .unwrap_or_default();
-                let brain_id = args.brain_id.clone();
-                let snapshot_json = startup_snapshot_json.clone();
-                let neuron_model = args.neuron_model.to_str().to_string();
-                let learning_rule = args.learning.to_str().to_string();
+                let startup_networks = build_orchestrator_startup_networks(
+                    &args,
+                    &net_cfg,
+                    startup_config_json.as_deref(),
+                    startup_snapshot_json.as_deref(),
+                )?;
+                let default_playing = distributed_autostart_enabled();
+                let distribute_startup_snapshot = std::env::var("NM_DISTRIBUTE_STARTUP_SNAPSHOT")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(true);
                 rt.block_on(async move {
                     {
                         let mut state = node.state.write().await;
-                        if let Some(net_status) = state.network_registry.get_mut(&brain_id) {
-                            net_status.num_layers = (net_cfg_clone.num_hidden_layers + 1) as u32;
-                            net_status.desired_aarnn_depth = net_cfg_clone.aarnn_layer_depth as u32;
-                            if !config_json.is_empty() {
-                                net_status.config_json = config_json;
+                        state.network_registry.clear();
+                        state.network_snapshots.clear();
+                        for startup in startup_networks {
+                            let network_id = startup.network_id.clone();
+                            let mut status = crate::distributed::proto::NetworkStatus {
+                                network_id: network_id.clone(),
+                                distribution: std::collections::HashMap::new(),
+                                current_dt: args.dt_ms,
+                                total_neurons: 0,
+                                num_layers: startup.num_layers,
+                                desired_aarnn_depth: startup.desired_aarnn_depth,
+                                config_json: startup.config_json,
+                                neuron_model: startup.neuron_model,
+                                learning_rule: startup.learning_rule,
+                                playing: default_playing,
+                                ..Default::default()
+                            };
+                            if let Some(snapshot_json) = startup.snapshot_json.as_deref() {
+                                crate::distributed::sync_network_status_deployment_from_payload(
+                                    &mut status,
+                                    snapshot_json,
+                                );
+                            } else {
+                                let deployment_payload = status.config_json.clone();
+                                crate::distributed::sync_network_status_deployment_from_payload(
+                                    &mut status,
+                                    &deployment_payload,
+                                );
                             }
-                            net_status.neuron_model = neuron_model;
-                            net_status.learning_rule = learning_rule;
-                        }
-                        if let Some(snapshot_json) = snapshot_json {
-                            state
-                                .network_snapshots
-                                .insert(brain_id.clone(), snapshot_json);
+                            state.network_registry.insert(network_id.clone(), status);
+                            if distribute_startup_snapshot {
+                                if let Some(snapshot_json) = startup.snapshot_json {
+                                    state.network_snapshots.insert(network_id, snapshot_json);
+                                }
+                            }
                         }
                     }
                     node.rebalance_networks().await;
@@ -491,11 +1611,7 @@ fn main() -> anyhow::Result<()> {
         cfg.output_base = args.aer_output_base;
         cfg.max_events = args.aer_max_events;
         cfg.max_packet_bytes = args.aer_max_packet_bytes;
-        if cfg.enabled() {
-            Some(cfg)
-        } else {
-            None
-        }
+        if cfg.enabled() { Some(cfg) } else { None }
     };
 
     let ga_search_enabled = args.ga_search || args.auto_ga;
@@ -505,8 +1621,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "ui")]
     if args.ui {
         let mut net_cfg = net_cfg; // Re-use or reload config for UI consistency
-        if matches!(args.neuron_model, NeuronModel::Aarnn)
-            || matches!(args.learning, LearningRule::Aarnn)
+        if (matches!(args.neuron_model, NeuronModel::Aarnn)
+            || matches!(args.learning, LearningRule::Aarnn))
+            && startup_snapshot_json.is_none()
         {
             net_cfg.growth_enabled = true;
             net_cfg.use_morphology = true;
@@ -519,13 +1636,16 @@ fn main() -> anyhow::Result<()> {
             distributed_node,
             args.ui_remote_only,
             startup_snapshot_json,
+            remote_workspace_binding,
             aer_cfg.clone(),
             rt.handle().clone(),
         );
     }
     #[cfg(not(feature = "ui"))]
     if args.ui {
-        nm_err!("UI requested, but the binary was built without `--features ui`. Falling back to batch mode.");
+        nm_err!(
+            "UI requested, but the binary was built without `--features ui`. Falling back to batch mode."
+        );
     }
     let mut rng = StdRng::seed_from_u64(args.seed);
 
@@ -710,7 +1830,9 @@ fn main() -> anyhow::Result<()> {
     viz::draw_weight_histograms("weight_histograms_output.png", &sim_out.weights, true)?;
     viz::draw_final_weighted_network("final_weighted_network.png", &net_cfg, &sim_out.weights)?;
 
-    nm_log!("Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png");
+    nm_log!(
+        "Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png"
+    );
     Ok(())
 }
 
@@ -756,11 +1878,11 @@ fn run_ga_search(
 
     let (status_tx, _status_rx) = std::sync::mpsc::channel();
 
-    for gen in 0..n_gen {
-        nm_log!("\n=== Generation {}/{} ===", gen + 1, n_gen);
+    for gen_iter in 0..n_gen {
+        nm_log!("\n=== Generation {}/{} ===", gen_iter + 1, n_gen);
         let gen_seed = rng.random::<u64>();
         let plan = ramp.generation_plan();
-        crate::ga::ga_set_ramp_runtime(&plan, gen);
+        crate::ga::ga_set_ramp_runtime(&plan, gen_iter);
         GARampController::apply_plan_overrides(&plan);
         ga.resize_population(plan.population_size, &base_cfg, &mut rng);
         rt.block_on(ga.evaluate_population(plan.sim_time_ms, gen_seed, &status_tx));
@@ -789,7 +1911,7 @@ fn run_ga_search(
             // Update local state for reporting back to orchestrator (if we are a node)
             let mut state_mut = rt.block_on(async { dist.state.write().await });
             state_mut.ga_running = true;
-            state_mut.ga_generation = (gen + 1) as u32;
+            state_mut.ga_generation = (gen_iter + 1) as u32;
             state_mut.ga_best_fitness = ga.best_fitness;
             if let Some(best) = &ga.best_config {
                 state_mut.ga_best_config_json = serde_json::to_string(best).unwrap_or_default();
@@ -813,7 +1935,7 @@ fn run_ga_search(
             );
         }
 
-        if gen < n_gen - 1 {
+        if gen_iter < n_gen - 1 {
             if !crate::ga::ga_wait_for_generation_headroom() {
                 break;
             }
@@ -985,8 +2107,15 @@ fn run_continuous(
                 .map(|v| format!("{}MB", v))
                 .unwrap_or_else(|| "-".into());
             nm_log!(
-                "[info] t={:.2}ms, dt={:.3}ms, avg_calc={:.2}ms, steps/s={}, spikes: H={}, O={}, temp={}, free_mem={}", 
-                sim_time, runner.lif.dt, avg_step_time_ms, steps_since_report, total_hidden_spikes, total_output_spikes, temp_s, free_s
+                "[info] t={:.2}ms, dt={:.3}ms, avg_calc={:.2}ms, steps/s={}, spikes: H={}, O={}, temp={}, free_mem={}",
+                sim_time,
+                runner.lif.dt,
+                avg_step_time_ms,
+                steps_since_report,
+                total_hidden_spikes,
+                total_output_spikes,
+                temp_s,
+                free_s
             );
             last_report = std::time::Instant::now();
             steps_since_report = 0;
@@ -1008,7 +2137,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
     use crate::distributed::proto::{HeartbeatRequest, JoinRequest};
     use crate::distributed::{
-        proto::distributed_neuromorphic_server::DistributedNeuromorphicServer, DistributedNode,
+        DistributedNode, ManagedNetwork,
+        proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
     };
     use tonic::transport::{Channel, Server};
 
@@ -1033,15 +2163,143 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let node = DistributedNode::new(node_id.clone(), args.orchestrator);
     node.start_optional_mpi_spike_receiver().await;
 
+    // In node role, pre-load the startup config/snapshot from local files so a
+    // large snapshot doesn't have to be delivered in one heartbeat response.
+    if args.node {
+        let preload_enabled = std::env::var("NM_PRELOAD_NODE_NETWORK")
+            .ok()
+            .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+            .unwrap_or(true);
+        if preload_enabled {
+            let config_fingerprint = |bytes: &[u8]| -> u64 {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                bytes.hash(&mut hasher);
+                hasher.finish()
+            };
+            let mut preload_snapshot_json: Option<String> = None;
+            let mut preload_cfg: Option<NetworkConfig> = None;
+
+            if let Some(network_path) = args.network.as_deref() {
+                if let Ok(s) = std::fs::read_to_string(network_path) {
+                    if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
+                        preload_snapshot_json = Some(s);
+                        preload_cfg = Some(snap.net);
+                    }
+                }
+            }
+
+            if preload_cfg.is_none() {
+                let cfg_path = std::path::Path::new(&args.config);
+                if cfg_path.exists() {
+                    if let Ok(s) = std::fs::read_to_string(cfg_path) {
+                        if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
+                            preload_snapshot_json = Some(s);
+                            preload_cfg = Some(snap.net);
+                        } else if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&s) {
+                            preload_cfg = Some(cfg);
+                        }
+                    }
+                }
+            }
+
+            if let Some(mut cfg) = preload_cfg {
+                let preload_config_fingerprint = preload_snapshot_json
+                    .as_ref()
+                    .map(|json| config_fingerprint(json.as_bytes()))
+                    .or_else(|| {
+                        serde_json::to_vec(&cfg)
+                            .ok()
+                            .map(|bytes| config_fingerprint(&bytes))
+                    });
+                if (matches!(args.neuron_model, NeuronModel::Aarnn)
+                    || matches!(args.learning, LearningRule::Aarnn))
+                    && preload_snapshot_json.is_none()
+                {
+                    cfg.growth_enabled = true;
+                    cfg.use_morphology = true;
+                    cfg.aarnn_layer_depth = 5;
+                }
+                resolve_deployment(&mut cfg, args);
+
+                let model = match args.neuron_model {
+                    NeuronModel::Lif => sim::NeuronModel::Lif,
+                    NeuronModel::Izh => {
+                        sim::NeuronModel::Izh(IzhikevichParams::from_preset(&args.izh_type, 1.0))
+                    }
+                    NeuronModel::Aarnn => sim::NeuronModel::Aarnn,
+                };
+                let learning = match args.learning {
+                    LearningRule::Stdp => sim::Learning::Stdp,
+                    LearningRule::Hebb => sim::Learning::Hebb,
+                    LearningRule::Oja => sim::Learning::Oja,
+                    LearningRule::Aarnn => sim::Learning::Aarnn,
+                };
+
+                let lif = LIFParams::default();
+                let stdp = STDPParams::default();
+                let mut runner =
+                    Runner::new(lif.clone(), stdp.clone(), cfg.clone(), model, learning);
+
+                if let Some(json) = preload_snapshot_json.as_deref() {
+                    if let Err(e) = runner.import_network_json(json) {
+                        nm_err!(
+                            "[warn] Failed to preload startup snapshot for node {}: {}",
+                            args.brain_id,
+                            e
+                        );
+                    }
+                }
+
+                let total_layers = (runner.net.num_hidden_layers + 1) as u32;
+                let assigned_layers: Vec<u32> = (0..total_layers).collect();
+                let desired_depth = runner.net.aarnn_layer_depth as u32;
+                let initial_config = runner.net.clone();
+
+                let mut state = node.state.write().await;
+                let workspace_binding = state.workspace_bindings.get(&args.brain_id).cloned();
+                state.networks.insert(
+                    args.brain_id.clone(),
+                    std::sync::Arc::new(tokio::sync::RwLock::new(ManagedNetwork {
+                        id: args.brain_id.clone(),
+                        runner,
+                        assigned_layers,
+                        redundant_layers: Vec::new(),
+                        remote_spikes_fwd: std::collections::HashMap::new(),
+                        remote_spikes_bwd: std::collections::HashMap::new(),
+                        remote_spike_steps_fwd: std::collections::HashMap::new(),
+                        remote_spike_steps_bwd: std::collections::HashMap::new(),
+                        external_sensory_spikes: None,
+                        avg_step_time_ms: 0.0,
+                        desired_aarnn_depth: desired_depth,
+                        playing: true,
+                        initial_config,
+                        initial_model: model,
+                        initial_learning: learning,
+                        initial_lif: lif,
+                        initial_stdp: stdp,
+                        last_config_fingerprint: preload_config_fingerprint,
+                        workspace_binding,
+                    })),
+                );
+            }
+        }
+    }
+
     async fn connect_and_join(
         orchestrator_addr: &str,
         node_id: &str,
         grpc_addr: &str,
         node: &DistributedNode,
     ) -> Result<DistributedNeuromorphicClient<Channel>, String> {
+        let grpc_max_msg_bytes = grpc_max_message_bytes();
         let mut client = DistributedNeuromorphicClient::connect(orchestrator_addr.to_string())
             .await
             .map_err(|e| format!("connect: {e}"))?;
+        client = client
+            .max_decoding_message_size(grpc_max_msg_bytes)
+            .max_encoding_message_size(grpc_max_msg_bytes);
         let resources = node.get_resources().await;
         let network_resources = node.get_network_resources().await;
         let join_req = JoinRequest {
@@ -1063,23 +2321,23 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .await?;
 
         // Register the brain network if we are an orchestrator
-        let default_playing = !args.ui;
+        let default_playing = distributed_autostart_enabled();
         let mut state = node.state.write().await;
-        state.network_registry.insert(
-            args.brain_id.clone(),
-            crate::distributed::proto::NetworkStatus {
-                network_id: args.brain_id.clone(),
-                distribution: std::collections::HashMap::new(),
-                current_dt: args.dt_ms,
-                total_neurons: 0,
-                num_layers: (args.num_hidden_layers + 1) as u32,
-                desired_aarnn_depth: 5, // Default to max realism depth
-                config_json: String::new(),
-                neuron_model: NeuronModel::Aarnn.to_str().to_string(),
-                learning_rule: LearningRule::Aarnn.to_str().to_string(),
-                playing: default_playing,
-            },
-        );
+        let mut status = crate::distributed::proto::NetworkStatus {
+            network_id: args.brain_id.clone(),
+            distribution: std::collections::HashMap::new(),
+            current_dt: args.dt_ms,
+            total_neurons: 0,
+            num_layers: (args.num_hidden_layers + 1) as u32,
+            desired_aarnn_depth: 5, // Default to max realism depth
+            config_json: String::new(),
+            neuron_model: NeuronModel::Aarnn.to_str().to_string(),
+            learning_rule: LearningRule::Aarnn.to_str().to_string(),
+            playing: default_playing,
+            ..Default::default()
+        };
+        crate::distributed::sync_network_status_deployment_from_payload(&mut status, "");
+        state.network_registry.insert(args.brain_id.clone(), status);
     }
 
     let addr: std::net::SocketAddr = args.grpc_addr.parse()?;
@@ -1088,6 +2346,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let node_clone = node.clone();
     let mut shutdown_rx_server = shutdown_rx.clone();
     tokio::spawn(async move {
+        let grpc_max_msg_bytes = grpc_max_message_bytes();
         let shutdown = async move {
             while !*shutdown_rx_server.borrow() {
                 if shutdown_rx_server.changed().await.is_err() {
@@ -1096,7 +2355,11 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             }
         };
         if let Err(e) = Server::builder()
-            .add_service(DistributedNeuromorphicServer::new(node_clone))
+            .add_service(
+                DistributedNeuromorphicServer::new(node_clone)
+                    .max_decoding_message_size(grpc_max_msg_bytes)
+                    .max_encoding_message_size(grpc_max_msg_bytes),
+            )
             .serve_with_shutdown(addr, shutdown)
             .await
         {
@@ -1131,6 +2394,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         let node_inner = node.clone();
         let grpc_addr = args.grpc_addr.clone();
         let orchestrator_addr_arg = args.orchestrator_addr.clone();
+        let orchestrator_addr_detected = autodetected_orchestrator_addr(args);
         let shutdown_tx_node = shutdown_tx.clone();
 
         tokio::spawn(async move {
@@ -1138,6 +2402,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             let reconnect_interval = std::time::Duration::from_secs(2);
             let heartbeat_interval = std::time::Duration::from_secs(5);
             let orchestrator_addr = if let Some(addr) = orchestrator_addr_arg {
+                normalize_runtime_url(&addr)
+            } else if let Some(addr) = orchestrator_addr_detected {
                 addr
             } else {
                 match DistributedNode::discover_orchestrator().await {
@@ -1228,7 +2494,9 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         let deadline = *reconnect_start + reconnect_timeout;
                         loop {
                             if std::time::Instant::now() >= deadline {
-                                nm_err!("[error] Orchestrator unreachable for 5 minutes; shutting down node");
+                                nm_err!(
+                                    "[error] Orchestrator unreachable for 5 minutes; shutting down node"
+                                );
                                 let _ = shutdown_tx_node.send(true);
                                 return;
                             }
@@ -1310,8 +2578,14 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         0.0
                     };
 
-                    nm_log!(" - Network {}: dt={:.3}ms, Total Neurons={}, Distributed across {} nodes, Est. nodes for 1ms: {:.1}", 
-                        id, net.current_dt, net.total_neurons, net.distribution.len(), est_nodes_1ms);
+                    nm_log!(
+                        " - Network {}: dt={:.3}ms, Total Neurons={}, Distributed across {} nodes, Est. nodes for 1ms: {:.1}",
+                        id,
+                        net.current_dt,
+                        net.total_neurons,
+                        net.distribution.len(),
+                        est_nodes_1ms
+                    );
                 }
                 nm_log!("-----------------\n");
             }

@@ -1,197 +1,90 @@
-# Multi-arch Containerfile for AARNN
+# Multi-arch Containerfile for AARNN role-specific workloads.
 # Target Architectures: linux/amd64, linux/arm64
-# Base: CentOS Stream 9
+# Base: Ubuntu 24.04
 
-# --- Stage 0: Python 3.12 Builder ---
 ARG PYTHON_MIN_VERSION=3.12
 ARG PYTHON_FULL_VERSION=3.12.2
-FROM quay.io/centos/centos:stream9 AS python_builder
-ARG PYTHON_FULL_VERSION=3.12.2
-RUN dnf install -y 'dnf-command(config-manager)' && \
-    dnf config-manager --set-enabled crb && \
-    dnf install -y \
-    gcc make wget tar \
-    openssl-devel bzip2-devel libffi-devel zlib-devel xz-devel \
-    readline-devel sqlite-devel ncurses-devel gdbm-devel libuuid-devel \
-    && dnf clean all
-WORKDIR /tmp/python_build
-RUN wget -q "https://www.python.org/ftp/python/${PYTHON_FULL_VERSION}/Python-${PYTHON_FULL_VERSION}.tgz" -O python.tgz && \
-    tar -xzf python.tgz && \
-    cd "Python-${PYTHON_FULL_VERSION}" && \
-    ./configure --prefix=/opt/python3.12 --with-ensurepip=install && \
-    make -j"$(nproc)" && \
-    make altinstall
-
-# --- Stage 1: Build ---
+FROM ubuntu:24.04
 ARG PYTHON_MIN_VERSION=3.12
 ARG PYTHON_FULL_VERSION=3.12.2
-FROM quay.io/centos/centos:stream9 AS builder
-ARG PYTHON_MIN_VERSION=3.12
-ARG PYTHON_FULL_VERSION=3.12.2
+ARG CONTAINER_WORKLOAD="standalone"
+ARG CARGO_FEATURES="standalone_workload"
 ENV PYTHON_MIN_VERSION=${PYTHON_MIN_VERSION}
 ENV PYTHON_FULL_VERSION=${PYTHON_FULL_VERSION}
+ENV AARNN_CONTAINER_WORKLOAD=${CONTAINER_WORKLOAD}
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build-time dependencies
-# Note: CentOS Stream 9 is used to access the full set of dependencies (AppStream, CRB)
-# which are restricted in the minimal UBI images without a subscription.
-RUN dnf install -y 'dnf-command(config-manager)' && \
-    dnf config-manager --set-enabled crb && \
-    dnf install -y \
-    gcc gcc-c++ make cmake wget unzip \
-    openssl-devel pkgconfig \
-    fontconfig-devel freetype-devel \
-    clang-devel llvm-devel \
-    libjpeg-turbo-devel libpng-devel libtiff-devel \
-    protobuf-compiler libnl3-devel \
-    opencl-headers ocl-icd-devel \
-    libibverbs-devel \
-    openmpi openmpi-devel \
-    libgomp \
-    alsa-lib-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
-    libXcomposite-devel libXdamage-devel libXfixes-devel libXext-devel \
-    libXrender-devel mesa-libGL-devel gtk3-devel libxkbcommon-devel wayland-devel \
-    git \
-    && dnf clean all
+COPY dist/container/*.deb /tmp/aarnn/
+COPY requirements.txt /tmp/aarnn-requirements.txt
+COPY tools /app/tools
+COPY scripts/container_entrypoint.sh /usr/local/bin/aarnn-entrypoint
 
-# Bring in Python 3.12 built from source
-COPY --from=python_builder /opt/python3.12 /opt/python3.12
-RUN ln -sf /opt/python3.12/bin/python3.12 /usr/bin/python3.12 && \
-    ln -sf /opt/python3.12/bin/python3.12 /usr/bin/python3 && \
-    ln -sf /opt/python3.12/bin/pip3.12 /usr/bin/pip3 && \
-    python3 -c "import os,sys; min_version=os.environ.get('PYTHON_MIN_VERSION','3.12'); min_tuple=tuple(int(x) for x in min_version.split('.')); sys.exit(0) if sys.version_info>=min_tuple else (_ for _ in ()).throw(SystemExit(f'Python {min_version}+ required, got {sys.version}'))"
-
-# Build OpenCV from source (it's missing from CentOS 9 repos)
-WORKDIR /tmp/opencv_build
-RUN git clone --depth 1 -b 4.x https://github.com/opencv/opencv.git && \
-    mkdir build && cd build && \
-    cmake -D CMAKE_BUILD_TYPE=RELEASE \
-          -D CMAKE_INSTALL_PREFIX=/usr/local \
-          -D INSTALL_C_EXAMPLES=OFF \
-          -D INSTALL_PYTHON_EXAMPLES=OFF \
-          -D OPENCV_GENERATE_PKGCONFIG=ON \
-          -D BUILD_EXAMPLES=OFF \
-          -D BUILD_TESTS=OFF \
-          -D BUILD_PERF_TESTS=OFF \
-          -D BUILD_opencv_java=OFF \
-          -D BUILD_opencv_python2=OFF \
-          -D BUILD_opencv_python3=OFF \
-          ../opencv && \
-    make -j$(nproc) && \
-    make install && \
-    rm -rf /tmp/opencv_build
-
-# Set environment for Rust build to find OpenCV + MPI
-# - OpenMPI on CentOS Stream installs wrappers/libs under /usr/lib64/openmpi
-# - mpi-sys respects MPI_PKG_CONFIG when set.
-ENV PATH="/usr/lib64/openmpi/bin:${PATH}"
-ENV MPI_PKG_CONFIG="ompi"
-ENV PKG_CONFIG_PATH="/usr/lib64/openmpi/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/lib64/pkgconfig"
-ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:/usr/local/lib64:/usr/local/lib"
-
-# Install Rust toolchain
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-WORKDIR /build
-
-# Copy source code and build dependencies
-# Note: third_party is required because Cargo.toml patches ibverbs-sys to a local path.
-COPY Cargo.toml Cargo.lock config.json ./
-COPY proto ./proto
-COPY tools ./tools
-COPY build.rs ./
-COPY src ./src
-COPY web_ui ./web_ui
-COPY third_party ./third_party
-
-# Features to enable during build (can be overridden via --build-arg)
-# Use CARGO_FEATURES="all" or "all-features" to build with --all-features.
-ARG CARGO_FEATURES="all"
-RUN if [ "${CARGO_FEATURES}" = "all" ] || [ "${CARGO_FEATURES}" = "all-features" ]; then \
-        cargo build --release --all-features --bin aarnn_rust --bin web_ui; \
-    else \
-        cargo build --release --features "${CARGO_FEATURES}" --bin aarnn_rust --bin web_ui; \
-    fi
-
-# --- Stage 2: Runtime ---
-FROM quay.io/centos/centos:stream9
-ARG PYTHON_MIN_VERSION=3.12
-ARG PYTHON_FULL_VERSION=3.12.2
-ENV PYTHON_MIN_VERSION=${PYTHON_MIN_VERSION}
-ENV PYTHON_FULL_VERSION=${PYTHON_FULL_VERSION}
-
-# Install runtime dependencies
-RUN dnf install -y \
-    openssl \
-    libffi bzip2-libs zlib xz-libs readline sqlite-libs ncurses-libs gdbm-libs libuuid \
-    fontconfig freetype \
-    libjpeg-turbo libpng libtiff \
-    libibverbs libnl3 \
-    openmpi libgomp \
-    ocl-icd \
-    mesa-libGL \
-    libX11 libXext libXrender libICE libSM libXcursor libXi libXrandr \
-    libXcomposite libXdamage libXfixes libxkbcommon libxkbcommon-x11 alsa-lib gtk3 \
-    && dnf clean all
-
-# Bring in Python 3.12 built from source
-COPY --from=python_builder /opt/python3.12 /opt/python3.12
-RUN ln -sf /opt/python3.12/bin/python3.12 /usr/bin/python3.12 && \
-    ln -sf /opt/python3.12/bin/python3.12 /usr/bin/python3 && \
-    ln -sf /opt/python3.12/bin/pip3.12 /usr/bin/pip3 && \
-    python3 -c "import os,sys; min_version=os.environ.get('PYTHON_MIN_VERSION','3.12'); min_tuple=tuple(int(x) for x in min_version.split('.')); sys.exit(0) if sys.version_info>=min_tuple else (_ for _ in ()).throw(SystemExit(f'Python {min_version}+ required, got {sys.version}'))"
-
-# Copy OpenCV libraries from builder
-COPY --from=builder /usr/local/lib64/ /usr/local/lib64/
-COPY --from=builder /usr/local/lib/ /usr/local/lib/
-COPY --from=builder /usr/local/include/opencv4/ /usr/local/include/opencv4/
-COPY --from=builder /usr/local/share/opencv4/ /usr/local/share/opencv4/
-
-# Install Python requirements for tools
-COPY requirements.txt .
-RUN python3.12 -m ensurepip --upgrade && \
-    python3.12 -m pip install --no-cache-dir --upgrade --ignore-installed setuptools wheel
-RUN python3.12 -m pip install --no-cache-dir --default-timeout=1000 --retries 10 "numpy<2.0.0"
-RUN python3.12 -m pip install --no-cache-dir --only-binary=PyQt6,PyQt6-Qt6,PyQt6-sip "PyQt6>=6.7.1"
-RUN python3.12 -m pip install --no-cache-dir --default-timeout=3600 --retries 10 \
-                 --only-binary=onnx,onnxruntime,tflite-support,PyQt6,PyQt6-Qt6,PyQt6-sip \
-                 -r requirements.txt
+RUN set -eux; \
+    need_ui=0; \
+    case ",${CARGO_FEATURES},${CONTAINER_WORKLOAD}," in \
+        *,all,*|*,all-features,*|*,ui,*|*,image_input,*|*,video_input,*|*,webcam_input,*|*,robot_io,*|*,desktop_ui_workload,*|*,container,*|*,desktop-ui,*) need_ui=1 ;; \
+    esac; \
+    resolve_package() { \
+        for candidate in "$@"; do \
+            if apt-cache show "$candidate" >/dev/null 2>&1; then \
+                printf '%s\n' "$candidate"; \
+                return 0; \
+            fi; \
+        done; \
+        printf 'error: unable to resolve package from candidates: %s\n' "$*" >&2; \
+        return 1; \
+    }; \
+    packages='ca-certificates python3 python3-venv python3-pip openmpi-bin ocl-icd-libopencl1'; \
+    apt-get update; \
+    if [ "${need_ui}" = "1" ]; then \
+        alsa_package="$(resolve_package libasound2t64 libasound2)"; \
+        packages="$packages libgl1 libx11-6 libxext6 libxrender1 libice6 libsm6 libxcursor1 libxi6 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxkbcommon-x11-0 ${alsa_package} libgtk-3-0"; \
+    fi; \
+    apt-get install -y --no-install-recommends $packages; \
+    arch="$(dpkg --print-architecture)"; \
+    deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"; \
+    test -n "$deb"; \
+    apt-get install -y --no-install-recommends "$deb"; \
+    python3 -c "import os,sys; min_version=os.environ.get('PYTHON_MIN_VERSION','3.12'); min_tuple=tuple(int(x) for x in min_version.split('.')); sys.exit(0) if sys.version_info>=min_tuple else (_ for _ in ()).throw(SystemExit(f'Python {min_version}+ required, got {sys.version}'))"; \
+    python3 -m venv /opt/aarnn-venv; \
+    /opt/aarnn-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel; \
+    /opt/aarnn-venv/bin/pip install --no-cache-dir --default-timeout=1000 --retries 10 "numpy<2.0.0"; \
+    /opt/aarnn-venv/bin/pip install --no-cache-dir --only-binary=PyQt6,PyQt6-Qt6,PyQt6-sip "PyQt6>=6.7.1"; \
+    /opt/aarnn-venv/bin/pip install --no-cache-dir --default-timeout=3600 --retries 10 \
+        --only-binary=onnx,onnxruntime,tflite-support,PyQt6,PyQt6-Qt6,PyQt6-sip \
+        -r /tmp/aarnn-requirements.txt; \
+    /opt/aarnn-venv/bin/python -m compileall -b -q /app/tools; \
+    find /app/tools -type f -name '*.py' -delete; \
+    find /app/tools -type d -name '__pycache__' -prune -exec rm -rf {} +; \
+    chmod 0755 /usr/local/bin/aarnn-entrypoint; \
+    mkdir -p /app/outputs /app/logs /app/data/runtime; \
+    chmod 777 /app/outputs /app/logs /app/data/runtime; \
+    ln -sf /usr/bin/aarnn_rust /app/aarnn_rust; \
+    ln -sf /usr/bin/web_ui /app/web_ui; \
+    ln -sf /usr/share/aarnn-rust/config.json /app/config.json; \
+    rm -rf /tmp/aarnn /tmp/aarnn-requirements.txt /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the compiled binary and necessary assets from the builder stage
-COPY --from=builder /build/target/release/aarnn_rust .
-COPY --from=builder /build/target/release/web_ui .
-COPY --from=builder /build/config.json .
-COPY --from=builder /build/tools ./tools
-COPY --from=builder /build/proto ./proto
-
-# Create directories for outputs (PNGs, logs)
-RUN mkdir -p /app/outputs && chmod 777 /app/outputs
-
-# Environment variables for Hardware Discovery
-# - LD_LIBRARY_PATH: Ensure libraries like libopencv are found
-# - NM_LOG_DIR: Custom env var if supported, otherwise use default
-ENV PATH="/usr/lib64/openmpi/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:/usr/local/lib64:/usr/local/lib:/usr/lib64"
+# Environment variables for hardware discovery and shared runtime defaults.
+ENV PATH="/opt/aarnn-venv/bin:/usr/lib/x86_64-linux-gnu/openmpi/bin:/usr/lib/aarch64-linux-gnu/openmpi/bin:${PATH}"
 ENV OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
-# OpenShift/Kubernetes security: Run as a non-privileged user
+# OpenShift/Kubernetes security: run as a non-privileged user.
 USER 1001
 
-# Default gRPC port for Distributed Mode
+# Common ports used by the various workloads.
 EXPOSE 50051
-# Default UDP Discovery port
 EXPOSE 50050/udp
-# Web UI HTTP port
 EXPOSE 8080
 
-# Labels for OpenShift
 LABEL io.k8s.description="Neuromorphic simulation and visualization engine" \
       io.k8s.display-name="AARNN" \
       io.openshift.expose-services="50051:grpc,8080:http" \
-      io.openshift.tags="neuromorphic,ai,distributed,rust,web"
+      io.openshift.tags="neuromorphic,ai,distributed,rust,web" \
+      org.opencontainers.image.title="AARNN ${CONTAINER_WORKLOAD}" \
+      org.opencontainers.image.description="Role-specific AARNN workload image (${CONTAINER_WORKLOAD})" \
+      org.neuralmimicry.aarnn.workload="${CONTAINER_WORKLOAD}" \
+      org.neuralmimicry.aarnn.features="${CARGO_FEATURES}"
 
-# Default entrypoint runs the help command to show available modes
-ENTRYPOINT ["./aarnn_rust"]
-CMD ["--help"]
+ENTRYPOINT ["/usr/local/bin/aarnn-entrypoint"]

@@ -1,5 +1,7 @@
 # Rust
 /target/
+/dist/
+/.container-cache/
 **/*.rs.bk
 
 # Python
@@ -30,7 +32,7 @@ perf_report.txt
 *.tflite
 *.nir.json
 network.json
-network_demo.json
+network_*.json
 config_worker_*.json
 leaderboard.json
 probes.json
@@ -41,7 +43,17 @@ network_architecture_block.txt
 .DS_Store
 Thumbs.db
 
-# Large files (prevent accidental inclusion of binaries/datasets)
+# Large file policy (25MB+): .gitignore can't filter by size directly,
+# so block known high-risk generated/model/archive artifacts.
+network_drosophila.json
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.hdf5
+*.npz
+*.npy
 *.bin
 *.out
 *.exe
@@ -49,6 +61,12 @@ Thumbs.db
 *.dll
 *.dylib
 *.zip
+*.tar
 *.tar.gz
+*.tgz
+*.bz2
+*.xz
+*.zst
 *.7z
 *.rar
+data/

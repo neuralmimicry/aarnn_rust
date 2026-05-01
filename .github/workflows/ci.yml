@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FEATURES: all-features
+  CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  UBUNTU_NATIVE_BUILD_DEPS: >-
+    ca-certificates curl xz-utils build-essential pkg-config libssl-dev protobuf-compiler
+    dpkg-dev clang libclang-dev cmake git perl python3 libnl-3-dev
+    libnl-route-3-dev libudev-dev ocl-icd-opencl-dev libopenmpi-dev libopencv-dev
+    libgtk-3-dev libasound2-dev libv4l-dev libgl1-mesa-dev libegl1-mesa-dev
+    libx11-dev libxext-dev libxrender-dev libice-dev libsm-dev libxcursor-dev
+    libxi-dev libxrandr-dev libxcomposite-dev libxdamage-dev libxfixes-dev
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
+    libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+    libfontconfig1-dev libfreetype6-dev
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.runner_arch }})
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: repo-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        runner_arch: [X64, ARM64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086
+          sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "repo-ci -> target"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check build
+        run: cargo check --locked --all-features --all-targets
+
+      - name: Run tests
+        run: cargo test --locked --all-features --all-targets
+
+      - name: Build release binaries
+        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
+
+      - name: Smoke test binaries
+        run: |
+          cargo run --locked --release --all-features --bin aarnn_rust -- --help
+          cargo run --locked --release --all-features --bin web_ui -- --help
+
+      - name: Validate release script
+        run: bash -n scripts/package-release.sh

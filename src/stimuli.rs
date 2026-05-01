@@ -1,4 +1,4 @@
-use crate::aer::{decode_events, encode_events, AerEvent};
+use crate::aer::{AerEvent, decode_events, encode_events};
 use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};

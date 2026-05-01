@@ -1,0 +1,378 @@
+name: Build and Release
+
+on:
+  pull_request:
+    branches:
+      - engine
+      - main
+      - master
+  push:
+    branches:
+      - engine
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub release from the selected v* tag ref"
+        required: true
+        type: boolean
+        default: false
+      draft_release:
+        description: "Mark a manually published release as draft"
+        required: true
+        type: boolean
+        default: false
+      prerelease:
+        description: "Mark a manually published release as prerelease"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FEATURES: all-features
+  CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  UBUNTU_NATIVE_BUILD_DEPS: >-
+    ca-certificates curl xz-utils build-essential pkg-config libssl-dev protobuf-compiler
+    dpkg-dev clang libclang-dev cmake git perl python3 libnl-3-dev
+    libnl-route-3-dev libudev-dev
+    ocl-icd-opencl-dev libopenmpi-dev libopencv-dev libgtk-3-dev libasound2-dev
+    libv4l-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxext-dev
+    libxrender-dev libice-dev libsm-dev libxcursor-dev libxi-dev
+    libxrandr-dev libxcomposite-dev libxdamage-dev libxfixes-dev
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
+    libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+    libfontconfig1-dev libfreetype6-dev
+
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: repo-build-release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086
+          sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "repo-build-release -> target"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check build
+        run: cargo check --locked --all-features --all-targets
+
+      - name: Run tests
+        run: cargo test --locked --all-features --all-targets
+
+      - name: Build release binaries
+        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
+
+      - name: Smoke test CLI help
+        run: cargo run --locked --release --all-features --bin aarnn_rust -- --help
+
+      - name: Smoke test web UI help
+        run: cargo run --locked --release --all-features --bin web_ui -- --help
+
+      - name: Validate release script
+        run: bash -n scripts/package-release.sh
+
+  release-meta:
+    name: Release Metadata
+    needs: verify
+    runs-on: [self-hosted, Linux, X64]
+    defaults:
+      run:
+        working-directory: repo-build-release
+    outputs:
+      artifact_version: ${{ steps.meta.outputs.artifact_version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      publish_release: ${{ steps.meta.outputs.publish_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
+
+      - name: Compute artifact metadata
+        id: meta
+        shell: bash
+        env:
+          MANUAL_PUBLISH_REQUEST: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || false }}
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          short_sha="${GITHUB_SHA:0:7}"
+          release_tag=""
+          publish_release="false"
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            release_tag="${GITHUB_REF#refs/tags/}"
+            artifact_version="${release_tag#v}"
+            if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+              publish_release="true"
+            elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && \
+                    "${MANUAL_PUBLISH_REQUEST}" == "true" ]]; then
+              publish_release="true"
+            fi
+          else
+            artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
+          fi
+
+          if [[ -n "$release_tag" && "$artifact_version" != "$cargo_version" ]]; then
+            echo "::error::Tag ${release_tag} does not match Cargo.toml"
+            echo "::error::version ${cargo_version}"
+            exit 1
+          fi
+
+          {
+            echo "release_tag=$release_tag"
+            echo "artifact_version=$artifact_version"
+            echo "publish_release=$publish_release"
+          } >> "$GITHUB_OUTPUT"
+
+  package-linux:
+    name: Package Linux (${{ matrix.ubuntu_label }} ${{ matrix.deb_arch }})
+    needs:
+      - verify
+      - release-meta
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
+    timeout-minutes: 120
+    container:
+      image: ubuntu:${{ matrix.ubuntu_series }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner_arch: X64
+            ubuntu_series: "24.04"
+            ubuntu_label: ubuntu24.04
+            rust_target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            deb_arch: amd64
+            container_platform: amd64
+          - runner_arch: X64
+            ubuntu_series: "25.04"
+            ubuntu_label: ubuntu25.04
+            rust_target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            deb_arch: amd64
+            container_platform: amd64
+          - runner_arch: ARM64
+            ubuntu_series: "24.04"
+            ubuntu_label: ubuntu24.04
+            rust_target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+            deb_arch: arm64
+            container_platform: arm64
+          - runner_arch: ARM64
+            ubuntu_series: "25.04"
+            ubuntu_label: ubuntu25.04
+            rust_target: aarch64-unknown-linux-gnu
+            platform: linux-aarch64
+            deb_arch: arm64
+            container_platform: arm64
+    defaults:
+      run:
+        working-directory: repo-build-release
+    env:
+      PACKAGE_OUTPUT_DIR: /tmp/release-assets/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+      CARGO_TARGET_DIR: /tmp/cargo-target/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
+
+      - name: Install native build dependencies
+        run: |
+          apt-get update
+          # shellcheck disable=SC2086
+          apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+          . "$HOME/.cargo/env"
+          rustup target add "${{ matrix.rust_target }}"
+
+      - name: Package Linux release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$HOME/.cargo/env"
+          mkdir -p "$PACKAGE_OUTPUT_DIR" "$CARGO_TARGET_DIR"
+          chmod +x scripts/package-release.sh
+          ./scripts/package-release.sh \
+            --version "${{ needs.release-meta.outputs.artifact_version }}" \
+            --output-dir "$PACKAGE_OUTPUT_DIR" \
+            --target-triple "${{ matrix.rust_target }}" \
+            --platform "${{ matrix.platform }}" \
+            --artifact-suffix "${{ matrix.ubuntu_label }}" \
+            --deb-arch "${{ matrix.deb_arch }}" \
+            --cargo-features "${{ env.CARGO_FEATURES }}" \
+            --cargo-build-targets "${{ env.CARGO_BUILD_TARGETS }}"
+
+      - name: Validate Debian package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          if [[ -z "$deb_path" ]]; then
+            echo "::error::Expected a Debian package under $PACKAGE_OUTPUT_DIR"
+            exit 1
+          fi
+
+          expected_version="$(
+            printf '%s' "${{ needs.release-meta.outputs.artifact_version }}" \
+              | tr '-' '~' \
+              | sed -E 's/[^A-Za-z0-9.+:~]+/./g; s/^[^A-Za-z0-9]+//; s/[^A-Za-z0-9]+$//'
+          )"
+          actual_package="$(dpkg-deb -f "$deb_path" Package)"
+          actual_version="$(dpkg-deb -f "$deb_path" Version)"
+          actual_arch="$(dpkg-deb -f "$deb_path" Architecture)"
+
+          [[ "$actual_package" == "aarnn-rust" ]]
+          [[ "$actual_version" == "$expected_version" ]]
+          [[ "$actual_arch" == "${{ matrix.deb_arch }}" ]]
+
+      - name: Smoke install Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          deb_path="$(readlink -f "$deb_path")"
+
+          apt-get update
+          apt-get install -y --allow-downgrades "$deb_path"
+
+          test -x /usr/bin/aarnn_rust
+          test -x /usr/bin/web_ui
+          test -f /usr/share/aarnn-rust/config.json
+          aarnn_rust --help >/dev/null
+          web_ui --help >/dev/null
+          dpkg-query -W -f='${Version}\n' aarnn-rust
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+          path: ${{ env.PACKAGE_OUTPUT_DIR }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Restore workspace ownership
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e "$GITHUB_WORKSPACE/repo-build-release" ]]; then
+            chown -R 1000:1000 "$GITHUB_WORKSPACE/repo-build-release"
+          fi
+
+  publish-release:
+    name: Publish Release
+    needs:
+      - release-meta
+      - package-linux
+    runs-on: [self-hosted, Linux, X64]
+    if: >-
+      always() &&
+      needs.release-meta.outputs.publish_release == 'true' &&
+      needs.package-linux.result == 'success'
+    permissions:
+      contents: write
+    steps:
+      - name: Validate publish target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ needs.release-meta.outputs.release_tag }}" ]]; then
+            echo "::error::Publishing requires a resolved v* tag"
+            exit 1
+          fi
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
+          DRAFT_RELEASE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.draft_release }}
+          MANUAL_PRERELEASE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find dist -type f -print0 | sort -z)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No packaged artifacts were downloaded"
+            exit 1
+          fi
+
+          title="AARNN Rust ${RELEASE_TAG}"
+          prerelease="${MANUAL_PRERELEASE}"
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" && "${RELEASE_TAG}" == *-* ]]; then
+            prerelease="true"
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+            exit 0
+          fi
+
+          args=(
+            "${RELEASE_TAG}"
+            "${files[@]}"
+            --target "${GITHUB_SHA}"
+            --title "${title}"
+            --generate-notes
+          )
+
+          if [[ "${DRAFT_RELEASE}" == "true" ]]; then
+            args+=(--draft)
+          fi
+          if [[ "${prerelease}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "${args[@]}"

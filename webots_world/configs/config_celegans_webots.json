@@ -1,0 +1,373 @@
+{
+  "spike_io": {
+    "profile": "c_elegans",
+    "input_strategy": "profile_default",
+    "output_strategy": "profile_default"
+  },
+  "num_sensory_neurons": 24,
+  "num_hidden_layers": 1,
+  "num_hidden_per_layer_initial": 302,
+  "num_output_neurons": 96,
+  "p_in": 1.0,
+  "p_hidden": 1.0,
+  "p_out": 1.0,
+  "ga_stall_timeout_secs": 1800,
+  "sensory_target_layer": 0,
+  "output_source_layer": 0,
+  "growth_enabled": true,
+  "max_layers": 1,
+  "saturation_threshold": 0.5,
+  "saturation_window_ms": 200.0,
+  "growth_cooldown_ms": 500.0,
+  "spawn_radius": 0.045,
+  "migrate_in_prob": 0.5,
+  "migrate_out_prob": 0.5,
+  "new_edge_prob": 0.025,
+  "layer_split_threshold": 4096,
+  "global_growth_cooldown_ms": 150.0,
+  "proximity_degree_cap": 3,
+  "use_morphology": true,
+  "aarnn_velocity": 5.5,
+  "axon_velocity": 6.8,
+  "dend_velocity": 3.6,
+  "p_release_default": 0.72,
+  "use_aarnn_delays": true,
+  "bouton_latency_ms": 0.4,
+  "bouton_jitter_ms": 0.05,
+  "enforce_unique_geometry": true,
+  "min_node_sep": 0.02,
+  "min_segment_sep": 0.01,
+  "synapse_offset": 0.0125,
+  "max_place_tries": 16,
+  "relax_iters": 2,
+  "relax_step": 0.004,
+  "seg_eps": 0.0015,
+  "max_reroute_tries": 6,
+  "use_mid_bends": true,
+  "morpho_growth_enabled": true,
+  "synaptic_energy_window_ms": 1000.0,
+  "energy_attraction_radius": 0.4,
+  "energy_kernel_k": 2.0,
+  "dendrite_sprout_prob": 0.01,
+  "aarnn_synaptic_energy_randomness": 0.1,
+  "aarnn_ambient_energy_level": 0.05,
+  "synaptic_stabilization_strength": 0.05,
+  "axon_contact_dist": 0.03,
+  "component_decay_rate": 0.99,
+  "trunk_growth_rate": 0.005,
+  "branch_growth_rate": 0.02,
+  "bouton_growth_rate": 0.1,
+  "max_segment_length": 5.0,
+  "spatial_repulsion_strength": 0.01,
+  "spatial_clumping_strength": 0.005,
+  "density_target": 0.05,
+  "skull_pid_kp": 0.05,
+  "skull_pid_ki": 0.001,
+  "skull_pid_kd": 0.01,
+  "spontaneous_neuron_interval_ms": 1000.0,
+  "neuron_removal_delay_ms": 180000.0,
+  "max_sensory_connections": 10,
+  "max_output_connections": 4,
+  "component_pruning_threshold": 0.01,
+  "initial_synaptic_weight": 1.0,
+  "synaptic_growth_threshold": 0.6,
+  "synaptic_consolidation_factor": 0.1,
+  "aarnn_layer_depth": 5,
+  "brain_regions": [
+    {
+      "name": "head_ganglia",
+      "shape": {
+        "shape": "ellipsoid",
+        "center": [
+          0.0,
+          7.0,
+          0.0
+        ],
+        "radii": [
+          6.0,
+          8.0,
+          6.0
+        ]
+      },
+      "center": [
+        0.0,
+        7.0,
+        0.0
+      ],
+      "radii": [
+        6.0,
+        8.0,
+        6.0
+      ],
+      "type_distribution": [
+        [
+          "Sensory",
+          0.55
+        ],
+        [
+          "Interneuron",
+          0.3
+        ],
+        [
+          "Neuromodulatory",
+          0.1
+        ],
+        [
+          "Motor",
+          0.05
+        ]
+      ]
+    },
+    {
+      "name": "nerve_ring",
+      "shape": {
+        "shape": "torus",
+        "center": [
+          0.0,
+          10.0,
+          0.0
+        ],
+        "R": 6.0,
+        "r": 1.5,
+        "plane": "x-z"
+      },
+      "center": [
+        0.0,
+        10.0,
+        0.0
+      ],
+      "radii": [
+        7.5,
+        1.5,
+        7.5
+      ],
+      "type_distribution": [
+        [
+          "Sensory",
+          0.15
+        ],
+        [
+          "Interneuron",
+          0.75
+        ],
+        [
+          "Neuromodulatory",
+          0.1
+        ]
+      ]
+    },
+    {
+      "name": "ventral_nerve_cord",
+      "shape": {
+        "shape": "tube",
+        "line_from": [
+          0.0,
+          15.0,
+          -6.0
+        ],
+        "line_to": [
+          0.0,
+          95.0,
+          -6.0
+        ],
+        "radius": 1.2
+      },
+      "center": [
+        0.0,
+        55.0,
+        -6.0
+      ],
+      "radii": [
+        1.2,
+        40.0,
+        1.2
+      ],
+      "type_distribution": [
+        [
+          "Sensory",
+          0.1
+        ],
+        [
+          "Interneuron",
+          0.25
+        ],
+        [
+          "Motor",
+          0.6
+        ],
+        [
+          "Neuromodulatory",
+          0.05
+        ]
+      ]
+    },
+    {
+      "name": "dorsal_nerve_cord",
+      "shape": {
+        "shape": "tube",
+        "line_from": [
+          0.0,
+          15.0,
+          6.0
+        ],
+        "line_to": [
+          0.0,
+          95.0,
+          6.0
+        ],
+        "radius": 1.0
+      },
+      "center": [
+        0.0,
+        55.0,
+        6.0
+      ],
+      "radii": [
+        1.0,
+        40.0,
+        1.0
+      ],
+      "type_distribution": [
+        [
+          "Motor",
+          0.95
+        ],
+        [
+          "Interneuron",
+          0.05
+        ]
+      ]
+    },
+    {
+      "name": "tail_ganglia",
+      "shape": {
+        "shape": "ellipsoid",
+        "center": [
+          0.0,
+          95.0,
+          0.0
+        ],
+        "radii": [
+          5.0,
+          6.0,
+          5.0
+        ]
+      },
+      "center": [
+        0.0,
+        95.0,
+        0.0
+      ],
+      "radii": [
+        5.0,
+        6.0,
+        5.0
+      ],
+      "type_distribution": [
+        [
+          "Sensory",
+          0.6
+        ],
+        [
+          "Interneuron",
+          0.2
+        ],
+        [
+          "Motor",
+          0.15
+        ],
+        [
+          "Neuromodulatory",
+          0.05
+        ]
+      ]
+    }
+  ],
+  "neuron_types": [
+    {
+      "name": "Sensory",
+      "bio_params": {
+        "izh_preset": "RS",
+        "synaptic_gain": 1.0
+      }
+    },
+    {
+      "name": "Interneuron",
+      "bio_params": {
+        "izh_preset": "FS",
+        "synaptic_gain": 1.0
+      }
+    },
+    {
+      "name": "Motor",
+      "bio_params": {
+        "izh_preset": "RS",
+        "synaptic_gain": 1.2
+      }
+    },
+    {
+      "name": "Neuromodulatory",
+      "bio_params": {
+        "izh_preset": "RS",
+        "synaptic_gain": 1.1
+      }
+    }
+  ],
+  "aarnn_bio": {
+    "stp_enabled": true,
+    "stp_u": 0.2,
+    "stp_tau_rec_ms": 800.0,
+    "stp_tau_facil_ms": 200.0,
+    "ampa_tau_ms": 5.0,
+    "nmda_tau_ms": 100.0,
+    "gaba_tau_ms": 10.0,
+    "nmda_ratio": 0.25,
+    "synaptic_gain": 1.0,
+    "adaptive_threshold_enabled": true,
+    "adaptive_threshold_tau_ms": 200.0,
+    "adaptive_threshold_increment": 0.5,
+    "adaptive_threshold_min": -2.0,
+    "adaptive_threshold_max": 5.0,
+    "izh_refractory_ms": 2.0,
+    "homeostasis_target_rate_hz": 5.0,
+    "homeostasis_tau_ms": 2000.0,
+    "homeostasis_gain": 0.25,
+    "neuromodulation_enabled": true,
+    "dopamine_gain": 1.0,
+    "acetylcholine_gain": 1.0,
+    "serotonin_gain": 1.0
+  },
+  "ui_target_fps": 60.0,
+  "clumping_design": "NematodeWorm",
+  "max_total_neurons": 398,
+  "sleep_enabled": true,
+  "sleep_cycle_ms": 180000.0,
+  "sleep_duration_ms": 1200.0,
+  "world_model_enabled": false,
+  "theta_rhythm_enabled": false,
+  "thalamic_gating_enabled": false,
+  "aarnn_dale_strictness": 0.9,
+  "aarnn_inhibitory_fraction": 0.36,
+  "aarnn_gap_junction_strength": 0.06,
+  "aarnn_gap_junction_radius": 0.28,
+  "aarnn_gap_junction_inhibitory_only": false,
+  "aarnn_nmda_voltage_sensitivity": 0.02,
+  "aarnn_distance_attenuation_per_unit": 0.26,
+  "aarnn_release_prob_heterogeneity": 0.12,
+  "volume_transmission_enabled": true,
+  "volume_transmission_radius": 0.18,
+  "volume_transmission_strength": 0.08,
+  "aarnn_triplet_ltp_gain": 0.12,
+  "aarnn_triplet_ltd_gain": 0.08,
+  "aarnn_synaptic_scaling_strength": 0.03,
+  "aarnn_synaptic_scaling_target": 0.85,
+  "aarnn_myelination_enabled": false,
+  "aarnn_myelination_rate": 0.0,
+  "aarnn_demyelination_rate": 0.0,
+  "aarnn_myelin_min_conduction_gain": 1.0,
+  "aarnn_myelin_max_conduction_gain": 1.0,
+  "aarnn_myelin_initial": 0.0,
+  "aarnn_import_topology_rewire_enabled": true,
+  "aarnn_import_topology_rewire_keep_fraction": 0.74,
+  "aarnn_import_topology_rewire_region_bias": 0.3
+}

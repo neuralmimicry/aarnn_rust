@@ -3,84 +3,129 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Neuromorphic API Swagger UI</title>
+    <title>NeuralMimicry API Explorer</title>
+    <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
     <style>
-      :root {
-        color-scheme: dark;
+      .swagger-ui .topbar {
+        display: none;
       }
-      body {
-        margin: 0;
-        background: #11161c;
-        color: #d9e2ec;
-        font-family: "Noto Sans", "Segoe UI", sans-serif;
-      }
-      .topbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 10px 16px;
-        border-bottom: 1px solid #2b3642;
-        background: #171d24;
-      }
-      .title {
-        font-weight: 700;
-        font-size: 15px;
-      }
-      .links {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      .links a {
-        color: #d9e2ec;
-        text-decoration: none;
-        border: 1px solid #2f3f50;
-        border-radius: 6px;
-        padding: 5px 9px;
-        font-size: 12px;
-      }
-      .links a:hover {
-        color: #71e0b1;
-        border-color: #71e0b1;
-      }
-      .hint {
-        padding: 10px 16px;
-        border-bottom: 1px solid #2b3642;
-        background: #1f2530;
-        font-size: 13px;
-      }
-      .hint code {
-        background: #12171e;
-        border: 1px solid #2b3642;
-        border-radius: 4px;
-        padding: 1px 4px;
-      }
+
       #swagger-ui {
-        max-width: 1300px;
+        max-width: 1320px;
         margin: 0 auto;
       }
-      .swagger-ui .topbar { display: none; }
     </style>
   </head>
-  <body>
+  <body class="page-swagger" data-page-kind="swagger">
     <header class="topbar">
-      <div class="title">Neuromorphic API - Swagger UI</div>
-      <nav class="links">
-        <a href="/">Web UI</a>
-        <a href="/docs">Full Docs</a>
-        <a href="/api/openapi.json">OpenAPI JSON</a>
-      </nav>
+      <div class="topbar-left">
+        <div class="title">NeuralMimicry</div>
+        <div class="subtitle">Executable API explorer with shared browser session and runtime context</div>
+      </div>
+      <div class="topbar-right">
+        <a class="btn ghost small" href="/">Web UI</a>
+        <a class="btn ghost small" href="/docs">Docs</a>
+        <a class="btn ghost small" href="/api/openapi.json">OpenAPI JSON</a>
+        <span id="shell-user-status">Signed out</span>
+        <button class="btn ghost small hidden" id="shell-logout-btn" type="button">Logout</button>
+      </div>
     </header>
 
-    <div class="hint">
-      Use <code>POST /api/login</code> first in local-auth mode. Requests are configured with
-      <code>credentials: include</code> so the <code>nm_session</code> cookie is sent automatically.
-    </div>
+    <main class="docs-layout">
+      <section class="hero-panel">
+        <h1 class="hero-title">API Explorer</h1>
+        <p class="hero-subtitle">
+          Use this surface for executable API calls against the same runtime contract used by the Web UI and native tools.
+          It shares the same-origin session cookie with the browser shell, so log in once and then exercise protected
+          endpoints directly from the explorer below, subject to the resolved AARNN service authorisation.
+        </p>
+        <div class="runtime-grid">
+          <div class="runtime-card">
+            <div class="runtime-label">Auth Mode</div>
+            <div class="runtime-value" id="shell-auth-mode">Loading...</div>
+          </div>
+          <div class="runtime-card">
+            <div class="runtime-label">Session</div>
+            <div class="runtime-value" id="shell-session-state">Checking...</div>
+          </div>
+          <div class="runtime-card">
+            <div class="runtime-label">Default Orchestrator</div>
+            <div class="runtime-value" id="shell-default-orchestrator">Loading...</div>
+          </div>
+        </div>
+        <form id="shell-login-form" class="auth-inline hidden">
+          <div class="auth-inline-field">
+            <label for="shell-login-username">Username</label>
+            <input id="shell-login-username" type="text" autocomplete="username" />
+          </div>
+          <div class="auth-inline-field">
+            <label for="shell-login-password">Password</label>
+            <input id="shell-login-password" type="password" autocomplete="current-password" />
+          </div>
+          <div class="auth-inline-actions">
+            <button class="btn" id="shell-login-submit" type="submit">Login</button>
+            <button class="btn ghost hidden" id="shell-signup-btn" type="button">Sign up</button>
+          </div>
+        </form>
+        <div class="auth-inline-actions">
+          <a class="btn hidden" id="shell-oidc-link" href="/auth/oidc/login">Continue with SSO</a>
+        </div>
+        <div class="shell-auth-error" id="shell-auth-error"></div>
+      </section>
 
-    <div id="swagger-ui"></div>
+      <section class="panel">
+        <div class="panel-title">Surface Role</div>
+        <table class="matrix-table">
+          <thead>
+            <tr>
+              <th>Surface</th>
+              <th>Role</th>
+              <th>Best For</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Web UI</td>
+              <td><span class="matrix-pill matrix-pill-full">Operational</span></td>
+              <td>Visual control, topology, cluster overview, probes, browser save/load, export.</td>
+            </tr>
+            <tr>
+              <td>Docs</td>
+              <td><span class="matrix-pill matrix-pill-reference">Reference</span></td>
+              <td>Function matrix, auth/session guidance, endpoint contract, runtime notes.</td>
+            </tr>
+            <tr>
+              <td>Swagger</td>
+              <td><span class="matrix-pill matrix-pill-full">Executable</span></td>
+              <td>Request construction, same-origin cookie tests, payload inspection, response timing.</td>
+            </tr>
+            <tr>
+              <td>Native UI</td>
+              <td><span class="matrix-pill matrix-pill-native">Deep Local</span></td>
+              <td>Full morphology, advanced AARNN biology, GA search, local import/export workflows.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
 
+      <section class="panel swagger-frame">
+        <div class="swagger-toolbar">
+          <div class="panel-title">Swagger Explorer</div>
+          <div class="swagger-hint">
+            Requests use <code>credentials: include</code>, so the <code>nm_session</code> cookie is sent automatically.
+            In local-auth mode, sign in first with the shell above or with <code>POST /api/login</code>. In OIDC mode,
+            complete the browser redirect flow and return here.
+          </div>
+        </div>
+        <div class="swagger-host">
+          <div id="swagger-ui"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/service-access.js"></script>
+    <script src="/shell.js"></script>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
     <script>

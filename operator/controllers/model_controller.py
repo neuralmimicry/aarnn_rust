@@ -19,4 +19,4 @@ def reconcile_model(spec: ModelSpec) -> dict:
     }
 
 if __name__ == "__main__":
-    print(reconcile_model(ModelSpec(name="neuromorphic-model", image="ghcr.io/neuralmimicry/aarnn_rust:brainregions")))
+    print(reconcile_model(ModelSpec(name="neuromorphic-model", image="ghcr.io/neuralmimicry/aarnn_rust:engine")))

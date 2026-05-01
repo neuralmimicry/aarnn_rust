@@ -26,17 +26,21 @@ use eframe::{egui, egui::vec2};
 use crate::aer::decode_events;
 #[cfg(feature = "ui")]
 use crate::config::{
-    apply_aarnn_human_biomimicry_defaults, apply_clumping_design, ClumpingDesign, IzhikevichParams,
-    LIFParams, NetworkConfig, NeuromodSignal, STDPParams,
+    ClumpingDesign, FpaaKernelRoute, FpaaStartupMode, FpaaTransportPreference, IzhikevichParams,
+    LIFParams, NetworkConfig, NeuromodSignal, STDPParams, apply_aarnn_human_biomimicry_defaults,
+    apply_clumping_design, apply_clumping_layer_defaults,
 };
 #[cfg(feature = "ui")]
 use crate::distributed::{
-    proto::{
-        control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-        NetworkSnapshotRequest, NetworkStatus, NodeStatus, StatusRequest,
-    },
     DistributedNode, ManagedNetwork,
+    proto::{
+        ControlUpdate, NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus,
+        StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+    },
 };
+#[cfg(feature = "ui")]
+use crate::fpaa::{FpaaKernel, FpaaRuntimeStatus};
 use crate::ga::GASearch;
 #[cfg(all(feature = "ui", feature = "image_input"))]
 use crate::providers::ImageFileProvider;
@@ -49,14 +53,29 @@ use crate::providers::{
 };
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
+#[cfg(feature = "ui")]
+use crate::runtime_api::{
+    RemoteWorkspaceBinding, TokenBalanceResponse, WorkspaceControlAction, WorkspaceImportRequest,
+};
 use crate::sim::{Learning, NeuronModel};
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::spike_io::encoding::TemporalEncodingContext;
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+use crate::spike_io::profiles::{
+    NetworkIoProfile, NetworkIoProfileSelector, ProfileInputEncoding, ProfileOutputEncoding,
+    SpikeInputEncodingStrategy, SpikeInputPrimitive, SpikeIoConfig, SpikeOutputDecodingStrategy,
+    decode_network_outputs, decode_profile_outputs, encode_network_inputs_with,
+    encode_profile_inputs_with, resolve_network_io_profile,
+};
+#[cfg(feature = "ui")]
+use crate::spike_io::transport::{apply_hex_aer_payload, apply_usize_indices};
 use crate::stimuli::{AerIoConfig, AerLink};
-use rand::SeedableRng;
+use rand::{RngExt, SeedableRng};
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 #[cfg(feature = "sysinfo")]
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::sync::RwLock;
@@ -174,18 +193,9 @@ impl HttpAerStreamProvider {
         aer_base: u32,
         spikes: &mut [i8],
     ) -> Result<(), String> {
-        let compact: String = hex_payload.chars().filter(|c| !c.is_whitespace()).collect();
-        let compact = compact
-            .strip_prefix("0x")
-            .or_else(|| compact.strip_prefix("0X"))
-            .unwrap_or(&compact);
-        if compact.is_empty() {
-            return Ok(());
-        }
-        let bytes = hex::decode(compact).map_err(|e| format!("invalid hex payload: {e}"))?;
-        crate::aer::decode_spikes(&bytes, aer_base, spikes)
-            .map_err(|e| format!("invalid AER payload: {:?}", e))?;
-        Ok(())
+        apply_hex_aer_payload(hex_payload, aer_base, spikes)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn parse_line(
@@ -209,11 +219,7 @@ impl HttpAerStreamProvider {
 
         let mut spikes = vec![0i8; sensory_len];
         if let Some(indices) = frame.spike_indices {
-            for idx in indices {
-                if idx < spikes.len() {
-                    spikes[idx] = 1;
-                }
-            }
+            apply_usize_indices(&indices, &mut spikes);
         }
         if let Some(payload_hex) = frame.aer_payload_hex.as_deref() {
             Self::apply_hex_payload(
@@ -436,6 +442,7 @@ struct IpcUdsServer {
     aer_output_base: u32,
     last_peer: Option<PathBuf>,
     req_buf: Vec<u8>,
+    truncated_packets: u64,
     #[allow(dead_code)]
     recent_drops: u64,
     #[allow(dead_code)]
@@ -452,10 +459,21 @@ impl IpcUdsServer {
         aer_sensory_base: u32,
         aer_output_base: u32,
     ) -> std::io::Result<Self> {
+        let req_buf_bytes = std::env::var("NM_IPC_UDS_RECV_BUF_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|v| v.clamp(8_192, 4 * 1024 * 1024))
+            .unwrap_or(262_144);
         let _ = std::fs::remove_file(path);
         let sock = UnixDatagram::bind(path)?;
         sock.set_nonblocking(true)?;
-        nm_err!("[IpcUdsServer] Bound to {} with S={}, O={}", path, s, o);
+        nm_err!(
+            "[IpcUdsServer] Bound to {} with S={}, O={}, recv_buf={}B",
+            path,
+            s,
+            o,
+            req_buf_bytes
+        );
         Ok(Self {
             sock,
             s,
@@ -463,7 +481,8 @@ impl IpcUdsServer {
             aer_sensory_base,
             aer_output_base,
             last_peer: None,
-            req_buf: vec![0u8; 8192],
+            req_buf: vec![0u8; req_buf_bytes],
+            truncated_packets: 0,
             recent_drops: 0,
             recent_mismatches: 0,
             total_received: 0,
@@ -477,6 +496,15 @@ impl IpcUdsServer {
                 Ok((n, addr)) => {
                     if n == 0 {
                         continue;
+                    }
+                    if n == self.req_buf.len() {
+                        self.truncated_packets = self.truncated_packets.saturating_add(1);
+                        if self.truncated_packets == 1 || self.truncated_packets % 64 == 0 {
+                            nm_err!(
+                                "[IpcUdsServer] Received packet at recv buffer limit ({} bytes). Consider increasing NM_IPC_UDS_RECV_BUF_BYTES.",
+                                self.req_buf.len()
+                            );
+                        }
                     }
                     if n > 0 && self.req_buf[0] == b'{' {
                         match serde_json::from_slice::<IpcHandshake>(&self.req_buf[..n]) {
@@ -684,13 +712,27 @@ pub fn launch_ui(
     distributed_node: Option<DistributedNode>,
     remote_only: bool,
     startup_snapshot_json: Option<String>,
+    remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     aer_cfg: Option<AerIoConfig>,
     runtime_handle: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
+    let ui_hidden = std::env::var("NM_UI_HIDDEN")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(format!("Neuromorphic Network - {}", brain_id))
+        .with_inner_size(vec2(1100.0, 700.0));
+    if ui_hidden {
+        viewport = viewport.with_visible(false);
+    }
     let mut native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(format!("Neuromorphic Network - {}", brain_id))
-            .with_inner_size(vec2(1100.0, 700.0)),
+        viewport,
         ..Default::default()
     };
     #[cfg(target_arch = "aarch64")]
@@ -713,6 +755,7 @@ pub fn launch_ui(
                 distributed_node,
                 remote_only,
                 startup_snapshot_json,
+                remote_workspace_binding,
                 aer_cfg,
                 runtime_handle,
             )))
@@ -888,6 +931,9 @@ enum ToolTaskResult {
         stdout: String,
         stderr: String,
         error: Option<String>,
+    },
+    RemoteTokenBalance {
+        result: Result<TokenBalanceResponse, String>,
     },
 }
 
@@ -1135,6 +1181,10 @@ struct App {
     boost_connectivity_count: usize,
     // Local copy of config for UI editing
     local_net: NetworkConfig,
+    // FPAA discovery / routing status for the local host
+    fpaa_status: FpaaRuntimeStatus,
+    fpaa_last_refresh: Instant,
+    fpaa_last_signature: String,
     // External IPC (UDS) state (only when robot_io feature is on)
     #[cfg(all(feature = "robot_io", unix))]
     ipc_sock_path: String,
@@ -1236,6 +1286,11 @@ struct App {
     sim_last_spike_count: Arc<AtomicU64>,
     sim_last_spike_len: Arc<AtomicU64>,
     runtime_handle: tokio::runtime::Handle,
+    remote_workspace_binding: Option<RemoteWorkspaceBinding>,
+    remote_token_balance: Option<TokenBalanceResponse>,
+    remote_token_error: Option<String>,
+    remote_token_last_refresh: Option<Instant>,
+    remote_token_refresh_inflight: bool,
     // Distributed state
     distributed_node: Option<DistributedNode>,
     view_source: ViewSource,
@@ -1288,6 +1343,8 @@ struct App {
     dist_node_id: String,
     dist_nodes: HashMap<String, NodeStatus>,
     dist_network_registry: HashMap<String, NetworkStatus>,
+    dist_local_playing_cache: HashMap<String, bool>,
+    dist_initial_view_selected: bool,
     // hull cache for UI rendering
     #[cfg(feature = "growth3d")]
     cached_skull_hull: Vec<egui::Pos2>,
@@ -1530,6 +1587,7 @@ impl App {
         distributed_node: Option<DistributedNode>,
         remote_only: bool,
         startup_snapshot_json: Option<String>,
+        remote_workspace_binding: Option<RemoteWorkspaceBinding>,
         aer_cfg: Option<AerIoConfig>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
@@ -1547,13 +1605,20 @@ impl App {
         }
         let initial_net_cfg = runner.net.clone();
         let local_net = runner.net.clone();
+        let fpaa_signature = serde_json::to_string(&local_net.fpaa).unwrap_or_default();
+        let fpaa_status = crate::fpaa::startup_probe(&local_net.fpaa);
         let n_s = runner.net.num_sensory_neurons;
         // allocate activity buffers
-        let l = runner.net.num_hidden_layers;
-        let h = runner.net.num_hidden_per_layer_initial;
+        let hidden_layer_sizes: Vec<usize> = (0..runner.net.num_hidden_layers)
+            .map(|li| runner.layer_size(li).max(1))
+            .collect();
+        let l = hidden_layer_sizes.len();
         let o = runner.net.num_output_neurons;
-        let act_h = (0..l).map(|_| vec![0.0f32; h]).collect();
-        let prev_spk_h = (0..l).map(|_| vec![0i8; h]).collect();
+        let act_h = hidden_layer_sizes
+            .iter()
+            .map(|&h| vec![0.0f32; h])
+            .collect();
+        let prev_spk_h = hidden_layer_sizes.iter().map(|&h| vec![0i8; h]).collect();
         let runner = Arc::new(RwLock::new(runner));
         let (sim_tx, sim_rx) = std::sync::mpsc::channel::<SimControl>();
         let playing_atomic = Arc::new(AtomicBool::new(false));
@@ -1596,6 +1661,11 @@ impl App {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(16)
             .clamp(1, 1000);
+        let sim_ipc_idle_sleep_ms = std::env::var("NM_SIM_IPC_IDLE_SLEEP_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1)
+            .clamp(0, 100);
         let sim_remote_idle_sleep_ms = std::env::var("NM_SIM_REMOTE_IDLE_SLEEP_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -1633,6 +1703,151 @@ impl App {
             .spawn(move || {
                 // Keep simulation controller thread unpinned so the scheduler can
                 // spread its control-path load instead of concentrating it on one core.
+                let mut ipc_seed_rng = rand::rng();
+                let mut ipc_spike_rng = rand::rngs::StdRng::from_rng(&mut ipc_seed_rng);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_celegans_graded_output = std::env::var("NM_IPC_CELEGANS_GRADED_OUTPUT")
+                    .ok()
+                    .map(|v| {
+                        matches!(
+                            v.trim().to_ascii_lowercase().as_str(),
+                            "1" | "true" | "yes" | "on"
+                        )
+                    })
+                    .unwrap_or(true);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_celegans_output_gain = std::env::var("NM_IPC_CELEGANS_OUTPUT_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.95)
+                    .clamp(0.05, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_celegans_output_current_gain =
+                    std::env::var("NM_IPC_CELEGANS_OUTPUT_CURRENT_GAIN")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.35)
+                        .clamp(0.01, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_celegans_output_current_mix =
+                    std::env::var("NM_IPC_CELEGANS_OUTPUT_CURRENT_MIX")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.35)
+                        .clamp(0.0, 1.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_non_celegans_graded_output =
+                    std::env::var("NM_IPC_NON_CELEGANS_GRADED_OUTPUT")
+                        .ok()
+                        .map(|v| {
+                            matches!(
+                                v.trim().to_ascii_lowercase().as_str(),
+                                "1" | "true" | "yes" | "on"
+                            )
+                        })
+                        .unwrap_or(true);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_dros_input_rate_gain = std::env::var("NM_IPC_DROS_INPUT_RATE_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.34)
+                    .clamp(0.0, 2.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_nao_input_rate_gain = std::env::var("NM_IPC_NAO_INPUT_RATE_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.18)
+                    .clamp(0.0, 2.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_dros_output_gain = std::env::var("NM_IPC_DROS_OUTPUT_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.82)
+                    .clamp(0.05, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_dros_output_current_gain =
+                    std::env::var("NM_IPC_DROS_OUTPUT_CURRENT_GAIN")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.22)
+                        .clamp(0.01, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_dros_output_current_mix =
+                    std::env::var("NM_IPC_DROS_OUTPUT_CURRENT_MIX")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.18)
+                        .clamp(0.0, 1.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_nao_output_gain = std::env::var("NM_IPC_NAO_OUTPUT_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.92)
+                    .clamp(0.05, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_nao_output_current_gain =
+                    std::env::var("NM_IPC_NAO_OUTPUT_CURRENT_GAIN")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.42)
+                        .clamp(0.01, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_nao_output_current_mix =
+                    std::env::var("NM_IPC_NAO_OUTPUT_CURRENT_MIX")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.38)
+                        .clamp(0.0, 1.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_celegans_debug_interval =
+                    std::env::var("NM_IPC_CELEGANS_DEBUG_INTERVAL")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(100_000);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_input_encoding = ProfileInputEncoding {
+                    drosophila_rate: crate::spike_io::encoding::RateEncoding {
+                        low_gain: ipc_dros_input_rate_gain,
+                        quiet_floor: 0.002,
+                        ..crate::spike_io::encoding::RateEncoding::default()
+                    },
+                    nao_rate: crate::spike_io::encoding::RateEncoding {
+                        low_gain: ipc_nao_input_rate_gain,
+                        quiet_floor: 0.001,
+                        ..crate::spike_io::encoding::RateEncoding::default()
+                    },
+                    ..ProfileInputEncoding::default()
+                };
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_output_encoding = ProfileOutputEncoding {
+                    celegans_graded_output: ipc_celegans_graded_output,
+                    non_celegans_graded_output: ipc_non_celegans_graded_output,
+                    celegans_output_gain: ipc_celegans_output_gain,
+                    celegans_output_current_gain: ipc_celegans_output_current_gain,
+                    celegans_output_current_mix: ipc_celegans_output_current_mix,
+                    drosophila_output_gain: ipc_dros_output_gain,
+                    drosophila_output_current_gain: ipc_dros_output_current_gain,
+                    drosophila_output_current_mix: ipc_dros_output_current_mix,
+                    nao_output_gain: ipc_nao_output_gain,
+                    nao_output_current_gain: ipc_nao_output_current_gain,
+                    nao_output_current_mix: ipc_nao_output_current_mix,
+                };
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut ipc_celegans_debug_counter: usize = 0;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut ipc_last_reply_values: Vec<f32> = Vec::new();
                 loop {
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
@@ -1648,43 +1863,43 @@ impl App {
                                 }
                             }
                             SimControl::ApplyConfig(cfg) => {
-                                sim_runner.blocking_write().apply_config(cfg);
+                                sim_write_spin!(sim_runner).apply_config(cfg);
                             }
                             SimControl::SetModel(m) => {
-                                sim_runner.blocking_write().set_model(m);
+                                sim_write_spin!(sim_runner).set_model(m);
                             }
                             SimControl::SetLearning(l) => {
-                                sim_runner.blocking_write().set_learning(l);
+                                sim_write_spin!(sim_runner).set_learning(l);
                             }
                             SimControl::Reset => {
-                                sim_runner.blocking_write().reset();
+                                sim_write_spin!(sim_runner).reset();
                             }
                             SimControl::SetDt(dt) => {
-                                sim_runner.blocking_write().set_dt(dt);
+                                sim_write_spin!(sim_runner).set_dt(dt);
                                 sim_provider.set_dt(dt as f32);
                             }
                             SimControl::ResizeSensory(n) => {
-                                sim_runner.blocking_write().resize_sensory(n);
+                                sim_write_spin!(sim_runner).resize_sensory(n);
                                 sim_provider.set_num_sensory_neurons(n);
                             }
                             SimControl::ResizeOutput(n) => {
-                                sim_runner.blocking_write().resize_output(n);
+                                sim_write_spin!(sim_runner).resize_output(n);
                             }
                             SimControl::SetFeedback(f) => {
-                                sim_runner.blocking_write().feedback_enabled = f;
+                                sim_write_spin!(sim_runner).feedback_enabled = f;
                             }
                             SimControl::RecreateRunner(lif, stdp, net, model, learning) => {
-                                *sim_runner.blocking_write() =
+                                *sim_write_spin!(sim_runner) =
                                     Runner::new(lif, stdp, net, model, learning);
                             }
                             SimControl::ImportNetwork(json) => {
-                                let _ = sim_runner.blocking_write().import_network_json(&json);
+                                let _ = sim_write_spin!(sim_runner).import_network_json(&json);
                                 if let Ok(r) = sim_runner.try_read() {
                                     sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
                                 }
                             }
                             SimControl::ImportNetworkWithReply(json, tx) => {
-                                let res = sim_runner.blocking_write().import_network_json(&json);
+                                let res = sim_write_spin!(sim_runner).import_network_json(&json);
                                 if let Ok(ref r) = sim_runner.try_read() {
                                     sim_provider.set_num_sensory_neurons(r.net.num_sensory_neurons);
                                     nm_log!(
@@ -1698,7 +1913,7 @@ impl App {
                                 let _ = tx.send(res.map_err(|e| e.to_string()));
                             }
                             SimControl::SetStdpEta(eta) => {
-                                sim_runner.blocking_write().stdp.eta = eta;
+                                sim_write_spin!(sim_runner).stdp.eta = eta;
                             }
                             #[cfg(all(feature = "robot_io", unix))]
                             SimControl::BindIpc(path, s, o) => {
@@ -1750,10 +1965,69 @@ impl App {
                             match ev {
                                 IpcEvent::Data(t_ms, reward, peer) => {
                                     let mut spk = vec![0i8; srv.s];
-                                    for (i, &v) in inputs.iter().enumerate() {
-                                        if v >= 0.5 {
-                                            spk[i] = 1;
-                                        }
+                                    let (io_cfg, io_profile, encode_ctx) =
+                                        if let Ok(r) = sim_runner.try_read() {
+                                            let io_cfg = r.net.spike_io.clone();
+                                            let dt_ms = if t_ms > 0.0 {
+                                                t_ms as f32
+                                            } else {
+                                                r.lif.dt.max(0.001) as f32
+                                            };
+                                            let step_index =
+                                                (r.t_ms / r.lif.dt.max(0.001)).round().max(0.0)
+                                                    as usize;
+                                            let io_profile = resolve_network_io_profile(
+                                                io_cfg.profile,
+                                                srv.s,
+                                                srv.o,
+                                            );
+                                            (
+                                                io_cfg,
+                                                io_profile,
+                                                TemporalEncodingContext {
+                                                    step_index,
+                                                    time_ms: r.t_ms as f32,
+                                                    dt_ms,
+                                                },
+                                            )
+                                        } else {
+                                            let io_cfg = SpikeIoConfig::default();
+                                            let io_profile = resolve_network_io_profile(
+                                                io_cfg.profile,
+                                                srv.s,
+                                                srv.o,
+                                            );
+                                            (
+                                                io_cfg,
+                                                io_profile,
+                                                TemporalEncodingContext {
+                                                    step_index: 0,
+                                                    time_ms: 0.0,
+                                                    dt_ms: if t_ms > 0.0 { t_ms as f32 } else { 1.0 },
+                                                },
+                                            )
+                                        };
+                                    if matches!(
+                                        io_cfg.input_strategy,
+                                        SpikeInputEncodingStrategy::ProfileDefault
+                                    ) {
+                                        encode_profile_inputs_with(
+                                            io_profile,
+                                            &inputs,
+                                            &mut spk,
+                                            || ipc_spike_rng.random::<f32>(),
+                                            &ipc_input_encoding,
+                                        );
+                                    } else {
+                                        encode_network_inputs_with(
+                                            &io_cfg,
+                                            srv.s,
+                                            srv.o,
+                                            &inputs,
+                                            &mut spk,
+                                            || ipc_spike_rng.random::<f32>(),
+                                            encode_ctx,
+                                        );
                                     }
                                     spikes_source = Some(spk);
                                     if t_ms > 0.0 {
@@ -1800,20 +2074,32 @@ impl App {
                     }
 
                     if !sim_playing.load(Ordering::SeqCst) && spikes_source.is_none() {
-                        std::thread::sleep(std::time::Duration::from_millis(sim_idle_sleep_ms));
+                        let mut idle_sleep_ms = sim_idle_sleep_ms;
+                        #[cfg(all(feature = "robot_io", unix))]
+                        {
+                            if sim_ipc_server.is_some() {
+                                // Keep IPC round-trip latency low when Webots is driving the
+                                // simulation via UDS, even if playback is paused in the UI.
+                                idle_sleep_ms = sim_ipc_idle_sleep_ms;
+                            }
+                        }
+                        if idle_sleep_ms > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(idle_sleep_ms));
+                        } else {
+                            std::thread::yield_now();
+                        }
                         continue;
                     }
 
                     if sim_playing.load(Ordering::SeqCst) || spikes_source.is_some() {
-                        let batch_steps: usize = {
-                            let r = sim_runner.blocking_read();
+                        // Use try_read to avoid ever blocking the sim thread on lock contention.
+                        // Fall back to sim_batch_steps if the runner is momentarily locked.
+                        let batch_steps: usize = if let Ok(r) = sim_runner.try_read() {
                             let many_layers = r.net.num_hidden_layers > 32;
                             let many_neurons = r.total_neurons() > 5000;
-                            if many_layers || many_neurons {
-                                1
-                            } else {
-                                sim_batch_steps
-                            }
+                            if many_layers || many_neurons { 1 } else { sim_batch_steps }
+                        } else {
+                            sim_batch_steps
                         };
                         if spikes_source.is_some() || ipc_dt.is_some() {
                             #[cfg(all(feature = "robot_io", unix))]
@@ -1865,13 +2151,140 @@ impl App {
                                 #[cfg(all(feature = "robot_io", unix))]
                                 if let Some(ref srv) = sim_ipc_server {
                                     let mut out = vec![0.0f32; srv.o];
-                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
-                                        for i in 0..out.len().min(src_slice.len()) {
-                                            out[i] = if src_slice[i] != 0 { 1.0 } else { 0.0 };
-                                        }
+                                    let io_cfg = r.net.spike_io.clone();
+                                    let io_profile =
+                                        resolve_network_io_profile(io_cfg.profile, srv.s, srv.o);
+                                    if matches!(
+                                        io_cfg.output_strategy,
+                                        SpikeOutputDecodingStrategy::ProfileDefault
+                                    ) {
+                                        decode_profile_outputs(
+                                            io_profile,
+                                            &r,
+                                            &mut out,
+                                            &ipc_output_encoding,
+                                        );
                                     } else {
-                                        for i in 0..out.len().min(r.last_spk_o.len()) {
-                                            out[i] = if r.last_spk_o[i] != 0 { 1.0 } else { 0.0 };
+                                        decode_network_outputs(&io_cfg, &r, &mut out);
+                                    }
+                                    let celegans_debug_enabled =
+                                        matches!(io_profile, NetworkIoProfile::Celegans)
+                                            && match io_cfg.output_strategy {
+                                                SpikeOutputDecodingStrategy::ProfileDefault => {
+                                                    ipc_output_encoding.celegans_graded_output
+                                                }
+                                                SpikeOutputDecodingStrategy::Graded => true,
+                                                _ => false,
+                                            };
+                                    if celegans_debug_enabled {
+                                        if ipc_celegans_debug_interval > 0 {
+                                            ipc_celegans_debug_counter =
+                                                ipc_celegans_debug_counter.saturating_add(1);
+                                            if ipc_celegans_debug_counter
+                                                .is_multiple_of(ipc_celegans_debug_interval)
+                                            {
+                                                let out_min = out
+                                                    .iter()
+                                                    .fold(f32::INFINITY, |acc, &v| acc.min(v));
+                                                let out_max = out.iter().fold(
+                                                    f32::NEG_INFINITY,
+                                                    |acc, &v| acc.max(v),
+                                                );
+                                                let out_mean = if out.is_empty() {
+                                                    0.0
+                                                } else {
+                                                    out.iter().sum::<f32>() / out.len() as f32
+                                                };
+                                                let in_spk =
+                                                    spikes.iter().filter(|&&v| v != 0).count();
+                                                let h_spk = r
+                                                    .last_spk_h
+                                                    .first()
+                                                    .map(|h| h.iter().filter(|&&v| v != 0).count())
+                                                    .unwrap_or(0);
+                                                let (recv_in_total, recv_in_w_sum, recv_in_w_max) =
+                                                    r.w_in.iter().fold(
+                                                        (0usize, 0.0f64, 0.0f64),
+                                                        |(count, sum, max_w), &w| {
+                                                            let abs_w = w.abs();
+                                                            if abs_w > 0.0 {
+                                                                (
+                                                                    count + 1,
+                                                                    sum + abs_w,
+                                                                    max_w.max(abs_w),
+                                                                )
+                                                            } else {
+                                                                (count, sum, max_w)
+                                                            }
+                                                        },
+                                                    );
+                                                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                                                let (in_delay_min, in_delay_max) = {
+                                                    let mut min_steps = usize::MAX;
+                                                    let mut max_steps = 0usize;
+                                                    for syns in &r.recv_in {
+                                                        for &(_, syn_idx) in syns {
+                                                            let (steps, _) =
+                                                                r.syn_delay_and_atten(syn_idx);
+                                                            min_steps = min_steps.min(steps);
+                                                            max_steps = max_steps.max(steps);
+                                                        }
+                                                    }
+                                                    if min_steps == usize::MAX {
+                                                        (0, 0)
+                                                    } else {
+                                                        (min_steps, max_steps)
+                                                    }
+                                                };
+                                                #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+                                                let (in_delay_min, in_delay_max) = (0usize, 0usize);
+                                                let (i_h0_min, i_h0_max) = r
+                                                    .last_i_h0
+                                                    .as_ref()
+                                                    .map(|arr| {
+                                                        arr.iter().fold(
+                                                            (f64::INFINITY, f64::NEG_INFINITY),
+                                                            |(mn, mx), &v| {
+                                                                (mn.min(v), mx.max(v))
+                                                            },
+                                                        )
+                                                    })
+                                                    .unwrap_or((0.0, 0.0));
+                                                let v_h0_max = r
+                                                    .v_h
+                                                    .first()
+                                                    .map(|arr| {
+                                                        arr.iter().fold(
+                                                            f64::NEG_INFINITY,
+                                                            |mx, &v| mx.max(v),
+                                                        )
+                                                    })
+                                                    .unwrap_or(0.0);
+                                                let o_spk = r
+                                                    .last_spk_o
+                                                    .iter()
+                                                    .filter(|&&v| v != 0)
+                                                    .count();
+                                                nm_err!(
+                                                    "[IPC celegans dbg] in_spk={} h0_spk={} out_spk={} recv_in={} w_sum={:.3} w_max={:.3} p_rel={:.3} delay=[{},{}] i_h0=[{:.3},{:.3}] v_h0_max={:.3} out_min={:.3} out_max={:.3} out_mean={:.3} O={}",
+                                                    in_spk,
+                                                    h_spk,
+                                                    o_spk,
+                                                    recv_in_total,
+                                                    recv_in_w_sum,
+                                                    recv_in_w_max,
+                                                    r.net.p_release_default,
+                                                    in_delay_min,
+                                                    in_delay_max,
+                                                    i_h0_min,
+                                                    i_h0_max,
+                                                    v_h0_max,
+                                                    out_min,
+                                                    out_max,
+                                                    out_mean,
+                                                    r.net.num_output_neurons
+                                                );
+                                            }
                                         }
                                     }
                                     ipc_reply_values = Some(out);
@@ -1908,6 +2321,37 @@ impl App {
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
+                                    snap.sim_step = r.t as u64;
+                                    snap.sim_time_ms = r.t_ms;
+                                    snap.dt_ms = r.lif.dt;
+                                    if snap.v_h.len() != r.v_h.len() {
+                                        snap.v_h.resize_with(r.v_h.len(), Vec::new);
+                                    }
+                                    for (dst, src) in snap.v_h.iter_mut().zip(r.v_h.iter()) {
+                                        if dst.len() != src.len() {
+                                            dst.resize(src.len(), 0.0);
+                                        }
+                                        for (d, s) in dst.iter_mut().zip(src.iter()) {
+                                            *d = *s as f32;
+                                        }
+                                    }
+                                    if snap.v_o.len() != r.v_o.len() {
+                                        snap.v_o.resize(r.v_o.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.v_o.iter_mut().zip(r.v_o.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    if snap.x_pre_in.len() != r.x_pre_in.len() {
+                                        snap.x_pre_in.resize(r.x_pre_in.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.x_pre_in.iter_mut().zip(r.x_pre_in.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    if r.t % 100 == 0 {
+                                        let (lt, tot) = r.calculate_longterm_connections();
+                                        snap.longterm_conn = lt;
+                                        snap.total_conn = tot;
+                                    }
                                     #[cfg(feature = "growth3d")]
                                     {
                                         if r.net.growth_enabled {
@@ -1918,11 +2362,20 @@ impl App {
                                     }
                                 }
                             } else {
-                                std::thread::sleep(std::time::Duration::from_millis(1));
+                                // If the runner lock is briefly busy, still reply with the last
+                                // known actuator frame so Webots controller IO doesn't stall.
+                                #[cfg(all(feature = "robot_io", unix))]
+                                if let Some(ref srv) = sim_ipc_server {
+                                    if ipc_last_reply_values.len() != srv.o {
+                                        ipc_last_reply_values.resize(srv.o, 0.5);
+                                    }
+                                    ipc_reply_values = Some(ipc_last_reply_values.clone());
+                                }
                             }
                             #[cfg(all(feature = "robot_io", unix))]
                             if let Some(out_vals) = ipc_reply_values {
                                 if let Some(ref mut srv) = sim_ipc_server {
+                                    ipc_last_reply_values = out_vals.clone();
                                     let _ = srv.send_outputs(&out_vals);
                                     if let Ok(mut stats) = sim_ipc_stats.try_write() {
                                         stats.last_steps = 1;
@@ -1970,6 +2423,40 @@ impl App {
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
+                                    snap.sim_step = r.t as u64;
+                                    snap.sim_time_ms = r.t_ms;
+                                    snap.dt_ms = r.lif.dt;
+                                    // Membrane potentials: copy as f32 for probe display.
+                                    if snap.v_h.len() != r.v_h.len() {
+                                        snap.v_h.resize_with(r.v_h.len(), Vec::new);
+                                    }
+                                    for (dst, src) in snap.v_h.iter_mut().zip(r.v_h.iter()) {
+                                        if dst.len() != src.len() {
+                                            dst.resize(src.len(), 0.0);
+                                        }
+                                        for (d, s) in dst.iter_mut().zip(src.iter()) {
+                                            *d = *s as f32;
+                                        }
+                                    }
+                                    if snap.v_o.len() != r.v_o.len() {
+                                        snap.v_o.resize(r.v_o.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.v_o.iter_mut().zip(r.v_o.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    // Sensory eligibility traces.
+                                    if snap.x_pre_in.len() != r.x_pre_in.len() {
+                                        snap.x_pre_in.resize(r.x_pre_in.len(), 0.0);
+                                    }
+                                    for (d, s) in snap.x_pre_in.iter_mut().zip(r.x_pre_in.iter()) {
+                                        *d = *s as f32;
+                                    }
+                                    // Long-term connection stats: expensive scan, only every 100 steps.
+                                    if r.t % 100 == 0 {
+                                        let (lt, tot) = r.calculate_longterm_connections();
+                                        snap.longterm_conn = lt;
+                                        snap.total_conn = tot;
+                                    }
                                     #[cfg(feature = "growth3d")]
                                     {
                                         if r.net.growth_enabled {
@@ -2016,10 +2503,16 @@ impl App {
                                         }
                                     }
                                     update_ui_snapshot(&r);
+                                    // Write lock is dropped here at end of this block.
+                                    // Yield between batch steps so the UI event loop and
+                                    // any pending try_read() callers can proceed.
                                 } else {
                                     std::thread::sleep(std::time::Duration::from_millis(1));
                                     break;
                                 }
+                                // Explicitly yield after each step within a batch so the UI
+                                // thread gets a window to acquire the read lock between steps.
+                                std::thread::yield_now();
                             }
                             if let Some(bands) = last_bands {
                                 if let Ok(mut b) = sim_spectral.try_write() {
@@ -2311,6 +2804,9 @@ impl App {
             aarnn_defaults_applied: false,
             boost_connectivity_count: 0,
             local_net: local_net.clone(),
+            fpaa_status,
+            fpaa_last_refresh: Instant::now(),
+            fpaa_last_signature: fpaa_signature,
             #[cfg(feature = "sysinfo")]
             sys_snapshot,
             #[cfg(feature = "sysinfo")]
@@ -2396,6 +2892,7 @@ impl App {
             quantizer: Quantizer {
                 threshold: 0.2,
                 probabilistic: true,
+                ..Quantizer::default()
             },
             #[cfg(all(feature = "robot_io", unix))]
             last_sensory_inputs_f32: vec![0.0; n_s],
@@ -2439,7 +2936,7 @@ impl App {
                 .checked_sub(std::time::Duration::from_millis(edge_cache_refresh_ms))
                 .unwrap_or_else(std::time::Instant::now),
             cached_edges: Vec::new(),
-            cached_layer_sizes: Vec::new(),
+            cached_layer_sizes: hidden_layer_sizes,
             cached_conn_counts: Vec::new(),
             cached_output_conn_count: None,
             #[cfg(feature = "growth3d")]
@@ -2464,12 +2961,19 @@ impl App {
             dist_node_id: String::new(),
             dist_nodes: HashMap::new(),
             dist_network_registry: HashMap::new(),
+            dist_local_playing_cache: HashMap::new(),
+            dist_initial_view_selected: false,
             sensory_spikes_snapshot,
             ui_snapshot,
             sim_step_counter,
             sim_last_spike_count,
             sim_last_spike_len,
             runtime_handle,
+            remote_workspace_binding,
+            remote_token_balance: None,
+            remote_token_error: None,
+            remote_token_last_refresh: None,
+            remote_token_refresh_inflight: false,
             initial_net_cfg,
             initial_lif,
             initial_stdp,
@@ -2479,6 +2983,17 @@ impl App {
 
         if remote_only {
             app.status = "Remote-only UI (local simulation disabled)".into();
+        }
+        if app.remote_workspace_binding.is_some() {
+            app.queue_remote_token_refresh(true);
+        }
+        let auto_remote_count = app.add_remote_orchestrators_from_env();
+        if auto_remote_count > 0 {
+            app.status = format!(
+                "Remote-only UI (auto-connected {} orchestrator{})",
+                auto_remote_count,
+                if auto_remote_count == 1 { "" } else { "s" }
+            );
         }
 
         #[cfg(all(feature = "robot_io", unix))]
@@ -2513,6 +3028,221 @@ impl App {
 
 #[cfg(feature = "ui")]
 impl App {
+    fn normalize_remote_orchestrator_addr(addr: &str) -> Option<String> {
+        let mut normalized = addr.trim().to_string();
+        if normalized.is_empty() {
+            return None;
+        }
+        if !normalized.starts_with("http://") && !normalized.starts_with("https://") {
+            normalized = format!("http://{}", normalized);
+        }
+        Some(normalized)
+    }
+
+    fn remote_workspace_client(&self) -> Result<crate::runtime_api::BlockingRuntimeClient, String> {
+        self.remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .client()
+            .map_err(|err| err.to_string())
+    }
+
+    fn queue_remote_token_refresh(&mut self, force: bool) {
+        if self.remote_workspace_binding.is_none() {
+            self.remote_token_refresh_inflight = false;
+            return;
+        }
+        if self.remote_token_refresh_inflight {
+            return;
+        }
+        let stale = self
+            .remote_token_last_refresh
+            .map(|ts| ts.elapsed() >= Duration::from_secs(30))
+            .unwrap_or(true);
+        if !force && !stale {
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            return;
+        };
+        let tx = self.tool_task_tx.clone();
+        self.remote_token_refresh_inflight = true;
+        std::thread::spawn(move || {
+            let result = (|| -> Result<TokenBalanceResponse, String> {
+                let mut client = binding.client().map_err(|err| err.to_string())?;
+                client.token_balance().map_err(|err| err.to_string())
+            })();
+            let _ = tx.send(ToolTaskResult::RemoteTokenBalance { result });
+        });
+    }
+
+    fn push_remote_workspace_snapshot(&mut self) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?;
+        let snapshot_json = {
+            let runner = self
+                .runner
+                .try_read()
+                .map_err(|_| "Runner busy".to_string())?;
+            runner
+                .export_network_json()
+                .map_err(|err| err.to_string())?
+        };
+        let mut client = self.remote_workspace_client()?;
+        client
+            .import_workspace(
+                &binding.workspace_id,
+                &WorkspaceImportRequest {
+                    payload_json: snapshot_json,
+                    kind: Some(crate::engine::EnginePayloadKind::Snapshot),
+                    replace_baseline: Some(false),
+                    auto_start: Some(false),
+                    neuron_model: None,
+                    learning_rule: None,
+                },
+            )
+            .map_err(|err| err.to_string())?;
+        self.queue_remote_token_refresh(true);
+        Ok(())
+    }
+
+    fn pull_remote_workspace_snapshot(&mut self) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .clone();
+        let mut client = self.remote_workspace_client()?;
+        let snapshot = client
+            .workspace_snapshot(&binding.workspace_id)
+            .map_err(|err| err.to_string())?;
+
+        {
+            let mut runner = self
+                .runner
+                .try_write()
+                .map_err(|_| "Runner busy".to_string())?;
+            runner
+                .import_network_json(&snapshot.snapshot_json)
+                .map_err(|err| err.to_string())?;
+            self.initial_net_cfg = runner.net.clone();
+            self.initial_model = runner.neuron_model;
+            self.initial_learning = runner.learning;
+        }
+
+        self.set_standalone_playing(false);
+        self.refresh_ui_buffers();
+        self.status = format!("Pulled remote workspace '{}'", binding.workspace_id);
+        Ok(())
+    }
+
+    fn control_remote_workspace_backend(
+        &mut self,
+        action: WorkspaceControlAction,
+    ) -> Result<(), String> {
+        let binding = self
+            .remote_workspace_binding
+            .as_ref()
+            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
+            .clone();
+        let mut client = self.remote_workspace_client()?;
+        client
+            .control_workspace(&binding.workspace_id, action)
+            .map_err(|err| err.to_string())?;
+        self.queue_remote_token_refresh(true);
+        self.status = format!("Remote workspace '{}' {:?}", binding.workspace_id, action);
+        Ok(())
+    }
+
+    fn add_remote_orchestrator_connection(&mut self, addr: &str) -> bool {
+        let Some(addr) = Self::normalize_remote_orchestrator_addr(addr) else {
+            return false;
+        };
+        if self.remote_connections.iter().any(|c| c.addr == addr) {
+            return false;
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let tx = self.remote_status_tx.clone();
+        let addr_clone = addr.clone();
+        let rt = self.runtime_handle.clone();
+        rt.spawn(async move {
+            loop {
+                if stop_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+                match DistributedNeuromorphicClient::connect(addr_clone.clone()).await {
+                    Ok(mut client) => {
+                        match client
+                            .get_system_status(Request::new(StatusRequest {}))
+                            .await
+                        {
+                            Ok(resp) => {
+                                let status = resp.into_inner();
+                                let nodes = status
+                                    .nodes
+                                    .into_iter()
+                                    .map(|n| (n.node_id.clone(), n))
+                                    .collect();
+                                let networks = status
+                                    .networks
+                                    .into_iter()
+                                    .map(|n| (n.network_id.clone(), n))
+                                    .collect();
+                                let _ = tx.send(RemoteStatusMsg::Update {
+                                    addr: addr_clone.clone(),
+                                    nodes,
+                                    networks,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(RemoteStatusMsg::Error {
+                                    addr: addr_clone.clone(),
+                                    error: format!("Status error: {}", e),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(RemoteStatusMsg::Error {
+                            addr: addr_clone.clone(),
+                            error: format!("Connect error: {}", e),
+                        });
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        });
+        self.remote_connections
+            .push(RemoteConnection { addr, stop });
+        true
+    }
+
+    fn add_remote_orchestrators_from_env(&mut self) -> usize {
+        let raw = std::env::var("NM_UI_REMOTE_ORCHESTRATORS")
+            .ok()
+            .or_else(|| std::env::var("NM_REMOTE_ORCHESTRATORS").ok())
+            .unwrap_or_default();
+        if raw.trim().is_empty() {
+            return 0;
+        }
+
+        let mut added = 0usize;
+        for token in raw.split([',', ';', ' ']) {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if self.add_remote_orchestrator_connection(trimmed) {
+                added += 1;
+            }
+        }
+        added
+    }
+
     fn apply_aarnn_bio_defaults(&mut self) {
         let mut net = self.local_net.clone();
         // Canonical baseline: AARNN biomimicry profile with human-brain clumping.
@@ -2537,6 +3267,173 @@ impl App {
         self.status = "Applied AARNN human-brain biomimicry defaults".into();
     }
 
+    fn refresh_fpaa_status(&mut self, force: bool) {
+        let signature = serde_json::to_string(&self.local_net.fpaa).unwrap_or_default();
+        let stale = self.fpaa_last_refresh.elapsed() >= Duration::from_secs(5);
+        if force || stale || signature != self.fpaa_last_signature {
+            self.fpaa_status = crate::fpaa::startup_probe(&self.local_net.fpaa);
+            self.fpaa_last_refresh = Instant::now();
+            self.fpaa_last_signature = signature;
+        }
+    }
+
+    fn fpaa_route_label(route: FpaaKernelRoute) -> &'static str {
+        match route {
+            FpaaKernelRoute::Software => "Software",
+            FpaaKernelRoute::Fpaa => "FPAA",
+        }
+    }
+
+    fn render_fpaa_controls(&mut self, ui: &mut egui::Ui) -> bool {
+        self.refresh_fpaa_status(false);
+        let mut changed = false;
+
+        ui.group(|ui| {
+            ui.label("FPAA Offload");
+            ui.small(self.fpaa_status.summary.as_str());
+            if let Some(transport) = self.fpaa_status.detected_transport.as_ref() {
+                ui.small(format!(
+                    "Transport: {} | {} | ready={}",
+                    transport.kind.label(),
+                    transport.path,
+                    transport.ready
+                ));
+            } else {
+                ui.small("Transport: not detected");
+            }
+            if let Some(err) = self.fpaa_status.startup_error.as_deref() {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            ui.horizontal(|ui| {
+                ui.label("Startup mode");
+                egui::ComboBox::from_id_salt("fpaa_startup_mode")
+                    .selected_text(match self.local_net.fpaa.startup_mode {
+                        FpaaStartupMode::Auto => "Auto",
+                        FpaaStartupMode::Disabled => "Disabled",
+                        FpaaStartupMode::Required => "Required",
+                    })
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Auto,
+                                "Auto",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Disabled,
+                                "Disabled",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.startup_mode,
+                                FpaaStartupMode::Required,
+                                "Required",
+                            )
+                            .changed();
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Transport");
+                egui::ComboBox::from_id_salt("fpaa_transport_pref")
+                    .selected_text(match self.local_net.fpaa.transport_preference {
+                        FpaaTransportPreference::Auto => "Auto",
+                        FpaaTransportPreference::PiHat => "Pi.HAT",
+                        FpaaTransportPreference::Usb => "USB",
+                    })
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::Auto,
+                                "Auto",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::PiHat,
+                                "Pi.HAT",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut self.local_net.fpaa.transport_preference,
+                                FpaaTransportPreference::Usb,
+                                "USB",
+                            )
+                            .changed();
+                    });
+            });
+            changed |= ui
+                .checkbox(
+                    &mut self.local_net.fpaa.run_self_test_on_startup,
+                    "Run FPAA sample tests at startup",
+                )
+                .changed();
+            ui.horizontal(|ui| {
+                if ui.button("Refresh FPAA").clicked() {
+                    self.refresh_fpaa_status(true);
+                    self.status = self.fpaa_status.summary.clone();
+                }
+                if ui.button("Re-run tests").clicked() {
+                    self.local_net.fpaa.run_self_test_on_startup = true;
+                    self.refresh_fpaa_status(true);
+                    self.status = format!("FPAA re-probed: {}", self.fpaa_status.summary);
+                    changed = true;
+                }
+            });
+            ui.separator();
+            for kernel in FpaaKernel::ALL {
+                let requested = kernel.route_mut(&mut self.local_net.fpaa.routing);
+                let effective = self.fpaa_status.effective_route(kernel);
+                let status = self
+                    .fpaa_status
+                    .kernels
+                    .iter()
+                    .find(|item| item.kernel == kernel);
+                ui.horizontal(|ui| {
+                    ui.label(kernel.label());
+                    egui::ComboBox::from_id_salt(format!("fpaa_kernel_route_{}", kernel.id()))
+                        .selected_text(Self::fpaa_route_label(*requested))
+                        .show_ui(ui, |ui| {
+                            changed |= ui
+                                .selectable_value(requested, FpaaKernelRoute::Software, "Software")
+                                .changed();
+                            changed |= ui
+                                .selectable_value(requested, FpaaKernelRoute::Fpaa, "FPAA")
+                                .changed();
+                        });
+                    let effective_color = if effective == FpaaKernelRoute::Fpaa {
+                        egui::Color32::LIGHT_GREEN
+                    } else {
+                        egui::Color32::LIGHT_YELLOW
+                    };
+                    ui.colored_label(
+                        effective_color,
+                        format!("effective {}", Self::fpaa_route_label(effective)),
+                    );
+                });
+                if let Some(status) = status {
+                    ui.small(format!(
+                        "verify={} | self-test={} | {}",
+                        status.verification.label(),
+                        status.sample_test.label(),
+                        status.note
+                    ));
+                }
+            }
+        });
+
+        if changed {
+            self.refresh_fpaa_status(true);
+        }
+        changed
+    }
+
     fn cache_sizes_counts(runner: &Runner) -> (Vec<usize>, Vec<usize>, usize) {
         let sizes = (0..runner.net.num_hidden_layers)
             .map(|l| runner.layer_size(l).max(1))
@@ -2544,6 +3441,43 @@ impl App {
         let counts = runner.connection_counts();
         let out = runner.output_connection_count();
         (sizes, counts, out)
+    }
+
+    fn compact_usize_list(values: &[usize]) -> String {
+        if values.len() <= 12 {
+            return format!("{:?}", values);
+        }
+        let head = values
+            .iter()
+            .take(6)
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut tail_vals = values
+            .iter()
+            .rev()
+            .take(3)
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>();
+        tail_vals.reverse();
+        let tail = tail_vals.join(", ");
+        format!("[{}, ..., {}] (n={})", head, tail, values.len())
+    }
+
+    fn hidden_summary(layer_sizes: &[usize]) -> String {
+        let total_hidden: usize = layer_sizes.iter().sum();
+        format!(
+            "layers={} total={} sizes={}",
+            layer_sizes.len(),
+            total_hidden,
+            Self::compact_usize_list(layer_sizes)
+        )
+    }
+
+    fn should_build_static_edges(layer_sizes: &[usize]) -> bool {
+        // Keep import/load responsive for very large models unless user explicitly asks.
+        let total_hidden: usize = layer_sizes.iter().sum();
+        total_hidden <= 8192
     }
 
     fn compute_edges_from_snapshot(
@@ -3096,12 +4030,40 @@ impl App {
                     NetworkLayout::Conventional
                 }
             }
-            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => {
+            ViewSource::LocalManaged(id) => {
                 if network_registry
                     .get(id)
                     .map(|net| net.desired_aarnn_depth > 0)
                     .unwrap_or(false)
                 {
+                    NetworkLayout::Aarnn
+                } else {
+                    NetworkLayout::Conventional
+                }
+            }
+            ViewSource::ClusterGlobal(id) => {
+                // Prefer Aarnn if the registry says the network uses it, or if we
+                // have already received 3D topology data from the remote node.
+                let from_registry = network_registry
+                    .get(id)
+                    .map(|net| {
+                        net.desired_aarnn_depth > 0
+                            || net.neuron_model.eq_ignore_ascii_case("aarnn")
+                    })
+                    .unwrap_or(false);
+                #[cfg(feature = "growth3d")]
+                let from_topo = self
+                    .cluster_topo_cache
+                    .as_ref()
+                    .map(|topo| {
+                        !topo.layers.is_empty()
+                            || !topo.sensory_nodes.is_empty()
+                            || !topo.output_nodes.is_empty()
+                    })
+                    .unwrap_or(false);
+                #[cfg(not(feature = "growth3d"))]
+                let from_topo = false;
+                if from_registry || from_topo {
                     NetworkLayout::Aarnn
                 } else {
                     NetworkLayout::Conventional
@@ -3118,6 +4080,24 @@ impl App {
         if changed && matches!(layout, NetworkLayout::Conventional) {
             self.camera_yaw_degrees = 0.0;
             self.camera_pitch_degrees = 0.0;
+            #[cfg(feature = "growth3d")]
+            {
+                // Prevent stale AARNN topology data from being reused in conventional layout.
+                self.cached_edge_topo = None;
+                // In ClusterGlobal mode the topology is fetched from a remote node and must
+                // survive layout transitions — clearing it here would prevent the Aarnn view
+                // from ever recovering once the fetch completes.
+                if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+                    self.cluster_topo_cache = None;
+                }
+                self.reset_topology_pid_states();
+            }
+            #[cfg(feature = "growth3d")]
+            if let Ok(mut snap) = self.ui_snapshot.try_write() {
+                snap.topo_sensory.clear();
+                snap.topo_hidden.clear();
+                snap.topo_output.clear();
+            }
         }
         if changed {
             self.refresh_ui_buffers();
@@ -3127,9 +4107,148 @@ impl App {
     fn set_view_source(&mut self, source: ViewSource) {
         if self.view_source != source {
             self.view_source = source;
+            self.dist_initial_view_selected = true;
             self.view_node_filter = None;
             self.layout_auto = true;
             self.refresh_ui_buffers();
+        }
+    }
+
+    fn managed_playing_from_state(
+        state_arc: Option<&Arc<RwLock<crate::distributed::NodeState>>>,
+        network_id: &str,
+    ) -> Option<bool> {
+        let state_guard = state_arc?.try_read().ok()?;
+        let net_arc = state_guard.networks.get(network_id)?;
+        let net_guard = net_arc.try_read().ok()?;
+        Some(net_guard.playing)
+    }
+
+    fn resolve_view_playing(
+        &self,
+        state_arc: Option<&Arc<RwLock<crate::distributed::NodeState>>>,
+    ) -> Option<bool> {
+        let resolve_managed = |network_id: &str| {
+            self.dist_network_registry
+                .get(network_id)
+                .map(|net| net.playing)
+                .or_else(|| self.dist_local_playing_cache.get(network_id).copied())
+                .or_else(|| Self::managed_playing_from_state(state_arc, network_id))
+        };
+        match &self.view_source {
+            ViewSource::Standalone => Some(self.playing),
+            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => resolve_managed(id),
+        }
+    }
+
+    fn distributed_view_auto_select_enabled() -> bool {
+        std::env::var("NM_UI_AUTO_SELECT_DISTRIBUTED_VIEW")
+            .ok()
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(true)
+    }
+
+    fn preferred_cluster_network_id(&self) -> Option<String> {
+        if let ViewSource::ClusterGlobal(id) = &self.view_source {
+            if self.dist_network_registry.contains_key(id) {
+                return Some(id.clone());
+            }
+        }
+
+        let mut network_ids: Vec<String> = self.dist_network_registry.keys().cloned().collect();
+        network_ids.sort();
+
+        let preferred = |require_playing: bool, require_distribution: bool| {
+            network_ids
+                .iter()
+                .filter(|id| {
+                    self.dist_network_registry
+                        .get(*id)
+                        .map(|status| {
+                            (!require_playing || status.playing)
+                                && (!require_distribution || !status.distribution.is_empty())
+                        })
+                        .unwrap_or(false)
+                })
+                .max_by_key(|id| {
+                    self.dist_network_registry
+                        .get(*id)
+                        .map(|status| status.total_neurons)
+                        .unwrap_or(0)
+                })
+                .cloned()
+        };
+
+        preferred(true, true)
+            .or_else(|| preferred(false, true))
+            .or_else(|| preferred(true, false))
+            .or_else(|| network_ids.first().cloned())
+    }
+
+    fn maybe_select_initial_distributed_view(&mut self) {
+        if self.dist_initial_view_selected {
+            return;
+        }
+        if self.distributed_node.is_none() {
+            self.dist_initial_view_selected = true;
+            return;
+        }
+        if !matches!(self.view_source, ViewSource::Standalone) {
+            self.dist_initial_view_selected = true;
+            return;
+        }
+        // Default distributed UIs to the managed/cluster view so Start/Stop
+        // reflects the network actually hosted by the node. Set
+        // NM_UI_AUTO_SELECT_DISTRIBUTED_VIEW=0 to keep the old standalone
+        // default.
+        if !Self::distributed_view_auto_select_enabled() {
+            self.dist_initial_view_selected = true;
+            return;
+        }
+
+        let preferred = if self.dist_is_orchestrator {
+            self.preferred_cluster_network_id()
+                .map(ViewSource::ClusterGlobal)
+        } else {
+            let mut network_ids: Vec<String> =
+                self.dist_local_playing_cache.keys().cloned().collect();
+            network_ids.sort();
+            network_ids
+                .iter()
+                .find(|id| *id == &self.brain_id)
+                .cloned()
+                .or_else(|| {
+                    network_ids
+                        .iter()
+                        .find(|id| {
+                            self.dist_local_playing_cache
+                                .get(*id)
+                                .copied()
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                })
+                .or_else(|| network_ids.first().cloned())
+                .map(ViewSource::LocalManaged)
+        };
+
+        if let Some(source) = preferred {
+            let source_label = match &source {
+                ViewSource::Standalone => "standalone",
+                ViewSource::LocalManaged(_) => "local managed",
+                ViewSource::ClusterGlobal(_) => "cluster",
+            };
+            self.set_view_source(source);
+            self.status = format!(
+                "Auto-selected {} view so Start/Stop tracks active network state",
+                source_label
+            );
+            self.dist_initial_view_selected = true;
         }
     }
 
@@ -3284,29 +4403,88 @@ impl App {
             ViewSource::ClusterGlobal(_) => "Cluster network",
             ViewSource::Standalone => "Standalone",
         };
+
+        let playing_after = matches!(
+            action,
+            control_update::Action::Start | control_update::Action::Repeat
+        );
+
         if let Some(node) = &self.distributed_node {
-            match node.apply_network_control(network_id, action) {
-                Ok(()) => {
-                    if let Some(net_status) = self.dist_network_registry.get_mut(network_id) {
-                        match action {
-                            control_update::Action::Start | control_update::Action::Repeat => {
-                                net_status.playing = true;
-                            }
-                            control_update::Action::Stop
-                            | control_update::Action::Reset
-                            | control_update::Action::New => {
-                                net_status.playing = false;
-                            }
+            let queue_result = node.apply_network_control(network_id, action);
+            // "Cluster state busy" means the write lock was contended — the
+            // direct gRPC path below will still deliver the command immediately,
+            // so treat it as a soft failure and still update the UI optimistically.
+            let fatal = match &queue_result {
+                Err(e) if e.contains("Cluster state busy") => false,
+                Err(_) => true,
+                Ok(()) => false,
+            };
+            if !fatal {
+                // Optimistic UI update: reflect the intended state immediately.
+                self.dist_local_playing_cache
+                    .insert(network_id.to_string(), playing_after);
+                if let Some(net_status) = self.dist_network_registry.get_mut(network_id) {
+                    match action {
+                        control_update::Action::Start | control_update::Action::Repeat => {
+                            net_status.playing = true;
+                        }
+                        control_update::Action::Stop
+                        | control_update::Action::Reset
+                        | control_update::Action::New => {
+                            net_status.playing = false;
                         }
                     }
-                    self.status = format!("{} {} ({})", view_scope, status, network_id);
                 }
-                Err(err) => {
-                    self.status = format!("{} {} failed: {}", view_scope, status, err);
-                }
+                self.status = format!("{} {} ({})", view_scope, status, network_id);
+            } else {
+                self.status = format!(
+                    "{} {} failed: {}",
+                    view_scope,
+                    status,
+                    queue_result.unwrap_err()
+                );
             }
         } else {
             self.status = "Cluster control unavailable".into();
+        }
+
+        // For ClusterGlobal views also send a direct gRPC UpdateNetwork to
+        // every worker node that manages this network.  Workers now accept
+        // ControlUpdate directly (they no longer require is_orchestrator for
+        // this RPC variant), so this gives immediate effect even when the
+        // heartbeat-queue path was temporarily busy.
+        if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+            if let Some(net_status) = self.dist_network_registry.get(network_id) {
+                let node_ids: Vec<String> = net_status.distribution.keys().cloned().collect();
+                let rt = self.runtime_handle.clone();
+                let net_id = network_id.to_string();
+                let action_i32 = action as i32;
+                for node_id in node_ids {
+                    if let Some(node_info) = self.dist_nodes.get(&node_id) {
+                        let mut addr = node_info.address.clone();
+                        if addr.is_empty() {
+                            continue;
+                        }
+                        if !addr.starts_with("http://") && !addr.starts_with("https://") {
+                            addr = format!("http://{}", addr);
+                        }
+                        let net_id_c = net_id.clone();
+                        rt.spawn(async move {
+                            if let Ok(mut client) =
+                                DistributedNeuromorphicClient::connect(addr).await
+                            {
+                                let req = NetworkUpdateRequest {
+                                    network_id: net_id_c,
+                                    update: Some(network_update_request::Update::Control(
+                                        ControlUpdate { action: action_i32 },
+                                    )),
+                                };
+                                let _ = client.update_network(Request::new(req)).await;
+                            }
+                        });
+                    }
+                }
+            }
         }
         if matches!(
             action,
@@ -3487,7 +4665,17 @@ impl App {
         let mut net_guard = net_arc
             .try_write()
             .map_err(|_| "Local managed network busy".to_string())?;
-        net_guard.runner.apply_config(net.clone());
+        let requires_recreate = net.num_hidden_layers != net_guard.runner.net.num_hidden_layers
+            || net.clumping_design != net_guard.runner.net.clumping_design;
+        if requires_recreate {
+            let lif = net_guard.runner.lif.clone();
+            let stdp = net_guard.runner.stdp.clone();
+            let model = net_guard.runner.neuron_model;
+            let learning = net_guard.runner.learning;
+            net_guard.runner = Runner::new(lif, stdp, net.clone(), model, learning);
+        } else {
+            net_guard.runner.apply_config(net.clone());
+        }
         net_guard.initial_config = net;
         Ok(())
     }
@@ -3536,6 +4724,10 @@ impl App {
                             net_status.num_layers = imported_layers;
                             net_status.neuron_model = imported_model;
                             net_status.learning_rule = imported_learning;
+                            crate::distributed::sync_network_status_deployment_from_payload(
+                                net_status,
+                                &imported_snapshot_json,
+                            );
                         }
                         state
                             .network_snapshots
@@ -3556,15 +4748,16 @@ impl App {
             ImportKind::Nir => "NIR",
             ImportKind::Standard => "Network",
         };
-        let layers = net_guard.runner.net.num_hidden_layers;
-        let h = net_guard.runner.net.num_hidden_per_layer_initial;
+        let layer_sizes: Vec<usize> = (0..net_guard.runner.net.num_hidden_layers)
+            .map(|li| net_guard.runner.layer_size(li).max(1))
+            .collect();
+        let hidden_summary = Self::hidden_summary(&layer_sizes);
         let summary = format!(
-            "Imported {} from {} (S={} H={}x{} O={})",
+            "Imported {} from {} (S={} {} O={})",
             kind_str,
             path.display(),
             net_guard.runner.net.num_sensory_neurons,
-            layers,
-            h,
+            hidden_summary,
             net_guard.runner.net.num_output_neurons
         );
         self.cached_layer_sizes.clear();
@@ -3851,7 +5044,7 @@ impl App {
             }
 
             if let Some(nid) = owning_node {
-                if let Some(ref filter) = view_node_filter {
+                if let Some(filter) = view_node_filter {
                     if nid != filter {
                         return (default_color.gamma_multiply(0.15), false);
                     }
@@ -3972,6 +5165,79 @@ impl App {
         }
     }
 
+    /// Update probes using the lock-free `UiSnapshot`.
+    ///
+    /// Handles Spike and Membrane probes from snapshot data.  Current probes
+    /// that need weight matrices are skipped (produce NaN) when the runner lock
+    /// is unavailable – this is acceptable since probes are purely decorative.
+    fn update_probes_from_ui_snapshot(&mut self, snap: &UiSnapshot) {
+        if self.scope_paused {
+            return;
+        }
+        let dt = (snap.dt_ms as f32).max(0.001);
+        let desired_cap = ((self.scope_time_ms / dt).ceil() as usize).clamp(100, 20000);
+        let bands_guard = self.spectral_bands.try_read().ok();
+        let samples: Vec<f32> = self
+            .probes
+            .iter()
+            .map(|p| {
+                if !p.enabled {
+                    return f32::NAN;
+                }
+                match (p.kind, p.target) {
+                    (ProbeKind::Spike, ProbeTarget::Sensory(i)) => snap
+                        .sensory_spikes
+                        .get(i)
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Spike, ProbeTarget::Hidden(l, j)) => snap
+                        .hidden_spikes
+                        .get(l)
+                        .and_then(|a| a.get(j))
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Spike, ProbeTarget::Output(k)) => snap
+                        .output_spikes
+                        .get(k)
+                        .copied()
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Membrane, ProbeTarget::Hidden(l, j)) => snap
+                        .v_h
+                        .get(l)
+                        .and_then(|a| a.get(j))
+                        .copied()
+                        .unwrap_or(f32::NAN),
+                    (ProbeKind::Membrane, ProbeTarget::Output(k)) => {
+                        snap.v_o.get(k).copied().unwrap_or(f32::NAN)
+                    }
+                    (ProbeKind::Level, ProbeTarget::Band(b)) => bands_guard
+                        .as_deref()
+                        .and_then(|bands| bands.get(b).copied())
+                        .unwrap_or(f32::NAN),
+                    // Current probes require weight matrices not held in snapshot.
+                    // Return NAN rather than stalling on the runner lock.
+                    _ => f32::NAN,
+                }
+            })
+            .collect();
+        for (idx, val) in samples.into_iter().enumerate() {
+            let pr = &mut self.probes[idx];
+            if !pr.enabled {
+                continue;
+            }
+            if pr.capacity != desired_cap {
+                pr.data.clear();
+                pr.data.resize(desired_cap, 0.0);
+                pr.capacity = desired_cap;
+                pr.write_idx = 0;
+            }
+            pr.push(val);
+        }
+    }
+
     #[cfg(all(feature = "robot_io", unix))]
     fn apply_ipc_config(&mut self, handshake: IpcHandshake) {
         self.ipc_last_handshake = Some(handshake.clone());
@@ -4010,6 +5276,11 @@ impl App {
             }
         }
         self.ipc_mapping = Some(mapping);
+
+        // Keep UI fallback config in sync with negotiated IPC dimensions so
+        // diagnostics and manual rebind actions don't regress to stale S/O.
+        self.local_net.num_sensory_neurons = s_total;
+        self.local_net.num_output_neurons = o_total;
 
         let _ = self.sim_tx.send(SimControl::ResizeSensory(s_total));
         let _ = self.sim_tx.send(SimControl::ResizeOutput(o_total));
@@ -4295,6 +5566,22 @@ struct UiSnapshot {
     num_sensory: usize,
     num_hidden_layers: usize,
     num_output: usize,
+    /// Membrane potentials per hidden layer (f32 for display only).
+    v_h: Vec<Vec<f32>>,
+    /// Output membrane potentials.
+    v_o: Vec<f32>,
+    /// Sensory eligibility traces (x_pre_in) for activity visualisation.
+    x_pre_in: Vec<f32>,
+    /// Simulation step counter from runner.t.
+    sim_step: u64,
+    /// Simulation wall-clock in ms from runner.t_ms.
+    sim_time_ms: f64,
+    /// LIF dt (ms) – needed for probe buffer capacity calculation.
+    dt_ms: f64,
+    /// Long-term connection count, refreshed every ~100 sim steps.
+    longterm_conn: usize,
+    /// Total connection count, refreshed alongside longterm_conn.
+    total_conn: usize,
     #[cfg(feature = "growth3d")]
     topo_sensory: Vec<crate::topology::Node3D>,
     #[cfg(feature = "growth3d")]
@@ -4537,28 +5824,36 @@ impl App {
         use std::path::{Path, PathBuf};
         let mut tried: Vec<PathBuf> = Vec::new();
 
+        let candidates = [script_file.to_string(), format!("{}c", script_file)];
+
         // 0) Env override for tools dir
         if let Ok(tools_dir) = std::env::var("NMD_TOOLS_DIR") {
-            let p = Path::new(&tools_dir).join(script_file);
-            tried.push(p.clone());
-            if p.exists() {
-                return Ok(p);
+            for candidate in &candidates {
+                let p = Path::new(&tools_dir).join(candidate);
+                tried.push(p.clone());
+                if p.exists() {
+                    return Ok(p);
+                }
             }
         }
 
         // 1) Relative to current working directory
-        let rel = Path::new("tools").join(script_file);
-        tried.push(rel.clone());
-        if rel.exists() {
-            return Ok(rel);
+        for candidate in &candidates {
+            let rel = Path::new("tools").join(candidate);
+            tried.push(rel.clone());
+            if rel.exists() {
+                return Ok(rel);
+            }
         }
 
         // 2) CARGO_MANIFEST_DIR (project root) if available
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            let p = Path::new(&manifest_dir).join("tools").join(script_file);
-            tried.push(p.clone());
-            if p.exists() {
-                return Ok(p);
+            for candidate in &candidates {
+                let p = Path::new(&manifest_dir).join("tools").join(candidate);
+                tried.push(p.clone());
+                if p.exists() {
+                    return Ok(p);
+                }
             }
         }
 
@@ -4568,10 +5863,12 @@ impl App {
             for _ in 0..4 {
                 // check a few ancestors
                 if let Some(dir) = cur {
-                    let p = dir.join("tools").join(script_file);
-                    tried.push(p.clone());
-                    if p.exists() {
-                        return Ok(p);
+                    for candidate in &candidates {
+                        let p = dir.join("tools").join(candidate);
+                        tried.push(p.clone());
+                        if p.exists() {
+                            return Ok(p);
+                        }
                     }
                     cur = dir.parent().map(Path::to_path_buf);
                 } else {
@@ -4606,7 +5903,9 @@ impl App {
             Ok(o) => Ok(o),
             Err(e) => {
                 if let Some(8) = e.raw_os_error() {
-                    Err(anyhow::anyhow!("Exec format error launching Python. The configured interpreter may be invalid or wrong-architecture. Set NMD_PYTHON to a working python3, or install Python and required packages."))
+                    Err(anyhow::anyhow!(
+                        "Exec format error launching Python. The configured interpreter may be invalid or wrong-architecture. Set NMD_PYTHON to a working python3, or install Python and required packages."
+                    ))
                 } else {
                     Err(anyhow::anyhow!(format!("Failed to run python: {}", e)))
                 }
@@ -4839,6 +6138,14 @@ fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = self.sim_tx.send(SimControl::Shutdown);
+        if self
+            .remote_workspace_binding
+            .as_ref()
+            .map(|binding| binding.save_on_exit)
+            .unwrap_or(false)
+        {
+            let _ = self.push_remote_workspace_snapshot();
+        }
         if let Some(tx) = &self.ga_control_tx {
             let _ = tx.send(GAControl::Stop);
         }
@@ -4858,7 +6165,8 @@ impl Drop for App {
 
 #[cfg(feature = "ui")]
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         observe_time!("App::update");
         observe_hit!("ui_frame");
         let ui_frame_ms = (ctx.input(|i| i.unstable_dt).max(0.0) * 1000.0) as f32;
@@ -4876,20 +6184,42 @@ impl eframe::App for App {
                 self.hot_core_top = snap.hot_core_top.clone();
             }
         }
+        self.refresh_fpaa_status(false);
         self.reap_finished_ga_thread();
+        self.queue_remote_token_refresh(false);
 
         let runner_arc = self.runner.clone();
         let spectral_arc = self.spectral_bands.clone();
         #[cfg(all(feature = "robot_io", unix))]
         let ipc_stats_arc = self.ipc_stats.clone();
 
-        #[cfg(all(feature = "robot_io", unix))]
-        let is_external_ipc = matches!(self.input_source, InputSource::ExternalIpc);
-        #[cfg(not(all(feature = "robot_io", unix)))]
-        let is_external_ipc = false;
         let bands_guard = spectral_arc.try_read().ok();
         #[cfg(all(feature = "robot_io", unix))]
         let ipc_stats_guard = ipc_stats_arc.try_read().ok();
+
+        let fallback_model = match self.neuron_model {
+            NeuronModelSel::Lif => NeuronModel::Lif,
+            NeuronModelSel::Izh => {
+                let preset = match self.izh_preset {
+                    IzhPreset::RS => "RS",
+                    IzhPreset::FS => "FS",
+                    IzhPreset::IB => "IB",
+                    IzhPreset::CH => "CH",
+                    IzhPreset::LTS => "LTS",
+                    IzhPreset::RZ => "RZ",
+                    IzhPreset::TC => "TC",
+                    IzhPreset::P => "P",
+                };
+                NeuronModel::Izh(IzhikevichParams::from_preset(preset, self.initial_lif.dt))
+            }
+            NeuronModelSel::Aarnn => NeuronModel::Aarnn,
+        };
+        let fallback_learning = match self.learning {
+            LearningSel::Stdp => Learning::Stdp,
+            LearningSel::Hebb => Learning::Hebb,
+            LearningSel::Oja => Learning::Oja,
+            LearningSel::Aarnn => Learning::Aarnn,
+        };
 
         let (
             net_cloned,
@@ -4924,10 +6254,10 @@ impl eframe::App for App {
             // Fallback to local values if simulation is writing (busy)
             (
                 self.local_net.clone(),
-                LIFParams::default(),
-                STDPParams::default(),
-                NeuronModel::Aarnn,
-                Learning::Aarnn,
+                self.initial_lif.clone(),
+                self.initial_stdp.clone(),
+                fallback_model,
+                fallback_learning,
                 0.0,
                 0,
                 false,
@@ -4939,24 +6269,34 @@ impl eframe::App for App {
             observe_time!("App::update/dist_sync");
             if let Some(ref node) = self.distributed_node {
                 if let Ok(mut state) = node.state.try_write() {
-                    if state.is_orchestrator {
+                    let sync_standalone_registry =
+                        matches!(self.view_source, ViewSource::Standalone);
+                    if state.is_orchestrator && sync_standalone_registry {
                         if !state.network_registry.contains_key(&self.brain_id) {
-                            state.network_registry.insert(
-                                self.brain_id.clone(),
-                                crate::distributed::proto::NetworkStatus {
-                                    network_id: self.brain_id.clone(),
-                                    distribution: std::collections::HashMap::new(),
-                                    current_dt: lif_cloned.dt,
-                                    total_neurons: total_neurons_cloned as u64,
-                                    num_layers: (net_cloned.num_hidden_layers + 1) as u32,
-                                    desired_aarnn_depth: net_cloned.aarnn_layer_depth as u32,
-                                    config_json: serde_json::to_string(&net_cloned)
-                                        .unwrap_or_default(),
-                                    neuron_model: model_cloned.to_str().to_string(),
-                                    learning_rule: learning_cloned.to_str().to_string(),
-                                    playing: self.playing,
-                                },
-                            );
+                            if state.network_registry.is_empty() {
+                                state.network_registry.insert(self.brain_id.clone(), {
+                                    let mut status = crate::distributed::proto::NetworkStatus {
+                                        network_id: self.brain_id.clone(),
+                                        distribution: std::collections::HashMap::new(),
+                                        current_dt: lif_cloned.dt,
+                                        total_neurons: total_neurons_cloned as u64,
+                                        num_layers: (net_cloned.num_hidden_layers + 1) as u32,
+                                        desired_aarnn_depth: net_cloned.aarnn_layer_depth as u32,
+                                        config_json: serde_json::to_string(&net_cloned)
+                                            .unwrap_or_default(),
+                                        neuron_model: model_cloned.to_str().to_string(),
+                                        learning_rule: learning_cloned.to_str().to_string(),
+                                        playing: self.playing,
+                                        ..Default::default()
+                                    };
+                                    let deployment_payload = status.config_json.clone();
+                                    crate::distributed::sync_network_status_deployment_from_payload(
+                                        &mut status,
+                                        &deployment_payload,
+                                    );
+                                    status
+                                });
+                            }
                         } else {
                             let nodes_empty = state.nodes.is_empty();
                             if let Some(net_status) = state.network_registry.get_mut(&self.brain_id)
@@ -4982,6 +6322,11 @@ impl eframe::App for App {
                                         self.last_synced_config = Some(net_cloned.clone());
                                     }
                                     net_status.config_json = self.last_config_json.clone();
+                                    let deployment_payload = net_status.config_json.clone();
+                                    crate::distributed::sync_network_status_deployment_from_payload(
+                                        net_status,
+                                        &deployment_payload,
+                                    );
                                     if nodes_empty {
                                         net_status.playing = self.playing;
                                     }
@@ -5014,8 +6359,17 @@ impl eframe::App for App {
                 self.dist_node_id = state.node_id.clone();
                 self.dist_nodes = state.nodes.clone();
                 self.dist_network_registry = state.network_registry.clone();
+                self.dist_local_playing_cache
+                    .retain(|network_id, _| state.networks.contains_key(network_id));
+                for (network_id, net_arc) in &state.networks {
+                    if let Ok(net) = net_arc.try_read() {
+                        self.dist_local_playing_cache
+                            .insert(network_id.clone(), net.playing);
+                    }
+                }
             }
         }
+        self.maybe_select_initial_distributed_view();
 
         while let Ok(msg) = self.cluster_snapshot_rx.try_recv() {
             match msg {
@@ -5112,7 +6466,7 @@ impl eframe::App for App {
                                         })).await {
                                             Ok(resp) => {
                                                 let snap_resp = resp.into_inner();
-                                                match serde_json::from_str::<crate::runner::Snapshot>(&snap_resp.snapshot_json) {
+                                                match crate::runner::decode_snapshot_with_profile_backfill(&snap_resp.snapshot_json) {
                                                     Ok(st) => {
                                                         let _ = tx.send(ClusterSnapshotMsg::Ok {
                                                             network_id: net_id_clone,
@@ -5559,12 +6913,23 @@ impl eframe::App for App {
                     match kind {
                         FileTaskKind::LoadConfig => {
                             match serde_json::from_str::<NetworkConfig>(&data) {
-                                Ok(net) => {
+                                Ok(mut net) => {
+                                    if net.clumping_design != ClumpingDesign::None
+                                        && net.num_hidden_layers <= 1
+                                    {
+                                        apply_clumping_layer_defaults(&mut net);
+                                    }
                                     let view_source = self.view_source.clone();
                                     match view_source {
                                         ViewSource::Standalone => {
                                             self.local_net = net.clone();
-                                            let _ = self.sim_tx.send(SimControl::ApplyConfig(net));
+                                            let _ = self.sim_tx.send(SimControl::RecreateRunner(
+                                                lif_cloned.clone(),
+                                                stdp_cloned.clone(),
+                                                net,
+                                                model_cloned,
+                                                learning_cloned,
+                                            ));
                                             self.refresh_ui_buffers();
                                             self.status = format!(
                                                 "Loaded and applied config from {}",
@@ -5575,7 +6940,10 @@ impl eframe::App for App {
                                             match self.apply_config_to_local_managed(&id, net) {
                                                 Ok(()) => {
                                                     self.refresh_ui_buffers();
-                                                    self.status = format!("Loaded config for local managed network from {}", path.display());
+                                                    self.status = format!(
+                                                        "Loaded config for local managed network from {}",
+                                                        path.display()
+                                                    );
                                                 }
                                                 Err(e) => {
                                                     self.status = format!("Load failed: {}", e);
@@ -5710,6 +7078,19 @@ impl eframe::App for App {
                         self.status = format!("{} import failed: {}", kind_str, e);
                     }
                 }
+                ToolTaskResult::RemoteTokenBalance { result } => {
+                    self.remote_token_refresh_inflight = false;
+                    self.remote_token_last_refresh = Some(Instant::now());
+                    match result {
+                        Ok(balance) => {
+                            self.remote_token_balance = Some(balance);
+                            self.remote_token_error = None;
+                        }
+                        Err(error) => {
+                            self.remote_token_error = Some(error);
+                        }
+                    }
+                }
             }
         }
 
@@ -5735,19 +7116,21 @@ impl eframe::App for App {
             if !keep_pending {
                 match pending.result.as_ref() {
                     Some(Ok(())) => {
-                        let (net, model, learning, sizes, counts, _rebuild_edges) =
+                        let (net, model, learning, sizes, counts) =
                             if let Ok(r) = self.runner.try_read() {
+                                let sizes = Self::cache_sizes_counts(&r);
+                                let allow_static_edges = self.show_static_overlays
+                                    && Self::should_build_static_edges(&sizes.0);
                                 (
                                     r.net.clone(),
                                     r.neuron_model,
                                     r.learning,
-                                    Self::cache_sizes_counts(&r),
-                                    if self.show_static_overlays {
+                                    sizes,
+                                    if allow_static_edges {
                                         Some(Self::compute_cached_edges(self.overlay_density, &r))
                                     } else {
                                         None
                                     },
-                                    self.show_static_overlays,
                                 )
                             } else {
                                 keep_pending = true;
@@ -5757,7 +7140,6 @@ impl eframe::App for App {
                                     Learning::Stdp,
                                     (Vec::new(), Vec::new(), 0),
                                     None,
-                                    false,
                                 )
                             };
 
@@ -5818,6 +7200,13 @@ impl eframe::App for App {
                             self.cached_layer_sizes = sizes.0;
                             self.cached_conn_counts = sizes.1;
                             self.cached_output_conn_count = Some(sizes.2);
+                            let hidden_summary = Self::hidden_summary(&self.cached_layer_sizes);
+                            let skipped_static_edges = self.show_static_overlays
+                                && !self.force_show_connections
+                                && !Self::should_build_static_edges(&self.cached_layer_sizes);
+                            if skipped_static_edges {
+                                self.show_static_overlays = false;
+                            }
                             if let Some(edges) = counts {
                                 self.cached_edges = edges;
                                 #[cfg(feature = "growth3d")]
@@ -5830,9 +7219,6 @@ impl eframe::App for App {
                                 }
                             }
 
-                            let layers = self.local_net.num_hidden_layers;
-                            let h = self.local_net.num_hidden_per_layer_initial;
-
                             let kind_str = match pending.kind {
                                 ImportKind::Tflite => "TFLite",
                                 ImportKind::Onnx => "ONNX",
@@ -5842,14 +7228,21 @@ impl eframe::App for App {
                                 ImportKind::Standard => "Network",
                             };
                             let summary = format!(
-                                "Imported {} from {} (S={} H={}x{} O={})",
+                                "Imported {} from {} (S={} {} O={})",
                                 kind_str,
                                 pending.path.display(),
                                 self.local_net.num_sensory_neurons,
-                                layers,
-                                h,
+                                hidden_summary,
                                 self.local_net.num_output_neurons
                             );
+                            let summary = if skipped_static_edges {
+                                format!(
+                                    "{} (static connection overlays auto-disabled for large model)",
+                                    summary
+                                )
+                            } else {
+                                summary
+                            };
                             self.status = summary.clone();
                             self.last_import_report = Some(summary.clone());
                             nm_log!("[import] {}", summary);
@@ -5902,47 +7295,105 @@ impl eframe::App for App {
         }
         if self.pending_edge_cache && !self.edge_cache_inflight {
             match self.view_source {
-                ViewSource::Standalone | ViewSource::LocalManaged(_) => {
+                ViewSource::Standalone => {
                     self.edge_cache_inflight = true;
                     self.pending_edge_cache = false;
                     let density = self.overlay_density;
                     let tx = self.edge_cache_res_tx.clone();
                     if let Ok(r) = self.runner.try_read() {
-                        let snap = Box::new(r.snapshot());
+                        let edges = Self::compute_cached_edges(density, &r);
+                        let (sizes, counts, output_count) = Self::cache_sizes_counts(&r);
+                        #[cfg(feature = "growth3d")]
+                        let topo = r.topo.clone();
+                        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                        let skull_membrane = r.morph.skull_membrane;
                         std::thread::spawn(move || {
-                            let (edges, sizes, counts, output_count) =
-                                Self::compute_edges_from_snapshot(density, &snap);
                             let _ = tx.send(EdgeCacheResult {
                                 edges,
                                 sizes,
                                 counts,
                                 output_count,
                                 #[cfg(feature = "growth3d")]
-                                topo: snap.topo.clone(),
+                                topo: Some(topo),
                                 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                                skull_membrane: snap.skull_membrane,
+                                skull_membrane,
                             });
                         });
                     } else {
                         let runner = self.runner.clone();
                         std::thread::spawn(move || {
-                            let snap = {
+                            let (edges, sizes, counts, output_count, topo_opt) = {
                                 let r = runner.blocking_read();
-                                Box::new(r.snapshot())
+                                let edges = Self::compute_cached_edges(density, &r);
+                                let (sizes, counts, output_count) = Self::cache_sizes_counts(&r);
+                                #[cfg(feature = "growth3d")]
+                                let topo_opt = Some(r.topo.clone());
+                                #[cfg(not(feature = "growth3d"))]
+                                let topo_opt = ();
+                                (edges, sizes, counts, output_count, topo_opt)
                             };
-                            let (edges, sizes, counts, output_count) =
-                                Self::compute_edges_from_snapshot(density, &snap);
+                            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                            let skull_membrane = {
+                                let r = runner.blocking_read();
+                                r.morph.skull_membrane
+                            };
                             let _ = tx.send(EdgeCacheResult {
                                 edges,
                                 sizes,
                                 counts,
                                 output_count,
                                 #[cfg(feature = "growth3d")]
-                                topo: snap.topo.clone(),
+                                topo: topo_opt,
                                 #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                                skull_membrane: snap.skull_membrane,
+                                skull_membrane,
                             });
                         });
+                    }
+                }
+                ViewSource::LocalManaged(ref network_id) => {
+                    let managed_net_arc = self
+                        .distributed_node
+                        .as_ref()
+                        .and_then(|node| node.state.try_read().ok())
+                        .and_then(|state| state.networks.get(network_id).cloned());
+                    if let Some(net_arc) = managed_net_arc {
+                        self.edge_cache_inflight = true;
+                        self.pending_edge_cache = false;
+                        let density = self.overlay_density;
+                        let tx = self.edge_cache_res_tx.clone();
+                        std::thread::spawn(move || {
+                            let (edges, sizes, counts, output_count, topo_opt) = {
+                                let net = net_arc.blocking_read();
+                                let r = &net.runner;
+                                let edges = Self::compute_cached_edges(density, r);
+                                let (sizes, counts, output_count) = Self::cache_sizes_counts(r);
+                                #[cfg(feature = "growth3d")]
+                                let topo_opt = Some(r.topo.clone());
+                                #[cfg(not(feature = "growth3d"))]
+                                let topo_opt = ();
+                                (edges, sizes, counts, output_count, topo_opt)
+                            };
+                            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                            let skull_membrane = {
+                                let net = net_arc.blocking_read();
+                                net.runner.morph.skull_membrane
+                            };
+                            let _ = tx.send(EdgeCacheResult {
+                                edges,
+                                sizes,
+                                counts,
+                                output_count,
+                                #[cfg(feature = "growth3d")]
+                                topo: topo_opt,
+                                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                                skull_membrane,
+                            });
+                        });
+                    } else {
+                        // Keep last good cache; retry next refresh period.
+                        self.pending_edge_cache = false;
+                        self.edge_cache_inflight = false;
+                        self.last_edge_cache_refresh = std::time::Instant::now();
                     }
                 }
                 ViewSource::ClusterGlobal(_) => {
@@ -5971,14 +7422,25 @@ impl eframe::App for App {
         }
 
         while let Ok(msg) = self.edge_cache_rx.try_recv() {
+            let incoming_edges_empty = msg.edges.is_empty();
+            let incoming_has_connections =
+                msg.output_count > 0 || msg.counts.iter().any(|&v| v > 0);
+            let preserve_cached_edges =
+                incoming_edges_empty && incoming_has_connections && !self.cached_edges.is_empty();
             self.cached_layer_sizes = msg.sizes;
             self.cached_conn_counts = msg.counts;
             self.cached_output_conn_count = Some(msg.output_count);
             self.last_conn_stats_refresh = std::time::Instant::now();
-            self.cached_edges = msg.edges;
+            if !preserve_cached_edges {
+                self.cached_edges = msg.edges;
+            }
             #[cfg(feature = "growth3d")]
             {
-                self.cached_edge_topo = msg.topo;
+                if let Some(topo) = msg.topo {
+                    self.cached_edge_topo = Some(topo);
+                } else if !preserve_cached_edges {
+                    self.cached_edge_topo = None;
+                }
             }
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             {
@@ -6111,126 +7573,144 @@ impl eframe::App for App {
         }
 
         #[cfg(all(feature = "robot_io", unix))]
-        if is_external_ipc {
-            if let Some(stats) = ipc_stats_guard.as_deref() {
-                self.ipc_connected = stats.connected;
-                self.ipc_last_peer = stats.last_peer.clone();
-                self.ipc_last_receive_time = stats.last_receive_time;
-                self.ipc_frame_count = stats.frame_count;
-                self.ipc_packet_drop_count = stats.drop_count;
-                self.ipc_size_mismatch_count = stats.size_mismatch_count;
-                self.ipc_last_steps = stats.last_steps;
-                if let Some(hs) = stats.last_handshake.clone() {
-                    let unchanged = self
-                        .ipc_last_handshake
-                        .as_ref()
-                        .map(|old| old == &hs)
-                        .unwrap_or(false);
-                    if !unchanged {
-                        self.apply_ipc_config(hs);
-                    }
+        if let Some(stats) = ipc_stats_guard.as_deref() {
+            self.ipc_connected = stats.connected;
+            self.ipc_last_peer = stats.last_peer.clone();
+            self.ipc_last_receive_time = stats.last_receive_time;
+            self.ipc_frame_count = stats.frame_count;
+            self.ipc_packet_drop_count = stats.drop_count;
+            self.ipc_size_mismatch_count = stats.size_mismatch_count;
+            self.ipc_last_steps = stats.last_steps;
+            if let Some(hs) = stats.last_handshake.clone() {
+                let unchanged = self
+                    .ipc_last_handshake
+                    .as_ref()
+                    .map(|old| old == &hs)
+                    .unwrap_or(false);
+                if !unchanged {
+                    self.apply_ipc_config(hs);
                 }
             }
         }
 
         // --- 1. Simulation Monitoring & Activity Pull ---
-        if !is_external_ipc {
-            if matches!(self.view_source, ViewSource::Standalone) {
-                if let Ok(r) = runner_arc.try_read() {
-                    let (lt, tot) = r.calculate_longterm_connections();
-                    self.sync_activity_from_standalone(&r);
-                    self.update_probes_from_standalone(&r);
-                    self.longterm_conn = lt;
-                    self.total_conn = tot;
-                    self.last_longterm_update = std::time::Instant::now();
-                } else {
-                    // If locked by simulation, just decay current UI activity to keep it smooth
-                    let decay = 0.95f32;
-                    for v in &mut self.sensory_activity {
-                        *v *= decay;
+        // Read exclusively from the lock-free UiSnapshot so the UI thread never
+        // competes with the sim thread's write lock.  The snapshot is populated by
+        // the sim thread after every step and includes spikes, membrane potentials,
+        // eligibility traces, and (every 100 steps) connection statistics.
+        if matches!(self.view_source, ViewSource::Standalone) {
+            // Decay existing activity each frame; active neurons will be set to 1.0 below.
+            let decay = 0.95f32;
+            for v in &mut self.sensory_activity {
+                *v *= decay;
+            }
+            for layer in &mut self.hidden_activity {
+                for v in layer {
+                    *v *= decay;
+                }
+            }
+            for v in &mut self.output_activity {
+                *v *= decay;
+            }
+
+            // Collect all snapshot data into owned values; the RwLockReadGuard
+            // is dropped at the end of this block, before any &mut self call.
+            let snap_clone: Option<UiSnapshot> = if let Ok(snap) = self.ui_snapshot.try_read() {
+                // Sensory: prefer eligibility traces; fall back to spike flags.
+                if !snap.x_pre_in.is_empty() {
+                    if self.sensory_activity.len() != snap.x_pre_in.len() {
+                        self.sensory_activity.resize(snap.x_pre_in.len(), 0.0);
                     }
-                    for layer in &mut self.hidden_activity {
-                        for v in layer {
-                            *v *= decay;
+                    for (i, &tr) in snap.x_pre_in.iter().enumerate() {
+                        if tr > 0.1 {
+                            self.sensory_activity[i] = 1.0;
                         }
                     }
-                    for v in &mut self.output_activity {
-                        *v *= decay;
+                } else if !snap.sensory_spikes.is_empty() {
+                    if self.sensory_activity.len() != snap.sensory_spikes.len() {
+                        self.sensory_activity.resize(snap.sensory_spikes.len(), 0.0);
                     }
-                    let snap_opt = self
-                        .sensory_spikes_snapshot
-                        .try_read()
-                        .ok()
-                        .map(|s| s.clone());
-                    if let Some(snap) = snap_opt {
-                        if !snap.is_empty() {
-                            if self.sensory_activity.len() != snap.len() {
-                                self.sensory_activity.resize(snap.len(), 0.0);
-                            }
-                            self.last_sensory_spikes = snap.clone();
-                            for (i, &sv) in snap.iter().enumerate() {
-                                if sv != 0 {
-                                    self.sensory_activity[i] = 1.0;
-                                }
-                            }
-                            self.update_probes_from_snapshot(lif_cloned.dt as f32, snap.as_slice());
-                            self.status = format!(
-                                "Input spikes: {}/{}",
-                                snap.iter().filter(|&&v| v != 0).count(),
-                                snap.len()
-                            );
-                        }
-                    }
-                    let ui_snap_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
-                    if let Some(snap) = ui_snap_opt {
-                        if !snap.hidden_spikes.is_empty() {
-                            self.hidden_activity
-                                .resize(snap.hidden_spikes.len(), Vec::new());
-                            self.previous_hidden_spikes
-                                .resize(snap.hidden_spikes.len(), Vec::new());
-                            for (li, spk) in snap.hidden_spikes.iter().enumerate() {
-                                if self.hidden_activity[li].len() != spk.len() {
-                                    self.hidden_activity[li] = vec![0.0; spk.len()];
-                                }
-                                if self.previous_hidden_spikes[li].len() != spk.len() {
-                                    self.previous_hidden_spikes[li] = vec![0; spk.len()];
-                                }
-                                for j in 0..spk.len() {
-                                    if spk[j] != 0 {
-                                        self.hidden_activity[li][j] = 1.0;
-                                        self.previous_hidden_spikes[li][j] = 1;
-                                    } else {
-                                        self.previous_hidden_spikes[li][j] = 0;
-                                    }
-                                }
-                            }
-                        }
-                        if !snap.output_spikes.is_empty() {
-                            if self.output_activity.len() != snap.output_spikes.len() {
-                                self.output_activity.resize(snap.output_spikes.len(), 0.0);
-                            }
-                            let mut col = vec![0i8; snap.output_spikes.len()];
-                            let mut any = false;
-                            for (k, &sv) in snap.output_spikes.iter().enumerate() {
-                                if sv != 0 {
-                                    self.output_activity[k] = 1.0;
-                                    col[k] = 1;
-                                    any = true;
-                                }
-                            }
-                            let step = self.sim_step_counter.load(Ordering::Relaxed) as usize;
-                            if any || (step % 5 == 0) {
-                                self.raster_outputs.push_back(col);
-                                if self.raster_outputs.len() > self.raster_cols {
-                                    self.raster_outputs.pop_front();
-                                }
-                            }
+                    for (i, &sv) in snap.sensory_spikes.iter().enumerate() {
+                        if sv != 0 {
+                            self.sensory_activity[i] = 1.0;
                         }
                     }
                 }
+                if !snap.sensory_spikes.is_empty() {
+                    self.last_sensory_spikes = snap.sensory_spikes.clone();
+                }
+
+                // Hidden layers.
+                let layers = snap.hidden_spikes.len();
+                self.hidden_activity.resize(layers, Vec::new());
+                self.previous_hidden_spikes.resize(layers, Vec::new());
+                for (li, spk) in snap.hidden_spikes.iter().enumerate() {
+                    if self.hidden_activity[li].len() != spk.len() {
+                        self.hidden_activity[li] = vec![0.0; spk.len()];
+                    }
+                    if self.previous_hidden_spikes[li].len() != spk.len() {
+                        self.previous_hidden_spikes[li] = vec![0; spk.len()];
+                    }
+                    for j in 0..spk.len() {
+                        if spk[j] != 0 {
+                            self.hidden_activity[li][j] = 1.0;
+                            self.previous_hidden_spikes[li][j] = 1;
+                        } else {
+                            self.previous_hidden_spikes[li][j] = 0;
+                        }
+                    }
+                }
+
+                // Output + raster.
+                let num_out = snap.output_spikes.len();
+                if self.output_activity.len() != num_out {
+                    self.output_activity.resize(num_out, 0.0);
+                }
+                let mut col = vec![0i8; num_out];
+                let mut any_out = false;
+                for (k, &sv) in snap.output_spikes.iter().enumerate() {
+                    if sv != 0 {
+                        self.output_activity[k] = 1.0;
+                        col[k] = 1;
+                        any_out = true;
+                    }
+                }
+                if any_out || (snap.sim_step % 5 == 0) {
+                    self.raster_outputs.push_back(col);
+                    if self.raster_outputs.len() > self.raster_cols {
+                        self.raster_outputs.pop_front();
+                    }
+                }
+
+                // Connection statistics (refreshed every 100 steps in sim thread).
+                if snap.total_conn > 0 || snap.longterm_conn > 0 {
+                    self.longterm_conn = snap.longterm_conn;
+                    self.total_conn = snap.total_conn;
+                    self.last_longterm_update = std::time::Instant::now();
+                }
+
+                // Status line.
+                self.status = format!("Watching Standalone: t={} ms", snap.sim_time_ms as i64);
+
+                Some(snap.clone())
+                // snap (RwLockReadGuard) is dropped here — before the mutable call below
             } else {
-                self.pull_activity();
+                None
+            };
+
+            // Probe oscilloscope update outside the guard scope.
+            if let Some(sc) = snap_clone {
+                self.update_probes_from_ui_snapshot(&sc);
             }
+        } else {
+            self.pull_activity();
+        }
+        #[cfg(all(feature = "robot_io", unix))]
+        if matches!(self.view_source, ViewSource::Standalone)
+            && self.ipc_connected
+            && self.ipc_frame_count == 0
+        {
+            self.status = "IPC connected; waiting for sensory frames from Webots.".to_string();
         }
 
         let dist_node_arc = self.distributed_node.clone();
@@ -6240,15 +7720,18 @@ impl eframe::App for App {
         // --- 2. Panels and Controls ---
         {
             observe_time!("App::update/render");
-            egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.heading("Neuromorphic Network");
-            ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
-        });
+            egui::Panel::top("top").show_inside(ui, |ui| {
+                ui.heading("Neuromorphic Network");
+                ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
+            });
 
-            egui::SidePanel::right("controls").resizable(true).default_width(260.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.heading("Controls");
+            egui::Panel::right("controls")
+                .resizable(true)
+                .default_size(260.0_f32)
+                .show_inside(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.heading("Controls");
                     let sleep_label = if let Ok(r) = self.runner.try_read() {
                         if r.net.sleep_enabled {
                             if r.sleep_active { "sleeping" } else { "awake" }
@@ -6259,34 +7742,164 @@ impl eframe::App for App {
                         "busy"
                     };
                     ui.label(format!("Status: {} | Sleep: {}", self.status, sleep_label));
+                    ui.small(format!("FPAA: {}", self.fpaa_status.summary));
                     ui.separator();
 
+                    if let Some(binding) = self.remote_workspace_binding.clone() {
+                        ui.group(|ui| {
+                            ui.label(format!(
+                                "Remote workspace: {} @ {}",
+                                binding.workspace_id, binding.base_url
+                            ));
+                            ui.horizontal(|ui| {
+                                if ui.button("Pull").on_hover_text("Load the latest backend workspace snapshot into this UI session").clicked() {
+                                    if let Err(err) = self.pull_remote_workspace_snapshot() {
+                                        self.status = format!("Remote pull failed: {}", err);
+                                    }
+                                }
+                                if ui.button("Push").on_hover_text("Save the current UI snapshot back into the backend workspace").clicked() {
+                                    if let Err(err) = self.push_remote_workspace_snapshot() {
+                                        self.status = format!("Remote push failed: {}", err);
+                                    } else {
+                                        self.status = format!("Pushed remote workspace '{}'", binding.workspace_id);
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Start backend").on_hover_text("Resume background stepping in the backend runtime").clicked() {
+                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Start) {
+                                        self.status = format!("Remote start failed: {}", err);
+                                    }
+                                }
+                                if ui.button("Stop backend").on_hover_text("Pause background stepping in the backend runtime").clicked() {
+                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Stop) {
+                                        self.status = format!("Remote stop failed: {}", err);
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            let neuron_count = self
+                                .runner
+                                .try_read()
+                                .ok()
+                                .map(|runner| runner.total_neurons());
+                            let token_balance = self.remote_token_balance.clone();
+                            let token_balance_ref = token_balance.as_ref();
+                            let neuron_daily_rate = token_balance_ref
+                                .map(|balance| balance.neuron_daily_rate.max(0))
+                                .unwrap_or(1);
+                            let projected_burn = neuron_count
+                                .map(|count| (count as i64).saturating_mul(neuron_daily_rate));
+                            let balance_label = if self.remote_token_refresh_inflight
+                                && token_balance_ref.is_none()
+                            {
+                                "Loading...".to_string()
+                            } else {
+                                token_balance_ref
+                                    .map(|balance| format!("{} tok", balance.balance))
+                                    .unwrap_or_else(|| "-".to_string())
+                            };
+                            ui.label(format!("Token balance: {}", balance_label));
+                            if let Some(count) = neuron_count {
+                                let burn = projected_burn.unwrap_or(0);
+                                ui.small(format!(
+                                    "Projected burn: {} tok/day ({} neurons x {} tok)",
+                                    burn, count, neuron_daily_rate
+                                ));
+                            } else {
+                                ui.small(format!(
+                                    "Projected burn rate: {} tok per neuron per day.",
+                                    neuron_daily_rate
+                                ));
+                            }
+                            if let Some(balance) = token_balance_ref {
+                                if let Some(updated_at) = balance.updated_at.as_deref() {
+                                    ui.small(format!("Ledger snapshot: {}", updated_at));
+                                }
+                            }
+                            if let Some(error) = self.remote_token_error.as_deref() {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(255, 170, 120),
+                                    format!("Token info unavailable: {}", error),
+                                );
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("Refresh tokens").clicked() {
+                                    self.queue_remote_token_refresh(true);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.token_vault_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Token Vault", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.buy_tokens_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Buy tokens", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.billing_dashboard_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Billing", url);
+                                }
+                                if let Some(url) = token_balance_ref
+                                    .and_then(|balance| balance.billing_admin_url.as_deref())
+                                {
+                                    ui.hyperlink_to("Admin Billing", url);
+                                }
+                            });
+                            if binding.save_on_exit {
+                                ui.small("Remote workspace auto-push on exit is enabled.");
+                            }
+                        });
+                        ui.separator();
+                    }
+
                     let view_is_standalone = matches!(self.view_source, ViewSource::Standalone);
-                    let managed_playing = |net_id: &str| -> Option<bool> {
-                        let state_arc = state_arc_for_controls.as_ref()?;
-                        let state_guard = state_arc.try_read().ok()?;
-                        let net_arc = state_guard.networks.get(net_id)?;
-                        let net_guard = net_arc.try_read().ok()?;
-                        Some(net_guard.playing)
+                    let view_playing_state =
+                        self.resolve_view_playing(state_arc_for_controls.as_ref());
+                    let view_playing = view_playing_state.unwrap_or(false);
+                    let play_button_label = match view_playing_state {
+                        Some(true) => "Stop",
+                        Some(false) => "Start",
+                        None => "Syncing...",
                     };
-                    let view_playing = match &self.view_source {
-                        ViewSource::Standalone => self.playing,
-                        ViewSource::LocalManaged(id) => managed_playing(id).unwrap_or(false),
-                        ViewSource::ClusterGlobal(id) => self.dist_network_registry.get(id)
-                            .map(|n| n.playing)
-                            .or_else(|| managed_playing(id))
-                            .unwrap_or(false),
+                    let play_button_hover = if view_playing_state.is_some() {
+                        "Start/stop simulation stepping"
+                    } else {
+                        "Waiting for simulation state sync"
                     };
 
                     if self.remote_only && view_is_standalone {
                         ui.label("Remote-only mode: local simulation disabled.");
                     } else {
+                        if view_is_standalone
+                            && self.distributed_node.is_some()
+                            && (self.dist_is_orchestrator
+                                && !self.dist_network_registry.is_empty()
+                                || !self.dist_local_playing_cache.is_empty())
+                        {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 196, 128),
+                                "Standalone view controls only this local runner.",
+                            );
+                            ui.small(
+                                "Orchestrator Start/Stop/Repeat/Reset affects the selected cluster network instead. Switch View Selection to a local managed or cluster network to control the distributed run.",
+                            );
+                        }
                         let view_network_id = match &self.view_source {
                             ViewSource::Standalone => None,
                             ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => Some(id.clone()),
                         };
                         ui.horizontal(|ui| {
-                            if ui.button(if view_playing { "Stop" } else { "Start" }).on_hover_text("Start/stop simulation stepping").clicked() {
+                            let play_clicked = ui
+                                .add_enabled(
+                                    view_playing_state.is_some(),
+                                    egui::Button::new(play_button_label),
+                                )
+                                .on_hover_text(play_button_hover)
+                                .clicked();
+                            if play_clicked {
                                 if view_is_standalone {
                                     self.set_standalone_playing(!self.playing);
                                 } else if let Some(net_id) = view_network_id.as_ref() {
@@ -6395,9 +8008,29 @@ impl eframe::App for App {
                     }
                     #[cfg(feature = "opencl")]
                     {
-                        let cl_status = self.runner.try_read().map(|r| r.cl.is_some()).ok();
+                        let cl_status = self
+                            .runner
+                            .try_read()
+                            .map(|r| {
+                                r.cl.as_ref()
+                                    .map(|cl| (cl.execution_target(), cl.is_cuda_backend()))
+                            })
+                            .ok();
                         match cl_status {
-                            Some(true) => {
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, true))) => {
+                                ui.label("GPU: Detected (CUDA)");
+                                if self.playing {
+                                    let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
+                                    if !use_aarnn || !net_cloned.use_morphology {
+                                        ui.label("GPU Status: Active (Dense CUDA path)");
+                                    } else {
+                                        ui.label("GPU Status: Active (Sparse CUDA path)");
+                                    }
+                                } else {
+                                    ui.label("GPU Status: Inactive");
+                                }
+                            }
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, false))) => {
                                 ui.label("GPU: Detected (OpenCL)");
                                 if self.playing {
                                     let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
@@ -6410,7 +8043,15 @@ impl eframe::App for App {
                                     ui.label("GPU Status: Inactive");
                                 }
                             }
-                            Some(false) => {
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Cpu, _))) => {
+                                ui.label("GPU: Not Detected (OpenCL CPU fallback)");
+                                if self.playing {
+                                    ui.label("GPU Status: Active (OpenCL CPU path)");
+                                } else {
+                                    ui.label("GPU Status: Inactive");
+                                }
+                            }
+                            Some(None) => {
                                 ui.label("GPU: Not Detected");
                             }
                             None => {
@@ -6494,57 +8135,8 @@ impl eframe::App for App {
                         ui.label("Address");
                         ui.text_edit_singleline(&mut self.remote_addr_input);
                         if ui.button("Add").clicked() {
-                            let mut addr = self.remote_addr_input.trim().to_string();
-                            if !addr.is_empty() {
-                                if !addr.starts_with("http://") && !addr.starts_with("https://") {
-                                    addr = format!("http://{}", addr);
-                                }
-                                let exists = self.remote_connections.iter().any(|c| c.addr == addr);
-                                if !exists {
-                                    let stop = Arc::new(AtomicBool::new(false));
-                                    let stop_clone = stop.clone();
-                                    let tx = self.remote_status_tx.clone();
-                                    let addr_clone = addr.clone();
-                                    let rt = self.runtime_handle.clone();
-                                    rt.spawn(async move {
-                                        loop {
-                                            if stop_clone.load(Ordering::SeqCst) {
-                                                break;
-                                            }
-                                            match DistributedNeuromorphicClient::connect(addr_clone.clone()).await {
-                                                Ok(mut client) => {
-                                                    match client.get_system_status(Request::new(StatusRequest {})).await {
-                                                        Ok(resp) => {
-                                                            let status = resp.into_inner();
-                                                            let nodes = status.nodes.into_iter().map(|n| (n.node_id.clone(), n)).collect();
-                                                            let networks = status.networks.into_iter().map(|n| (n.network_id.clone(), n)).collect();
-                                                            let _ = tx.send(RemoteStatusMsg::Update {
-                                                                addr: addr_clone.clone(),
-                                                                nodes,
-                                                                networks,
-                                                            });
-                                                        }
-                                                        Err(e) => {
-                                                            let _ = tx.send(RemoteStatusMsg::Error {
-                                                                addr: addr_clone.clone(),
-                                                                error: format!("Status error: {}", e),
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    let _ = tx.send(RemoteStatusMsg::Error {
-                                                        addr: addr_clone.clone(),
-                                                        error: format!("Connect error: {}", e),
-                                                    });
-                                                }
-                                            }
-                                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                        }
-                                    });
-                                    self.remote_connections.push(RemoteConnection { addr, stop });
-                                }
-                            }
+                            let addr_input = self.remote_addr_input.clone();
+                            let _ = self.add_remote_orchestrator_connection(&addr_input);
                         }
                     });
 
@@ -6589,7 +8181,7 @@ impl eframe::App for App {
                 if self.distributed_node.is_some() {
                     let mut new_source = None;
                     let mut clear_filter = false;
-                    
+
                     ui.collapsing("View Selection & Cluster", |ui| {
                         let current_view = match &self.view_source {
                             ViewSource::Standalone => format!("Standalone: {}", self.brain_id),
@@ -6610,7 +8202,16 @@ impl eframe::App for App {
                             }
                             if is_orchestrator {
                                 if ui.button("Cluster Global (combined)").clicked() {
-                                    new_source = Some(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                                    // Use the network with the most neurons (has distribution
+                                    // data) rather than the orchestrator's own brain_id, which
+                                    // is a node ID and may not match any registered network.
+                                    let net_id = network_registry
+                                        .iter()
+                                        .filter(|(_, s)| !s.distribution.is_empty())
+                                        .max_by_key(|(_, s)| s.total_neurons)
+                                        .map(|(id, _)| id.clone())
+                                        .unwrap_or_else(|| self.brain_id.clone());
+                                    new_source = Some(ViewSource::ClusterGlobal(net_id));
                                     clear_filter = true;
                                 }
                             }
@@ -6654,7 +8255,19 @@ impl eframe::App for App {
                             for (id, status) in &connected_nodes {
                                 let label = format!("Focus {}", id);
                                 if ui.button(label).clicked() {
-                                    new_source = Some(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                                    // Keep current ClusterGlobal network ID if already set,
+                                    // otherwise pick the best registered network.
+                                    let net_id = if let ViewSource::ClusterGlobal(cur) = &self.view_source {
+                                        cur.clone()
+                                    } else {
+                                        network_registry
+                                            .iter()
+                                            .filter(|(_, s)| !s.distribution.is_empty())
+                                            .max_by_key(|(_, s)| s.total_neurons)
+                                            .map(|(nid, _)| nid.clone())
+                                            .unwrap_or_else(|| self.brain_id.clone())
+                                    };
+                                    new_source = Some(ViewSource::ClusterGlobal(net_id));
                                     filter_node = Some(id.clone());
                                 }
                                 if let Some(res) = &status.resources {
@@ -6678,7 +8291,7 @@ impl eframe::App for App {
                             });
                         }
                     });
-                    
+
                     if let Some(source) = new_source { self.set_view_source(source); }
                     if clear_filter { self.view_node_filter = None; }
                 }
@@ -6687,15 +8300,44 @@ impl eframe::App for App {
                     ui.collapsing("Cluster Dashboard", |ui| {
                         ui.label(format!("Node ID: {}", node_id));
                         ui.label(format!("Role: {}", if is_orchestrator { "Orchestrator" } else { "Worker Node" }));
-                        
+
                         if is_orchestrator {
                             ui.separator();
                             ui.label(format!("Active Networks: {}", network_registry.len()));
                             for (id, net) in &network_registry {
                                 ui.collapsing(format!("Network: {}", id), |ui| {
+                                    let deployment_modes = if net.deployment_modes.is_empty() {
+                                        "auto".to_string()
+                                    } else {
+                                        net.deployment_modes.join(", ")
+                                    };
                                     ui.label(format!("dt: {:.3} ms", net.current_dt));
                                     ui.label(format!("Total Neurons: {}", net.total_neurons));
-                                    
+                                    ui.label(format!(
+                                        "Deployment: {} [{}]",
+                                        deployment_modes, net.deployment_scope
+                                    ));
+                                    ui.label(format!(
+                                        "Live Transition: {} | Autonomous: {}",
+                                        if net.live_transition_allowed { "yes" } else { "no" },
+                                        if net.autonomous_transition_enabled {
+                                            "yes"
+                                        } else {
+                                            "no"
+                                        }
+                                    ));
+                                    if !net.last_transition_reason.is_empty() {
+                                        let source = if net.last_transition_source.is_empty() {
+                                            "unknown"
+                                        } else {
+                                            &net.last_transition_source
+                                        };
+                                        ui.label(format!(
+                                            "Last Transition: {} at {} ms ({})",
+                                            source, net.last_transition_ts_ms, net.last_transition_reason
+                                        ));
+                                    }
+
                                     // Calculate estimated nodes for 1ms cycle
                                     let mut total_workload_ms = 0.0;
                                     let mut total_cluster_neurons = 0;
@@ -6752,7 +8394,7 @@ impl eframe::App for App {
                                         } else {
                                             ui.label("Temp: n/a");
                                         }
-                                        
+
                                         ui.separator();
                                         ui.label(format!("GA Evaluations: {}", res.ga_total_evaluations));
                                         if total_cluster_ga_evals > 0 {
@@ -6774,13 +8416,47 @@ impl eframe::App for App {
                                         ui.label(format!("Redundant: {}", res.redundant_neurons));
                                         ui.label(format!("AARNN Depth: {}/{}", res.current_aarnn_depth, res.desired_aarnn_depth));
                                         ui.label(format!("Capacity Score: {:.2}", res.capacity_score));
-                                        
+                                        if !res.telemetry_source.is_empty() {
+                                            ui.separator();
+                                            ui.label(format!(
+                                                "External Telemetry: {}",
+                                                res.telemetry_source
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry CPU/Mem: {:.1}% / {:.1}%",
+                                                res.telemetry_cpu_usage_pct,
+                                                res.telemetry_mem_used_pct
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry Net RX/TX: {:.0} / {:.0} Bps",
+                                                res.telemetry_net_rx_bps,
+                                                res.telemetry_net_tx_bps
+                                            ));
+                                            ui.label(format!(
+                                                "Telemetry Disk Used: {:.1}% | Actions: {}",
+                                                res.telemetry_disk_used_pct,
+                                                res.telemetry_recent_action_count
+                                            ));
+                                            if res.num_gpus > 0
+                                                || res.telemetry_gpu_util_pct > 0.0
+                                                || res.telemetry_gpu_temp_c > 0.0
+                                                || res.telemetry_gpu_power_w > 0.0
+                                            {
+                                                ui.label(format!(
+                                                    "Telemetry GPU Util/Temp/Power: {:.1}% / {:.1} C / {:.1} W",
+                                                    res.telemetry_gpu_util_pct,
+                                                    res.telemetry_gpu_temp_c,
+                                                    res.telemetry_gpu_power_w
+                                                ));
+                                            }
+                                        }
+
                                         if res.ga_running {
                                             ui.separator();
                                             ui.colored_label(egui::Color32::LIGHT_GREEN, "🧬 GA Search Running");
                                             ui.label(format!("Generation: {}", res.ga_generation));
                                             ui.label(format!("Best Fitness: {:.4}", res.ga_best_fitness));
-                                            
+
                                             if !res.ga_best_config_json.is_empty() {
                                                 if ui.button("Apply Node's Best GA Params").clicked() {
                                                     if let Ok(cfg) = serde_json::from_str(&res.ga_best_config_json) {
@@ -6845,7 +8521,9 @@ impl eframe::App for App {
                             self.refresh_ui_buffers(); // Trigger layout recompute when switching node parts
                         }
                         if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-                            self.set_view_source(ViewSource::ClusterGlobal(self.brain_id.clone()));
+                            if let Some(net_id) = self.preferred_cluster_network_id() {
+                                self.set_view_source(ViewSource::ClusterGlobal(net_id));
+                            }
                         }
                     }
                 }
@@ -6861,7 +8539,7 @@ impl eframe::App for App {
                     ui.radio_value(&mut self.neuron_model, NeuronModelSel::Izh, "Izh").on_hover_text("Izhikevich: rich spiking dynamics via quadratic integrate-and-fire");
                     ui.radio_value(&mut self.neuron_model, NeuronModelSel::Aarnn, "AARNN").on_hover_text("Axon–Axon–Recurrent Neural Network: includes connection length and transmission velocity in thresholding");
                 });
-                
+
                 // AARNN specific parameters - always visible when AARNN is selected
                 if matches!(self.neuron_model, NeuronModelSel::Aarnn) || matches!(self.learning, LearningSel::Aarnn) {
                     ui.add_space(4.0);
@@ -7052,11 +8730,11 @@ impl eframe::App for App {
                                 NeuromodSignal::Stability => "Stability",
                             }
                         };
-                        let mut pick_signal = |ui: &mut egui::Ui, label: &str, sig: &mut NeuromodSignal| -> bool {
+                        let pick_signal = |ui: &mut egui::Ui, label: &str, sig: &mut NeuromodSignal| -> bool {
                             let mut changed = false;
                             ui.horizontal(|ui| {
                                 ui.label(label);
-                                egui::ComboBox::from_id_source(label)
+                                egui::ComboBox::from_id_salt(label)
                                     .selected_text(signal_label(*sig))
                                     .show_ui(ui, |ui| {
                                         let options = [
@@ -7169,13 +8847,10 @@ impl eframe::App for App {
                 match self.neuron_model {
                     NeuronModelSel::Lif => {
                         if runner_ready && !matches!(model_cloned, NeuronModel::Lif) {
-                            if matches!(model_cloned, NeuronModel::Aarnn) {
-                                // Transition away from AARNN: recreate runner to restore standard topology mapping (S->H0, H_last->O)
-                                let _ = self.sim_tx.send(SimControl::RecreateRunner(lif_cloned.clone(), stdp_cloned.clone(), net_cloned.clone(), NeuronModel::Lif, learning_cloned));
-                                self.refresh_ui_buffers();
-                            } else {
-                                let _ = self.sim_tx.send(SimControl::SetModel(NeuronModel::Lif));
-                            }
+                            // Preserve imported/connectome wiring when switching models.
+                            // RecreateRunner rebuilds random connectivity and breaks mapping.
+                            let _ = self.sim_tx.send(SimControl::SetModel(NeuronModel::Lif));
+                            self.refresh_ui_buffers();
                         }
                     }
                     NeuronModelSel::Izh => {
@@ -7183,19 +8858,17 @@ impl eframe::App for App {
                         let dt = lif_cloned.dt;
                         let izh = IzhikevichParams::from_preset(preset, dt);
                         if runner_ready && model_cloned != NeuronModel::Izh(izh.clone()) {
-                            if matches!(model_cloned, NeuronModel::Aarnn) {
-                                // Transition away from AARNN: recreate runner
-                                let _ = self.sim_tx.send(SimControl::RecreateRunner(lif_cloned.clone(), stdp_cloned.clone(), net_cloned.clone(), NeuronModel::Izh(izh), learning_cloned));
-                                self.refresh_ui_buffers();
-                            } else {
-                                let _ = self.sim_tx.send(SimControl::SetModel(NeuronModel::Izh(izh)));
-                            }
+                            // Preserve imported/connectome wiring when switching models.
+                            // RecreateRunner rebuilds random connectivity and breaks mapping.
+                            let _ = self.sim_tx.send(SimControl::SetModel(NeuronModel::Izh(izh)));
+                            self.refresh_ui_buffers();
                         }
                     }
                     NeuronModelSel::Aarnn => {
                         if runner_ready && !matches!(model_cloned, NeuronModel::Aarnn) {
-                            // Transition to AARNN: Recreate runner to ensure the biological bootstrap state (0 sensory/output, 1x1 hidden)
-                            let _ = self.sim_tx.send(SimControl::RecreateRunner(lif_cloned.clone(), stdp_cloned.clone(), net_cloned.clone(), NeuronModel::Aarnn, Learning::Aarnn));
+                            // Preserve imported/connectome wiring when switching models.
+                            // RecreateRunner rebuilds random connectivity and breaks mapping.
+                            let _ = self.sim_tx.send(SimControl::SetModel(NeuronModel::Aarnn));
                             self.apply_aarnn_bio_defaults();
                             self.aarnn_defaults_applied = true;
                             // self.apply_aarnn_bio_defaults already calls refresh_ui_buffers
@@ -7246,12 +8919,19 @@ impl eframe::App for App {
                             self.aarnn_defaults_applied = true;
                         }
                         let mut need_apply = false;
+                        let mut fpaa_changed = false;
+                        ui.collapsing("FPAA Offload", |ui| {
+                            fpaa_changed |= self.render_fpaa_controls(ui);
+                        });
+                        if fpaa_changed {
+                            need_apply = true;
+                        }
                         {
                             let net = &mut self.local_net;
                             let mut changed = false;
                             changed |= ui.add(egui::Slider::new(&mut net.aarnn_velocity, 0.1..=50.0).text("Default Velocity")).on_hover_text("Aggregate default velocity (used if per-segment velocities are zero)").changed();
                             changed |= ui.checkbox(&mut net.use_aarnn_delays, "Use Conduction Delays").on_hover_text("Apply velocity-based discrete delays proportional to connection length (growth3d)").changed();
-                            
+
                             // Per-segment controls (exact AARNN conduction)
                             ui.collapsing("Detailed Conduction Physics", |ui| {
                                 changed |= ui.add(egui::Slider::new(&mut net.axon_velocity, 0.0..=100.0).text("Axon velocity")).on_hover_text("If > 0, overrides default velocity for axon segments").changed();
@@ -7312,6 +8992,24 @@ impl eframe::App for App {
                                 });
                                 ui.separator();
                                 ui.group(|ui| {
+                                    ui.label("Dendritic Nonlinearity");
+                                    changed |= ui.checkbox(&mut net.aarnn_bio.dendritic_active_enabled, "Enable active dendrites")
+                                        .on_hover_text("Adds calcium/plateau-like dendritic compartment integration for hidden neurons").changed();
+                                    ui.add_enabled_ui(net.aarnn_bio.dendritic_active_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_ca_tau_ms, 10.0..=1000.0).text("Dendritic Ca tau (ms)"))
+                                            .on_hover_text("Time constant for dendritic calcium integration").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_tau_ms, 20.0..=2000.0).text("Plateau tau (ms)"))
+                                            .on_hover_text("Decay time constant of dendritic plateau state").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_ca_influx_gain, 0.0..=1.0).text("Ca influx gain"))
+                                            .on_hover_text("How strongly excitatory drive enters dendritic calcium state").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_threshold, 0.0..=5.0).text("Plateau threshold"))
+                                            .on_hover_text("Calcium level needed to recruit nonlinear dendritic boost").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_bio.dendritic_plateau_gain, 0.0..=2.0).text("Plateau gain"))
+                                            .on_hover_text("Maximum dendritic multiplicative gain contribution").changed();
+                                    });
+                                });
+                                ui.separator();
+                                ui.group(|ui| {
                                     ui.label("Advanced Bio Interactions");
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_inhibitory_fraction, 0.0..=0.8).text("Inhibitory fraction"))
                                         .on_hover_text("Fraction of presynaptic neurons treated as inhibitory for Dale-style sign constraints").changed();
@@ -7319,8 +9017,20 @@ impl eframe::App for App {
                                         .on_hover_text("0 disables Dale enforcement; 1 enforces strict fixed-sign output per presynaptic neuron").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_gap_junction_strength, 0.0..=0.2).text("Gap junction strength"))
                                         .on_hover_text("Electrical coupling term that nudges same-layer membrane potentials toward their local mean").changed();
+                                    changed |= ui.add(egui::Slider::new(&mut net.aarnn_gap_junction_radius, 0.0..=0.5).text("Gap junction radius"))
+                                        .on_hover_text("Locality radius for gap-junction coupling in normalized space; 0 falls back to global mean coupling").changed();
+                                    changed |= ui.checkbox(&mut net.aarnn_gap_junction_inhibitory_only, "Gap junctions inhibitory-only")
+                                        .on_hover_text("Restrict electrical coupling to inhibitory/interneuron-like neuron types").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_nmda_voltage_sensitivity, 0.0..=0.2).text("NMDA voltage sensitivity"))
                                         .on_hover_text("Voltage-dependent NMDA gating strength (0 disables voltage gating)").changed();
+                                    changed |= ui.checkbox(&mut net.volume_transmission_enabled, "Enable volume transmission")
+                                        .on_hover_text("Enable local neuromodulator diffusion-like gain fields around active neuromodulatory neurons").changed();
+                                    ui.add_enabled_ui(net.volume_transmission_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.volume_transmission_radius, 0.05..=1.0).text("Volume radius"))
+                                            .on_hover_text("Spatial radius of neuromodulator field spread").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.volume_transmission_strength, 0.0..=1.0).text("Volume strength"))
+                                            .on_hover_text("Gain applied by local neuromodulator field to hidden-layer input current").changed();
+                                    });
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_triplet_ltp_gain, 0.0..=2.0).text("Triplet LTP gain"))
                                         .on_hover_text("Scales an activity-based potentiation term in AARNN/STDP learning-rate modulation").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_triplet_ltd_gain, 0.0..=2.0).text("Triplet LTD gain"))
@@ -7333,6 +9043,22 @@ impl eframe::App for App {
                                         .on_hover_text("Exponential attenuation of transmitted signals based on morphology path length").changed();
                                     changed |= ui.add(egui::Slider::new(&mut net.aarnn_release_prob_heterogeneity, 0.0..=1.0).text("Release heterogeneity"))
                                         .on_hover_text("Per-synapse variation around baseline release probability `p_release_default`").changed();
+                                    changed |= ui.checkbox(&mut net.aarnn_myelination_enabled, "Enable myelination dynamics")
+                                        .on_hover_text("Activity-dependent myelination/demyelination that modulates conduction delay").changed();
+                                    ui.add_enabled_ui(net.aarnn_myelination_enabled, |ui| {
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelination_rate, 0.0..=0.02).text("Myelination rate"))
+                                            .on_hover_text("Growth rate of myelin for sufficiently active synapses").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_demyelination_rate, 0.0..=0.02).text("Demyelination rate"))
+                                            .on_hover_text("Decay rate of myelin for underused or metabolically stressed pathways").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelination_activity_target, 0.0..=1.0).text("Myelination target"))
+                                            .on_hover_text("Activity threshold above which myelin tends to increase").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_min_conduction_gain, 0.2..=2.0).text("Myelin min gain"))
+                                            .on_hover_text("Conduction factor at low myelin (values <1 slow conduction)").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_max_conduction_gain, 0.5..=4.0).text("Myelin max gain"))
+                                            .on_hover_text("Conduction factor at high myelin (higher values speed conduction)").changed();
+                                        changed |= ui.add(egui::Slider::new(&mut net.aarnn_myelin_initial, 0.0..=1.0).text("Initial myelin"))
+                                            .on_hover_text("Initial myelin state assigned to newly formed synapses").changed();
+                                    });
                                 });
                             });
 
@@ -7477,7 +9203,7 @@ impl eframe::App for App {
                         self.sensory_activity = vec![0.0; num_s];
                         self.hidden_activity = (0..num_l).map(|_| vec![0.0; num_h]).collect();
                         self.output_activity = vec![0.0; num_o];
-                        
+
                         let num_l2 = net.num_hidden_layers;
                         let num_h2 = net.num_hidden_per_layer_initial;
                         let num_s2 = net.num_sensory_neurons;
@@ -7566,10 +9292,11 @@ impl eframe::App for App {
                     let mut changed = false;
                     let mut growth_params_changed = false;
                     let mut geom_changed = false;
+                    let mut clumping_design_changed = false;
 
                     changed |= ui.checkbox(&mut net.morpho_growth_enabled, "Enable physical growth")
                         .on_hover_text("Allow dendrites to sprout and grow towards synaptic energy density, forming new connections on axon contact.").changed();
-                    
+
                     ui.add_enabled_ui(net.morpho_growth_enabled, |ui| {
                         // Intelligent Heuristic Section
                         ui.group(|ui| {
@@ -7584,7 +9311,7 @@ impl eframe::App for App {
 
                                 // Intelligent heuristic: progressively more aggressive if no/low growth
                                 let phase = self.boost_connectivity_count as f32;
-                                
+
                                 // --- Morphological (Physical) ---
                                 net.energy_attraction_radius = (0.4 + 0.2 * phase).min(3.0);
                                 net.energy_kernel_k = (2.0 - 0.3 * phase).max(0.01);
@@ -7593,15 +9320,15 @@ impl eframe::App for App {
                                 net.axon_contact_dist = (0.04 + 0.05 * phase).min(1.0);
                                 net.component_decay_rate = (0.01 + 0.0005 * phase).min(1.0);
                                 net.synaptic_stabilization_strength = (0.05 + 0.05 * phase).min(0.5);
-                                
+
                                 net.trunk_growth_rate = (0.005 + 0.005 * phase).min(0.5);
                                 net.branch_growth_rate = (0.02 + 0.02 * phase).min(1.0);
                                 net.bouton_growth_rate = (0.1 + 0.05 * phase).min(2.0);
                                 net.max_segment_length = (5.0 + 0.1 * phase).min(5.0);
-                                
+
                                 net.spatial_clumping_strength = (0.005 * phase).min(0.2);
                                 net.density_target = (0.05 + 0.05 * phase).min(1.0);
-                                
+
                                 // --- Topological (Network Structure) ---
                                 net.growth_enabled = true;
                                 self.growth_enabled = true; // Sync UI state
@@ -7624,7 +9351,7 @@ impl eframe::App for App {
                                 self.status = format!("Connectivity boosted (Phase {})", self.boost_connectivity_count);
                                 changed = true;
                             }
-                            
+
                             // Indicators
                             let topo_pot = (2.0f32 - net.saturation_threshold).clamp(0.0, 2.0) / 2.0;
                             let morph_pot = (net.energy_attraction_radius * net.dendrite_sprout_prob * net.axon_contact_dist * (1.0 + net.aarnn_ambient_energy_level) * 200.0).min(1.0);
@@ -7656,7 +9383,7 @@ impl eframe::App for App {
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.synaptic_stabilization_strength, 0.0..=1.0).text("Synaptic stabilization"))
                             .on_hover_text("Amount by which a synapse's stimuli (structural stability) increases per spike. Higher values make active synapses harder to prune.")
                             .changed();
-                        
+
                         ui.separator();
                         ui.label("Synaptic Dynamics & Stability");
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.component_pruning_threshold, 0.001..=0.2).text("Pruning threshold"))
@@ -7671,14 +9398,14 @@ impl eframe::App for App {
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.synaptic_consolidation_factor, 0.0..=1.0).text("Consolidation factor"))
                             .on_hover_text("Reduces the effective decay rate for established connections, rewarding stability.")
                             .changed();
-                        
+
                         ui.separator();
                         ui.label("Growth Rates & Constraints");
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.trunk_growth_rate, 0.0001..=0.5).text("Trunk growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.branch_growth_rate, 0.001..=1.0).text("Branch growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.bouton_growth_rate, 0.005..=2.0).text("Bouton growth rate")).changed();
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.max_segment_length, 0.1..=2.0).text("Max segment length")).changed();
-                        
+
                         ui.separator();
                         ui.label("Geometry & Collision");
                         geom_changed |= ui.checkbox(&mut net.enforce_unique_geometry, "Enforce unique geometry")
@@ -7714,7 +9441,8 @@ impl eframe::App for App {
                                 apply_clumping_design(net, net.clumping_design);
                                 growth_params_changed = true;
                                 // We'll trigger a full reset for design changes below
-                                geom_changed = true; 
+                                geom_changed = true;
+                                clumping_design_changed = true;
                             }
                         });
                         growth_params_changed |= ui.add(egui::Slider::new(&mut net.spatial_repulsion_strength, 0.0..=0.5).text("Spatial repulsion")).changed();
@@ -7755,7 +9483,21 @@ impl eframe::App for App {
                             .changed();
                     });
 
-                    if changed {
+                    if clumping_design_changed {
+                        let _ = self.sim_tx.send(SimControl::RecreateRunner(
+                            lif_cloned.clone(),
+                            stdp_cloned.clone(),
+                            self.local_net.clone(),
+                            model_cloned,
+                            learning_cloned,
+                        ));
+                        self.refresh_ui_buffers();
+                        self.status = format!(
+                            "Clumping design updated: {} ({} layers)",
+                            self.local_net.clumping_design.to_str(),
+                            self.local_net.num_hidden_layers
+                        );
+                    } else if changed {
                         let _ = self.sim_tx.send(SimControl::ApplyConfig(self.local_net.clone()));
                         let _ = self.sim_tx.send(SimControl::Reset);
                         self.refresh_ui_buffers();
@@ -7778,7 +9520,7 @@ impl eframe::App for App {
                         ui.label("Remote-only mode: local GA search disabled.");
                         return;
                     }
-                    
+
                     ui.add(egui::Slider::new(&mut self.ga_pop_size, 4..=100).text("Population size"));
                     ui.add(egui::Slider::new(&mut self.ga_generations, 1..=100).text("Generations"));
                     ui.add(egui::Slider::new(&mut self.ga_mutation_rate, 0.001..=0.3).text("Initial mutation rate"));
@@ -7825,13 +9567,13 @@ impl eframe::App for App {
                                 crate::ga::ga_reset_abort_reason();
                                 crate::ga::ga_clear_ramp_runtime_status();
                                 crate::ga::ga_mark_dirty();
-                                
+
                                 let (tx, rx) = std::sync::mpsc::channel();
                                 self.ga_rx = Some(rx);
-                                
+
                                 let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel();
                                 self.ga_control_tx = Some(ctrl_tx);
-                                
+
                                 // Determine if we are restarting from a previous search
                                 let mut is_restart = false;
                                 let mut existing_leaderboard = Vec::new();
@@ -7853,26 +9595,26 @@ impl eframe::App for App {
                             let gens = self.ga_generations;
                             let runtime_handle = self.runtime_handle.clone();
                             crate::ga::ga_set_stall_timeout_secs(base_cfg.ga_stall_timeout_secs);
-                                
+
                                 match std::thread::Builder::new().name("ga-ui".into()).spawn(move || {
                                     // Keep GA controller thread unpinned so worker budgeting and child pools
                                     // can see/use the full CPU set.
                                     let mut seed_rng = rand::rng();
                                     let mut rng = rand::rngs::StdRng::from_rng(&mut seed_rng);
                                     let mut ga = GASearch::new(pop_size.max(1), &base_cfg, &mut rng, dist_node, is_restart, existing_leaderboard);
-                                    
+
                                     // Set initial self-adaptive rates from UI
                                     for ind in &mut ga.population {
                                         ind.mutation_rate = mutation_rate;
                                         ind.crossover_rate = crossover_rate;
                                     }
-                                    
+
                                     let mut paused = false;
                                     let mut stop_requested = false;
                                     let mut ramp = crate::ga::GARampController::new(pop_size.max(1), sim_time);
                                     crate::ga::ga_clear_ramp_runtime_status();
 
-                                    for gen in 0..gens {
+                                    for gen_iter in 0..gens {
                                         // Check for control signals
                                         while let Ok(ctrl) = ctrl_rx.try_recv() {
                                             match ctrl {
@@ -7897,16 +9639,16 @@ impl eframe::App for App {
                                         }
 
                                         let plan = ramp.generation_plan();
-                                        crate::ga::ga_set_ramp_runtime(&plan, gen);
+                                        crate::ga::ga_set_ramp_runtime(&plan, gen_iter);
                                         crate::ga::GARampController::apply_plan_overrides(&plan);
                                         ga.resize_population(plan.population_size, &base_cfg, &mut rng);
                                         let gen_seed: u64 = rand::random();
                                         runtime_handle.block_on(ga.evaluate_population(plan.sim_time_ms, gen_seed, &tx));
                                         let success = crate::ga::ga_abort_reason().is_none();
                                         ramp.note_generation_result(success);
-                                        
+
                                         if tx.send(ga.clone()).is_err() { break; }
-                                        
+
                                         if !crate::ga::ga_wait_for_generation_headroom() {
                                             let _ = tx.send(ga.clone());
                                             break;
@@ -7945,7 +9687,7 @@ impl eframe::App for App {
                             ui.separator();
                             ui.label(format!("Generation: {}", ga.generation));
                             ui.label(format!("Best Fitness: {:.4}", ga.best_fitness));
-                            
+
                             if !ga.population.is_empty() {
                                 let avg_mut: f64 = ga.population.iter().map(|ind| ind.mutation_rate).sum::<f64>() / ga.population.len() as f64;
                                 let avg_cross: f64 = ga.population.iter().map(|ind| ind.crossover_rate).sum::<f64>() / ga.population.len() as f64;
@@ -8460,7 +10202,7 @@ impl eframe::App for App {
                             ui.label("Brain ID:");
                             ui.label(egui::RichText::new(&self.brain_id).strong());
                         });
-                        
+
                         ui.collapsing("Connection", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Socket:");
@@ -8468,8 +10210,14 @@ impl eframe::App for App {
                                     .on_hover_text("UDS path to bind and receive frames: AER (AER1) preferred, or legacy [f32 t_ms] + [S f32] + optional [f32 reward].");
                             });
                             if ui.button("Bind / Restart").on_hover_text("Bind the IPC server socket with current sizes and path").clicked() {
-                                let s = self.local_net.num_sensory_neurons; 
-                                let o = self.local_net.num_output_neurons;
+                                let (s, o) = if let Ok(r) = self.runner.try_read() {
+                                    (r.net.num_sensory_neurons, r.net.num_output_neurons)
+                                } else {
+                                    (
+                                        self.local_net.num_sensory_neurons,
+                                        self.local_net.num_output_neurons,
+                                    )
+                                };
                                 let _ = self.sim_tx.send(SimControl::BindIpc(self.ipc_sock_path.clone(), s, o));
                                 self.status = format!("Requested IPC bind: {}", self.ipc_sock_path);
                             }
@@ -8478,7 +10226,7 @@ impl eframe::App for App {
                             let color = if self.ipc_connected { egui::Color32::GREEN } else { egui::Color32::RED };
                             let peer = self.ipc_last_peer.as_deref().unwrap_or("none");
                             let age_ms = self.ipc_last_receive_time.map(|t| t.elapsed().as_millis() as i64).unwrap_or(-1);
-                            
+
                             ui.horizontal(|ui| { ui.label("Connected:"); ui.colored_label(color, conn); });
                             ui.label(format!("Peer: {}", peer));
                             ui.label(format!("Last frame: {} ms ago", age_ms));
@@ -8486,6 +10234,329 @@ impl eframe::App for App {
 
                         #[cfg(all(feature = "robot_io", unix))]
                         ui.collapsing("Encoding", |ui| {
+                            let mut io_changed = false;
+                            {
+                                let spike_io = &mut self.local_net.spike_io;
+                                let prev_profile = spike_io.profile;
+                                let prev_input_strategy = spike_io.input_strategy;
+                                let prev_output_strategy = spike_io.output_strategy;
+                                ui.label("Network spike I/O policy");
+                                ui.horizontal(|ui| {
+                                    ui.label("Profile:");
+                                    egui::ComboBox::from_id_salt("ipc_io_profile")
+                                        .selected_text(spike_io.profile.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Auto,
+                                                "auto",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Generic,
+                                                "generic",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Celegans,
+                                                "celegans",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Drosophila,
+                                                "drosophila",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Nao,
+                                                "nao",
+                                            );
+                                        });
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Input:");
+                                    egui::ComboBox::from_id_salt("ipc_input_strategy")
+                                        .selected_text(spike_io.input_strategy.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::ProfileDefault,
+                                                "profile_default",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Threshold,
+                                                "threshold",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Rate,
+                                                "rate",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationThreshold,
+                                                "population_threshold",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationRate,
+                                                "population_rate",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::PopulationLevel,
+                                                "population_level",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Ttfs,
+                                                "ttfs",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Isi,
+                                                "isi",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Phase,
+                                                "phase",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.input_strategy,
+                                                SpikeInputEncodingStrategy::Multiplex,
+                                                "multiplex",
+                                            );
+                                        });
+                                    ui.label("Output:");
+                                    egui::ComboBox::from_id_salt("ipc_output_strategy")
+                                        .selected_text(spike_io.output_strategy.as_str())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::ProfileDefault,
+                                                "profile_default",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::Binary,
+                                                "binary",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::PopulationAverage,
+                                                "population_average",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.output_strategy,
+                                                SpikeOutputDecodingStrategy::Graded,
+                                                "graded",
+                                            );
+                                        });
+                                });
+                                io_changed |= prev_profile != spike_io.profile
+                                    || prev_input_strategy != spike_io.input_strategy
+                                    || prev_output_strategy != spike_io.output_strategy;
+                                io_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut spike_io.threshold, 0.0..=1.0)
+                                            .text("Threshold"),
+                                    )
+                                    .on_hover_text(
+                                        "Threshold used by threshold/generic encoders and as a fallback for profile_default",
+                                    )
+                                    .changed();
+                                match spike_io.input_strategy {
+                                    SpikeInputEncodingStrategy::Rate => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.rate.low_gain,
+                                                    0.0..=2.0,
+                                                )
+                                                .text("Rate low gain"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.rate.high_value_bias,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Rate high bias"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::PopulationThreshold
+                                    | SpikeInputEncodingStrategy::PopulationRate
+                                    | SpikeInputEncodingStrategy::PopulationLevel => {}
+                                    SpikeInputEncodingStrategy::Ttfs => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.ttfs.window_steps,
+                                                    1..=128,
+                                                )
+                                                .text("TTFS window"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.ttfs.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("TTFS threshold"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Isi => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.min_interval_steps,
+                                                    1..=64,
+                                                )
+                                                .text("ISI min"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.max_interval_steps,
+                                                    1..=256,
+                                                )
+                                                .text("ISI max"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.isi.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("ISI threshold"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Phase => {
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.frequency_hz,
+                                                    0.1..=120.0,
+                                                )
+                                                .text("Phase Hz"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.phase_jitter,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Phase jitter"),
+                                            )
+                                            .changed();
+                                        io_changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut spike_io.phase.threshold,
+                                                    0.0..=1.0,
+                                                )
+                                                .text("Phase gate"),
+                                            )
+                                            .changed();
+                                    }
+                                    SpikeInputEncodingStrategy::Multiplex => {
+                                        ui.label("Multiplex components");
+                                        let strategies = &mut spike_io.multiplex.strategies;
+                                        let mut toggle =
+                                            |ui: &mut egui::Ui,
+                                             label: &str,
+                                             primitive: SpikeInputPrimitive| {
+                                                let mut enabled = strategies.contains(&primitive);
+                                                if ui.checkbox(&mut enabled, label).changed() {
+                                                    if enabled {
+                                                        if !strategies.contains(&primitive) {
+                                                            strategies.push(primitive);
+                                                        }
+                                                    } else {
+                                                        strategies.retain(|s| *s != primitive);
+                                                    }
+                                                    io_changed = true;
+                                                }
+                                            };
+                                        ui.horizontal(|ui| {
+                                            toggle(ui, "threshold", SpikeInputPrimitive::Threshold);
+                                            toggle(ui, "rate", SpikeInputPrimitive::Rate);
+                                            toggle(ui, "ttfs", SpikeInputPrimitive::Ttfs);
+                                            toggle(ui, "isi", SpikeInputPrimitive::Isi);
+                                            toggle(ui, "phase", SpikeInputPrimitive::Phase);
+                                        });
+                                        ui.horizontal(|ui| {
+                                            toggle(
+                                                ui,
+                                                "population_threshold",
+                                                SpikeInputPrimitive::PopulationThreshold,
+                                            );
+                                            toggle(
+                                                ui,
+                                                "population_rate",
+                                                SpikeInputPrimitive::PopulationRate,
+                                            );
+                                            toggle(
+                                                ui,
+                                                "population_level",
+                                                SpikeInputPrimitive::PopulationLevel,
+                                            );
+                                        });
+                                    }
+                                    SpikeInputEncodingStrategy::ProfileDefault
+                                    | SpikeInputEncodingStrategy::Threshold => {}
+                                }
+                                if matches!(
+                                    spike_io.input_strategy,
+                                    SpikeInputEncodingStrategy::PopulationThreshold
+                                        | SpikeInputEncodingStrategy::PopulationRate
+                                        | SpikeInputEncodingStrategy::PopulationLevel
+                                        | SpikeInputEncodingStrategy::Multiplex
+                                ) || matches!(
+                                    spike_io.output_strategy,
+                                    SpikeOutputDecodingStrategy::PopulationAverage
+                                ) {
+                                    io_changed |= ui
+                                        .add(
+                                            egui::DragValue::new(
+                                                &mut spike_io.population.neurons_per_value,
+                                            )
+                                            .range(1..=128)
+                                            .speed(1.0)
+                                            .prefix("Population n/v "),
+                                        )
+                                        .changed();
+                                    io_changed |= ui
+                                        .add(
+                                            egui::Slider::new(
+                                                &mut spike_io.population.threshold,
+                                                0.0..=1.0,
+                                            )
+                                            .text("Population threshold"),
+                                        )
+                                        .changed();
+                                }
+                            }
+                            if io_changed {
+                                self.ipc_threshold = self.local_net.spike_io.threshold;
+                                self.quantizer.threshold = self.local_net.spike_io.threshold;
+                                let _ = self
+                                    .sim_tx
+                                    .send(SimControl::ApplyConfig(self.local_net.clone()));
+                            }
+
+                            ui.separator();
+                            ui.label("Legacy IPC mapping settings");
                             ui.horizontal(|ui| {
                                 ui.label("Neurons/value:");
                                 if ui.add(egui::DragValue::new(&mut self.ipc_neurons_per_value).range(1..=128))
@@ -8495,14 +10566,20 @@ impl eframe::App for App {
                                     }
                                 }
                             });
-                            ui.checkbox(&mut self.quantizer.probabilistic, "Probabilistic (Poisson)")
-                                .on_hover_text("Enable Poisson-like rate coding (spike patterns related to values)");
-                            
+                            ui.checkbox(
+                                &mut self.quantizer.probabilistic,
+                                "Legacy probabilistic quantizer",
+                            )
+                            .on_hover_text(
+                                "Only used by the older port-mapping quantizer paths; the network spike_io policy above drives current IPC encoding",
+                            );
+
                             let mut thr = self.ipc_threshold;
                             if ui.add(egui::Slider::new(&mut thr, 0.0..=1.0).text("Threshold"))
                                 .on_hover_text("Float→spike threshold; lower to increase activity").changed() {
                                 self.ipc_threshold = thr;
                                 self.quantizer.threshold = thr;
+                                self.local_net.spike_io.threshold = thr;
                             }
                             ui.checkbox(&mut self.ipc_bias_last_sensory_input, "Bias last input")
                                 .on_hover_text("Keep last sensory channel ≥ 0.7 to encourage early spiking");
@@ -8510,11 +10587,23 @@ impl eframe::App for App {
 
                         #[cfg(all(feature = "robot_io", unix))]
                         ui.collapsing("Diagnostics", |ui| {
+                            let (runner_s, runner_o) = if let Ok(r) = self.runner.try_read() {
+                                (r.net.num_sensory_neurons, r.net.num_output_neurons)
+                            } else {
+                                (
+                                    net_cloned.num_sensory_neurons,
+                                    net_cloned.num_output_neurons,
+                                )
+                            };
                             ui.label(format!("Frames processed: {}", self.ipc_frame_count));
                             ui.label(format!("Drops: {}", self.ipc_packet_drop_count));
                             ui.label(format!("Size errors: {}", self.ipc_size_mismatch_count));
                             ui.label(format!("Last frame steps: {}", self.ipc_last_steps));
-                            ui.label(format!("Network S={} O={}", net_cloned.num_sensory_neurons, net_cloned.num_output_neurons));
+                            ui.label(format!("Runner S={} O={}", runner_s, runner_o));
+                            if let Some(hs) = self.ipc_last_handshake.as_ref() {
+                                let (ipc_s, ipc_o) = resolve_ipc_handshake_sizes(hs, runner_s.max(1), runner_o.max(1));
+                                ui.label(format!("IPC negotiated S={} O={}", ipc_s, ipc_o));
+                            }
                             if ui.button("Clear Stats").clicked() {
                                 self.ipc_frame_count = 0;
                                 self.ipc_packet_drop_count = 0;
@@ -8590,7 +10679,13 @@ impl eframe::App for App {
                             counts = vec![net_cloned.num_hidden_per_layer_initial; net_cloned.num_hidden_layers];
                         }
                     }
-                    ui.label(format!("Layers: {} — per-layer counts: {:?}", net_cloned.num_hidden_layers, counts));
+                    let total_hidden: usize = counts.iter().sum();
+                    ui.label(format!(
+                        "Layers: {} — total hidden: {} — per-layer counts: {}",
+                        counts.len(),
+                        total_hidden,
+                        Self::compact_usize_list(&counts)
+                    ));
                     let refresh_due = self.last_conn_stats_refresh.elapsed().as_millis() as u64 >= self.conn_stats_refresh_ms;
                     let counts_from_edge_cache = self.show_static_overlays || self.force_show_connections;
                     if refresh_due && !counts_from_edge_cache {
@@ -8606,7 +10701,10 @@ impl eframe::App for App {
                         Some(self.cached_conn_counts.clone())
                     };
                     if let Some(conn_counts) = conn_counts {
-                        ui.label(format!("Per-layer connections: {:?}", conn_counts));
+                        ui.label(format!(
+                            "Per-layer connections: {}",
+                            Self::compact_usize_list(&conn_counts)
+                        ));
                     } else {
                         ui.label("Per-layer connections: (busy)");
                     }
@@ -8659,7 +10757,7 @@ impl eframe::App for App {
                         });
                         ui.separator();
                         // Provider band probes (if available)
-                        if let Some(bands) = bands_guard.as_deref() { 
+                        if let Some(bands) = bands_guard.as_deref() {
                             ui.horizontal(|ui|{
                                 ui.label("Band b:");
                                 let mut b = 0usize; ui.add(egui::DragValue::new(&mut b).range(0..=bands.len().saturating_sub(1)));
@@ -9474,13 +11572,52 @@ impl eframe::App for App {
                         }
                         ui.label("Tip: You can set the environment variable NMD_PYTHON to point to your python3 binary.");
                     });
+                    ui.separator();
+                    ui.collapsing("Companion Interfaces", |ui| {
+                        ui.label("Browser surfaces now share a consistent session/runtime shell. Use each surface for the role it is best at instead of forcing one UI to do everything.");
+                        ui.separator();
+                        egui::Grid::new("ui_surface_matrix")
+                            .num_columns(3)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.strong("Surface");
+                                ui.strong("Role");
+                                ui.strong("Best for");
+                                ui.end_row();
+
+                                ui.label("Native UI");
+                                ui.label("Operational");
+                                ui.label("Full simulation control, morphology, GA search, deep local import/export.");
+                                ui.end_row();
+
+                                ui.label("Web UI");
+                                ui.label("Operational");
+                                ui.label("Remote orchestration, browser topology view, probes, browser save/load, export.");
+                                ui.end_row();
+
+                                ui.label("Docs");
+                                ui.label("Reference");
+                                ui.label("Function matrix, auth flow, runtime notes, endpoint contract.");
+                                ui.end_row();
+
+                                ui.label("Swagger");
+                                ui.label("Executable");
+                                ui.label("Same-origin API request testing with the current browser session cookie.");
+                                ui.end_row();
+                            });
+                        ui.separator();
+                        ui.label("When the companion web server is running, the browser routes are:");
+                        ui.label("/  -> Web UI");
+                        ui.label("/docs  -> interface matrix + reference");
+                        ui.label("/docs/swagger  -> interactive API explorer");
+                    });
                 });
             });
         });
     });
 
             let state_arc_for_layout = state_arc.clone();
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
             // Main drawing area
             let avail = ui.available_size();
             let panel_rect = ui.allocate_space(avail).1;
@@ -9519,7 +11656,7 @@ impl eframe::App for App {
                 }
                 // Mouse wheel Y scroll as zoom (use moderate sensitivity)
                 if pointer_over_canvas && !mouse_over_scope {
-                    let scroll_y = i.raw_scroll_delta.y as f32;
+                    let scroll_y = i.smooth_scroll_delta.y as f32;
                     if scroll_y.abs() > 0.5 {
                         // convert wheel delta to multiplicative factor (~ 120 per notch typical)
                         let f: f32 = 1.0 + (scroll_y / 480.0);
@@ -9551,7 +11688,7 @@ impl eframe::App for App {
                         } else {
                             egui::pos2(x_ref * old_zoom + self.cam_pan.x, y_ref * old_zoom + self.cam_pan.y)
                         };
-                        
+
                         let focal_point = i.pointer.hover_pos()
                             .filter(|p| panel_rect.contains(*p))
                             .unwrap_or(current_network_center);
@@ -9626,46 +11763,27 @@ impl eframe::App for App {
                     if let Some(state_arc) = state_arc_for_layout.as_ref() {
                         if let Ok(s) = state_arc.try_read() {
                             if let Some(net_arc) = s.networks.get(id) {
-                                let arc = net_arc.clone();
-                                managed_net_arc_for_guard = Some(arc);
-                                managed_net_guard = managed_net_arc_for_guard.as_ref().unwrap().try_read().ok();
+                                managed_net_arc_for_guard = Some(net_arc.clone());
+                                managed_net_guard = managed_net_arc_for_guard
+                                    .as_ref()
+                                    .and_then(|arc| arc.try_read().ok());
                                 if let Some(ref m) = managed_net_guard {
                                     Some(&m.runner)
-                                } else {
-                                    if let Ok(guard) = runner_arc_for_guard.try_read() {
-                                        standalone_guard = Some(guard);
-                                        Some(&*standalone_guard.as_ref().unwrap())
-                                    } else {
-                                        runner_busy = true;
-                                        None
-                                    }
-                                }
-                            } else {
-                                if let Ok(guard) = runner_arc_for_guard.try_read() {
-                                    standalone_guard = Some(guard);
-                                    Some(&*standalone_guard.as_ref().unwrap())
                                 } else {
                                     runner_busy = true;
                                     None
                                 }
-                            }
-                        } else {
-                            if let Ok(guard) = runner_arc_for_guard.try_read() {
-                                standalone_guard = Some(guard);
-                                Some(&*standalone_guard.as_ref().unwrap())
                             } else {
                                 runner_busy = true;
                                 None
                             }
-                        }
-                    } else {
-                        if let Ok(guard) = runner_arc_for_guard.try_read() {
-                            standalone_guard = Some(guard);
-                            Some(&*standalone_guard.as_ref().unwrap())
                         } else {
                             runner_busy = true;
                             None
                         }
+                    } else {
+                        runner_busy = true;
+                        None
                     }
                 }
             };
@@ -9724,19 +11842,38 @@ impl eframe::App for App {
             let layout_ns = cluster_layout_ns.unwrap_or(active_net.num_sensory_neurons);
             let layout_o = cluster_layout_o.unwrap_or(active_net.num_output_neurons);
             let layout_layers = cluster_layout_layers.unwrap_or(active_net.num_hidden_layers.max(1));
-            let cache_layout_active = (self.show_static_overlays || self.force_show_connections)
+            // In ClusterGlobal mode the snapshot comes from one node only, so
+            // cached_layer_sizes reflects a single node's neuron counts rather than the
+            // cluster aggregate.  Always bypass the cache path so cluster_layer_sizes
+            // (which sums all nodes) is used for layout instead.
+            let cache_layout_active = !matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && (self.show_static_overlays || self.force_show_connections)
                 && !self.cached_edges.is_empty()
                 && !self.cached_layer_sizes.is_empty();
             #[cfg(feature = "growth3d")]
-            let cache_topology_active = cache_layout_active && self.cached_edge_topo.is_some();
+            let use_aarnn_layout = matches!(self.network_layout, NetworkLayout::Aarnn);
+            #[cfg(feature = "growth3d")]
+            let cache_topology_active =
+                use_aarnn_layout && cache_layout_active && self.cached_edge_topo.is_some();
             #[cfg(feature = "growth3d")]
             let ui_snapshot_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
             #[cfg(feature = "growth3d")]
-            let snapshot_topology_available = ui_snapshot_opt.as_ref().map(|snap| {
-                !snap.topo_hidden.is_empty() || !snap.topo_sensory.is_empty() || !snap.topo_output.is_empty()
-            }).unwrap_or(false);
+            let snapshot_topology_allowed = matches!(self.view_source, ViewSource::Standalone);
             #[cfg(feature = "growth3d")]
-            let prefer_snapshot_topology = !cache_topology_active
+            let snapshot_topology_available = ui_snapshot_opt
+                .as_ref()
+                .map(|snap| {
+                    snapshot_topology_allowed
+                        && use_aarnn_layout
+                        && (!snap.topo_hidden.is_empty()
+                            || !snap.topo_sensory.is_empty()
+                            || !snap.topo_output.is_empty())
+                })
+                .unwrap_or(false);
+            #[cfg(feature = "growth3d")]
+            let prefer_snapshot_topology = use_aarnn_layout
+                && snapshot_topology_allowed
+                && !cache_topology_active
                 && (self.playing || self.ga_running || runner_busy)
                 && snapshot_topology_available;
             let mut layer_sizes: Vec<usize> = if cache_layout_active {
@@ -9772,7 +11909,7 @@ impl eframe::App for App {
             }
             // Keep last known 3D layout if the runner is busy to avoid falling back to grid layout.
         #[cfg(feature = "growth3d")]
-        let growth_check = self.growth_enabled;
+        let growth_check = active_net.growth_enabled;
         #[cfg(not(feature = "growth3d"))]
         let growth_check = false;
 
@@ -9790,7 +11927,7 @@ impl eframe::App for App {
                 }
             }
             #[cfg(feature = "growth3d")]
-            if self.growth_enabled {
+            if self.growth_enabled && use_aarnn_layout {
                 // Avoid recomputing full topology layout on every frame while dragging.
                 if self.playing && !camera_interacting {
                     if self.last_layout_recompute.elapsed() >= std::time::Duration::from_millis(33) {
@@ -9883,20 +12020,26 @@ impl eframe::App for App {
                 #[cfg(not(feature = "growth3d"))]
                 let _cluster_topo_opt: Option<()> = None;
                 #[cfg(feature = "growth3d")]
-                let use_aarnn_layout = matches!(self.network_layout, NetworkLayout::Aarnn)
-                    && (cache_topology_active || snapshot_topology_available || active_runner_opt.is_some() || cluster_topo_opt.is_some());
+                let active_runner_topology_available = active_runner_opt
+                    .map(|runner| {
+                        !runner.topo.layers.is_empty()
+                            || !runner.topo.sensory_nodes.is_empty()
+                            || !runner.topo.output_nodes.is_empty()
+                    })
+                    .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
-                let topo_enabled = if cache_topology_active {
-                    true
-                } else if prefer_snapshot_topology {
-                    snapshot_topology_available
-                } else {
-                    match self.view_source {
-                        ViewSource::Standalone => self.growth_enabled,
-                        ViewSource::ClusterGlobal(_) => cluster_topo_opt.is_some(),
-                        _ => active_runner_opt.map(|r| r.net.growth_enabled).unwrap_or(false),
-                    }
-                };
+                let cluster_topology_available = cluster_topo_opt
+                    .map(|topo| {
+                        !topo.layers.is_empty()
+                            || !topo.sensory_nodes.is_empty()
+                            || !topo.output_nodes.is_empty()
+                    })
+                    .unwrap_or(false);
+                #[cfg(feature = "growth3d")]
+                let topo_enabled = cache_topology_active
+                    || snapshot_topology_available
+                    || active_runner_topology_available
+                    || cluster_topology_available;
 
                 #[cfg(feature = "growth3d")]
                 if use_aarnn_layout {
@@ -10481,10 +12624,10 @@ impl eframe::App for App {
                     if dist > 5.0 {
                         painter.line_segment(
                             [*label_pos, *target_pos],
-                            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(80)),
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(80)),
                         );
                     }
-                    
+
                     painter.text(
                         *label_pos,
                         egui::Align2::CENTER_CENTER,
@@ -10672,7 +12815,7 @@ impl eframe::App for App {
                                 }
                                 let convex_smooth = smooth_polygon(convex_inflated, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 18); // transparent fill
-                                let membrane_stroke_bg = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(180, 195, 255, 64));
+                                let membrane_stroke_bg = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(180, 195, 255, 64));
                                 painter.add(egui::Shape::convex_polygon(convex_smooth, membrane_fill, membrane_stroke_bg));
                             }
 
@@ -10680,7 +12823,7 @@ impl eframe::App for App {
                             let k = ((n as f32).sqrt() as usize).clamp(3, 25);
                             let now = std::time::Instant::now();
                             let force_recompute = self.last_hull_update.elapsed() > std::time::Duration::from_millis(300) || self.cached_skull_hull.is_empty();
-                            
+
                             if force_recompute {
                                 self.cached_skull_hull = concave_hull_knn(pts2d.clone(), k);
                                 self.last_hull_update = now;
@@ -10702,11 +12845,11 @@ impl eframe::App for App {
                                     }
                                 }
                                 let outline_smooth = smooth_polygon(outline, 3);
-                                let membrane_stroke = egui::Stroke::new(1.6, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 140));
+                                let membrane_stroke = egui::Stroke::new(1.6_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 140));
                                 painter.add(egui::Shape::closed_line(outline_smooth, membrane_stroke));
                             }
                         }
-                    } else if let Some((rx, ry, rz)) = skull.radii { 
+                    } else if let Some((rx, ry, rz)) = skull.radii {
                         // Sample ellipsoid surface, project to 2D, compute convex hull and draw as vector polygon
                         let cx = skull.center.x - pivot.0;
                         let cyw = skull.center.y - pivot.1;
@@ -10748,7 +12891,7 @@ impl eframe::App for App {
                             if hull.len() >= 3 {
                                 let hull_smooth = smooth_polygon(hull, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
-                                let membrane_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40));
+                                let membrane_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40));
                                 painter.add(egui::Shape::convex_polygon(hull_smooth, membrane_fill, membrane_stroke));
                             }
                         }
@@ -10761,7 +12904,7 @@ impl eframe::App for App {
                         let radius_proj = skull.radius * scale_x.max(scale_y);
                         let membrane_col = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
                         painter.circle_filled(center_proj, radius_proj, membrane_col);
-                        painter.circle_stroke(center_proj, radius_proj, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40)));
+                        painter.circle_stroke(center_proj, radius_proj, egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40)));
                     }
                 }
             }
@@ -10799,7 +12942,7 @@ impl eframe::App for App {
                         let y = panel_rect.top() + 28.0;
                         let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(box_w, box_h));
                         painter.rect_filled(rect, 6.0, egui::Color32::from_rgba_unmultiplied(20, 20, 25, 200));
-                        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
+                        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60)), egui::StrokeKind::Outside);
                         painter.text(
                             egui::pos2(x + pad, y + pad - 1.0),
                             egui::Align2::LEFT_TOP,
@@ -10837,15 +12980,20 @@ impl eframe::App for App {
             for (li, layer) in hidden_positions.iter().enumerate() {
                 let (col_h_base, vis_h) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, li as isize, egui::Color32::from_rgb(255, 160, 60), &network_registry);
                 if !vis_h && view_node_filter.is_some() { continue; }
-                
+
                 for (j, &p) in layer.iter().enumerate() {
-                    let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    // In ClusterGlobal mode activity data is only available for the local
+                    // node; remote neurons have no entry in hidden_activity.  Use a 0.5
+                    // baseline so all cluster neurons render at a visible brightness rather
+                    // than the near-invisible 30% that a 0.0 default produces.
+                    let activity_default = if matches!(view_source, ViewSource::ClusterGlobal(_)) { 0.5 } else { 0.0 };
+                    let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(activity_default).clamp(0.0, 1.0);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
                     let mut col = col_h_base.gamma_multiply(0.30 + 0.70 * a);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
                     let mut r_h = radius_h;
                     #[cfg(feature = "growth3d")]
-                    if growth_enabled {
+                    if growth_enabled && use_aarnn_layout {
                         let depth_node_opt: Option<&crate::topology::Node3D> = if cache_topology_active {
                             self.cached_edge_topo
                                 .as_ref()
@@ -10929,7 +13077,7 @@ impl eframe::App for App {
                             points: [p0, cp, p1],
                             closed: false,
                             fill: egui::Color32::TRANSPARENT,
-                            stroke: egui::epaint::PathStroke::new(if is_longterm { 1.5 } else { 1.0 }, color),
+                            stroke: egui::epaint::PathStroke::new(if is_longterm { 1.5 } else { 1.0_f32 }, color),
                         }));
                     } else {
                         painter.line_segment([p0, p1], egui::Stroke { width: if is_longterm { 1.5 } else { 1.0 }, color });
@@ -11266,20 +13414,20 @@ impl eframe::App for App {
                                 let p0 = send_pos[i];
                                 let p1 = recv_pos[r];
                                 let is_longterm = check_lt(r, i);
-                                
+
                                 // width/alpha from weight (absolute)
                                 let abs_w = w.abs();
                                 let ww = (1.0 + 3.0 * abs_w).clamp(1.0, 4.0) * (if is_longterm { 1.3 } else { 1.0 });
-                                
+
                                 let mut base_col = if is_longterm {
                                     egui::Color32::from_rgb(0, 255, 128) // Greenish for longterm
                                 } else {
                                     egui::Color32::from_rgb(255, 128, 0) // Orangeish for new
                                 };
-                                
+
                                 if !vis_from || !vis_to { base_col = base_col.gamma_multiply(0.2); }
                                 let col_line = base_col.gamma_multiply((0.3 + 0.7 * abs_w).clamp(0.3, 1.0));
-                                
+
                                 // subtle glow
                                 painter.line_segment([p0, p1], egui::Stroke { width: ww + 1.5, color: col_line.gamma_multiply(0.25) });
                                 painter.line_segment([p0, p1], egui::Stroke { width: ww, color: col_line });
@@ -11308,7 +13456,7 @@ impl eframe::App for App {
                     for l in 1..hidden_positions.len() {
                         let (_, vis_prev) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize - 1, egui::Color32::TRANSPARENT, &network_registry);
                         let (_, vis_curr) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                        
+
                         let send_mask = active_runner.last_spk_h.get(l-1).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         let recv_mask = active_runner.last_spk_h.get(l).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         if let Some(w) = active_runner.w_hh_fwd.get(l-1) {
@@ -11327,7 +13475,7 @@ impl eframe::App for App {
                     if out_l < hidden_positions.len() {
                         let source_h = &hidden_positions[out_l];
                         let (_, vis_source) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, out_l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                        
+
                         let send_mask = active_runner.last_spk_h.get(out_l).map(|a: &ndarray::Array1<i8>| a.as_slice().unwrap_or(&[])).unwrap_or(&[]);
                         let recv_mask = active_runner.last_spk_o.as_slice().unwrap_or(&[]);
                         draw_links(&painter, &mut edge_shapes_vec, source_h, output_positions, send_mask, recv_mask, &active_runner.w_out, egui::Color32::from_rgb(160, 240, 160), "out", &format!("H{}:", out_l+1), "O", vis_source, vis_o, Box::new(move |k, j| active_runner.is_longterm_out(k, j)));
@@ -11340,7 +13488,7 @@ impl eframe::App for App {
                             let send_layer = l + 1;
                             let (_, vis_send) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, send_layer as isize, egui::Color32::TRANSPARENT, &network_registry);
                             let (_, vis_recv) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize, egui::Color32::TRANSPARENT, &network_registry);
-                            
+
                             let send_pos = &hidden_positions[send_layer];
                             let recv_pos = &hidden_positions[l];
                             let send_mask: &[i8] = previous_hidden_spikes.get(send_layer).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -11847,9 +13995,8 @@ impl eframe::App for App {
             let scope_resp = ui.allocate_rect(scope_rect, egui::Sense::hover());
             // Handle zoom via mouse wheel when hovered
             if scope_resp.hovered() {
-                // Use smooth_scroll_delta when available (falls back to raw_scroll_delta)
                 let scroll_y = ui.input(|i| {
-                    let d = if i.smooth_scroll_delta.y != 0.0 { i.smooth_scroll_delta.y } else { i.raw_scroll_delta.y };
+                    let d = i.smooth_scroll_delta.y;
                     d
                 });
                 if scroll_y.abs() > 0.0 {
@@ -11962,9 +14109,14 @@ impl eframe::App for App {
             let mut detail_standalone_guard = None;
             let active_runner_opt: Option<&Runner> = match &self.view_source {
                 ViewSource::Standalone | ViewSource::ClusterGlobal(_) => {
-                    let guard = detail_runner_arc.blocking_read();
-                    detail_standalone_guard = Some(guard);
-                    Some(&*detail_standalone_guard.as_ref().unwrap())
+                    if let Ok(guard) = detail_runner_arc.try_read() {
+                        detail_standalone_guard = Some(guard);
+                        Some(&*detail_standalone_guard.as_ref().unwrap())
+                    } else {
+                        // Runner is busy with a simulation step; skip detail panel this frame
+                        // rather than blocking the UI event loop.
+                        None
+                    }
                 }
                 ViewSource::LocalManaged(id) => {
                     if let Some(state_arc) = state_arc.as_ref() {
@@ -11976,25 +14128,18 @@ impl eframe::App for App {
                                     detail_managed_guard = Some(guard);
                                     Some(&detail_managed_guard.as_ref().unwrap().runner)
                                 } else {
-                                    let guard =
-                                        detail_managed_arc.as_ref().unwrap().blocking_read();
-                                    detail_managed_guard = Some(guard);
-                                    Some(&detail_managed_guard.as_ref().unwrap().runner)
+                                    // Network is busy; skip detail panel this frame
+                                    // rather than blocking the UI event loop.
+                                    None
                                 }
                             } else {
-                                let guard = detail_runner_arc.blocking_read();
-                                detail_standalone_guard = Some(guard);
-                                Some(&*detail_standalone_guard.as_ref().unwrap())
+                                None
                             }
                         } else {
-                            let guard = detail_runner_arc.blocking_read();
-                            detail_standalone_guard = Some(guard);
-                            Some(&*detail_standalone_guard.as_ref().unwrap())
+                            None
                         }
                     } else {
-                        let guard = detail_runner_arc.blocking_read();
-                        detail_standalone_guard = Some(guard);
-                        Some(&*detail_standalone_guard.as_ref().unwrap())
+                        None
                     }
                 }
             };
@@ -12032,7 +14177,7 @@ impl eframe::App for App {
             egui::Window::new("🔬 Biological Detail View")
                 .open(&mut open)
                 .default_size(egui::vec2(600.0, 500.0))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     if active_runner_opt.is_none() {
                         ui.label("Simulation busy...");
                         return;
@@ -12040,9 +14185,9 @@ impl eframe::App for App {
                     let active_runner = active_runner_opt.unwrap();
                     if let Some(pick) = selected_neuron_pick {
                         // Detect first selection or handle newly selected neuron
-                        let is_new = detail_last_neuron.is_none() || 
+                        let is_new = detail_last_neuron.is_none() ||
                             format!("{:?}", detail_last_neuron.unwrap()) != format!("{:?}", pick);
-                        
+
                         if is_new {
                             detail_last_neuron = Some(pick);
                             let acts = self.find_activations(active_runner, pick);
@@ -12080,7 +14225,7 @@ impl eframe::App for App {
                             ui.checkbox(&mut detail_paused, "Pause Playback");
                             ui.label("(Drag: Rotate, Ctrl+Drag: Pan, WASD/QE: Fly)");
                         });
-                        
+
                         ui.separator();
 
                         // Independent timescale/playback
@@ -12148,7 +14293,7 @@ impl eframe::App for App {
 
                         // 3D Visualizer Area
                         let (rect, response) = ui.allocate_at_least(ui.available_size() - egui::vec2(0.0, 20.0), egui::Sense::click_and_drag());
-                        
+
                         // Handle 3D rotation/pan/zoom/fly-through for detail view
                         ui.input(|i| {
                             if response.hovered() {
@@ -12156,11 +14301,11 @@ impl eframe::App for App {
                                 if (zoom - 1.0).abs() > 0.001 {
                                     detail_camera_zoom = (detail_camera_zoom * zoom).clamp(0.1, 10.0);
                                 }
-                                if i.raw_scroll_delta.y != 0.0 {
-                                    let f = 1.0 + (i.raw_scroll_delta.y / 480.0);
+                                if i.smooth_scroll_delta.y != 0.0 {
+                                    let f = 1.0 + (i.smooth_scroll_delta.y / 480.0);
                                     detail_camera_zoom = (detail_camera_zoom * f).clamp(0.1, 10.0);
                                 }
-                                
+
                                 // Fly-through keyboard controls (WASD/QE)
                                 let speed = 0.02f32;
                                 if i.key_down(egui::Key::W) { detail_camera_pos[2] += speed; }
@@ -12251,7 +14396,7 @@ impl eframe::App for App {
                                             align_yaw = sum.2.atan2(sum.0);
                                         }
                                     }
-                                    
+
                                     let project = |p: crate::morphology::Point3, part: DetailPart| {
                                         let x = p.x; let y = p.y; let z = p.z;
                                         // Rotate around soma center + camera translation
@@ -12280,25 +14425,25 @@ impl eframe::App for App {
 
                                         let (sy, cy_rot) = detail_camera_yaw.sin_cos();
                                         let (sp, cp) = detail_camera_pitch.sin_cos();
-                                        
+
                                         // 3D Rotation
                                         let x1 = mx * cy_rot - mz * sy;
                                         let z1 = mx * sy + mz * cy_rot;
-                                        
+
                                         let y2 = my * cp - z1 * sp;
                                         let z2 = my * sp + z1 * cp;
-                                        
+
                                         // Perspective-like depth scaling
                                         let depth_scale = (1.5 + z2).max(0.1);
                                         let final_scale = scale * depth_scale;
-                                        
+
                                         egui::pos2(center.x + x1 * final_scale, center.y + y2 * final_scale)
                                     };
 
                                     // Draw Soma (sphere approximation)
                                     let soma_p = project(soma.pos, DetailPart::Soma);
                                     let soma_r = 0.05 * scale; // default soma size
-                                    
+
                                     if let Some(mpos) = mouse_pos {
                                         if mpos.distance(soma_p) <= soma_r {
                                             detail_tooltip = Some(format!("Soma (Layer {}, ID {}) - ATP: {:.1}%", soma.layer, soma.id, soma.atp * 100.0));
@@ -12329,18 +14474,18 @@ impl eframe::App for App {
                                         }
                                         _ => false,
                                     };
-                                    
+
                                     let soma_col = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 160, 60) };
                                     let membrane_col = egui::Color32::from_rgb(255, 200, 150).gamma_multiply(0.8);
-                                    
+
                                     // Draw Soma Membrane (close-fitting)
                                     painter.circle_filled(soma_p, soma_r, soma_col.gamma_multiply(0.3));
-                                    
+
                                     // ATP indicator (outer ring)
                                     let atp = soma.atp;
                                     let atp_col = if atp > 0.5 { egui::Color32::from_rgb(50, 255, 50) } else { egui::Color32::from_rgb(255, 50, 50) };
                                     painter.circle_stroke(soma_p, soma_r + 4.0 * detail_camera_zoom, egui::Stroke::new(2.0 * detail_camera_zoom, atp_col.gamma_multiply(0.4)));
-                                    
+
                                     painter.circle_stroke(soma_p, soma_r, egui::Stroke::new(3.0 * detail_camera_zoom, membrane_col));
 
                                     // Draw Organelles
@@ -12356,13 +14501,13 @@ impl eframe::App for App {
                                         match org.kind {
                                             crate::morphology::OrganelleKind::Nucleus => {
                                                 painter.circle_filled(p, soma_r * 0.35, egui::Color32::from_rgba_unmultiplied(180, 100, 255, 180));
-                                                painter.circle_stroke(p, soma_r * 0.35, egui::Stroke::new(1.0, egui::Color32::from_gray(200)));
+                                                painter.circle_stroke(p, soma_r * 0.35, egui::Stroke::new(1.0_f32, egui::Color32::from_gray(200)));
                                             }
                                             crate::morphology::OrganelleKind::Mitochondria => {
                                                 let pulse = (time * 5.0).sin().abs() as f32 * 0.2 * org.activity;
                                                 let r = soma_r * (0.15 + pulse);
                                                 painter.circle_filled(p, r, egui::Color32::from_rgba_unmultiplied(255, 150, 0, 200));
-                                                painter.circle_stroke(p, r, egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 100, 0)));
+                                                painter.circle_stroke(p, r, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(200, 100, 0)));
                                             }
                                             crate::morphology::OrganelleKind::GolgiApparatus => {
                                                 // Draw as folded ribbons/curves
@@ -12375,14 +14520,14 @@ impl eframe::App for App {
                                                             p + egui::vec2(0.0, offset + 2.0),
                                                             p + egui::vec2(r, offset),
                                                         ],
-                                                        egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 100, 200))
+                                                        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(255, 100, 200))
                                                     ));
                                                 }
                                             }
                                             crate::morphology::OrganelleKind::EndoplasmicReticulum => {
                                                 // Draw as a textured/stippled area
                                                 painter.circle_filled(p, soma_r * 0.25, egui::Color32::from_rgba_unmultiplied(100, 150, 255, 100));
-                                                painter.circle_stroke(p, soma_r * 0.25, egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 100, 200)));
+                                                painter.circle_stroke(p, soma_r * 0.25, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 100, 200)));
                                             }
                                             _ => {
                                                 painter.circle_filled(p, soma_r * 0.1, egui::Color32::LIGHT_GRAY);
@@ -12428,7 +14573,7 @@ impl eframe::App for App {
                                         // Draw bouton at dendrite tip if it's a synapse site
                                         if seg.syn_index.is_some() {
                                             painter.circle_filled(p0, 0.015 * scale, egui::Color32::from_rgba_unmultiplied(180, 255, 180, 200));
-                                            painter.circle_stroke(p0, 0.015 * scale, egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 200, 100)));
+                                            painter.circle_stroke(p0, 0.015 * scale, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 200, 100)));
                                         }
                                     }
 
@@ -12487,10 +14632,10 @@ impl eframe::App for App {
                                         // Draw bouton at axon terminal if it's a synapse site
                                         if seg.syn_index.is_some() {
                                             painter.circle_filled(p1, 0.018 * scale, egui::Color32::from_rgba_unmultiplied(255, 180, 180, 220));
-                                            painter.circle_stroke(p1, 0.018 * scale, egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 100, 100)));
+                                            painter.circle_stroke(p1, 0.018 * scale, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(200, 100, 100)));
                                         }
                                     }
-                                    
+
                                     // Info overlay
                                     painter.text(rect.left_top() + egui::vec2(10.0, 10.0), egui::Align2::LEFT_TOP, format!("ATP Level: {:.1}%", soma.atp * 100.0), egui::FontId::proportional(14.0), atp_col);
 

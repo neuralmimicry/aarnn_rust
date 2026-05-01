@@ -1,0 +1,56 @@
+{
+  "id": "triplet_scaling_dale_hybrid",
+  "title": "AARNN Triplet Metaplasticity and Constraint Hybrid",
+  "analog_class": "hybrid_supervised",
+  "rust_modules": ["src/aarnn/plasticity.rs"],
+  "rust_functions": [
+    "triplet_eta_scale",
+    "apply_synaptic_scaling_matrix_rows",
+    "enforce_dale_matrix_cols",
+    "release_probability"
+  ],
+  "defaults": {
+    "aarnn_triplet_ltp_gain": 0.25,
+    "aarnn_triplet_ltd_gain": 0.15,
+    "aarnn_synaptic_scaling_strength": 0.02,
+    "aarnn_synaptic_scaling_target": 1.0,
+    "aarnn_dale_strictness": 0.75,
+    "aarnn_release_prob_heterogeneity": 0.10
+  },
+  "xcos_workspace": {
+    "inputs": ["triplet_pre_mean", "triplet_post_mean", "triplet_rate_mean"],
+    "outputs": ["triplet_eta_scale"],
+    "script": "../xcos/07_triplet_scaling_dale_hybrid.sce"
+  },
+  "hasler_xcos_blocks": [
+    "OTA",
+    "Buffer",
+    "Measure Voltage",
+    "To Workspace"
+  ],
+  "okika_design": {
+    "expected_ahf": "07_triplet_scaling_dale_hybrid.ahf",
+    "export_profile": {
+      "container": "single_file",
+      "configuration_type": "primary",
+      "data_block_terminator": "standard"
+    },
+    "pika": {
+      "clock_source": "local_16mhz",
+      "spi_hz": 32000000,
+      "max_xfer_bytes": 4096
+    },
+    "host_supervision_required": true,
+    "stages": [
+      "Analog trace integrators for pre/post activity",
+      "Metaplastic gain cell for triplet eta scaling",
+      "Host-side row normalization for synaptic scaling",
+      "Host-side sign enforcement / compile-time partition for Dale constraints",
+      "Optional mismatch-based release-probability offsets"
+    ],
+    "limitations": [
+      "Synaptic scaling and Dale enforcement are supervisory operations, not a pure continuous-time datapath.",
+      "This kernel is intentionally hybrid rather than purely analog."
+    ]
+  }
+}

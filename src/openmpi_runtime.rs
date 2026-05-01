@@ -1,7 +1,7 @@
 #![cfg(feature = "openmpi")]
 
 use anyhow::anyhow;
-use mpi::environment::{threading_support, Threading, Universe};
+use mpi::environment::{Threading, Universe, threading_support};
 use mpi::traits::*;
 use std::net::UdpSocket;
 use std::sync::{Mutex, OnceLock};
