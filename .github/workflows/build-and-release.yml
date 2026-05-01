@@ -169,8 +169,6 @@ jobs:
       - release-meta
     runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     timeout-minutes: 120
-    container:
-      image: ubuntu:${{ matrix.ubuntu_series }}
     strategy:
       fail-fast: false
       matrix:
@@ -209,6 +207,9 @@ jobs:
     env:
       PACKAGE_OUTPUT_DIR: /tmp/release-assets/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
       CARGO_TARGET_DIR: /tmp/cargo-target/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+      CONTAINER_CARGO_HOME: /tmp/cargo-home/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+      CONTAINER_RUSTUP_HOME: /tmp/rustup-home/${{ matrix.platform }}-${{ matrix.ubuntu_label }}
+      UBUNTU_CONTAINER_IMAGE: ubuntu:${{ matrix.ubuntu_series }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -216,49 +217,150 @@ jobs:
           clean: false
           path: repo-build-release
 
-      - name: Install native build dependencies
+      - name: Verify Podman is available
         run: |
-          apt-get update
-          # shellcheck disable=SC2086
-          apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+          command -v podman >/dev/null 2>&1 || {
+            echo "podman is required on self-hosted runners."
+            exit 1
+          }
+          podman --version
 
-      - name: Install Rust toolchain
+      - name: Configure rootless podman runtime environment
         shell: bash
         run: |
           set -euo pipefail
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
-          . "$HOME/.cargo/env"
-          rustup target add "${{ matrix.rust_target }}"
+          uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
+
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
+          fi
+
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
+          fi
+
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
+      - name: Prepare packaging directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$PACKAGE_OUTPUT_DIR"
+          mkdir -p \
+            "$PACKAGE_OUTPUT_DIR" \
+            "$CARGO_TARGET_DIR" \
+            "$CONTAINER_CARGO_HOME" \
+            "$CONTAINER_RUSTUP_HOME"
 
       - name: Package Linux release artifacts
         shell: bash
         run: |
           set -euo pipefail
-          . "$HOME/.cargo/env"
-          mkdir -p "$PACKAGE_OUTPUT_DIR" "$CARGO_TARGET_DIR"
-          chmod +x scripts/package-release.sh
-          ./scripts/package-release.sh \
-            --version "${{ needs.release-meta.outputs.artifact_version }}" \
-            --output-dir "$PACKAGE_OUTPUT_DIR" \
-            --target-triple "${{ matrix.rust_target }}" \
-            --platform "${{ matrix.platform }}" \
-            --artifact-suffix "${{ matrix.ubuntu_label }}" \
-            --deb-arch "${{ matrix.deb_arch }}" \
-            --cargo-features "${{ env.CARGO_FEATURES }}" \
-            --cargo-build-targets "${{ env.CARGO_BUILD_TARGETS }}"
+          podman run --rm -i --pull=missing \
+            --platform "linux/${{ matrix.container_platform }}" \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e CARGO_HOME=/cargo \
+            -e RUSTUP_HOME=/rustup \
+            -e CARGO_TARGET_DIR=/target \
+            -e UBUNTU_NATIVE_BUILD_DEPS="$UBUNTU_NATIVE_BUILD_DEPS" \
+            -v "$PWD:/workspace:ro" \
+            -v "$PACKAGE_OUTPUT_DIR:/out" \
+            -v "$CARGO_TARGET_DIR:/target" \
+            -v "$CONTAINER_CARGO_HOME:/cargo" \
+            -v "$CONTAINER_RUSTUP_HOME:/rustup" \
+            -w /workspace \
+            "$UBUNTU_CONTAINER_IMAGE" \
+            bash -s -- \
+              "${{ matrix.rust_target }}" \
+              "${{ needs.release-meta.outputs.artifact_version }}" \
+              "${{ matrix.platform }}" \
+              "${{ matrix.ubuntu_label }}" \
+              "${{ matrix.deb_arch }}" \
+              "${{ env.CARGO_FEATURES }}" \
+              "${{ env.CARGO_BUILD_TARGETS }}" <<'SCRIPT'
+          set -euo pipefail
+
+          rust_target="$1"
+          artifact_version="$2"
+          platform="$3"
+          artifact_suffix="$4"
+          deb_arch="$5"
+          cargo_features="$6"
+          cargo_build_targets="$7"
+
+          apt-get update
+          # shellcheck disable=SC2086
+          apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+
+          if [[ ! -x /cargo/bin/rustup ]]; then
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+
+          . /cargo/env
+          rustup target add "$rust_target"
+
+          chmod +x /workspace/scripts/package-release.sh
+          /workspace/scripts/package-release.sh \
+            --version "$artifact_version" \
+            --output-dir /out \
+            --target-triple "$rust_target" \
+            --platform "$platform" \
+            --artifact-suffix "$artifact_suffix" \
+            --deb-arch "$deb_arch" \
+            --cargo-features "$cargo_features" \
+            --cargo-build-targets "$cargo_build_targets"
+          SCRIPT
 
       - name: Validate Debian package metadata
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          podman run --rm -i --pull=missing \
+            --platform "linux/${{ matrix.container_platform }}" \
+            -e EXPECTED_VERSION="${{ needs.release-meta.outputs.artifact_version }}" \
+            -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
+            -e EXPECTED_ARCH="${{ matrix.deb_arch }}" \
+            -v "$PACKAGE_OUTPUT_DIR:/packages:ro" \
+            "$UBUNTU_CONTAINER_IMAGE" \
+            bash -s -- <<'SCRIPT'
+          set -euo pipefail
+
+          deb_path="$(find /packages -maxdepth 1 -type f -name "aarnn-rust_*_${EXPECTED_SUFFIX}_${EXPECTED_ARCH}.deb" | head -n 1)"
           if [[ -z "$deb_path" ]]; then
-            echo "::error::Expected a Debian package under $PACKAGE_OUTPUT_DIR"
+            echo "::error::Expected a Debian package under /packages"
             exit 1
           fi
 
           expected_version="$(
-            printf '%s' "${{ needs.release-meta.outputs.artifact_version }}" \
+            printf '%s' "$EXPECTED_VERSION" \
               | tr '-' '~' \
               | sed -E 's/[^A-Za-z0-9.+:~]+/./g; s/^[^A-Za-z0-9]+//; s/[^A-Za-z0-9]+$//'
           )"
@@ -268,13 +370,24 @@ jobs:
 
           [[ "$actual_package" == "aarnn-rust" ]]
           [[ "$actual_version" == "$expected_version" ]]
-          [[ "$actual_arch" == "${{ matrix.deb_arch }}" ]]
+          [[ "$actual_arch" == "$EXPECTED_ARCH" ]]
+          SCRIPT
 
       - name: Smoke install Debian package
         shell: bash
         run: |
           set -euo pipefail
-          deb_path="$(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name "aarnn-rust_*_${{ matrix.ubuntu_label }}_${{ matrix.deb_arch }}.deb" | head -n 1)"
+          podman run --rm -i --pull=missing \
+            --platform "linux/${{ matrix.container_platform }}" \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
+            -e EXPECTED_ARCH="${{ matrix.deb_arch }}" \
+            -v "$PACKAGE_OUTPUT_DIR:/packages:ro" \
+            "$UBUNTU_CONTAINER_IMAGE" \
+            bash -s -- <<'SCRIPT'
+          set -euo pipefail
+
+          deb_path="$(find /packages -maxdepth 1 -type f -name "aarnn-rust_*_${EXPECTED_SUFFIX}_${EXPECTED_ARCH}.deb" | head -n 1)"
           deb_path="$(readlink -f "$deb_path")"
 
           apt-get update
@@ -286,6 +399,7 @@ jobs:
           aarnn_rust --help >/dev/null
           web_ui --help >/dev/null
           dpkg-query -W -f='${Version}\n' aarnn-rust
+          SCRIPT
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
