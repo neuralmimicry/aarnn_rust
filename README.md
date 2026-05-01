@@ -19,7 +19,7 @@ This repository integrates the existing neuromorphic build and container workflo
 ### Build locally
 
 ```bash
-scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
+scripts/build_container.sh ghcr.io/neuralmimicry/aarnn_rust main
 ```
 
 This builds and pushes the native-architecture workload images from the same source tree. The script now prepares and reuses workload-specific Debian packages under `.container-cache/` and feeds those packages into the container build instead of compiling Rust inside the image:
