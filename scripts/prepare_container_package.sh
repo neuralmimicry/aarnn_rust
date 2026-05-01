@@ -209,7 +209,7 @@ fi
 . /cargo/env
 rustup target add "$RUST_TARGET"
 
-/workspace/scripts/package-release.sh \
+bash /workspace/scripts/package-release.sh \
   --version "$VERSION" \
   --output-dir /out \
   --target-triple "$RUST_TARGET" \

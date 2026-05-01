@@ -327,8 +327,7 @@ jobs:
           . /cargo/env
           rustup target add "$rust_target"
 
-          chmod +x /workspace/scripts/package-release.sh
-          /workspace/scripts/package-release.sh \
+          bash /workspace/scripts/package-release.sh \
             --version "$artifact_version" \
             --output-dir /out \
             --target-triple "$rust_target" \
