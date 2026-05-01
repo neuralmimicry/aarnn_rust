@@ -10,7 +10,7 @@ The project uses a `Containerfile` based on Ubuntu 24.04.
 
 ### Build with Podman (Recommended for OpenShift)
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust main
 ```
 By default this builds and pushes the native-architecture workload images from the same source tree, stages the matching workload `.deb` package for the host architecture, and assembles a manifest tag per workload:
 
@@ -23,7 +23,7 @@ By default this builds and pushes the native-architecture workload images from t
 Limit the build to a subset of workloads by passing a CSV list as the fourth argument:
 
 ```bash
-./build_container.sh ghcr.io/neuralmimicry/aarnn_rust engine true orchestrator,node,web-ui
+./build_container.sh ghcr.io/neuralmimicry/aarnn_rust main true orchestrator,node,web-ui
 ```
 
 Skip the automatic push by passing `false` as the third argument.
