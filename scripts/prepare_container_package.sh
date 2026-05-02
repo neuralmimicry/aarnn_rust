@@ -146,6 +146,8 @@ build_package_in_container() {
     bash -s -- "$RUST_TARGET" "$VERSION" "$PLATFORM" "$DEB_ARCH" "$CARGO_FEATURES" "$CARGO_BUILD_TARGETS" <<'SCRIPT'
 set -euo pipefail
 
+. /workspace/scripts/apt_retry.sh
+
 RUST_TARGET="$1"
 VERSION="$2"
 PLATFORM="$3"
@@ -153,8 +155,7 @@ DEB_ARCH="$4"
 CARGO_FEATURES="$5"
 CARGO_BUILD_TARGETS="$6"
 
-apt-get update
-apt-get install -y --no-install-recommends \
+aarnn_apt_install_with_retry -y --no-install-recommends \
   ca-certificates \
   curl \
   xz-utils \

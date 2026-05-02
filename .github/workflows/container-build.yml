@@ -172,14 +172,15 @@ jobs:
             --platform "linux/${{ matrix.arch }}" \
             -e DEBIAN_FRONTEND=noninteractive \
             -v "$PWD/dist/container:/tmp/aarnn:ro" \
+            -v "$PWD/scripts:/tmp/scripts:ro" \
             ubuntu:24.04 \
             bash -lc '
               set -euo pipefail
+              . /tmp/scripts/apt_retry.sh
               arch="$(dpkg --print-architecture)"
               deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"
               test -n "$deb"
-              apt-get update
-              apt-get install -y --no-install-recommends "$deb"
+              aarnn_apt_install_with_retry -y --no-install-recommends "$deb"
               test -x /usr/bin/aarnn_rust
             '
 
