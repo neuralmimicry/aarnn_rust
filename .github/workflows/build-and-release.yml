@@ -316,9 +316,9 @@ jobs:
           cargo_features="$6"
           cargo_build_targets="$7"
 
-          apt-get update
+          . /workspace/scripts/apt_retry.sh
           # shellcheck disable=SC2086
-          apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+          aarnn_apt_install_with_retry -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
           if [[ ! -x /cargo/bin/rustup ]]; then
             curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
@@ -382,15 +382,16 @@ jobs:
             -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
             -e EXPECTED_ARCH="${{ matrix.deb_arch }}" \
             -v "$PACKAGE_OUTPUT_DIR:/packages:ro" \
+            -v "$PWD/scripts:/tmp/scripts:ro" \
             "$UBUNTU_CONTAINER_IMAGE" \
             bash -s -- <<'SCRIPT'
           set -euo pipefail
 
+          . /tmp/scripts/apt_retry.sh
           deb_path="$(find /packages -maxdepth 1 -type f -name "aarnn-rust_*_${EXPECTED_SUFFIX}_${EXPECTED_ARCH}.deb" | head -n 1)"
           deb_path="$(readlink -f "$deb_path")"
 
-          apt-get update
-          apt-get install -y --allow-downgrades "$deb_path"
+          aarnn_apt_install_with_retry -y --allow-downgrades "$deb_path"
 
           test -x /usr/bin/aarnn_rust
           test -x /usr/bin/web_ui
