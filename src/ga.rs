@@ -2084,6 +2084,19 @@ thread_local! {
 
 #[cfg(feature = "opencl")]
 fn ga_thread_opencl_manager() -> Option<Arc<OpenCLManager>> {
+    let opencl_disabled = std::env::var("NM_DISABLE_OPENCL")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    if opencl_disabled {
+        return None;
+    }
+
     GA_OPENCL_MANAGER.with(|cell| {
         let mut mgr = cell.borrow_mut();
         if mgr.is_none() {

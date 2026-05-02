@@ -52,6 +52,18 @@ impl OpenCLExecutionTarget {
 pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
     GLOBAL_CL_MANAGER
         .get_or_init(|| {
+            if accelerated_compute_disabled() {
+                let source = if parse_env_bool("NM_DISABLE_OPENCL").unwrap_or(false) {
+                    "NM_DISABLE_OPENCL"
+                } else {
+                    "test default"
+                };
+                nm_log!(
+                    "[info] Accelerated compute backend disabled ({}); using CPU-only execution.",
+                    source
+                );
+                return None;
+            }
             // UI/global device selection: NM_UI_CL_DEVICE_INDEX or NM_CL_DEVICE_INDEX.
             let idx = parse_env_usize("NM_UI_CL_DEVICE_INDEX")
                 .or_else(|| parse_env_usize("NM_CL_DEVICE_INDEX"))
@@ -103,6 +115,24 @@ fn parse_env_usize(name: &str) -> Option<usize> {
     std::env::var(name)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
+}
+
+fn parse_env_bool(name: &str) -> Option<bool> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+}
+
+fn accelerated_compute_disabled() -> bool {
+    if parse_env_bool("NM_DISABLE_OPENCL").unwrap_or(false) {
+        return true;
+    }
+
+    cfg!(test) && !parse_env_bool("NM_ENABLE_OPENCL_IN_TESTS").unwrap_or(false)
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -217,6 +247,11 @@ fn select_device_id(
 }
 
 pub fn gpu_device_ids_for_indices(indices: Option<&[usize]>) -> anyhow::Result<Vec<cl_device_id>> {
+    if accelerated_compute_disabled() {
+        return Err(anyhow::anyhow!(
+            "accelerated compute backend disabled by configuration"
+        ));
+    }
     let devices = gpu_device_ids()?;
     if let Some(indices) = indices {
         let mut selected = Vec::new();

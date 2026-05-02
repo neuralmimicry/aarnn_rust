@@ -64,6 +64,8 @@ jobs:
         run: cargo check --locked --all-features --all-targets
 
       - name: Run tests
+        env:
+          NM_DISABLE_OPENCL: "1"
         run: cargo test --locked --all-features --all-targets
 
       - name: Build release binaries
