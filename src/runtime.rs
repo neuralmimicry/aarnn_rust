@@ -829,6 +829,7 @@ struct WorkspaceManifest {
 impl WorkspaceManifest {
     fn summary(&self, status: &crate::engine::EngineStatus, running: bool) -> WorkspaceSummary {
         WorkspaceSummary {
+            owner_id: self.user_id.clone(),
             workspace_id: self.workspace_id.clone(),
             network_id: self.workspace_id.clone(),
             name: self.name.clone(),
@@ -1004,16 +1005,37 @@ impl RuntimeManager {
     }
 
     pub async fn runtime_status(&self, user_id: &str) -> anyhow::Result<RuntimeStatusResponse> {
+        self.runtime_status_for_users(user_id, [user_id]).await
+    }
+
+    pub async fn runtime_status_for_users<I, S>(
+        &self,
+        user_id: &str,
+        user_ids: I,
+    ) -> anyhow::Result<RuntimeStatusResponse>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let user = sanitize_segment(user_id, "anonymous");
-        let workspaces = self.list_workspaces(&user).await?;
-        let running_workspaces = self
-            .workspaces
-            .read()
-            .await
+        let mut visible_users = Vec::new();
+        let mut seen_users = HashSet::new();
+        for owner in user_ids {
+            let owner_id = sanitize_segment(owner.as_ref(), "anonymous");
+            if seen_users.insert(owner_id.clone()) {
+                visible_users.push(owner_id);
+            }
+        }
+        if visible_users.is_empty() {
+            visible_users.push("anonymous".to_string());
+        }
+        let total_users = visible_users.len();
+        let workspaces = self
+            .list_workspaces_for_users(visible_users.iter().map(String::as_str))
+            .await?;
+        let running_workspaces = workspaces
             .iter()
-            .filter(|(key, _)| key.user_id == user)
-            .map(|(_, handle)| handle)
-            .filter(|handle| handle.running.load(Ordering::SeqCst))
+            .filter(|workspace| workspace.running)
             .count();
         let total_workspaces = workspaces.len();
 
@@ -1021,7 +1043,7 @@ impl RuntimeManager {
             user_id: user,
             tick_interval_ms: self.config.tick_interval_ms,
             local_worker_limit: self.config.local_worker_limit.max(1),
-            total_users: 1,
+            total_users,
             total_workspaces,
             running_workspaces,
             autoscaler: self.autoscaler_report.read().await.clone(),
@@ -1030,16 +1052,43 @@ impl RuntimeManager {
     }
 
     pub async fn list_workspaces(&self, user_id: &str) -> anyhow::Result<Vec<WorkspaceSummary>> {
+        self.list_workspaces_for_users([user_id]).await
+    }
+
+    pub async fn list_workspaces_for_users<I, S>(
+        &self,
+        user_ids: I,
+    ) -> anyhow::Result<Vec<WorkspaceSummary>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         self.load_existing_workspaces().await?;
-        let user = sanitize_segment(user_id, "anonymous");
+        let mut owner_order = Vec::new();
+        let mut owner_filter = HashSet::new();
+        for user_id in user_ids {
+            let owner_id = sanitize_segment(user_id.as_ref(), "anonymous");
+            if owner_filter.insert(owner_id.clone()) {
+                owner_order.push(owner_id);
+            }
+        }
+        if owner_order.is_empty() {
+            owner_order.push("anonymous".to_string());
+            owner_filter.insert("anonymous".to_string());
+        }
         let handles = {
             let guard = self.workspaces.read().await;
             guard
                 .iter()
-                .filter(|(key, _)| key.user_id == user)
+                .filter(|(key, _)| owner_filter.contains(&key.user_id))
                 .map(|(_, handle)| handle.clone())
                 .collect::<Vec<_>>()
         };
+        let owner_rank = owner_order
+            .iter()
+            .enumerate()
+            .map(|(idx, owner)| (owner.clone(), idx))
+            .collect::<HashMap<_, _>>();
 
         let mut summaries = Vec::with_capacity(handles.len());
         for handle in handles {
@@ -1048,7 +1097,14 @@ impl RuntimeManager {
             let status = handle.status_cache.read().await.clone();
             summaries.push(manifest.summary(&status, handle.running.load(Ordering::SeqCst)));
         }
-        summaries.sort_by(|lhs, rhs| lhs.workspace_id.cmp(&rhs.workspace_id));
+        summaries.sort_by(|lhs, rhs| {
+            owner_rank
+                .get(&lhs.owner_id)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .cmp(&owner_rank.get(&rhs.owner_id).copied().unwrap_or(usize::MAX))
+                .then(lhs.workspace_id.cmp(&rhs.workspace_id))
+        });
         Ok(summaries)
     }
 

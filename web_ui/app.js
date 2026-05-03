@@ -598,6 +598,99 @@ function saveActiveWorkspace() {
     localStorage.setItem("nm_active_workspace", state.runtime.activeWorkspace || "");
   } catch (_) {}
 }
+function authenticatedUsername() {
+  return state.user && typeof state.user.username === "string" ? state.user.username.trim() : "";
+}
+function workspaceOwnerId(workspace) {
+  const explicit = typeof (workspace === null || workspace === void 0 ? void 0 : workspace.owner_id) === "string" ? workspace.owner_id.trim() : "";
+  if (explicit) {
+    return explicit;
+  }
+  const authenticatedUser = authenticatedUsername();
+  if (authenticatedUser) {
+    return authenticatedUser;
+  }
+  return (state.runtime.userId || "").trim() || "anonymous";
+}
+function workspaceSelectionKey(workspaceId, ownerId) {
+  const id = typeof workspaceId === "string" ? workspaceId.trim() : "";
+  if (!id) return "";
+  const owner = typeof ownerId === "string" ? ownerId.trim() : "";
+  return owner ? `${owner}::${id}` : id;
+}
+function workspaceSelectionKeyFor(workspace) {
+  if (!workspace || typeof workspace !== "object") return "";
+  return workspaceSelectionKey(workspace.workspace_id, workspaceOwnerId(workspace));
+}
+function parseWorkspaceSelectionKey(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    return {
+      ownerId: "",
+      workspaceId: ""
+    };
+  }
+  const separatorIdx = raw.indexOf("::");
+  if (separatorIdx < 0) {
+    return {
+      ownerId: "",
+      workspaceId: raw
+    };
+  }
+  return {
+    ownerId: raw.slice(0, separatorIdx),
+    workspaceId: raw.slice(separatorIdx + 2)
+  };
+}
+function findWorkspaceBySelectionKey(selectionKey = state.runtime.activeWorkspace) {
+  const raw = typeof selectionKey === "string" ? selectionKey.trim() : "";
+  if (!raw) return null;
+  const direct = state.runtime.workspaces.find(workspace => workspaceSelectionKeyFor(workspace) === raw);
+  if (direct) {
+    return direct;
+  }
+  const parsed = parseWorkspaceSelectionKey(raw);
+  const workspaceId = parsed.workspaceId || raw;
+  const matches = state.runtime.workspaces.filter(workspace => workspace.workspace_id === workspaceId);
+  if (!matches.length) {
+    return null;
+  }
+  if (parsed.ownerId) {
+    const owned = matches.find(workspace => workspaceOwnerId(workspace) === parsed.ownerId);
+    if (owned) {
+      return owned;
+    }
+  }
+  const currentOwner = authenticatedUsername() || (state.runtime.userId || "").trim();
+  return matches.find(workspace => workspaceOwnerId(workspace) === currentOwner) || matches[0];
+}
+function workspaceBaseLabel(workspace) {
+  if (!workspace) return "";
+  const owner = workspaceOwnerId(workspace);
+  const currentOwner = authenticatedUsername() || (state.runtime.userId || "").trim();
+  const label = workspace.name || workspace.workspace_id;
+  return owner && owner !== currentOwner ? `${label} [${owner}]` : label;
+}
+function workspaceStatusLabel(workspace) {
+  if (!workspace) return "";
+  return `${workspaceBaseLabel(workspace)}${workspace.running ? " (running)" : ""}`;
+}
+function buildWorkspaceApiUrl(workspace, suffix = "", params = {}) {
+  const base = `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}${suffix}`;
+  const search = new URLSearchParams();
+  const owner = workspaceOwnerId(workspace);
+  if (owner) {
+    search.set("owner", owner);
+  }
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === null || typeof value === "undefined" || value === "") {
+      return;
+    }
+    search.set(key, String(value));
+  });
+  const query = search.toString();
+  return query ? `${base}?${query}` : base;
+}
 function normalizeExternalLink(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -712,7 +805,7 @@ function runtimeUserLabel() {
   if (state.authMode === "none") {
     return (state.runtime.userId || "").trim() || "anonymous";
   }
-  return state.user || "authenticated";
+  return authenticatedUsername() || "authenticated";
 }
 function clusterModeAllowed() {
   return state.authMode === "none";
@@ -1142,34 +1235,42 @@ function isWorkspaceMode() {
   return !clusterModeAllowed() || Boolean(state.runtime.activeWorkspace);
 }
 function getActiveWorkspaceMeta() {
-  return state.runtime.workspaces.find(workspace => workspace.workspace_id === state.runtime.activeWorkspace) || null;
+  return findWorkspaceBySelectionKey(state.runtime.activeWorkspace);
 }
 function getActiveWorkspaceDetail() {
+  const workspace = getActiveWorkspaceMeta();
+  if (workspace) {
+    return state.runtime.details.get(workspaceSelectionKeyFor(workspace)) || null;
+  }
   return state.runtime.details.get(state.runtime.activeWorkspace) || null;
 }
 function cacheWorkspaceDetail(detail) {
   var _detail$summary;
-  const workspaceId = detail === null || detail === void 0 || (_detail$summary = detail.summary) === null || _detail$summary === void 0 ? void 0 : _detail$summary.workspace_id;
+  const summary = detail === null || detail === void 0 ? void 0 : detail.summary;
+  const workspaceId = summary === null || summary === void 0 ? void 0 : summary.workspace_id;
   if (!workspaceId) return;
-  state.runtime.details.set(workspaceId, detail);
-  const idx = state.runtime.workspaces.findIndex(workspace => workspace.workspace_id === workspaceId);
+  const workspaceKey = workspaceSelectionKeyFor(summary);
+  state.runtime.details.set(workspaceKey, detail);
+  const idx = state.runtime.workspaces.findIndex(workspace => workspaceSelectionKeyFor(workspace) === workspaceKey);
   if (idx >= 0) {
     state.runtime.workspaces[idx] = {
       ...state.runtime.workspaces[idx],
-      ...detail.summary
+      ...summary
     };
   } else {
-    state.runtime.workspaces.push(detail.summary);
+    state.runtime.workspaces.push(summary);
   }
 }
-async function loadWorkspaceDetail(workspaceId = state.runtime.activeWorkspace) {
+async function loadWorkspaceDetail(workspaceRef = state.runtime.activeWorkspace) {
   if (state.authMode !== "none" && !hasAarnnObserveAccess()) return null;
-  if (!workspaceId) return null;
+  const workspace = typeof workspaceRef === "string" ? findWorkspaceBySelectionKey(workspaceRef) : workspaceRef;
+  if (!workspace) return null;
+  const workspaceKey = workspaceSelectionKeyFor(workspace);
   try {
-    const resp = await runtimeFetch(`/api/runtime/workspaces/${encodeURIComponent(workspaceId)}`);
+    const resp = await runtimeFetch(buildWorkspaceApiUrl(workspace));
     if (!resp.ok) {
       if (resp.status === 404) {
-        state.runtime.details.delete(workspaceId);
+        state.runtime.details.delete(workspaceKey);
       }
       return null;
     }
@@ -1207,7 +1308,7 @@ function activeSource() {
 function sourceRequestKey(source) {
   if (!source) return "";
   if (source.kind === "workspace") {
-    return `workspace::${source.workspace.workspace_id}`;
+    return `workspace::${workspaceSelectionKeyFor(source.workspace)}`;
   }
   return `${source.addr}::${source.networkId}::${source.nodeId || ""}`;
 }
@@ -1344,11 +1445,16 @@ function refreshWorkspaceSelect() {
   }
   state.runtime.workspaces.forEach(workspace => {
     const opt = document.createElement("option");
-    opt.value = workspace.workspace_id;
-    opt.textContent = `${workspace.name || workspace.workspace_id}${workspace.running ? " (running)" : ""}`;
+    opt.value = workspaceSelectionKeyFor(workspace);
+    opt.textContent = workspaceStatusLabel(workspace);
     workspaceSelect.appendChild(opt);
   });
-  if (state.runtime.activeWorkspace && !state.runtime.workspaces.some(workspace => workspace.workspace_id === state.runtime.activeWorkspace)) {
+  const activeWorkspace = getActiveWorkspaceMeta();
+  if (activeWorkspace && state.runtime.activeWorkspace !== workspaceSelectionKeyFor(activeWorkspace)) {
+    state.runtime.activeWorkspace = workspaceSelectionKeyFor(activeWorkspace);
+    saveActiveWorkspace();
+  }
+  if (state.runtime.activeWorkspace && !activeWorkspace) {
     state.runtime.activeWorkspace = "";
     saveActiveWorkspace();
   }
@@ -1416,16 +1522,24 @@ async function loadRuntimeStatus() {
     if (requestSeq !== runtimeStatusRequestSeq) return;
     state.runtime.workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
     state.runtime.autoscaler = data.autoscaler || null;
-    const activeIds = new Set(state.runtime.workspaces.map(workspace => workspace.workspace_id));
-    Array.from(state.runtime.details.keys()).forEach(workspaceId => {
-      if (!activeIds.has(workspaceId)) {
-        state.runtime.details.delete(workspaceId);
+    const activeKeys = new Set(state.runtime.workspaces.map(workspace => workspaceSelectionKeyFor(workspace)));
+    Array.from(state.runtime.details.keys()).forEach(workspaceKey => {
+      if (!activeKeys.has(workspaceKey)) {
+        state.runtime.details.delete(workspaceKey);
       }
     });
+    const activeWorkspace = getActiveWorkspaceMeta();
+    if (activeWorkspace && state.runtime.activeWorkspace !== workspaceSelectionKeyFor(activeWorkspace)) {
+      state.runtime.activeWorkspace = workspaceSelectionKeyFor(activeWorkspace);
+      saveActiveWorkspace();
+    } else if (state.runtime.activeWorkspace && !activeWorkspace) {
+      state.runtime.activeWorkspace = "";
+      saveActiveWorkspace();
+    }
     if (!clusterModeAllowed()) {
-      if (!state.runtime.activeWorkspace || !activeIds.has(state.runtime.activeWorkspace)) {
+      if (!state.runtime.activeWorkspace) {
         var _state$runtime$worksp;
-        state.runtime.activeWorkspace = ((_state$runtime$worksp = state.runtime.workspaces[0]) === null || _state$runtime$worksp === void 0 ? void 0 : _state$runtime$worksp.workspace_id) || "";
+        state.runtime.activeWorkspace = workspaceSelectionKeyFor((_state$runtime$worksp = state.runtime.workspaces[0]) !== null && _state$runtime$worksp !== void 0 ? _state$runtime$worksp : null);
         saveActiveWorkspace();
       }
     }
@@ -1480,7 +1594,7 @@ async function createWorkspaceFromCurrentState() {
     }
     const detail = await resp.json();
     cacheWorkspaceDetail(detail);
-    state.runtime.activeWorkspace = (detail === null || detail === void 0 || (_detail$summary3 = detail.summary) === null || _detail$summary3 === void 0 ? void 0 : _detail$summary3.workspace_id) || payload.workspace_id || "";
+    state.runtime.activeWorkspace = workspaceSelectionKeyFor((detail === null || detail === void 0 ? void 0 : detail.summary) || null) || payload.workspace_id || "";
     saveActiveWorkspace();
     refreshWorkspaceSelect();
     if (workspaceNameInput) workspaceNameInput.value = "";
@@ -1489,7 +1603,7 @@ async function createWorkspaceFromCurrentState() {
     refreshNetworkSelect();
     await fetchSnapshotForActive();
     await pollActivity();
-    const message = `Created workspace ${state.runtime.activeWorkspace}.`;
+    const message = `Created workspace ${workspaceBaseLabel((detail === null || detail === void 0 ? void 0 : detail.summary) || null)}.`;
     setWorkspaceFeedback(message, "success");
     setToolStatus(message);
   } catch (_) {
@@ -1506,7 +1620,7 @@ async function deleteSelectedWorkspace() {
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) return;
   try {
-    const resp = await runtimeFetch(`/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}`, {
+    const resp = await runtimeFetch(buildWorkspaceApiUrl(workspace), {
       method: "DELETE"
     });
     if (!resp.ok) {
@@ -1516,7 +1630,7 @@ async function deleteSelectedWorkspace() {
       setToolStatus(message);
       return;
     }
-    state.runtime.details.delete(workspace.workspace_id);
+    state.runtime.details.delete(workspaceSelectionKeyFor(workspace));
     state.runtime.activeWorkspace = "";
     saveActiveWorkspace();
     state.snapshot = null;
@@ -1530,7 +1644,7 @@ async function deleteSelectedWorkspace() {
     } else {
       rebuildGraph();
     }
-    const message = `Deleted workspace ${workspace.workspace_id}.`;
+    const message = `Deleted workspace ${workspaceBaseLabel(workspace)}.`;
     setWorkspaceFeedback(message, "success");
     setToolStatus(message);
   } catch (_) {
@@ -1551,7 +1665,7 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
     return false;
   }
   try {
-    const resp = await runtimeFetch(`/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/import`, {
+    const resp = await runtimeFetch(buildWorkspaceApiUrl(workspace, "/import"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -1578,7 +1692,7 @@ async function importWorkspacePayload(raw, kind, extra = {}) {
     await loadTokenBalance();
     await fetchSnapshotForActive();
     await pollActivity();
-    setWorkspaceFeedback(`Updated workspace ${workspace.workspace_id}.`, "success");
+    setWorkspaceFeedback(`Updated workspace ${workspaceBaseLabel(workspace)}.`, "success");
     return true;
   } catch (_) {
     setWorkspaceFeedback("Failed to update workspace.", "error");
@@ -1596,7 +1710,7 @@ async function controlWorkspaceAction(action) {
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) return false;
   try {
-    const resp = await runtimeFetch(`/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/control`, {
+    const resp = await runtimeFetch(buildWorkspaceApiUrl(workspace, "/control"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -1618,7 +1732,7 @@ async function controlWorkspaceAction(action) {
     await loadTokenBalance();
     await fetchSnapshotForActive();
     await pollActivity();
-    setWorkspaceFeedback(`Workspace ${workspace.workspace_id} ${action}.`, "success");
+    setWorkspaceFeedback(`Workspace ${workspaceBaseLabel(workspace)} ${action}.`, "success");
     return true;
   } catch (_) {
     setWorkspaceFeedback("Failed to control workspace.", "error");
@@ -1727,7 +1841,7 @@ function refreshNetworkSelect() {
     networkSelect.innerHTML = "";
     const opt = document.createElement("option");
     opt.value = networkId;
-    opt.textContent = `${workspace.name || workspace.workspace_id} (workspace)`;
+    opt.textContent = `${workspaceBaseLabel(workspace)} (workspace)`;
     networkSelect.appendChild(opt);
     state.activeNetwork = networkId;
     saveActiveNetwork();
@@ -1978,11 +2092,11 @@ function renderWorkspaceSidebar() {
   gaBestEl.textContent = "-";
   clusterGaEvalsEl.textContent = "0";
   stepTimeEl.textContent = running ? "engine" : "-";
-  activeTargetEl.textContent = `workspace:${workspace.workspace_id}`;
+  activeTargetEl.textContent = `workspace:${workspaceBaseLabel(workspace)}`;
   nodesCountEl.textContent = "1";
   networksCountEl.textContent = "1";
-  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | user ${runtimeUserLabel()} | ${running ? "running" : "stopped"} | step ${step} | updated ${updatedAtText}`)}</div>`;
-  clusterNetworksEl.innerHTML = `<div class="line">${escapeHtml(`${workspace.network_id || workspace.workspace_id} | ${running ? "running" : "stopped"} | t ${simTimeMs.toFixed(1)} ms | neurons ${totalNeurons} | layers ${totalLayers} | model ${status.neuron_model || state.lastModel || "aarnn"} | learning ${status.learning_rule || state.lastLearning || "aarnn"}`)}</div>`;
+  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | owner ${workspaceOwnerId(workspace)} | ${running ? "running" : "stopped"} | step ${step} | updated ${updatedAtText}`)}</div>`;
+  clusterNetworksEl.innerHTML = `<div class="line">${escapeHtml(`${workspaceBaseLabel(workspace)} | ${running ? "running" : "stopped"} | t ${simTimeMs.toFixed(1)} ms | neurons ${totalNeurons} | layers ${totalLayers} | model ${status.neuron_model || state.lastModel || "aarnn"} | learning ${status.learning_rule || state.lastLearning || "aarnn"}`)}</div>`;
 }
 function getActiveNetworkMeta() {
   if (isWorkspaceMode()) {
@@ -2052,14 +2166,14 @@ function refreshControlNote() {
       return;
     }
     if (getActivePlaying() && !workspaceActionAllowed("stop")) {
-      controlNoteEl.textContent = `Workspace ${workspace.workspace_id} is running. AARNN control authorisation is required to stop, reset, or replace it.`;
+      controlNoteEl.textContent = `Workspace ${workspaceBaseLabel(workspace)} is running. AARNN control authorisation is required to stop, reset, or replace it.`;
       return;
     }
     if (!getActivePlaying() && !workspaceActionAllowed("start")) {
-      controlNoteEl.textContent = `Workspace ${workspace.workspace_id} is available. AARNN use authorisation is required to start or update it.`;
+      controlNoteEl.textContent = `Workspace ${workspaceBaseLabel(workspace)} is available. AARNN use authorisation is required to start or update it.`;
       return;
     }
-    controlNoteEl.textContent = `Controls go to workspace runtime ${workspace.workspace_id}.`;
+    controlNoteEl.textContent = `Controls go to workspace runtime ${workspaceBaseLabel(workspace)}.`;
     return;
   }
   const orchestrator = getActiveOrchestratorAddr();
@@ -2242,10 +2356,9 @@ async function fetchSnapshotForActive() {
   let url = "";
   let fetcher = fetch;
   if (source.kind === "workspace") {
-    url = `/api/runtime/workspaces/${encodeURIComponent(source.workspace.workspace_id)}/snapshot`;
-    if (knownSnapshotMeta && knownSnapshotMeta.savedAtMs > 0) {
-      url += `?if_saved_after_ms=${encodeURIComponent(String(knownSnapshotMeta.savedAtMs))}`;
-    }
+    url = buildWorkspaceApiUrl(source.workspace, "/snapshot", knownSnapshotMeta && knownSnapshotMeta.savedAtMs > 0 ? {
+      if_saved_after_ms: knownSnapshotMeta.savedAtMs
+    } : {});
     fetcher = runtimeFetch;
   } else {
     url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}`;
@@ -2343,7 +2456,7 @@ async function pollActivity() {
   let url = "";
   let fetcher = fetch;
   if (source.kind === "workspace") {
-    url = `/api/runtime/workspaces/${encodeURIComponent(source.workspace.workspace_id)}/activity`;
+    url = buildWorkspaceApiUrl(source.workspace, "/activity");
     fetcher = runtimeFetch;
   } else {
     url = `/api/activity?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}`;
@@ -3188,7 +3301,7 @@ async function applyRemoteJsonPayload(raw, label) {
       replaceBaseline: true
     });
     if (ok) {
-      setToolStatus(`${label} applied to workspace ${workspace.workspace_id}.`);
+      setToolStatus(`${label} applied to workspace ${workspaceBaseLabel(workspace)}.`);
       resetInstrumentationBuffers();
     }
     return ok;
@@ -3968,7 +4081,10 @@ function attachControls() {
     workspacePullBtn.addEventListener("click", async () => {
       await fetchSnapshotForActive();
       await pollActivity();
-      setToolStatus(`Pulled workspace ${state.runtime.activeWorkspace}.`);
+      const workspace = getActiveWorkspaceMeta();
+      if (workspace) {
+        setToolStatus(`Pulled workspace ${workspaceBaseLabel(workspace)}.`);
+      }
     });
   }
   if (workspacePushBtn) {
@@ -3985,7 +4101,10 @@ function attachControls() {
         replaceBaseline: true
       });
       if (ok) {
-        setToolStatus(`Pushed ${kind} into workspace ${state.runtime.activeWorkspace}.`);
+        const workspace = getActiveWorkspaceMeta();
+        if (workspace) {
+          setToolStatus(`Pushed ${kind} into workspace ${workspaceBaseLabel(workspace)}.`);
+        }
       }
     });
   }
@@ -4356,7 +4475,9 @@ async function exportModel(format) {
     }
     const workspace = getActiveWorkspaceMeta();
     if (!workspace) return;
-    const url = `/api/runtime/workspaces/${encodeURIComponent(workspace.workspace_id)}/export?format=${encodeURIComponent(format)}`;
+    const url = buildWorkspaceApiUrl(workspace, "/export", {
+      format
+    });
     window.open(url, "_blank");
     return;
   }

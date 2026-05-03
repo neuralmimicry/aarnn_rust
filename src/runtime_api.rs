@@ -35,6 +35,8 @@ pub struct AutoscalerReport {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct WorkspaceSummary {
+    #[serde(default)]
+    pub owner_id: String,
     pub workspace_id: String,
     pub network_id: String,
     pub name: String,
