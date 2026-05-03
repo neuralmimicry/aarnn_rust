@@ -49,6 +49,7 @@
 #      Include obsolete scripts. These scripts are replaced by C programs with
 #      a different interface now.
 #   -DNO_MAN_PAGES=1 (default 0, build/install the man pages)
+#   -DNO_EXAMPLES=1 (default 0, skip example and demo binaries)
 #      Disable man pages. Allows rdma-core to be built and installed
 #      (without man pages) when neither pandoc/rst2man nor the pandoc-prebuilt
 #      directory are available.
@@ -470,6 +471,8 @@ if (NOT NO_MAN_PAGES)
   FIND_PACKAGE(rst2man)
 endif ()
 
+set(NO_EXAMPLES "OFF" CACHE BOOL "Disable build/install of example and demo binaries")
+
 #-------------------------
 # Find libraries
 # pthread
@@ -758,8 +761,10 @@ if (NOT NL_KIND EQUAL 0)
   add_subdirectory(iwpmd)
 endif()
 add_subdirectory(libibumad/tests)
-add_subdirectory(libibverbs/examples)
-add_subdirectory(librdmacm/examples)
+if (NOT NO_EXAMPLES)
+  add_subdirectory(libibverbs/examples)
+  add_subdirectory(librdmacm/examples)
+endif()
 if (UDEV_FOUND)
   add_subdirectory(rdma-ndd)
 endif()

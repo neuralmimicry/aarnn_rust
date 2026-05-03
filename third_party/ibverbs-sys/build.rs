@@ -28,6 +28,8 @@ fn main() {
     eprintln!("run cmake");
     let built_in = cmake::Config::new("vendor/rdma-core")
         .define("NO_MAN_PAGES", "1")
+        .define("NO_PYVERBS", "1")
+        .define("NO_EXAMPLES", "1")
         // cmake crate defaults CMAKE_INSTALL_PREFIX to the output directory
         //
         //   https://github.com/rust-lang/cmake-rs/blob/94da9de2ea79ab6cad572e908864a160cf4847a9/src/lib.rs#L699-L703
