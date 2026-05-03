@@ -127,3 +127,57 @@ async fn runtime_manager_isolates_users_by_workspace_root() {
     runtime.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn runtime_manager_lists_requested_workspace_owners_in_order() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(RuntimeConfig {
+        root_dir: root.clone(),
+        tick_interval_ms: 10,
+        local_worker_limit: 1,
+        resume_existing_workspaces: true,
+        autosave_steps: 10,
+        continuum: None,
+        reconcile_interval_ms: 10,
+        autoscaler_interval_ms: 50,
+        orchestrator_addr: None,
+    })
+    .await
+    .unwrap();
+
+    runtime
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("alpha".to_string()),
+                name: Some("Alice Alpha".to_string()),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    runtime
+        .create_workspace(
+            "system",
+            WorkspaceCreateRequest {
+                workspace_id: Some("alpha".to_string()),
+                name: Some("System Alpha".to_string()),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let combined = runtime
+        .list_workspaces_for_users(["alice", "system"])
+        .await
+        .unwrap();
+    assert_eq!(combined.len(), 2);
+    assert_eq!(combined[0].owner_id, "alice");
+    assert_eq!(combined[0].workspace_id, "alpha");
+    assert_eq!(combined[1].owner_id, "system");
+    assert_eq!(combined[1].workspace_id, "alpha");
+
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -1259,7 +1259,13 @@ struct SnapshotQuery {
 
 #[derive(Deserialize, Default)]
 struct RuntimeWorkspaceSnapshotQuery {
+    owner: Option<String>,
     if_saved_after_ms: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+struct RuntimeWorkspaceOwnerQuery {
+    owner: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1289,6 +1295,7 @@ struct ControlNetworkPayload {
 struct ExportQuery {
     addr: Option<String>,
     network_id: Option<String>,
+    owner: Option<String>,
     format: String,
 }
 
@@ -3644,7 +3651,11 @@ async fn runtime_status(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
 ) -> axum::response::Response {
-    match state.runtime.runtime_status(&user.username).await {
+    match state
+        .runtime
+        .runtime_status_for_users(&user.username, runtime_workspace_scope_owners(&user))
+        .await
+    {
         Ok(status) => Json(status).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3658,7 +3669,11 @@ async fn runtime_workspaces(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
 ) -> axum::response::Response {
-    match state.runtime.list_workspaces(&user.username).await {
+    match state
+        .runtime
+        .list_workspaces_for_users(runtime_workspace_scope_owners(&user))
+        .await
+    {
         Ok(workspaces) => Json(workspaces).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3733,12 +3748,13 @@ async fn runtime_workspace_detail(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
 ) -> axum::response::Response {
-    match state
-        .runtime
-        .workspace_detail(&user.username, &workspace_id)
-        .await
-    {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state.runtime.workspace_detail(&owner, &workspace_id).await {
         Ok(detail) => Json(detail).into_response(),
         Err(err) => (
             StatusCode::NOT_FOUND,
@@ -3752,12 +3768,13 @@ async fn delete_runtime_workspace(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
 ) -> axum::response::Response {
-    match state
-        .runtime
-        .delete_workspace(&user.username, &workspace_id)
-        .await
-    {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state.runtime.delete_workspace(&owner, &workspace_id).await {
         Ok(resp) => Json(resp).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -3773,9 +3790,13 @@ async fn runtime_workspace_snapshot(
     Path(workspace_id): Path<String>,
     Query(query): Query<RuntimeWorkspaceSnapshotQuery>,
 ) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
     match state
         .runtime
-        .workspace_saved_snapshot(&user.username, &workspace_id, query.if_saved_after_ms)
+        .workspace_saved_snapshot(&owner, &workspace_id, query.if_saved_after_ms)
         .await
     {
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
@@ -3792,10 +3813,15 @@ async fn runtime_workspace_activity(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
 ) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
     match state
         .runtime
-        .workspace_activity(&user.username, &workspace_id)
+        .workspace_activity(&owner, &workspace_id)
         .await
     {
         Ok(activity) => Json(activity).into_response(),
@@ -3811,12 +3837,17 @@ async fn control_runtime_workspace(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
     Json(payload): Json<WorkspaceControlRequest>,
 ) -> axum::response::Response {
     let requirement = workspace_control_requirement(payload.action);
     if !user.can_access(requirement) {
         return insufficient_service_access_response(&user, requirement);
     }
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
     let cost = state.token_pricing.control_cost(payload.action);
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -3827,8 +3858,9 @@ async fn control_runtime_workspace(
     }
     let action_name = control_action_label(payload.action);
     let debit_request_id = format!(
-        "aarnn:control:{}:{}:{}:{}",
+        "aarnn:control:{}:{}:{}:{}:{}",
         user.username.trim(),
+        owner.trim(),
         workspace_id.trim(),
         action_name,
         now_ts()
@@ -3840,6 +3872,7 @@ async fn control_runtime_workspace(
         debit_request_id.clone(),
         json!({
             "operation": "control_workspace",
+            "workspace_owner": owner,
             "workspace_id": workspace_id,
             "action": action_name,
             "source": "aarnn_web_ui",
@@ -3855,7 +3888,7 @@ async fn control_runtime_workspace(
     }
     match state
         .runtime
-        .control_workspace(&user.username, &workspace_id, payload.action)
+        .control_workspace(&owner, &workspace_id, payload.action)
         .await
     {
         Ok(detail) => Json(detail).into_response(),
@@ -3867,6 +3900,7 @@ async fn control_runtime_workspace(
                 format!("refund:{}", debit_request_id),
                 json!({
                     "operation": "control_workspace_refund",
+                    "workspace_owner": owner,
                     "workspace_id": workspace_id,
                     "action": action_name,
                     "source": "aarnn_web_ui",
@@ -3886,8 +3920,13 @@ async fn import_runtime_workspace(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
     Json(payload): Json<WorkspaceImportRequest>,
 ) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
     let cost = state.token_pricing.import_workspace;
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -3898,14 +3937,15 @@ async fn import_runtime_workspace(
     }
     match state
         .runtime
-        .import_workspace_json(&user.username, &workspace_id, payload)
+        .import_workspace_json(&owner, &workspace_id, payload)
         .await
     {
         Ok(detail) => {
             if cost > 0 {
                 let request_id = format!(
-                    "aarnn:import:{}:{}:{}",
+                    "aarnn:import:{}:{}:{}:{}",
                     user.username.trim(),
+                    owner.trim(),
                     workspace_id.trim(),
                     now_ts()
                 );
@@ -3916,6 +3956,7 @@ async fn import_runtime_workspace(
                     request_id,
                     json!({
                         "operation": "import_workspace",
+                        "workspace_owner": owner,
                         "workspace_id": workspace_id,
                         "network_id": detail.summary.network_id,
                         "source": "aarnn_web_ui",
@@ -5177,9 +5218,13 @@ async fn export_runtime_workspace(
     Path(workspace_id): Path<String>,
     Query(query): Query<ExportQuery>,
 ) -> impl IntoResponse {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
     let snapshot = match state
         .runtime
-        .workspace_snapshot(&user.username, &workspace_id)
+        .workspace_snapshot(&owner, &workspace_id)
         .await
     {
         Ok(snapshot) => snapshot,
@@ -5198,6 +5243,36 @@ async fn export_runtime_workspace(
         query.format.to_lowercase(),
     )
     .await
+}
+
+fn runtime_workspace_scope_owners(user: &AuthUser) -> Vec<String> {
+    let mut owners = vec![user.username.clone()];
+    if user.is_admin
+        && !owners
+            .iter()
+            .any(|owner| owner.eq_ignore_ascii_case("system"))
+    {
+        owners.push("system".to_string());
+    }
+    owners
+}
+
+fn resolve_runtime_workspace_owner(
+    user: &AuthUser,
+    requested_owner: Option<&str>,
+) -> Result<String, axum::response::Response> {
+    let owner = requested_owner.unwrap_or_default().trim();
+    if owner.is_empty() || owner.eq_ignore_ascii_case(user.username.trim()) {
+        return Ok(user.username.clone());
+    }
+    if user.is_admin && owner.eq_ignore_ascii_case("system") {
+        return Ok("system".to_string());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "workspace owner access denied" })),
+    )
+        .into_response())
 }
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -6350,6 +6425,47 @@ mod tests {
             workspace_control_requirement(WorkspaceControlAction::New),
             AccessRequirement::aarnn_control()
         );
+    }
+
+    #[test]
+    fn runtime_workspace_scope_includes_system_for_admins() {
+        let user = AuthUser {
+            username: "pbisaacs".to_string(),
+            is_admin: true,
+            ..AuthUser::default()
+        };
+        assert_eq!(
+            runtime_workspace_scope_owners(&user),
+            vec!["pbisaacs".to_string(), "system".to_string()]
+        );
+    }
+
+    #[test]
+    fn runtime_workspace_owner_resolution_allows_admin_system_access() {
+        let user = AuthUser {
+            username: "pbisaacs".to_string(),
+            is_admin: true,
+            ..AuthUser::default()
+        };
+        assert_eq!(
+            resolve_runtime_workspace_owner(&user, Some("system")).unwrap(),
+            "system"
+        );
+        assert_eq!(
+            resolve_runtime_workspace_owner(&user, Some("pbisaacs")).unwrap(),
+            "pbisaacs"
+        );
+    }
+
+    #[test]
+    fn runtime_workspace_owner_resolution_rejects_non_admin_system_access() {
+        let user = AuthUser {
+            username: "alice".to_string(),
+            is_admin: false,
+            ..AuthUser::default()
+        };
+        let response = resolve_runtime_workspace_owner(&user, Some("system")).unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
