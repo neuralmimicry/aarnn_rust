@@ -320,12 +320,7 @@ jobs:
           # shellcheck disable=SC2086
           aarnn_apt_install_with_retry -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
-          if [[ ! -x /cargo/bin/rustup ]]; then
-            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
-          fi
-
-          . /cargo/env
-          rustup target add "$rust_target"
+          . /workspace/scripts/ensure_container_rustup.sh "$rust_target"
 
           bash /workspace/scripts/package-release.sh \
             --version "$artifact_version" \
