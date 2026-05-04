@@ -89,6 +89,7 @@ collect_fingerprint_inputs() {
     third_party/ibverbs-sys \
     third_party/mpi-sys \
     scripts/container_workloads.sh \
+    scripts/ensure_container_rustup.sh \
     scripts/prepare_container_package.sh \
     scripts/package-release.sh
   do
@@ -202,13 +203,7 @@ aarnn_apt_install_with_retry -y --no-install-recommends \
   libfontconfig1-dev \
   libfreetype6-dev
 
-if [[ ! -x /cargo/bin/rustup ]]; then
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
-fi
-
-# shellcheck disable=SC1091
-. /cargo/env
-rustup target add "$RUST_TARGET"
+. /workspace/scripts/ensure_container_rustup.sh "$RUST_TARGET"
 
 bash /workspace/scripts/package-release.sh \
   --version "$VERSION" \
