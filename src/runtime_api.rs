@@ -51,6 +51,10 @@ pub struct WorkspaceSummary {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub last_saved_at_ms: Option<u64>,
+    #[serde(default)]
+    pub distributed_node_count: usize,
+    #[serde(default)]
+    pub distributed_node_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
