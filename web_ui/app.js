@@ -599,7 +599,10 @@ function saveActiveWorkspace() {
   } catch (_) {}
 }
 function authenticatedUsername() {
-  return state.user && typeof state.user.username === "string" ? state.user.username.trim() : "";
+  if (typeof state.user === "string") {
+    return state.user.trim();
+  }
+  return state.identity && typeof state.identity.username === "string" ? state.identity.username.trim() : "";
 }
 function workspaceOwnerId(workspace) {
   const explicit = typeof (workspace === null || workspace === void 0 ? void 0 : workspace.owner_id) === "string" ? workspace.owner_id.trim() : "";
@@ -1334,6 +1337,24 @@ function workspaceNetworkMeta(workspace, detail = getActiveWorkspaceDetail()) {
     desired_aarnn_depth: desiredDepth,
     neuron_model: status.neuron_model || state.lastModel || "aarnn",
     learning_rule: status.learning_rule || state.lastLearning || "aarnn"
+  };
+}
+function workspaceDistributedNodeMeta(workspace, detail = getActiveWorkspaceDetail()) {
+  var _ref6, _ref7;
+  if (!workspace) {
+    return {
+      count: 0,
+      nodeIds: []
+    };
+  }
+  const summary = detail && detail.summary && typeof detail.summary === "object" ? detail.summary : null;
+  const sourceNodeIds = Array.isArray(summary === null || summary === void 0 ? void 0 : summary.distributed_node_ids) ? summary.distributed_node_ids : Array.isArray(workspace === null || workspace === void 0 ? void 0 : workspace.distributed_node_ids) ? workspace.distributed_node_ids : [];
+  const dedupedNodeIds = Array.from(new Set(sourceNodeIds.map(value => String(value || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const reportedCount = Number((_ref6 = (_ref7 = summary === null || summary === void 0 ? void 0 : summary.distributed_node_count) !== null && _ref7 !== void 0 ? _ref7 : workspace === null || workspace === void 0 ? void 0 : workspace.distributed_node_count) !== null && _ref6 !== void 0 ? _ref6 : 0);
+  const normalizedCount = Number.isFinite(reportedCount) && reportedCount > 0 ? Math.trunc(reportedCount) : 0;
+  return {
+    count: dedupedNodeIds.length > 0 ? dedupedNodeIds.length : normalizedCount,
+    nodeIds: dedupedNodeIds
   };
 }
 function activeWorkspaceNeuronCount() {
@@ -2076,6 +2097,9 @@ function renderWorkspaceSidebar() {
   const hiddenLayers = Number((_ref1 = (_ref10 = (_detail$status$num_hi = detail === null || detail === void 0 || (_detail$status6 = detail.status) === null || _detail$status6 === void 0 ? void 0 : _detail$status6.num_hidden_layers) !== null && _detail$status$num_hi !== void 0 ? _detail$status$num_hi : workspace.num_hidden_layers) !== null && _ref10 !== void 0 ? _ref10 : (_state$snapshot3 = state.snapshot) === null || _state$snapshot3 === void 0 || (_state$snapshot3 = _state$snapshot3.net) === null || _state$snapshot3 === void 0 ? void 0 : _state$snapshot3.num_hidden_layers) !== null && _ref1 !== void 0 ? _ref1 : 0);
   const totalLayers = Math.max(0, hiddenLayers + 1);
   const depth = Number((_ref11 = (_ref12 = (_detail$status$desire = detail === null || detail === void 0 || (_detail$status7 = detail.status) === null || _detail$status7 === void 0 ? void 0 : _detail$status7.desired_aarnn_depth) !== null && _detail$status$desire !== void 0 ? _detail$status$desire : workspace.desired_aarnn_depth) !== null && _ref12 !== void 0 ? _ref12 : (_state$snapshot4 = state.snapshot) === null || _state$snapshot4 === void 0 || (_state$snapshot4 = _state$snapshot4.net) === null || _state$snapshot4 === void 0 ? void 0 : _state$snapshot4.aarnn_layer_depth) !== null && _ref11 !== void 0 ? _ref11 : 0);
+  const distributionMeta = workspaceDistributedNodeMeta(workspace, detail);
+  const distributedNodeCount = Math.max(0, Number(distributionMeta.count || 0));
+  const distributionLabel = distributionMeta.nodeIds.length ? distributionMeta.nodeIds.join(", ") : distributedNodeCount > 0 ? `${distributedNodeCount} nodes` : "none reported";
   const updatedAtText = Number(workspace.updated_at_ms || 0) > 0 ? new Date(Number(workspace.updated_at_ms)).toLocaleString() : "n/a";
   cpuEl.textContent = "n/a";
   ramEl.textContent = "sandbox";
@@ -2093,9 +2117,9 @@ function renderWorkspaceSidebar() {
   clusterGaEvalsEl.textContent = "0";
   stepTimeEl.textContent = running ? "engine" : "-";
   activeTargetEl.textContent = `workspace:${workspaceBaseLabel(workspace)}`;
-  nodesCountEl.textContent = "1";
+  nodesCountEl.textContent = distributedNodeCount.toString();
   networksCountEl.textContent = "1";
-  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | owner ${workspaceOwnerId(workspace)} | ${running ? "running" : "stopped"} | step ${step} | updated ${updatedAtText}`)}</div>`;
+  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | owner ${workspaceOwnerId(workspace)} | ${running ? "running" : "stopped"} | step ${step} | distributed nodes ${distributedNodeCount} | ${distributionLabel} | updated ${updatedAtText}`)}</div>`;
   clusterNetworksEl.innerHTML = `<div class="line">${escapeHtml(`${workspaceBaseLabel(workspace)} | ${running ? "running" : "stopped"} | t ${simTimeMs.toFixed(1)} ms | neurons ${totalNeurons} | layers ${totalLayers} | model ${status.neuron_model || state.lastModel || "aarnn"} | learning ${status.learning_rule || state.lastLearning || "aarnn"}`)}</div>`;
 }
 function getActiveNetworkMeta() {

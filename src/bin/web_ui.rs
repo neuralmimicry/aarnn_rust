@@ -65,7 +65,7 @@ use openidconnect::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -74,6 +74,8 @@ use tokio::fs;
 use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
+
+use aarnn_rust::runtime_api::WorkspaceSummary;
 
 type OidcClient = CoreClient<
     EndpointSet,
@@ -3656,7 +3658,11 @@ async fn runtime_status(
         .runtime_status_for_users(&user.username, runtime_workspace_scope_owners(&user))
         .await
     {
-        Ok(status) => Json(status).into_response(),
+        Ok(mut status) => {
+            enrich_workspace_summaries_with_distribution(state.as_ref(), &mut status.workspaces)
+                .await;
+            Json(status).into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -3674,7 +3680,10 @@ async fn runtime_workspaces(
         .list_workspaces_for_users(runtime_workspace_scope_owners(&user))
         .await
     {
-        Ok(workspaces) => Json(workspaces).into_response(),
+        Ok(mut workspaces) => {
+            enrich_workspace_summaries_with_distribution(state.as_ref(), &mut workspaces).await;
+            Json(workspaces).into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": err.to_string() })),
@@ -3755,7 +3764,14 @@ async fn runtime_workspace_detail(
         Err(response) => return response,
     };
     match state.runtime.workspace_detail(&owner, &workspace_id).await {
-        Ok(detail) => Json(detail).into_response(),
+        Ok(mut detail) => {
+            enrich_workspace_summaries_with_distribution(
+                state.as_ref(),
+                std::slice::from_mut(&mut detail.summary),
+            )
+            .await;
+            Json(detail).into_response()
+        }
         Err(err) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": err.to_string() })),
@@ -5275,6 +5291,102 @@ fn resolve_runtime_workspace_owner(
         .into_response())
 }
 
+fn apply_workspace_distribution_metadata(
+    workspaces: &mut [WorkspaceSummary],
+    distribution_by_network: &HashMap<String, Vec<String>>,
+) {
+    for workspace in workspaces {
+        workspace.distributed_node_count = 0;
+        workspace.distributed_node_ids.clear();
+        let network_id = workspace.network_id.trim();
+        if network_id.is_empty() {
+            continue;
+        }
+        if let Some(node_ids) = distribution_by_network.get(network_id) {
+            workspace.distributed_node_count = node_ids.len();
+            workspace.distributed_node_ids = node_ids.clone();
+        }
+    }
+}
+
+async fn fetch_workspace_distribution_by_network(
+    state: &AppState,
+) -> Option<HashMap<String, Vec<String>>> {
+    let orchestrator = state.default_orchestrator.as_deref()?;
+    let target_addr = normalize_target_addr(orchestrator);
+    let mut client = connect_cluster_client(target_addr).await.ok()?;
+    let status = client
+        .get_system_status(Request::new(StatusRequest {}))
+        .await
+        .ok()?
+        .into_inner();
+
+    let mut active_nodes_by_network: HashMap<String, HashSet<String>> = HashMap::new();
+    for node in &status.nodes {
+        let node_id = node.node_id.trim();
+        if node_id.is_empty() {
+            continue;
+        }
+        for network_id in &node.active_networks {
+            let network_id = network_id.trim();
+            if network_id.is_empty() {
+                continue;
+            }
+            active_nodes_by_network
+                .entry(network_id.to_string())
+                .or_default()
+                .insert(node_id.to_string());
+        }
+    }
+
+    let mut distribution_by_network: HashMap<String, HashSet<String>> = HashMap::new();
+    for network in &status.networks {
+        let network_id = network.network_id.trim();
+        if network_id.is_empty() {
+            continue;
+        }
+        let entry = distribution_by_network
+            .entry(network_id.to_string())
+            .or_default();
+        for node_id in network.distribution.keys() {
+            let node_id = node_id.trim();
+            if !node_id.is_empty() {
+                entry.insert(node_id.to_string());
+            }
+        }
+        if entry.is_empty()
+            && let Some(active_nodes) = active_nodes_by_network.get(network_id)
+        {
+            entry.extend(active_nodes.iter().cloned());
+        }
+    }
+    for (network_id, node_ids) in active_nodes_by_network {
+        distribution_by_network
+            .entry(network_id)
+            .or_insert(node_ids);
+    }
+
+    let mut normalized = HashMap::with_capacity(distribution_by_network.len());
+    for (network_id, node_ids) in distribution_by_network {
+        let mut ids = node_ids.into_iter().collect::<Vec<_>>();
+        ids.sort();
+        normalized.insert(network_id, ids);
+    }
+    Some(normalized)
+}
+
+async fn enrich_workspace_summaries_with_distribution(
+    state: &AppState,
+    workspaces: &mut [WorkspaceSummary],
+) {
+    if workspaces.is_empty() {
+        return;
+    }
+    if let Some(distribution) = fetch_workspace_distribution_by_network(state).await {
+        apply_workspace_distribution_metadata(workspaces, &distribution);
+    }
+}
+
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
 fn normalize_target_addr(raw: &str) -> String {
@@ -6466,6 +6578,48 @@ mod tests {
         };
         let response = resolve_runtime_workspace_owner(&user, Some("system")).unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn apply_workspace_distribution_metadata_populates_count_and_ids() {
+        let mut workspaces = vec![
+            WorkspaceSummary {
+                workspace_id: "neuralmimicry-shared-snn".to_string(),
+                network_id: "neuralmimicry-shared-snn".to_string(),
+                ..WorkspaceSummary::default()
+            },
+            WorkspaceSummary {
+                workspace_id: "celegans-lab".to_string(),
+                network_id: "celegans-lab".to_string(),
+                ..WorkspaceSummary::default()
+            },
+        ];
+        let distribution = HashMap::from([
+            (
+                "neuralmimicry-shared-snn".to_string(),
+                vec![
+                    "tenant-aarnn_103".to_string(),
+                    "tenant-aarnn_286".to_string(),
+                ],
+            ),
+            (
+                "tenant-aarnn".to_string(),
+                vec!["tenant-aarnn_103".to_string()],
+            ),
+        ]);
+
+        apply_workspace_distribution_metadata(&mut workspaces, &distribution);
+
+        assert_eq!(workspaces[0].distributed_node_count, 2);
+        assert_eq!(
+            workspaces[0].distributed_node_ids,
+            vec![
+                "tenant-aarnn_103".to_string(),
+                "tenant-aarnn_286".to_string()
+            ]
+        );
+        assert_eq!(workspaces[1].distributed_node_count, 0);
+        assert!(workspaces[1].distributed_node_ids.is_empty());
     }
 
     #[test]
