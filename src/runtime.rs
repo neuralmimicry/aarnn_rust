@@ -207,6 +207,7 @@ impl RuntimeAutoscaler for NoopAutoscaler {
                 local_worker_limit: self.local_worker_limit,
                 requested_remote_nodes: 0,
                 active_remote_nodes: 0,
+                active_remote_host_ids: Vec::new(),
                 last_action: None,
                 controller_role: None,
                 pressure_signals: Vec::new(),
@@ -244,6 +245,12 @@ pub struct ContinuumAutoscalerConfig {
     pub tenant_environment: Option<String>,
     #[serde(default)]
     pub recruit_token: Option<String>,
+    #[serde(default = "default_tracey_agent_prefix")]
+    pub tracey_agent_prefix: String,
+    #[serde(default)]
+    pub tracey_status_addr: Option<String>,
+    #[serde(default = "default_tracey_auto_discovery")]
+    pub tracey_auto_discovery: bool,
     #[serde(default = "default_worker_capacity_per_node")]
     pub worker_capacity_per_node: usize,
     #[serde(default = "default_auto_configure")]
@@ -278,6 +285,14 @@ fn default_node_type() -> String {
 
 fn default_worker_capacity_per_node() -> usize {
     4
+}
+
+fn default_tracey_agent_prefix() -> String {
+    "aarnn".to_string()
+}
+
+fn default_tracey_auto_discovery() -> bool {
+    true
 }
 
 fn default_auto_configure() -> bool {
@@ -347,6 +362,19 @@ impl ContinuumAutoscalerConfig {
             tenant_name: std::env::var("NM_RUNTIME_CONTINUUM_TENANT_NAME").ok(),
             tenant_environment: std::env::var("NM_RUNTIME_CONTINUUM_TENANT_ENV").ok(),
             recruit_token: std::env::var("NM_RUNTIME_CONTINUUM_RECRUIT_TOKEN").ok(),
+            tracey_agent_prefix: std::env::var("NM_RUNTIME_CONTINUUM_TRACEY_AGENT_PREFIX")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(default_tracey_agent_prefix),
+            tracey_status_addr: std::env::var("NM_RUNTIME_CONTINUUM_TRACEY_STATUS_ADDR")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            tracey_auto_discovery: std::env::var("NM_RUNTIME_CONTINUUM_TRACEY_AUTO_DISCOVERY")
+                .ok()
+                .map(|value| !matches!(value.as_str(), "0" | "false" | "FALSE" | "no" | "off"))
+                .unwrap_or_else(default_tracey_auto_discovery),
             worker_capacity_per_node: std::env::var("NM_RUNTIME_CONTINUUM_WORKERS_PER_NODE")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
@@ -452,26 +480,27 @@ impl ContinuumAutoscaler {
         atomic_write(&self.state_path(), &bytes)
     }
 
-    async fn recruit_host(&self, host: &str) -> anyhow::Result<()> {
-        let url = format!(
-            "{}/node/recruit",
-            self.config.base_url.trim_end_matches('/')
+    fn build_recruit_payload(&self, host: &str) -> serde_json::Value {
+        let node_name = format!("aarnn-{}", sanitize_segment(host, "remote-node"));
+        let tracey_agent_id = format!(
+            "{}-{}",
+            sanitize_segment(self.config.tracey_agent_prefix.as_str(), "aarnn"),
+            sanitize_segment(host, "remote-node").replace('.', "-")
         );
-        let mut request = self
-            .client
-            .post(url)
-            .header(CONTENT_TYPE, "application/json");
-        if let Some(token) = self.config.bearer_token.as_deref() {
-            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
-        }
 
         let mut body = serde_json::json!({
             "host": host,
             "user": self.config.recruit_user,
             "node_type": self.config.node_type,
-            "name": format!("aarnn-{}", sanitize_segment(host, "remote-node")),
+            "name": node_name,
             "dry_run": self.config.dry_run,
             "auto_configure": self.config.auto_configure,
+            // Continuum-managed environments can enforce Tracey metadata for
+            // recruit operations, so always provide a deterministic agent ID.
+            "tracey": {
+                "agent_id": tracey_agent_id,
+                "auto_discovery": self.config.tracey_auto_discovery,
+            },
         });
 
         if let Some(path) = self.config.ssh_key_path.as_deref() {
@@ -492,6 +521,26 @@ impl ContinuumAutoscaler {
         if let Some(recruit_token) = self.config.recruit_token.as_deref() {
             body["recruit_token"] = serde_json::Value::String(recruit_token.to_string());
         }
+        if let Some(status_addr) = self.config.tracey_status_addr.as_deref() {
+            body["tracey"]["status_addr"] = serde_json::Value::String(status_addr.to_string());
+        }
+        body
+    }
+
+    async fn recruit_host(&self, host: &str) -> anyhow::Result<()> {
+        let url = format!(
+            "{}/node/recruit",
+            self.config.base_url.trim_end_matches('/')
+        );
+        let mut request = self
+            .client
+            .post(url)
+            .header(CONTENT_TYPE, "application/json");
+        if let Some(token) = self.config.bearer_token.as_deref() {
+            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
+        }
+
+        let body = self.build_recruit_payload(host);
 
         let response = request
             .json(&body)
@@ -587,6 +636,7 @@ impl ContinuumAutoscaler {
                     .map(|value| value.nodes.saturating_sub(1))
                     .unwrap_or(0),
             ),
+            active_remote_host_ids: state.recruited_hosts.clone(),
             last_action,
             controller_role: Some(controller_role.to_string()),
             pressure_signals,
@@ -598,6 +648,16 @@ impl ContinuumAutoscaler {
             cluster_avg_step_time_ms: cluster.map(|value| value.avg_step_time_ms),
             cluster_load_skew: cluster.map(|value| value.load_skew),
         }
+    }
+}
+
+fn clear_stale_cluster_telemetry_error(last_action: &mut Option<String>) {
+    // Avoid surfacing stale transient connectivity warnings after telemetry has recovered.
+    if last_action
+        .as_deref()
+        .is_some_and(|value| value.starts_with("cluster telemetry unavailable:"))
+    {
+        *last_action = None;
     }
 }
 
@@ -613,7 +673,11 @@ impl RuntimeAutoscaler for ContinuumAutoscaler {
                 .context("autoscaler controller lease task failed")??;
 
             let cluster = match self.fetch_cluster_telemetry().await {
-                Ok(cluster) => cluster,
+                Ok(cluster) => {
+                    let mut last_action = self.last_action.write().await;
+                    clear_stale_cluster_telemetry_error(&mut last_action);
+                    cluster
+                }
                 Err(err) => {
                     let mut last_action = self.last_action.write().await;
                     *last_action = Some(format!("cluster telemetry unavailable: {}", err));
@@ -961,6 +1025,7 @@ impl RuntimeManager {
                 local_worker_limit: config.local_worker_limit.max(1),
                 requested_remote_nodes: 0,
                 active_remote_nodes: 0,
+                active_remote_host_ids: Vec::new(),
                 last_action: None,
                 controller_role: None,
                 pressure_signals: Vec::new(),
@@ -1051,6 +1116,10 @@ impl RuntimeManager {
             autoscaler: self.autoscaler_report.read().await.clone(),
             workspaces,
         })
+    }
+
+    pub async fn autoscaler_report(&self) -> AutoscalerReport {
+        self.autoscaler_report.read().await.clone()
     }
 
     pub async fn list_workspaces(&self, user_id: &str) -> anyhow::Result<Vec<WorkspaceSummary>> {
@@ -1634,6 +1703,7 @@ impl RuntimeManager {
                     local_worker_limit: self.config.local_worker_limit.max(1),
                     requested_remote_nodes: 0,
                     active_remote_nodes: 0,
+                    active_remote_host_ids: Vec::new(),
                     last_action: Some(format!("autoscaler failed: {}", err)),
                     controller_role: None,
                     pressure_signals: Vec::new(),
@@ -2113,4 +2183,97 @@ fn persist_handle_files(
     )?;
     persist_manifest(handle)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_autoscaler_config() -> ContinuumAutoscalerConfig {
+        ContinuumAutoscalerConfig {
+            base_url: "http://127.0.0.1:8080".to_string(),
+            bearer_token: None,
+            recruit_hosts: vec!["192.168.1.60".to_string()],
+            recruit_user: "pbisaacs".to_string(),
+            ssh_key_path: Some("/opt/nmc/.nmc/recruit_id_ed25519".to_string()),
+            node_type: "kubernetes".to_string(),
+            region: Some("eu-west-2".to_string()),
+            tenant_id: Some("aarnn-tenant".to_string()),
+            tenant_name: Some("AARNN Tenant".to_string()),
+            tenant_environment: Some("prod".to_string()),
+            recruit_token: Some("recruit-token".to_string()),
+            tracey_agent_prefix: default_tracey_agent_prefix(),
+            tracey_status_addr: None,
+            tracey_auto_discovery: default_tracey_auto_discovery(),
+            worker_capacity_per_node: default_worker_capacity_per_node(),
+            auto_configure: default_auto_configure(),
+            dry_run: default_dry_run(),
+            scale_out_load_ratio: default_scale_out_load_ratio(),
+            scale_out_cpu_usage_pct: default_scale_out_cpu_usage_pct(),
+            scale_out_memory_usage_pct: default_scale_out_memory_usage_pct(),
+            scale_out_step_time_ms: default_scale_out_step_time_ms(),
+            cluster_cpu_usage_pct: default_cluster_cpu_usage_pct(),
+            cluster_step_time_ms: default_cluster_step_time_ms(),
+            cluster_load_skew: default_cluster_load_skew(),
+            max_recruits_per_tick: default_max_recruits_per_tick(),
+        }
+    }
+
+    #[test]
+    fn recruit_payload_includes_tracey_defaults() {
+        let autoscaler = ContinuumAutoscaler::new(
+            test_autoscaler_config(),
+            8,
+            Path::new("/tmp/aarnn-runtime-tests"),
+            None,
+        );
+
+        let payload = autoscaler.build_recruit_payload("192.168.1.60");
+        assert_eq!(payload["tracey"]["agent_id"], "aarnn-192-168-1-60");
+        assert_eq!(payload["tracey"]["auto_discovery"], true);
+        assert!(payload["tracey"]["status_addr"].is_null());
+    }
+
+    #[test]
+    fn recruit_payload_respects_tracey_overrides() {
+        let mut config = test_autoscaler_config();
+        config.tracey_agent_prefix = "tenant-edge".to_string();
+        config.tracey_status_addr = Some("http://192.168.1.60:48000".to_string());
+        config.tracey_auto_discovery = false;
+        let autoscaler =
+            ContinuumAutoscaler::new(config, 8, Path::new("/tmp/aarnn-runtime-tests"), None);
+
+        let payload = autoscaler.build_recruit_payload("192.168.1.60");
+        assert_eq!(payload["tracey"]["agent_id"], "tenant-edge-192-168-1-60");
+        assert_eq!(
+            payload["tracey"]["status_addr"],
+            "http://192.168.1.60:48000"
+        );
+        assert_eq!(payload["tracey"]["auto_discovery"], false);
+    }
+
+    #[test]
+    fn clear_stale_cluster_telemetry_error_clears_telemetry_unavailable_message() {
+        let mut last_action = Some(
+            "cluster telemetry unavailable: failed to connect to orchestrator for autoscaler telemetry"
+                .to_string(),
+        );
+
+        clear_stale_cluster_telemetry_error(&mut last_action);
+
+        assert_eq!(last_action, None);
+    }
+
+    #[test]
+    fn clear_stale_cluster_telemetry_error_preserves_non_telemetry_messages() {
+        let mut last_action =
+            Some("recruited Continuum host '192.168.1.60' due to local load ratio".to_string());
+
+        clear_stale_cluster_telemetry_error(&mut last_action);
+
+        assert_eq!(
+            last_action,
+            Some("recruited Continuum host '192.168.1.60' due to local load ratio".to_string())
+        );
+    }
 }

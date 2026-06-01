@@ -12,6 +12,8 @@ pub struct AutoscalerReport {
     pub local_worker_limit: usize,
     pub requested_remote_nodes: usize,
     pub active_remote_nodes: usize,
+    #[serde(default)]
+    pub active_remote_host_ids: Vec<String>,
     pub last_action: Option<String>,
     #[serde(default)]
     pub controller_role: Option<String>,
