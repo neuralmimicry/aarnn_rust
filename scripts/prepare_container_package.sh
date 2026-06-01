@@ -119,11 +119,27 @@ compute_fingerprint() {
 }
 
 build_package_in_container() {
-  command -v podman >/dev/null 2>&1 || die "podman is required to build container-targeted packages"
+  local run_tool
+  run_tool="${CONTAINER_DEB_RUN_TOOL:-${CONTAINER_BUILD_TOOL:-${BUILD_TOOL:-podman}}}"
+  case "$run_tool" in
+    docker|docker-buildx|buildx)
+      run_tool="docker"
+      command -v docker >/dev/null 2>&1 || die "docker is required to build container-targeted packages"
+      ;;
+    podman)
+      command -v podman >/dev/null 2>&1 || die "podman is required to build container-targeted packages"
+      ;;
+    *)
+      die "unsupported CONTAINER_DEB_RUN_TOOL '$run_tool' (expected podman or docker)"
+      ;;
+  esac
 
-  local build_cache_root container_platform
+  local build_cache_root container_platform cargo_net_retry cargo_http_timeout cargo_http_multiplexing
   build_cache_root="$CACHE_DIR/_build-env/$ARCH"
   container_platform="linux/$ARCH"
+  cargo_net_retry="${CARGO_NET_RETRY:-20}"
+  cargo_http_timeout="${CARGO_HTTP_TIMEOUT:-600}"
+  cargo_http_multiplexing="${CARGO_HTTP_MULTIPLEXING:-false}"
 
   mkdir -p \
     "$PACKAGE_CACHE_DIR" \
@@ -131,12 +147,15 @@ build_package_in_container() {
     "$build_cache_root/rustup" \
     "$build_cache_root/target"
 
-  podman run --rm -i --pull=missing \
+  "$run_tool" run --rm -i --pull=missing \
     --platform "$container_platform" \
     -e DEBIAN_FRONTEND=noninteractive \
     -e CARGO_HOME=/cargo \
     -e RUSTUP_HOME=/rustup \
     -e CARGO_TARGET_DIR=/target \
+    -e CARGO_NET_RETRY="$cargo_net_retry" \
+    -e CARGO_HTTP_TIMEOUT="$cargo_http_timeout" \
+    -e CARGO_HTTP_MULTIPLEXING="$cargo_http_multiplexing" \
     -v "$ROOT_DIR:/workspace:ro" \
     -v "$PACKAGE_CACHE_DIR:/out" \
     -v "$build_cache_root/cargo:/cargo" \

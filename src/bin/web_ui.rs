@@ -75,7 +75,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
-use aarnn_rust::runtime_api::WorkspaceSummary;
+use aarnn_rust::runtime_api::{AutoscalerReport, WorkspaceSummary};
 
 type OidcClient = CoreClient<
     EndpointSet,
@@ -5309,6 +5309,55 @@ fn apply_workspace_distribution_metadata(
     }
 }
 
+fn apply_workspace_distribution_autoscaler_fallback(
+    workspaces: &mut [WorkspaceSummary],
+    autoscaler: &AutoscalerReport,
+) {
+    if !autoscaler.enabled {
+        return;
+    }
+
+    // Distribution metadata can be empty when orchestrator mapping is temporarily
+    // unavailable; derive a conservative fallback from autoscaler state so the UI
+    // still reflects active multi-node execution.
+    let inferred_node_count = autoscaler
+        .cluster_nodes
+        .unwrap_or_else(|| autoscaler.active_remote_nodes.saturating_add(1));
+    if inferred_node_count <= 1 {
+        return;
+    }
+
+    let mut remote_host_ids = autoscaler
+        .active_remote_host_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    remote_host_ids.sort();
+    remote_host_ids.dedup();
+
+    let mut fallback_node_ids = Vec::with_capacity(inferred_node_count);
+    fallback_node_ids.push("local".to_string());
+    for host_id in remote_host_ids {
+        if fallback_node_ids.len() >= inferred_node_count {
+            break;
+        }
+        fallback_node_ids.push(host_id);
+    }
+    while fallback_node_ids.len() < inferred_node_count {
+        fallback_node_ids.push(format!("remote-{}", fallback_node_ids.len()));
+    }
+
+    for workspace in workspaces.iter_mut().filter(|workspace| workspace.running) {
+        if workspace.distributed_node_count > 0 || !workspace.distributed_node_ids.is_empty() {
+            continue;
+        }
+        workspace.distributed_node_count = inferred_node_count;
+        workspace.distributed_node_ids = fallback_node_ids.clone();
+    }
+}
+
 async fn fetch_workspace_distribution_by_network(
     state: &AppState,
 ) -> Option<HashMap<String, Vec<String>>> {
@@ -5385,6 +5434,8 @@ async fn enrich_workspace_summaries_with_distribution(
     if let Some(distribution) = fetch_workspace_distribution_by_network(state).await {
         apply_workspace_distribution_metadata(workspaces, &distribution);
     }
+    let autoscaler = state.runtime.autoscaler_report().await;
+    apply_workspace_distribution_autoscaler_fallback(workspaces, &autoscaler);
 }
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -6620,6 +6671,78 @@ mod tests {
         );
         assert_eq!(workspaces[1].distributed_node_count, 0);
         assert!(workspaces[1].distributed_node_ids.is_empty());
+    }
+
+    #[test]
+    fn autoscaler_distribution_fallback_populates_running_workspace_when_missing() {
+        let mut workspaces = vec![
+            WorkspaceSummary {
+                workspace_id: "neuralmimicry-shared-snn".to_string(),
+                network_id: "neuralmimicry-shared-snn".to_string(),
+                running: true,
+                ..WorkspaceSummary::default()
+            },
+            WorkspaceSummary {
+                workspace_id: "celegans-lab".to_string(),
+                network_id: "celegans-lab".to_string(),
+                running: false,
+                ..WorkspaceSummary::default()
+            },
+        ];
+        let autoscaler = AutoscalerReport {
+            enabled: true,
+            cluster_nodes: Some(3),
+            active_remote_nodes: 2,
+            active_remote_host_ids: vec!["192.168.1.61".to_string(), "192.168.1.60".to_string()],
+            ..AutoscalerReport::default()
+        };
+
+        apply_workspace_distribution_autoscaler_fallback(&mut workspaces, &autoscaler);
+
+        assert_eq!(workspaces[0].distributed_node_count, 3);
+        assert_eq!(
+            workspaces[0].distributed_node_ids,
+            vec![
+                "local".to_string(),
+                "192.168.1.60".to_string(),
+                "192.168.1.61".to_string()
+            ]
+        );
+        assert_eq!(workspaces[1].distributed_node_count, 0);
+        assert!(workspaces[1].distributed_node_ids.is_empty());
+    }
+
+    #[test]
+    fn autoscaler_distribution_fallback_does_not_override_existing_distribution() {
+        let mut workspaces = vec![WorkspaceSummary {
+            workspace_id: "neuralmimicry-shared-snn".to_string(),
+            network_id: "neuralmimicry-shared-snn".to_string(),
+            running: true,
+            distributed_node_count: 2,
+            distributed_node_ids: vec![
+                "tenant-aarnn_103".to_string(),
+                "tenant-aarnn_286".to_string(),
+            ],
+            ..WorkspaceSummary::default()
+        }];
+        let autoscaler = AutoscalerReport {
+            enabled: true,
+            cluster_nodes: Some(3),
+            active_remote_nodes: 2,
+            active_remote_host_ids: vec!["192.168.1.60".to_string(), "192.168.1.61".to_string()],
+            ..AutoscalerReport::default()
+        };
+
+        apply_workspace_distribution_autoscaler_fallback(&mut workspaces, &autoscaler);
+
+        assert_eq!(workspaces[0].distributed_node_count, 2);
+        assert_eq!(
+            workspaces[0].distributed_node_ids,
+            vec![
+                "tenant-aarnn_103".to_string(),
+                "tenant-aarnn_286".to_string()
+            ]
+        );
     }
 
     #[test]

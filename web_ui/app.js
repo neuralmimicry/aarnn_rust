@@ -223,6 +223,8 @@ let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
 let ioSourceRunner = null;
 let runtimeStatusRequestSeq = 0;
+let runtimeStatusFetchInFlight = false;
+let runtimeStatusFetchQueued = false;
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
 function parseAuthGroups(value) {
@@ -808,6 +810,10 @@ function runtimeUserLabel() {
   if (state.authMode === "none") {
     return (state.runtime.userId || "").trim() || "anonymous";
   }
+  const workspace = getActiveWorkspaceMeta();
+  if (workspace) {
+    return workspaceOwnerId(workspace);
+  }
   return authenticatedUsername() || "authenticated";
 }
 function clusterModeAllowed() {
@@ -1352,9 +1358,38 @@ function workspaceDistributedNodeMeta(workspace, detail = getActiveWorkspaceDeta
   const dedupedNodeIds = Array.from(new Set(sourceNodeIds.map(value => String(value || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const reportedCount = Number((_ref6 = (_ref7 = summary === null || summary === void 0 ? void 0 : summary.distributed_node_count) !== null && _ref7 !== void 0 ? _ref7 : workspace === null || workspace === void 0 ? void 0 : workspace.distributed_node_count) !== null && _ref6 !== void 0 ? _ref6 : 0);
   const normalizedCount = Number.isFinite(reportedCount) && reportedCount > 0 ? Math.trunc(reportedCount) : 0;
+  if (dedupedNodeIds.length > 0 || normalizedCount > 0) {
+    return {
+      count: dedupedNodeIds.length > 0 ? dedupedNodeIds.length : normalizedCount,
+      nodeIds: dedupedNodeIds
+    };
+  }
+  if (!workspace.running) {
+    return {
+      count: 0,
+      nodeIds: []
+    };
+  }
+  const autoscaler = state.runtime.autoscaler || {};
+  // Fall back to autoscaler topology so authenticated mode can still display
+  // distributed node state when workspace summaries lag orchestrator metadata.
+  const clusterNodes = Number(autoscaler.cluster_nodes || 0);
+  const activeRemoteNodes = Number(autoscaler.active_remote_nodes || 0);
+  const inferredCount = Number.isFinite(clusterNodes) && clusterNodes > 1 ? Math.trunc(clusterNodes) : Number.isFinite(activeRemoteNodes) && activeRemoteNodes > 0 ? Math.trunc(activeRemoteNodes) + 1 : 0;
+  if (inferredCount <= 1) {
+    return {
+      count: 0,
+      nodeIds: []
+    };
+  }
+  const remoteNodeIds = Array.isArray(autoscaler.active_remote_host_ids) ? autoscaler.active_remote_host_ids : [];
+  const inferredNodeIds = ["local", ...Array.from(new Set(remoteNodeIds.map(value => String(value || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))];
+  while (inferredNodeIds.length < inferredCount) {
+    inferredNodeIds.push(`remote-${inferredNodeIds.length}`);
+  }
   return {
-    count: dedupedNodeIds.length > 0 ? dedupedNodeIds.length : normalizedCount,
-    nodeIds: dedupedNodeIds
+    count: inferredCount,
+    nodeIds: inferredNodeIds.slice(0, inferredCount)
   };
 }
 function activeWorkspaceNeuronCount() {
@@ -1516,20 +1551,47 @@ function syncWorkspaceUi() {
   if (workspacePushBtn) workspacePushBtn.disabled = !workspace || !hasAarnnUseAccess() || !(currentNetworkJson() || currentConfigJson());
   if (workspaceStartBtn) workspaceStartBtn.disabled = !workspace || running || !workspaceActionAllowed("start");
   if (workspaceStopBtn) workspaceStopBtn.disabled = !workspace || !running || !workspaceActionAllowed("stop");
-  if (networkSelect) networkSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
-  if (nodeSelect) nodeSelect.disabled = Boolean(workspace) || !clusterModeAllowed();
+  if (networkSelect) {
+    if (!clusterModeAllowed()) {
+      networkSelect.disabled = state.runtime.workspaces.length === 0;
+    } else {
+      networkSelect.disabled = Boolean(workspace);
+    }
+  }
+  if (nodeSelect) {
+    if (!clusterModeAllowed()) {
+      nodeSelect.disabled = !workspace;
+    } else {
+      nodeSelect.disabled = Boolean(workspace);
+    }
+  }
   syncTokenUi();
 }
 async function loadRuntimeStatus() {
+  // Runtime status calls can take longer than the poll interval under load.
+  // Serialise requests so a newer poll does not continuously mark all prior
+  // responses stale and leave workspace state empty.
+  if (runtimeStatusFetchInFlight) {
+    runtimeStatusFetchQueued = true;
+    return;
+  }
+  runtimeStatusFetchInFlight = true;
   if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
     clearRestrictedRuntimeState();
     refreshWorkspaceSelect();
     renderWorkspaceSidebar();
     refreshControlButtons();
+    runtimeStatusFetchInFlight = false;
     return;
   }
-  if (state.authMode !== "none" && !state.user) return;
-  if (!pageIsVisible()) return;
+  if (state.authMode !== "none" && !state.user) {
+    runtimeStatusFetchInFlight = false;
+    return;
+  }
+  if (!pageIsVisible()) {
+    runtimeStatusFetchInFlight = false;
+    return;
+  }
   const requestSeq = ++runtimeStatusRequestSeq;
   try {
     const resp = await runtimeFetch("/api/runtime/status");
@@ -1575,6 +1637,14 @@ async function loadRuntimeStatus() {
   } catch (_) {
     if (requestSeq !== runtimeStatusRequestSeq) return;
     refreshWorkspaceSelect();
+  } finally {
+    runtimeStatusFetchInFlight = false;
+    if (runtimeStatusFetchQueued) {
+      runtimeStatusFetchQueued = false;
+      scheduleMicrotask(() => {
+        loadRuntimeStatus();
+      });
+    }
   }
 }
 async function createWorkspaceFromCurrentState() {
@@ -1843,20 +1913,43 @@ function setActive(addr) {
   refreshNetworkSelect();
 }
 function refreshNetworkSelect() {
-  const workspace = getActiveWorkspaceMeta();
-  if (!clusterModeAllowed() && !workspace) {
+  if (!clusterModeAllowed()) {
     networkSelect.innerHTML = "";
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = hasAarnnObserveAccess() ? "(no workspaces)" : "(observation access not granted)";
-    networkSelect.appendChild(opt);
-    state.activeNetwork = "";
+    if (!state.runtime.workspaces.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = hasAarnnObserveAccess() ? "(no workspaces)" : "(observation access not granted)";
+      networkSelect.appendChild(opt);
+      state.activeNetwork = "";
+      saveActiveNetwork();
+      refreshNodeSelect();
+      refreshControlButtons();
+      syncWorkspaceUi();
+      return;
+    }
+    let workspace = getActiveWorkspaceMeta();
+    if (!workspace) {
+      // In authenticated mode there may be no active key yet; default to the
+      // first workspace so NETWORK/NODE controls remain interactive.
+      workspace = state.runtime.workspaces[0];
+      state.runtime.activeWorkspace = workspaceSelectionKeyFor(workspace);
+      saveActiveWorkspace();
+    }
+    state.runtime.workspaces.forEach(item => {
+      const opt = document.createElement("option");
+      opt.value = workspaceSelectionKeyFor(item);
+      opt.textContent = `${workspaceBaseLabel(item)}${item.running ? " (running)" : ""}`;
+      networkSelect.appendChild(opt);
+    });
+    networkSelect.value = state.runtime.activeWorkspace;
+    state.activeNetwork = (workspace === null || workspace === void 0 ? void 0 : workspace.network_id) || (workspace === null || workspace === void 0 ? void 0 : workspace.workspace_id) || "";
     saveActiveNetwork();
     refreshNodeSelect();
     refreshControlButtons();
     syncWorkspaceUi();
     return;
   }
+  const workspace = getActiveWorkspaceMeta();
   if (workspace) {
     const networkId = workspace.network_id || workspace.workspace_id;
     networkSelect.innerHTML = "";
@@ -1913,6 +2006,21 @@ function refreshNetworkSelect() {
   refreshControlButtons();
 }
 networkSelect.addEventListener("change", () => {
+  if (!clusterModeAllowed()) {
+    const selectedWorkspace = networkSelect.value || "";
+    if (workspaceSelect && workspaceSelect.value !== selectedWorkspace) {
+      workspaceSelect.value = selectedWorkspace;
+      workspaceSelect.dispatchEvent(new Event("change"));
+      return;
+    }
+    state.runtime.activeWorkspace = selectedWorkspace;
+    saveActiveWorkspace();
+    refreshWorkspaceSelect();
+    refreshNetworkSelect();
+    fetchSnapshotForActive();
+    pollActivity();
+    return;
+  }
   if (isWorkspaceMode()) {
     refreshNetworkSelect();
     return;
@@ -1935,13 +2043,23 @@ networkSelect.addEventListener("change", () => {
 function refreshNodeSelect() {
   if (isWorkspaceMode()) {
     nodeSelect.innerHTML = "";
-    const workspaceOpt = document.createElement("option");
-    workspaceOpt.value = "";
-    workspaceOpt.textContent = "Sandbox";
-    nodeSelect.appendChild(workspaceOpt);
-    state.activeNodeId = "";
-    saveActiveNode();
-    nodeSelect.value = "";
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "All nodes";
+    nodeSelect.appendChild(allOpt);
+    const workspace = getActiveWorkspaceMeta();
+    const distributionMeta = workspaceDistributedNodeMeta(workspace, getActiveWorkspaceDetail());
+    distributionMeta.nodeIds.forEach(nodeId => {
+      const opt = document.createElement("option");
+      opt.value = nodeId;
+      opt.textContent = nodeId === "local" ? "local (controller)" : nodeId;
+      nodeSelect.appendChild(opt);
+    });
+    if (![...nodeSelect.options].some(o => o.value === state.activeNodeId)) {
+      state.activeNodeId = "";
+      saveActiveNode();
+    }
+    nodeSelect.value = state.activeNodeId;
     return;
   }
   const status = state.statusByTarget.get(state.active);
@@ -1966,12 +2084,12 @@ function refreshNodeSelect() {
   nodeSelect.value = state.activeNodeId;
 }
 nodeSelect.addEventListener("change", () => {
-  if (isWorkspaceMode()) {
-    refreshNodeSelect();
-    return;
-  }
   state.activeNodeId = nodeSelect.value;
   saveActiveNode();
+  if (isWorkspaceMode()) {
+    renderWorkspaceSidebar();
+    return;
+  }
   hideGraphContextMenu();
   resetInstrumentationBuffers();
   fetchSnapshotForActive();
@@ -2100,6 +2218,7 @@ function renderWorkspaceSidebar() {
   const distributionMeta = workspaceDistributedNodeMeta(workspace, detail);
   const distributedNodeCount = Math.max(0, Number(distributionMeta.count || 0));
   const distributionLabel = distributionMeta.nodeIds.length ? distributionMeta.nodeIds.join(", ") : distributedNodeCount > 0 ? `${distributedNodeCount} nodes` : "none reported";
+  const selectedNodeLabel = state.activeNodeId ? ` | selected ${state.activeNodeId}` : "";
   const updatedAtText = Number(workspace.updated_at_ms || 0) > 0 ? new Date(Number(workspace.updated_at_ms)).toLocaleString() : "n/a";
   cpuEl.textContent = "n/a";
   ramEl.textContent = "sandbox";
@@ -2119,7 +2238,7 @@ function renderWorkspaceSidebar() {
   activeTargetEl.textContent = `workspace:${workspaceBaseLabel(workspace)}`;
   nodesCountEl.textContent = distributedNodeCount.toString();
   networksCountEl.textContent = "1";
-  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | owner ${workspaceOwnerId(workspace)} | ${running ? "running" : "stopped"} | step ${step} | distributed nodes ${distributedNodeCount} | ${distributionLabel} | updated ${updatedAtText}`)}</div>`;
+  clusterNodesEl.innerHTML = `<div class="line">${escapeHtml(`sandbox | owner ${workspaceOwnerId(workspace)} | ${running ? "running" : "stopped"} | step ${step} | distributed nodes ${distributedNodeCount} | ${distributionLabel}${selectedNodeLabel} | updated ${updatedAtText}`)}</div>`;
   clusterNetworksEl.innerHTML = `<div class="line">${escapeHtml(`${workspaceBaseLabel(workspace)} | ${running ? "running" : "stopped"} | t ${simTimeMs.toFixed(1)} ms | neurons ${totalNeurons} | layers ${totalLayers} | model ${status.neuron_model || state.lastModel || "aarnn"} | learning ${status.learning_rule || state.lastLearning || "aarnn"}`)}</div>`;
 }
 function getActiveNetworkMeta() {

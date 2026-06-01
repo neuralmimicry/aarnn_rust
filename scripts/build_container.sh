@@ -78,11 +78,12 @@ parse_workloads() {
 }
 
 detect_host_arch() {
-    case "$(uname -m)" in
+    local detected_arch="${CONTAINER_TARGET_ARCH:-$(uname -m)}"
+    case "$detected_arch" in
         x86_64|amd64) HOST_ARCH="amd64" ;;
         aarch64|arm64) HOST_ARCH="arm64" ;;
         *)
-            echo "Error: unsupported host architecture '$(uname -m)'." >&2
+            echo "Error: unsupported target architecture '${detected_arch}'." >&2
             exit 1
             ;;
     esac
