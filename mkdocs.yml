@@ -4,5 +4,6 @@ theme:
 nav:
   - Overview: index.md
   - Architecture: architecture.md
+  - Growth Workflow: growth_workflow_alignment.md
   - Operations: operations.md
   - Operator: operator.md

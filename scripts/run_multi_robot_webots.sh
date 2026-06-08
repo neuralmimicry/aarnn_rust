@@ -21,6 +21,7 @@ WEBOTS_WORKSPACE_RESUME_EXISTING="${WEBOTS_WORKSPACE_RESUME_EXISTING:-1}"
 COUNT_CELEGANS_OVERRIDE=""
 COUNT_DROSOPHILA_BANC_OVERRIDE=""
 COUNT_DROSOPHILA_FAFB_OVERRIDE=""
+COUNT_HEXAPOD_OVERRIDE=""
 COUNT_NAO_OVERRIDE=""
 
 # Core asset paths
@@ -37,6 +38,10 @@ DROSOPHILA_FAFB_PROTO_FILE="${DROSOPHILA_FAFB_PROTO_FILE:-$ROOT_DIR/webots_world
 
 NAO_NETWORK_FILE="${NAO_NETWORK_FILE:-$ROOT_DIR/network_nao.json}"
 NAO_CONFIG_FILE="${NAO_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_nao_webots.json}"
+
+HEXAPOD_NETWORK_FILE="${HEXAPOD_NETWORK_FILE:-$ROOT_DIR/network.json}"
+HEXAPOD_CONFIG_FILE="${HEXAPOD_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_hexapod_webots.json}"
+HEXAPOD_PROTO_FILE="${HEXAPOD_PROTO_FILE:-$ROOT_DIR/webots_world/protos/HexapodRobot.proto}"
 
 # Drosophila network build controls
 DROSOPHILA_BANC_DIR="${DROSOPHILA_BANC_DIR:-$ROOT_DIR/data/drosophila/BANC v626}"
@@ -128,10 +133,11 @@ Usage: scripts/run_multi_robot_webots.sh [options] [run_webot passthrough args]
 Options:
   --ui-mode <rust|web|cli>   Frontend mode (default: rust).
   --robots <spec>            Robot count spec, e.g.
-                             "drosophila_fafb=1,drosophila_banc=3,celegans=2,nao=3"
+                             "drosophila_fafb=1,drosophila_banc=3,celegans=2,hexapod=1,nao=3"
   --celegans <n>             Override celegans count.
   --drosophila-banc <n>      Override BANC drosophila count.
   --drosophila-fafb <n>      Override FAFB drosophila count.
+  --hexapod <n>              Override hexapod count.
   --nao <n>                  Override Nao count.
   --world <path>             Output mixed world path.
   --help                     Show this help.
@@ -140,7 +146,7 @@ Environment:
   UI_MODE, ROBOT_SPEC, REMOTE_COMPUTE, ORCHESTRATOR_PORT, WEB_UI_LISTEN,
   WEBOTS_RUNTIME_ROOT, WEBOTS_RUNTIME_USER, WEBOTS_WORKSPACE_PREFIX,
   WEBOTS_WORKSPACE_AUTOSAVE_STEPS, WEBOTS_WORKSPACE_RESUME_EXISTING,
-  CELEGANS_* / DROSOPHILA_* / NAO_* path and build variables.
+  CELEGANS_* / DROSOPHILA_* / HEXAPOD_* / NAO_* path and build variables.
 
 Notes:
   - All robot instances are placed into a single Webots world.
@@ -170,6 +176,10 @@ while [ "$#" -gt 0 ]; do
     --drosophila-fafb)
       shift
       COUNT_DROSOPHILA_FAFB_OVERRIDE="${1:-}"
+      ;;
+    --hexapod)
+      shift
+      COUNT_HEXAPOD_OVERRIDE="${1:-}"
       ;;
     --nao)
       shift
@@ -212,7 +222,7 @@ import re
 import sys
 
 spec = sys.argv[1]
-counts = {"celegans": 0, "drosophila_banc": 0, "drosophila_fafb": 0, "nao": 0}
+counts = {"celegans": 0, "drosophila_banc": 0, "drosophila_fafb": 0, "hexapod": 0, "nao": 0}
 aliases = {
     "celegans": "celegans",
     "worm": "celegans",
@@ -231,6 +241,13 @@ aliases = {
     "fafb_drosophila": "drosophila_fafb",
     "drosophila_fafb_v783": "drosophila_fafb",
     "fafb": "drosophila_fafb",
+    "hexapod": "hexapod",
+    "hex": "hexapod",
+    "hexapods": "hexapod",
+    "freenove_hexapod": "hexapod",
+    "big_hexapod": "hexapod",
+    "freenove": "hexapod",
+    "six_legged": "hexapod",
     "nao": "nao",
     "naos": "nao",
 }
@@ -249,6 +266,8 @@ for token in re.split(r"[;,]", spec):
             canonical = "drosophila_fafb"
         elif "banc" in key_norm and ("drosophila" in key_norm or "fly" in key_norm):
             canonical = "drosophila_banc"
+        elif "hexapod" in key_norm or "freenove" in key_norm:
+            canonical = "hexapod"
         else:
             raise SystemExit(f"Unknown robot key '{key_raw}'")
     try:
@@ -279,9 +298,10 @@ apply_override_count() {
 apply_override_count COUNT_CELEGANS "$COUNT_CELEGANS_OVERRIDE"
 apply_override_count COUNT_DROSOPHILA_BANC "$COUNT_DROSOPHILA_BANC_OVERRIDE"
 apply_override_count COUNT_DROSOPHILA_FAFB "$COUNT_DROSOPHILA_FAFB_OVERRIDE"
+apply_override_count COUNT_HEXAPOD "$COUNT_HEXAPOD_OVERRIDE"
 apply_override_count COUNT_NAO "$COUNT_NAO_OVERRIDE"
 
-TOTAL_ROBOTS=$((COUNT_CELEGANS + COUNT_DROSOPHILA_BANC + COUNT_DROSOPHILA_FAFB + COUNT_NAO))
+TOTAL_ROBOTS=$((COUNT_CELEGANS + COUNT_DROSOPHILA_BANC + COUNT_DROSOPHILA_FAFB + COUNT_HEXAPOD + COUNT_NAO))
 if [ "$TOTAL_ROBOTS" -le 0 ]; then
   echo "Robot counts resolve to zero. Use --robots or count overrides to add robots."
   exit 1
@@ -843,10 +863,26 @@ if [ "$COUNT_NAO" -gt 0 ]; then
   export NM_IPC_FORCE_AER NM_IPC_MAX_RAW_BYTES NM_IPC_AER_MAX_PACKET_BYTES NM_IPC_UDS_RECV_BUF_BYTES
 fi
 
+if [ "$COUNT_HEXAPOD" -gt 0 ]; then
+  if [ ! -f "$HEXAPOD_NETWORK_FILE" ]; then
+    echo "Missing hexapod network snapshot: $HEXAPOD_NETWORK_FILE"
+    exit 1
+  fi
+  if [ ! -f "$HEXAPOD_CONFIG_FILE" ]; then
+    echo "Missing hexapod config file: $HEXAPOD_CONFIG_FILE"
+    exit 1
+  fi
+  if [ ! -f "$HEXAPOD_PROTO_FILE" ]; then
+    echo "Missing hexapod proto file: $HEXAPOD_PROTO_FILE"
+    exit 1
+  fi
+fi
+
 declare -a BRAINS=()
 declare -a CELEGANS_BRAINS=()
 declare -a DROS_BANC_BRAINS=()
 declare -a DROS_FAFB_BRAINS=()
+declare -a HEXAPOD_BRAINS=()
 declare -a NAO_BRAINS=()
 declare -a NETWORK_MAP_ENTRIES=()
 declare -a CONFIG_MAP_ENTRIES=()
@@ -994,6 +1030,12 @@ for i in $(seq 1 "$COUNT_DROSOPHILA_FAFB"); do
   add_brain_mapping "$brain_id" "$DROSOPHILA_FAFB_NETWORK_FILE" "$DROSOPHILA_FAFB_CONFIG_FILE"
 done
 
+for i in $(seq 1 "$COUNT_HEXAPOD"); do
+  brain_id="$(printf "hexapod_%02d" "$i")"
+  HEXAPOD_BRAINS+=("$brain_id")
+  add_brain_mapping "$brain_id" "$HEXAPOD_NETWORK_FILE" "$HEXAPOD_CONFIG_FILE"
+done
+
 for i in $(seq 1 "$COUNT_NAO"); do
   brain_id="$(printf "nao_%02d" "$i")"
   NAO_BRAINS+=("$brain_id")
@@ -1006,6 +1048,7 @@ CONFIG_MAP_CSV="$(IFS=','; echo "${CONFIG_MAP_ENTRIES[*]}")"
 CELEGANS_BRAINS_CSV="$(IFS=','; echo "${CELEGANS_BRAINS[*]}")"
 DROS_BANC_BRAINS_CSV="$(IFS=','; echo "${DROS_BANC_BRAINS[*]}")"
 DROS_FAFB_BRAINS_CSV="$(IFS=','; echo "${DROS_FAFB_BRAINS[*]}")"
+HEXAPOD_BRAINS_CSV="$(IFS=','; echo "${HEXAPOD_BRAINS[*]}")"
 NAO_BRAINS_CSV="$(IFS=','; echo "${NAO_BRAINS[*]}")"
 
 prepare_runtime_workspaces
@@ -1015,15 +1058,18 @@ python3 "$ROOT_DIR/scripts/build_webots_multi_world.py" \
   --celegans-proto "$CELEGANS_PROTO_FILE" \
   --drosophila-banc-proto "$DROSOPHILA_BANC_PROTO_FILE" \
   --drosophila-fafb-proto "$DROSOPHILA_FAFB_PROTO_FILE" \
+  --hexapod-proto "$HEXAPOD_PROTO_FILE" \
   --celegans-brains "$CELEGANS_BRAINS_CSV" \
   --drosophila-banc-brains "$DROS_BANC_BRAINS_CSV" \
   --drosophila-fafb-brains "$DROS_FAFB_BRAINS_CSV" \
+  --hexapod-brains "$HEXAPOD_BRAINS_CSV" \
   --nao-brains "$NAO_BRAINS_CSV"
 
 echo "Multi-robot launch composition:"
 echo "  celegans: $COUNT_CELEGANS"
 echo "  drosophila_banc: $COUNT_DROSOPHILA_BANC"
 echo "  drosophila_fafb: $COUNT_DROSOPHILA_FAFB"
+echo "  hexapod: $COUNT_HEXAPOD"
 echo "  nao: $COUNT_NAO"
 echo "  total robots/brains: $TOTAL_ROBOTS"
 echo "  world: $WORLD_FILE"

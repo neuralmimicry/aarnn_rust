@@ -133,6 +133,7 @@ pub enum AarnnBiomimicryProfile {
     Human,
     Celegans,
     Drosophila,
+    Hexapod,
 }
 
 impl AarnnBiomimicryProfile {
@@ -168,6 +169,14 @@ impl AarnnBiomimicryProfile {
             return Some(Self::Drosophila);
         }
 
+        if squashed.contains("hexapod")
+            || squashed.contains("freenove")
+            || squashed.contains("sixleg")
+            || squashed.contains("6leg")
+        {
+            return Some(Self::Hexapod);
+        }
+
         if squashed.contains("human")
             || squashed.contains("homosapiens")
             || squashed.contains("nao")
@@ -176,6 +185,44 @@ impl AarnnBiomimicryProfile {
         }
 
         None
+    }
+}
+
+/// Stage policy source for developmental workflow alignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DevelopmentStageMode {
+    /// Infer stage from elapsed simulation time and per-profile stage boundaries.
+    Auto,
+    /// Hold an explicit fixed stage configured in `development_stage`.
+    Manual,
+}
+
+impl Default for DevelopmentStageMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Developmental stage aligned with `GROWTH.md` sections 9-13.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DevelopmentStage {
+    /// Section 9: axon growth and pathfinding.
+    AxonPathfinding,
+    /// Section 10: dendritic arborisation and spine formation.
+    DendriticArborization,
+    /// Section 11: synaptogenesis and early over-connection.
+    Synaptogenesis,
+    /// Section 12: refinement, pruning, and activity-dependent stabilization.
+    RefinementPruning,
+    /// Section 13: myelination and timing/efficiency stabilization.
+    MyelinationStabilization,
+}
+
+impl Default for DevelopmentStage {
+    fn default() -> Self {
+        Self::AxonPathfinding
     }
 }
 
@@ -488,6 +535,7 @@ pub enum ClumpingDesign {
     FruitFlyLarva,
     ZebraFish,
     NematodeWorm,
+    Hexapod,
 }
 
 impl ClumpingDesign {
@@ -500,6 +548,7 @@ impl ClumpingDesign {
             Self::FruitFlyLarva => "Fruit Fly (Larva)",
             Self::ZebraFish => "Zebra Fish",
             Self::NematodeWorm => "Nematode Worm",
+            Self::Hexapod => "Hexapod",
         }
     }
 }
@@ -515,6 +564,7 @@ pub fn default_hidden_layers_for_clumping(design: ClumpingDesign) -> Option<usiz
         ClumpingDesign::FruitFlyLarva => Some(10),
         ClumpingDesign::ZebraFish => Some(6),
         ClumpingDesign::NematodeWorm => Some(1),
+        ClumpingDesign::Hexapod => Some(6),
     }
 }
 
@@ -1130,6 +1180,85 @@ fn apply_nematode_worm_design(cfg: &mut NetworkConfig) {
     });
 }
 
+fn apply_hexapod_design(cfg: &mut NetworkConfig) {
+    cfg.spike_io.profile = NetworkIoProfileSelector::Hexapod;
+    cfg.max_total_neurons = 120_000;
+
+    cfg.brain_regions.push(BrainRegionConfig {
+        name: "supraesophageal_ganglion".to_string(),
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, 8.0, 6.0],
+            radii: [14.0, 10.0, 8.0],
+        }),
+        center: [0.0, 8.0, 6.0],
+        radii: [14.0, 10.0, 8.0],
+        type_distribution: vec![
+            ("Sensory".to_string(), 0.30),
+            ("Interneuron".to_string(), 0.45),
+            ("Motor".to_string(), 0.15),
+            ("Neuromodulatory".to_string(), 0.10),
+        ],
+    });
+
+    cfg.brain_regions.push(BrainRegionConfig {
+        name: "subesophageal_ganglion".to_string(),
+        shape: Some(RegionShape::Ellipsoid {
+            center: [0.0, -6.0, 2.0],
+            radii: [12.0, 8.0, 6.0],
+        }),
+        center: [0.0, -6.0, 2.0],
+        radii: [12.0, 8.0, 6.0],
+        type_distribution: vec![
+            ("Interneuron".to_string(), 0.46),
+            ("Motor".to_string(), 0.34),
+            ("Sensory".to_string(), 0.12),
+            ("Neuromodulatory".to_string(), 0.08),
+        ],
+    });
+
+    cfg.brain_regions.push(BrainRegionConfig {
+        name: "thoracic_pattern_network".to_string(),
+        shape: Some(RegionShape::Tube {
+            line_from: [-18.0, -28.0, -2.0],
+            line_to: [18.0, -28.0, -2.0],
+            radius: 5.5,
+        }),
+        center: [0.0, -28.0, -2.0],
+        radii: [18.0, 5.5, 5.5],
+        type_distribution: vec![
+            ("Interneuron".to_string(), 0.42),
+            ("Motor".to_string(), 0.35),
+            ("command_neuron".to_string(), 0.15),
+            ("Neuromodulatory".to_string(), 0.08),
+        ],
+    });
+
+    for (name, center) in [
+        ("left_front_leg_ganglion", [20.0, 18.0, -4.0]),
+        ("left_mid_leg_ganglion", [24.0, 0.0, -4.0]),
+        ("left_rear_leg_ganglion", [20.0, -18.0, -4.0]),
+        ("right_front_leg_ganglion", [-20.0, 18.0, -4.0]),
+        ("right_mid_leg_ganglion", [-24.0, 0.0, -4.0]),
+        ("right_rear_leg_ganglion", [-20.0, -18.0, -4.0]),
+    ] {
+        cfg.brain_regions.push(BrainRegionConfig {
+            name: name.to_string(),
+            shape: Some(RegionShape::Ellipsoid {
+                center,
+                radii: [7.0, 6.0, 5.0],
+            }),
+            center,
+            radii: [7.0, 6.0, 5.0],
+            type_distribution: vec![
+                ("Sensory".to_string(), 0.22),
+                ("Interneuron".to_string(), 0.38),
+                ("Motor".to_string(), 0.32),
+                ("Neuromodulatory".to_string(), 0.08),
+            ],
+        });
+    }
+}
+
 pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
     cfg.brain_regions.clear();
     cfg.max_total_neurons = 0; // Default: no limit
@@ -1142,6 +1271,7 @@ pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
         ClumpingDesign::FruitFlyLarva => apply_fruit_fly_larva_design(cfg),
         ClumpingDesign::ZebraFish => apply_zebra_fish_design(cfg),
         ClumpingDesign::NematodeWorm => apply_nematode_worm_design(cfg),
+        ClumpingDesign::Hexapod => apply_hexapod_design(cfg),
     }
     cfg.clumping_design = design;
     apply_clumping_layer_defaults(cfg);
@@ -1215,6 +1345,15 @@ pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
     cfg.morpho_growth_enabled = true;
+    cfg.development_growth_interval_ms = 12.0;
+    cfg.development_pruning_interval_ms = 60.0;
+    cfg.development_io_formation_interval_ms = 500.0;
+    cfg.development_stage_mode = DevelopmentStageMode::Auto;
+    cfg.development_stage = DevelopmentStage::AxonPathfinding;
+    cfg.development_stage_dendrite_start_ms = 20_000.0;
+    cfg.development_stage_synaptogenesis_start_ms = 70_000.0;
+    cfg.development_stage_refinement_start_ms = 180_000.0;
+    cfg.development_stage_myelination_start_ms = 420_000.0;
 
     cfg.use_aarnn_delays = true;
     cfg.aarnn_layer_depth = 5;
@@ -1301,6 +1440,7 @@ pub fn apply_aarnn_biomimicry_profile_defaults(
         AarnnBiomimicryProfile::Human => apply_aarnn_human_biomimicry_defaults(cfg),
         AarnnBiomimicryProfile::Celegans => apply_aarnn_celegans_biomimicry_defaults(cfg),
         AarnnBiomimicryProfile::Drosophila => apply_aarnn_drosophila_biomimicry_defaults(cfg),
+        AarnnBiomimicryProfile::Hexapod => apply_aarnn_hexapod_biomimicry_defaults(cfg),
     }
 }
 
@@ -1334,6 +1474,15 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
     backfill!(spawn_radius);
     backfill!(new_edge_prob);
     backfill!(proximity_degree_cap);
+    backfill!(development_growth_interval_ms);
+    backfill!(development_pruning_interval_ms);
+    backfill!(development_io_formation_interval_ms);
+    backfill!(development_stage_mode);
+    backfill!(development_stage);
+    backfill!(development_stage_dendrite_start_ms);
+    backfill!(development_stage_synaptogenesis_start_ms);
+    backfill!(development_stage_refinement_start_ms);
+    backfill!(development_stage_myelination_start_ms);
 
     backfill!(aarnn_layer_depth);
     backfill!(use_aarnn_delays);
@@ -1416,6 +1565,15 @@ pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
     cfg.morpho_growth_enabled = true;
+    cfg.development_growth_interval_ms = 6.0;
+    cfg.development_pruning_interval_ms = 30.0;
+    cfg.development_io_formation_interval_ms = 350.0;
+    cfg.development_stage_mode = DevelopmentStageMode::Auto;
+    cfg.development_stage = DevelopmentStage::AxonPathfinding;
+    cfg.development_stage_dendrite_start_ms = 2_000.0;
+    cfg.development_stage_synaptogenesis_start_ms = 8_000.0;
+    cfg.development_stage_refinement_start_ms = 30_000.0;
+    cfg.development_stage_myelination_start_ms = 60_000.0;
     cfg.max_layers = 1;
     cfg.layer_split_threshold = 4096;
     cfg.spawn_radius = 0.045;
@@ -1479,6 +1637,15 @@ pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
     cfg.morpho_growth_enabled = true;
+    cfg.development_growth_interval_ms = 8.0;
+    cfg.development_pruning_interval_ms = 40.0;
+    cfg.development_io_formation_interval_ms = 400.0;
+    cfg.development_stage_mode = DevelopmentStageMode::Auto;
+    cfg.development_stage = DevelopmentStage::AxonPathfinding;
+    cfg.development_stage_dendrite_start_ms = 5_000.0;
+    cfg.development_stage_synaptogenesis_start_ms = 18_000.0;
+    cfg.development_stage_refinement_start_ms = 80_000.0;
+    cfg.development_stage_myelination_start_ms = 160_000.0;
     cfg.max_layers = cfg.max_layers.max(8);
     cfg.spawn_radius = 0.065;
     cfg.new_edge_prob = 0.04;
@@ -1533,6 +1700,99 @@ pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.aarnn_import_topology_rewire_region_bias = 0.24;
 
     apply_clumping_design(cfg, ClumpingDesign::FruitFly);
+}
+
+/// Apply a six-legged hexapod profile aligned with Freenove-style locomotion:
+/// compact thoracic coordination loops, no myelination, and 18 motor outputs.
+pub fn apply_aarnn_hexapod_biomimicry_defaults(cfg: &mut NetworkConfig) {
+    apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.spike_io.profile = NetworkIoProfileSelector::Hexapod;
+
+    cfg.growth_enabled = true;
+    cfg.use_morphology = true;
+    cfg.morpho_growth_enabled = true;
+    cfg.development_growth_interval_ms = 7.0;
+    cfg.development_pruning_interval_ms = 34.0;
+    cfg.development_io_formation_interval_ms = 320.0;
+    cfg.development_stage_mode = DevelopmentStageMode::Auto;
+    cfg.development_stage = DevelopmentStage::AxonPathfinding;
+    cfg.development_stage_dendrite_start_ms = 4_000.0;
+    cfg.development_stage_synaptogenesis_start_ms = 14_000.0;
+    cfg.development_stage_refinement_start_ms = 60_000.0;
+    cfg.development_stage_myelination_start_ms = 130_000.0;
+    cfg.max_layers = cfg.max_layers.max(6);
+    cfg.spawn_radius = 0.055;
+    cfg.new_edge_prob = 0.032;
+    cfg.proximity_degree_cap = 4;
+
+    cfg.aarnn_layer_depth = 4;
+    cfg.use_aarnn_delays = true;
+    cfg.aarnn_velocity = 7.4;
+    cfg.axon_velocity = 9.2;
+    cfg.dend_velocity = 4.0;
+    cfg.p_release_default = 0.70;
+    cfg.bouton_latency_ms = 0.35;
+    cfg.bouton_jitter_ms = 0.06;
+
+    cfg.aarnn_dale_strictness = 0.86;
+    cfg.aarnn_inhibitory_fraction = 0.33;
+    cfg.aarnn_gap_junction_strength = 0.04;
+    cfg.aarnn_gap_junction_radius = 0.24;
+    cfg.aarnn_gap_junction_inhibitory_only = false;
+    cfg.aarnn_nmda_voltage_sensitivity = 0.028;
+    cfg.aarnn_distance_attenuation_per_unit = 0.22;
+    cfg.aarnn_release_prob_heterogeneity = 0.11;
+
+    cfg.volume_transmission_enabled = true;
+    cfg.volume_transmission_radius = 0.22;
+    cfg.volume_transmission_strength = 0.07;
+    cfg.aarnn_triplet_ltp_gain = 0.16;
+    cfg.aarnn_triplet_ltd_gain = 0.10;
+    cfg.aarnn_synaptic_scaling_strength = 0.028;
+    cfg.aarnn_synaptic_scaling_target = 0.92;
+
+    cfg.aarnn_myelination_enabled = false;
+    cfg.aarnn_myelination_rate = 0.0;
+    cfg.aarnn_demyelination_rate = 0.0;
+    cfg.aarnn_myelin_min_conduction_gain = 1.0;
+    cfg.aarnn_myelin_max_conduction_gain = 1.0;
+    cfg.aarnn_myelin_initial = 0.0;
+
+    cfg.perceptual_loop_enabled = true;
+    cfg.world_model_enabled = false;
+    cfg.sleep_enabled = true;
+    cfg.sleep_cycle_ms = 90_000.0;
+    cfg.sleep_duration_ms = 750.0;
+    cfg.theta_rhythm_enabled = true;
+    cfg.theta_rhythm_hz = 6.0;
+    cfg.theta_rhythm_duty = 0.28;
+    cfg.theta_rhythm_phase_jitter = 0.03;
+    cfg.thalamic_gating_enabled = false;
+
+    cfg.aarnn_import_topology_rewire_enabled = true;
+    cfg.aarnn_import_topology_rewire_keep_fraction = 0.80;
+    cfg.aarnn_import_topology_rewire_region_bias = 0.26;
+
+    apply_clumping_design(cfg, ClumpingDesign::Hexapod);
+}
+
+/// Infer the closest biomimicry profile from a resolved network configuration.
+pub fn infer_biomimicry_profile(cfg: &NetworkConfig) -> AarnnBiomimicryProfile {
+    match cfg.spike_io.profile {
+        NetworkIoProfileSelector::Celegans => return AarnnBiomimicryProfile::Celegans,
+        NetworkIoProfileSelector::Drosophila => return AarnnBiomimicryProfile::Drosophila,
+        NetworkIoProfileSelector::Hexapod => return AarnnBiomimicryProfile::Hexapod,
+        _ => {}
+    }
+
+    match cfg.clumping_design {
+        ClumpingDesign::NematodeWorm => AarnnBiomimicryProfile::Celegans,
+        ClumpingDesign::FruitFly | ClumpingDesign::FruitFlyLarva => {
+            AarnnBiomimicryProfile::Drosophila
+        }
+        ClumpingDesign::Hexapod => AarnnBiomimicryProfile::Hexapod,
+        _ => AarnnBiomimicryProfile::Human,
+    }
 }
 
 fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
@@ -1872,6 +2132,21 @@ pub struct NetworkConfig {
     pub layer_split_threshold: usize,
     /// Global cooldown (ms) to prevent a burst of growth events across the entire network.
     pub global_growth_cooldown_ms: f32,
+    /// Minimum interval (ms) between structural growth scans and spawn scheduling.
+    /// This decouples fast spike traversal from slower developmental updates.
+    pub development_growth_interval_ms: f32,
+    /// Policy mode for section-aligned developmental stage progression.
+    pub development_stage_mode: DevelopmentStageMode,
+    /// Active developmental stage used when `development_stage_mode` is `Manual`.
+    pub development_stage: DevelopmentStage,
+    /// Auto-stage transition boundary (ms): section 9 -> section 10.
+    pub development_stage_dendrite_start_ms: f32,
+    /// Auto-stage transition boundary (ms): section 10 -> section 11.
+    pub development_stage_synaptogenesis_start_ms: f32,
+    /// Auto-stage transition boundary (ms): section 11 -> section 12.
+    pub development_stage_refinement_start_ms: f32,
+    /// Auto-stage transition boundary (ms): section 12 -> section 13.
+    pub development_stage_myelination_start_ms: f32,
     /// Maximum number of proximity-biased edges created during a single spawn event.
     pub proximity_degree_cap: usize,
 
@@ -2112,6 +2387,10 @@ pub struct NetworkConfig {
     pub spontaneous_neuron_interval_ms: f32,
     /// Delay (ms) before a "dead" neuron (no connections) is removed from the simulation.
     pub neuron_removal_delay_ms: f32,
+    /// Minimum interval (ms) between pruning/shrinkage scans.
+    pub development_pruning_interval_ms: f32,
+    /// Minimum interval (ms) between sensory/output interface formation passes.
+    pub development_io_formation_interval_ms: f32,
     /// Capacity limit for the number of connections a sensory neuron can maintain.
     pub max_sensory_connections: usize,
     /// Capacity limit for the number of connections an output neuron can receive.
@@ -2178,6 +2457,13 @@ impl Default for NetworkConfig {
             new_edge_prob: 0.05,
             layer_split_threshold: 32,
             global_growth_cooldown_ms: 150.0,
+            development_growth_interval_ms: 10.0,
+            development_stage_mode: DevelopmentStageMode::Auto,
+            development_stage: DevelopmentStage::AxonPathfinding,
+            development_stage_dendrite_start_ms: 15_000.0,
+            development_stage_synaptogenesis_start_ms: 45_000.0,
+            development_stage_refinement_start_ms: 120_000.0,
+            development_stage_myelination_start_ms: 240_000.0,
             proximity_degree_cap: 4,
             use_morphology: true,
             aarnn_velocity: 10.0, // fast default → ~0-1 step delay at unit length
@@ -2297,6 +2583,8 @@ impl Default for NetworkConfig {
             skull_pid_kd: 0.01,
             spontaneous_neuron_interval_ms: 1000.0,
             neuron_removal_delay_ms: 180000.0,
+            development_pruning_interval_ms: 50.0,
+            development_io_formation_interval_ms: 500.0,
             max_sensory_connections: 4,
             max_output_connections: 4,
             component_pruning_threshold: 0.01,
@@ -2365,6 +2653,22 @@ mod tests {
         assert!(!cfg.neuron_types.is_empty());
         assert!(cfg.growth_enabled);
         assert!(cfg.use_morphology);
+        assert!(cfg.development_growth_interval_ms > 0.0);
+        assert!(cfg.development_pruning_interval_ms > 0.0);
+        assert!(cfg.development_io_formation_interval_ms > 0.0);
+        assert_eq!(cfg.development_stage_mode, DevelopmentStageMode::Auto);
+        assert_eq!(cfg.development_stage, DevelopmentStage::AxonPathfinding);
+        assert!(cfg.development_stage_dendrite_start_ms > 0.0);
+        assert!(
+            cfg.development_stage_synaptogenesis_start_ms > cfg.development_stage_dendrite_start_ms
+        );
+        assert!(
+            cfg.development_stage_refinement_start_ms
+                > cfg.development_stage_synaptogenesis_start_ms
+        );
+        assert!(
+            cfg.development_stage_myelination_start_ms > cfg.development_stage_refinement_start_ms
+        );
         assert!(cfg.use_aarnn_delays);
         assert_eq!(cfg.aarnn_layer_depth, 5);
         assert!(cfg.aarnn_bio.stp_enabled);
@@ -2420,6 +2724,10 @@ mod tests {
             Some(1)
         );
         assert_eq!(
+            default_hidden_layers_for_clumping(ClumpingDesign::Hexapod),
+            Some(6)
+        );
+        assert_eq!(
             default_hidden_layers_for_clumping(ClumpingDesign::None),
             None
         );
@@ -2445,6 +2753,13 @@ mod tests {
         assert_eq!(cfg.sensory_target_layer, Some(5));
         assert_eq!(cfg.output_source_layer, Some(5));
         assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Generic);
+
+        apply_clumping_design(&mut cfg, ClumpingDesign::Hexapod);
+        assert_eq!(cfg.num_hidden_layers, 6);
+        assert_eq!(cfg.max_layers, 10);
+        assert_eq!(cfg.sensory_target_layer, Some(5));
+        assert_eq!(cfg.output_source_layer, Some(5));
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Hexapod);
     }
 
     #[test]
@@ -2456,6 +2771,14 @@ mod tests {
         assert!(cfg.growth_enabled);
         assert!(cfg.use_morphology);
         assert!(cfg.morpho_growth_enabled);
+        assert!((cfg.development_growth_interval_ms - 6.0).abs() < 1.0e-6);
+        assert!((cfg.development_pruning_interval_ms - 30.0).abs() < 1.0e-6);
+        assert!((cfg.development_io_formation_interval_ms - 350.0).abs() < 1.0e-6);
+        assert_eq!(cfg.development_stage_mode, DevelopmentStageMode::Auto);
+        assert!((cfg.development_stage_dendrite_start_ms - 2_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_synaptogenesis_start_ms - 8_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_refinement_start_ms - 30_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_myelination_start_ms - 60_000.0).abs() < 1.0e-6);
         assert_eq!(cfg.aarnn_layer_depth, 3);
         assert!(!cfg.aarnn_myelination_enabled);
         assert!(cfg.aarnn_import_topology_rewire_enabled);
@@ -2473,12 +2796,44 @@ mod tests {
         assert!(cfg.growth_enabled);
         assert!(cfg.use_morphology);
         assert!(cfg.morpho_growth_enabled);
+        assert!((cfg.development_growth_interval_ms - 8.0).abs() < 1.0e-6);
+        assert!((cfg.development_pruning_interval_ms - 40.0).abs() < 1.0e-6);
+        assert!((cfg.development_io_formation_interval_ms - 400.0).abs() < 1.0e-6);
+        assert_eq!(cfg.development_stage_mode, DevelopmentStageMode::Auto);
+        assert!((cfg.development_stage_dendrite_start_ms - 5_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_synaptogenesis_start_ms - 18_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_refinement_start_ms - 80_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_myelination_start_ms - 160_000.0).abs() < 1.0e-6);
         assert_eq!(cfg.aarnn_layer_depth, 4);
         assert!(!cfg.aarnn_myelination_enabled);
         assert!(cfg.sleep_enabled);
         assert!(cfg.aarnn_import_topology_rewire_enabled);
         assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
         assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Drosophila);
+        assert!(!cfg.brain_regions.is_empty());
+    }
+
+    #[test]
+    fn test_hexapod_biomimicry_profile() {
+        let mut cfg = NetworkConfig::default();
+        apply_aarnn_hexapod_biomimicry_defaults(&mut cfg);
+        assert_eq!(cfg.clumping_design, ClumpingDesign::Hexapod);
+        assert_eq!(cfg.num_hidden_layers, 6);
+        assert!(cfg.growth_enabled);
+        assert!(cfg.use_morphology);
+        assert!(cfg.morpho_growth_enabled);
+        assert!((cfg.development_growth_interval_ms - 7.0).abs() < 1.0e-6);
+        assert!((cfg.development_pruning_interval_ms - 34.0).abs() < 1.0e-6);
+        assert!((cfg.development_io_formation_interval_ms - 320.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_dendrite_start_ms - 4_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_synaptogenesis_start_ms - 14_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_refinement_start_ms - 60_000.0).abs() < 1.0e-6);
+        assert!((cfg.development_stage_myelination_start_ms - 130_000.0).abs() < 1.0e-6);
+        assert_eq!(cfg.aarnn_layer_depth, 4);
+        assert!(!cfg.aarnn_myelination_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_enabled);
+        assert!(cfg.aarnn_import_topology_rewire_keep_fraction < 1.0);
+        assert_eq!(cfg.spike_io.profile, NetworkIoProfileSelector::Hexapod);
         assert!(!cfg.brain_regions.is_empty());
     }
 
@@ -2496,7 +2851,47 @@ mod tests {
             AarnnBiomimicryProfile::from_hint("NAO reverse engineered"),
             Some(AarnnBiomimicryProfile::Human)
         );
+        assert_eq!(
+            AarnnBiomimicryProfile::from_hint("Freenove Big Hexapod"),
+            Some(AarnnBiomimicryProfile::Hexapod)
+        );
         assert_eq!(AarnnBiomimicryProfile::from_hint(""), None);
+    }
+
+    #[test]
+    fn test_infer_biomimicry_profile_from_config() {
+        let mut cfg = NetworkConfig::default();
+        cfg.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::Celegans;
+        assert_eq!(
+            infer_biomimicry_profile(&cfg),
+            AarnnBiomimicryProfile::Celegans
+        );
+
+        cfg.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::Generic;
+        cfg.clumping_design = ClumpingDesign::FruitFly;
+        assert_eq!(
+            infer_biomimicry_profile(&cfg),
+            AarnnBiomimicryProfile::Drosophila
+        );
+
+        cfg.clumping_design = ClumpingDesign::HumanBrain;
+        assert_eq!(
+            infer_biomimicry_profile(&cfg),
+            AarnnBiomimicryProfile::Human
+        );
+
+        cfg.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::Hexapod;
+        assert_eq!(
+            infer_biomimicry_profile(&cfg),
+            AarnnBiomimicryProfile::Hexapod
+        );
+
+        cfg.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::Generic;
+        cfg.clumping_design = ClumpingDesign::Hexapod;
+        assert_eq!(
+            infer_biomimicry_profile(&cfg),
+            AarnnBiomimicryProfile::Hexapod
+        );
     }
 
     #[test]

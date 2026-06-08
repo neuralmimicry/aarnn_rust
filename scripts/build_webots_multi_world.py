@@ -22,6 +22,8 @@ DROS_SENSORS_REGEX = r"^dros_s_[0-9]{2}_.*$"
 DROS_ACTUATORS_REGEX = r"^dros_o_[0-9]{3}_.*$"
 CELEGANS_SENSORS_REGEX = r"^celegans_s_[0-9]{2}_.*$"
 CELEGANS_ACTUATORS_REGEX = r"^celegans_o_[0-9]{3}_.*$"
+HEXAPOD_SENSORS_REGEX = r"^hex_s_[0-9]{2}_.*$"
+HEXAPOD_ACTUATORS_REGEX = r"^hex_o_[0-9]{3}_.*$"
 
 # Approximate per-robot scene footprint used for startup camera framing.
 # These values intentionally include the nearby stimulus props placed around
@@ -29,6 +31,7 @@ CELEGANS_ACTUATORS_REGEX = r"^celegans_o_[0-9]{3}_.*$"
 ROBOT_VIEW_RADIUS = {
     "celegans": 0.55,
     "drosophila": 0.80,
+    "hexapod": 1.25,
     "nao": 2.80,
 }
 
@@ -36,6 +39,7 @@ ROBOT_VIEW_RADIUS = {
 ROBOT_ZONE_CLEAR_RADIUS = {
     "celegans": 0.78,
     "drosophila": 0.92,
+    "hexapod": 1.45,
     "nao": 1.95,
 }
 
@@ -88,6 +92,8 @@ def kind_zone_offsets(kind: str, count: int) -> List[Tuple[float, float]]:
         return centered_grid_offsets(count, 1.05, 0.92, max_cols=3 if count >= 5 else 2)
     if kind == "drosophila":
         return centered_grid_offsets(count, 1.28, 1.10, max_cols=3 if count >= 5 else 2)
+    if kind == "hexapod":
+        return centered_grid_offsets(count, 2.05, 1.75, max_cols=2)
     return centered_grid_offsets(count, 2.65, 2.35, max_cols=2)
 
 
@@ -123,15 +129,29 @@ def mixed_zone_centers(zone_extents: dict[str, Tuple[float, float]]) -> dict[str
     has_celegans = "celegans" in kinds
     has_drosophila = "drosophila" in kinds
     has_nao = "nao" in kinds
+    has_hexapod = "hexapod" in kinds
     centers: dict[str, Tuple[float, float]] = {}
 
-    if has_nao:
+    if has_nao or has_hexapod:
         small_front_depth = max(
             (zone_extents[kind][1] for kind in ("celegans", "drosophila") if kind in zone_extents),
             default=0.0,
         )
         front_z = -(0.55 + small_front_depth)
-        centers["nao"] = (0.0, 0.62 + zone_extents["nao"][1])
+        if has_nao and has_hexapod:
+            dual_gap = 1.35
+            centers["hexapod"] = (
+                -(dual_gap * 0.5 + zone_extents["hexapod"][0]),
+                0.62 + zone_extents["hexapod"][1],
+            )
+            centers["nao"] = (
+                dual_gap * 0.5 + zone_extents["nao"][0],
+                0.62 + zone_extents["nao"][1],
+            )
+        elif has_nao:
+            centers["nao"] = (0.0, 0.62 + zone_extents["nao"][1])
+        else:
+            centers["hexapod"] = (0.0, 0.62 + zone_extents["hexapod"][1])
 
         if has_celegans and has_drosophila:
             side_gap = 1.15
@@ -193,9 +213,9 @@ def layout_positions(
             math.hypot(x - center_x, z - center_z) + ROBOT_ZONE_CLEAR_RADIUS.get(kind, 0.9),
         )
 
-    has_nao = any(kind == "nao" for (_, _, _, _, kind) in entries)
-    room_margin = 3.2 if has_nao else 2.25
-    min_half_size = 6.8 if has_nao else 4.6
+    has_large = any(kind in {"nao", "hexapod"} for (_, _, _, _, kind) in entries)
+    room_margin = 3.2 if has_large else 2.25
+    min_half_size = 6.8 if has_large else 4.6
     arena_half_size = max(min_half_size, keepout_radius + room_margin)
     return positions, keepout_radius, arena_half_size
 
@@ -786,13 +806,13 @@ def startup_camera(
 
     center_x, center_z, scene_radius, _span_x, _span_z = scene_metrics(entries, positions)
     robot_kinds = {robot_kind for (_, _, _, _, robot_kind) in entries}
-    has_nao = "nao" in robot_kinds
+    has_large = bool(robot_kinds.intersection({"nao", "hexapod"}))
     only_small_bio = robot_kinds.issubset({"celegans", "drosophila"})
 
     if len(entries) == 1 and robot_kinds == {"celegans"}:
         cam_height = max(1.20, scene_radius * 2.60)
         fov = 0.72
-    elif only_small_bio and not has_nao:
+    elif only_small_bio and not has_large:
         cam_height = max(1.90, scene_radius * 2.25)
         fov = 0.80 if scene_radius < 2.4 else 0.86
     else:
@@ -810,6 +830,8 @@ def scene_target_height(entries: List[tuple[str, str, str, float, str]]) -> floa
     robot_kinds = {robot_kind for (_, _, _, _, robot_kind) in entries}
     if "nao" in robot_kinds:
         return 0.72
+    if "hexapod" in robot_kinds:
+        return 0.36
     if robot_kinds == {"drosophila"}:
         return 0.14
     if robot_kinds == {"celegans"}:
@@ -1912,7 +1934,7 @@ def build_environment_block(
 
     center_x, center_z, scene_radius, span_x, span_z = scene_metrics(entries, positions)
     robot_kinds = {robot_kind for (_, _, _, _, robot_kind) in entries}
-    has_nao = "nao" in robot_kinds
+    has_nao = bool(robot_kinds.intersection({"nao", "hexapod"}))
 
     floor_size = max(6.8, room_half_size * 2.0)
     arena_size = max(5.6, floor_size - 0.9)
@@ -2053,9 +2075,11 @@ def main() -> None:
     parser.add_argument("--celegans-proto", default="", help="Path to CelegansRobot.proto")
     parser.add_argument("--drosophila-banc-proto", default="", help="Path to DrosophilaBancRobot.proto")
     parser.add_argument("--drosophila-fafb-proto", default="", help="Path to DrosophilaFafbRobot.proto")
+    parser.add_argument("--hexapod-proto", default="", help="Path to HexapodRobot.proto")
     parser.add_argument("--celegans-brains", default="", help="CSV brain IDs for celegans instances")
     parser.add_argument("--drosophila-banc-brains", default="", help="CSV brain IDs for BANC drosophila instances")
     parser.add_argument("--drosophila-fafb-brains", default="", help="CSV brain IDs for FAFB drosophila instances")
+    parser.add_argument("--hexapod-brains", default="", help="CSV brain IDs for hexapod instances")
     parser.add_argument("--nao-brains", default="", help="CSV brain IDs for NAO instances")
     parser.add_argument(
         "--fridge",
@@ -2074,9 +2098,11 @@ def main() -> None:
     celegans_brains = parse_csv(args.celegans_brains)
     banc_brains = parse_csv(args.drosophila_banc_brains)
     fafb_brains = parse_csv(args.drosophila_fafb_brains)
+    hexapod_brains = parse_csv(args.hexapod_brains)
     nao_brains = parse_csv(args.nao_brains)
     has_celegans = bool(celegans_brains)
     has_drosophila = bool(banc_brains or fafb_brains)
+    has_hexapod = bool(hexapod_brains)
     has_nao = bool(nao_brains)
     if args.fridge == "on":
         include_fridge = True
@@ -2085,9 +2111,15 @@ def main() -> None:
     else:
         # Avoid articulated heavy fixtures in mixed/tiny-body scenes where they
         # can trigger large mass-ratio instability warnings.
-        include_fridge = has_nao and not (has_celegans or has_drosophila)
+        include_fridge = has_nao and not (has_celegans or has_drosophila or has_hexapod)
 
-    total = len(celegans_brains) + len(banc_brains) + len(fafb_brains) + len(nao_brains)
+    total = (
+        len(celegans_brains)
+        + len(banc_brains)
+        + len(fafb_brains)
+        + len(hexapod_brains)
+        + len(nao_brains)
+    )
     if total <= 0:
         raise SystemExit("At least one robot brain must be provided.")
 
@@ -2122,6 +2154,14 @@ def main() -> None:
         fafb_ref = rel_proto_ref(world_path, Path(args.drosophila_fafb_proto))
         extern_lines.append(f'EXTERNPROTO "{fafb_ref}"')
 
+    for i, brain in enumerate(hexapod_brains, 1):
+        entries.append(("HexapodRobot", f"HEXAPOD_{i:02d}", brain, 0.190, "hexapod"))
+    if hexapod_brains:
+        if not args.hexapod_proto:
+            raise SystemExit("hexapod brains are set but --hexapod-proto is missing.")
+        hexapod_ref = rel_proto_ref(world_path, Path(args.hexapod_proto))
+        extern_lines.append(f'EXTERNPROTO "{hexapod_ref}"')
+
     for i, brain in enumerate(nao_brains, 1):
         entries.append(("Nao", f"NAO_{i:02d}", brain, 0.34, "nao"))
     if nao_brains:
@@ -2140,6 +2180,9 @@ def main() -> None:
         elif robot_kind == "celegans":
             controller_args.append(f"NM_SENSORS_{brain_id}={CELEGANS_SENSORS_REGEX}")
             controller_args.append(f"NM_ACTUATORS_{brain_id}={CELEGANS_ACTUATORS_REGEX}")
+        elif robot_kind == "hexapod":
+            controller_args.append(f"NM_SENSORS_{brain_id}={HEXAPOD_SENSORS_REGEX}")
+            controller_args.append(f"NM_ACTUATORS_{brain_id}={HEXAPOD_ACTUATORS_REGEX}")
         robot_nodes.append(robot_node(proto_name, robot_name, brain_id, x, height, z, robot_kind, yaw, controller_args))
 
     cam_fov, cam_x, cam_y, cam_z = startup_camera(entries, positions)
@@ -2173,11 +2216,11 @@ Viewpoint {{
   position {cam_x:.2f} {cam_y:.2f} {cam_z:.2f}
 }}
 TexturedBackground {{
-  texture "dawn_cloudy_empty"
+  texture "noon_cloudy_countryside"
   luminosity 1.0
 }}
 TexturedBackgroundLight {{
-  texture "dawn_cloudy_empty"
+  texture "noon_cloudy_countryside"
   luminosity 0.62
 }}
 # Soft directional key light — no visible glare orb, casts crisp shadows.
@@ -2198,7 +2241,7 @@ DirectionalLight {{
     print(
         f"Wrote {world_path} with {len(entries)} robots "
         f"(celegans={len(celegans_brains)}, banc={len(banc_brains)}, "
-        f"fafb={len(fafb_brains)}, nao={len(nao_brains)})"
+        f"fafb={len(fafb_brains)}, hexapod={len(hexapod_brains)}, nao={len(nao_brains)})"
     )
 
 

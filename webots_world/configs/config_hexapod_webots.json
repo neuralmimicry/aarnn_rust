@@ -1,0 +1,23 @@
+{
+  "spike_io": {
+    "profile": "hexapod",
+    "input_strategy": "profile_default",
+    "output_strategy": "profile_default"
+  },
+  "num_sensory_neurons": 30,
+  "num_hidden_layers": 6,
+  "num_hidden_per_layer_initial": 96,
+  "num_output_neurons": 18,
+  "sensory_target_layer": 0,
+  "output_source_layer": 5,
+  "growth_enabled": true,
+  "use_morphology": true,
+  "morpho_growth_enabled": true,
+  "clumping_design": "Hexapod",
+  "brain_regions": [],
+  "aarnn_layer_depth": 4,
+  "aarnn_myelination_enabled": false,
+  "aarnn_import_topology_rewire_enabled": true,
+  "aarnn_import_topology_rewire_keep_fraction": 0.8,
+  "aarnn_import_topology_rewire_region_bias": 0.26
+}

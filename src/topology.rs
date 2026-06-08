@@ -32,11 +32,55 @@ pub struct Node3D {
     any(feature = "ui", feature = "growth3d"),
     derive(serde::Serialize, serde::Deserialize)
 )]
+#[cfg_attr(
+    any(feature = "ui", feature = "growth3d"),
+    serde(rename_all = "snake_case")
+)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EarlyCellPhase {
+    #[default]
+    Specification,
+    Migration,
+    Differentiation,
+}
+
+#[cfg_attr(
+    any(feature = "ui", feature = "growth3d"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[derive(Clone, Debug, Default)]
+pub struct EarlyCell3D {
+    pub id: u64,
+    pub source_layer: usize,
+    pub source_parent: usize,
+    pub target_layer: usize,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub start_x: f32,
+    pub start_y: f32,
+    pub start_z: f32,
+    pub target_x: f32,
+    pub target_y: f32,
+    pub target_z: f32,
+    pub age_ms: f32,
+    pub maturation_ms: f32,
+    pub phase: EarlyCellPhase,
+    pub region_name: Option<String>,
+    pub target_type_name: Option<String>,
+}
+
+#[cfg_attr(
+    any(feature = "ui", feature = "growth3d"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(any(feature = "ui", feature = "growth3d"), serde(default))]
 #[derive(Clone, Debug, Default)]
 pub struct Topology3D {
     pub layers: Vec<Vec<Node3D>>, // hidden layers only
     pub sensory_nodes: Vec<Node3D>,
     pub output_nodes: Vec<Node3D>,
+    pub early_cells: Vec<EarlyCell3D>,
 }
 
 impl Topology3D {
@@ -45,6 +89,7 @@ impl Topology3D {
             layers: Vec::new(),
             sensory_nodes: Vec::new(),
             output_nodes: Vec::new(),
+            early_cells: Vec::new(),
         }
     }
     pub fn add_layer(&mut self) {
@@ -55,6 +100,9 @@ impl Topology3D {
             self.layers.resize_with(layer + 1, Vec::new);
         }
         self.layers[layer].push(Node3D { layer, ..node });
+    }
+    pub fn add_early_cell(&mut self, cell: EarlyCell3D) {
+        self.early_cells.push(cell);
     }
     #[allow(dead_code)]
     pub fn len(&self, layer: usize) -> usize {
