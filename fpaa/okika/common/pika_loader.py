@@ -165,20 +165,61 @@ def _runtime_state_path(manifest_path: Path) -> Path:
     return manifest_path.resolve().parent.parent / "runtime_state.json"
 
 
+def _load_runtime_state(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except Exception as exc:
+        print(f"warning: ignoring malformed runtime-state file {path}: {exc}", file=sys.stderr)
+        return {}
+    if not isinstance(payload, dict):
+        print(f"warning: ignoring non-object runtime-state file {path}", file=sys.stderr)
+        return {}
+    return payload
+
+
 def _write_runtime_state(manifest_path: Path, manifest: Dict[str, Any], ahf_path: Path, ahf_bytes: List[int]) -> None:
     state_path = _runtime_state_path(manifest_path)
+    transport_id = "pihat_gpio_spi"
+    existing = _load_runtime_state(state_path)
+    existing_transport = str(existing.get("transport", "")).strip()
+    existing_loaded = existing.get("loaded_kernels", [])
+    if not isinstance(existing_loaded, list):
+        existing_loaded = []
+    merged_loaded: List[Dict[str, Any]] = []
+
+    # Keep previously programmed kernels when they came from the same transport record.
+    if existing_transport and existing_transport != transport_id and existing_loaded:
+        print(
+            "warning: runtime-state transport changed; replacing previous loaded-kernel records",
+            file=sys.stderr,
+        )
+    else:
+        for entry in existing_loaded:
+            if not isinstance(entry, dict):
+                continue
+            kernel_id = str(entry.get("kernel_id", "")).strip()
+            if not kernel_id or kernel_id == manifest["id"]:
+                continue
+            merged_loaded.append(entry)
+
+    merged_loaded.append(
+        {
+            "kernel_id": manifest["id"],
+            "manifest_path": str(manifest_path.resolve()),
+            "ahf_path": str(ahf_path.resolve()),
+            "ahf_fingerprint": _ahf_fingerprint(ahf_bytes),
+        }
+    )
+    merged_loaded.sort(key=lambda item: str(item.get("kernel_id", "")))
+
     payload = {
         "schema_version": 1,
-        "transport": "pihat_gpio_spi",
+        "transport": transport_id,
         "updated_at_unix_s": int(time.time()),
-        "loaded_kernels": [
-            {
-                "kernel_id": manifest["id"],
-                "manifest_path": str(manifest_path.resolve()),
-                "ahf_path": str(ahf_path.resolve()),
-                "ahf_fingerprint": _ahf_fingerprint(ahf_bytes),
-            }
-        ],
+        "loaded_kernels": merged_loaded,
     }
     state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"runtime-state: {state_path}")

@@ -39,6 +39,10 @@ After a successful Pi.Ka programming step, `common/pika_loader.py` writes:
 That file is consumed by the Rust startup probe so the runtime can decide whether
 the local FPAA image matches the requested AARNN kernel route.
 
+The loader now merges records per `kernel_id`, so running multiple `program_*.py`
+wrappers builds a cumulative `loaded_kernels` list instead of replacing it with the
+last programmed kernel only.
+
 The probe checks:
 
 - detected transport readiness

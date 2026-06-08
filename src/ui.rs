@@ -1097,6 +1097,8 @@ struct App {
     sensory_positions: Vec<egui::Pos2>,
     hidden_positions: Vec<Vec<egui::Pos2>>, // per hidden layer
     output_positions: Vec<egui::Pos2>,
+    #[cfg(feature = "growth3d")]
+    early_positions: Vec<egui::Pos2>,
     network_layout: NetworkLayout,
     layout_auto: bool,
     // Activity buffers (0..1, exponential decay)
@@ -1144,9 +1146,11 @@ struct App {
     #[cfg(feature = "growth3d")]
     topo_pid_output: Vec<UiPid2State>,
     #[cfg(feature = "growth3d")]
-    region_label_states: crate::morphology::FastHashMap<String, egui::Pos2>,
+    topo_pid_early: Vec<UiPid2State>,
     #[cfg(feature = "growth3d")]
-    region_label_target_states: crate::morphology::FastHashMap<String, egui::Pos2>,
+    region_label_states: HashMap<String, egui::Pos2>,
+    #[cfg(feature = "growth3d")]
+    region_label_target_states: HashMap<String, egui::Pos2>,
     // Morphology overlays (optional)
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     show_morpho_overlays: bool,
@@ -1423,6 +1427,8 @@ impl App {
         self.topo_pid_sensory.clear();
         self.topo_pid_hidden.clear();
         self.topo_pid_output.clear();
+        self.topo_pid_early.clear();
+        self.early_positions.clear();
         self.region_label_states.clear();
         self.region_label_target_states.clear();
         self.region_label_positions.clear();
@@ -1757,6 +1763,13 @@ impl App {
                     .unwrap_or(0.34)
                     .clamp(0.0, 2.0);
                 #[cfg(all(feature = "robot_io", unix))]
+                let ipc_hexapod_input_rate_gain = std::env::var("NM_IPC_HEXAPOD_INPUT_RATE_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.34)
+                    .clamp(0.0, 2.0);
+                #[cfg(all(feature = "robot_io", unix))]
                 let ipc_nao_input_rate_gain = std::env::var("NM_IPC_NAO_INPUT_RATE_GAIN")
                     .ok()
                     .and_then(|v| v.trim().parse::<f32>().ok())
@@ -1771,6 +1784,13 @@ impl App {
                     .unwrap_or(0.82)
                     .clamp(0.05, 8.0);
                 #[cfg(all(feature = "robot_io", unix))]
+                let ipc_hexapod_output_gain = std::env::var("NM_IPC_HEXAPOD_OUTPUT_GAIN")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.82)
+                    .clamp(0.05, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
                 let ipc_dros_output_current_gain =
                     std::env::var("NM_IPC_DROS_OUTPUT_CURRENT_GAIN")
                         .ok()
@@ -1779,8 +1799,24 @@ impl App {
                         .unwrap_or(0.22)
                         .clamp(0.01, 8.0);
                 #[cfg(all(feature = "robot_io", unix))]
+                let ipc_hexapod_output_current_gain =
+                    std::env::var("NM_IPC_HEXAPOD_OUTPUT_CURRENT_GAIN")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.22)
+                        .clamp(0.01, 8.0);
+                #[cfg(all(feature = "robot_io", unix))]
                 let ipc_dros_output_current_mix =
                     std::env::var("NM_IPC_DROS_OUTPUT_CURRENT_MIX")
+                        .ok()
+                        .and_then(|v| v.trim().parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.18)
+                        .clamp(0.0, 1.0);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_hexapod_output_current_mix =
+                    std::env::var("NM_IPC_HEXAPOD_OUTPUT_CURRENT_MIX")
                         .ok()
                         .and_then(|v| v.trim().parse::<f32>().ok())
                         .filter(|v| v.is_finite())
@@ -1840,6 +1876,9 @@ impl App {
                     drosophila_output_gain: ipc_dros_output_gain,
                     drosophila_output_current_gain: ipc_dros_output_current_gain,
                     drosophila_output_current_mix: ipc_dros_output_current_mix,
+                    hexapod_output_gain: ipc_hexapod_output_gain,
+                    hexapod_output_current_gain: ipc_hexapod_output_current_gain,
+                    hexapod_output_current_mix: ipc_hexapod_output_current_mix,
                     nao_output_gain: ipc_nao_output_gain,
                     nao_output_current_gain: ipc_nao_output_current_gain,
                     nao_output_current_mix: ipc_nao_output_current_mix,
@@ -2358,6 +2397,7 @@ impl App {
                                             snap.topo_sensory = r.topo.sensory_nodes.clone();
                                             snap.topo_hidden = r.topo.layers.clone();
                                             snap.topo_output = r.topo.output_nodes.clone();
+                                            snap.topo_early = r.topo.early_cells.clone();
                                         }
                                     }
                                 }
@@ -2463,6 +2503,7 @@ impl App {
                                             snap.topo_sensory = r.topo.sensory_nodes.clone();
                                             snap.topo_hidden = r.topo.layers.clone();
                                             snap.topo_output = r.topo.output_nodes.clone();
+                                            snap.topo_early = r.topo.early_cells.clone();
                                         }
                                     }
                                 }
@@ -2730,6 +2771,8 @@ impl App {
             sensory_positions: Vec::new(),
             hidden_positions: vec![vec![]; l],
             output_positions: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            early_positions: Vec::new(),
             network_layout: NetworkLayout::Aarnn,
             layout_auto: true,
             sensory_activity: vec![0.0; n_s],
@@ -2758,9 +2801,9 @@ impl App {
             #[cfg(feature = "growth3d")]
             region_label_positions: Vec::new(),
             #[cfg(feature = "growth3d")]
-            region_label_states: crate::morphology::FastHashMap::default(),
+            region_label_states: HashMap::default(),
             #[cfg(feature = "growth3d")]
-            region_label_target_states: crate::morphology::FastHashMap::default(),
+            region_label_target_states: HashMap::default(),
             #[cfg(feature = "growth3d")]
             cam_pivot_world: (0.0, 0.0, 0.0),
             #[cfg(feature = "growth3d")]
@@ -2771,6 +2814,8 @@ impl App {
             topo_pid_hidden: Vec::new(),
             #[cfg(feature = "growth3d")]
             topo_pid_output: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            topo_pid_early: Vec::new(),
             #[cfg(feature = "growth3d")]
             cached_skull_hull: Vec::new(),
             #[cfg(feature = "growth3d")]
@@ -4009,6 +4054,10 @@ impl App {
         self.sensory_count = n_s;
         self.output_count = n_o;
         self.hidden_positions = vec![vec![]; n_l];
+        #[cfg(feature = "growth3d")]
+        {
+            self.early_positions.clear();
+        }
         self.sensory_activity = vec![0.0; n_s];
         self.hidden_activity = (0..n_l).map(|_| Vec::new()).collect(); // will be resized in update_activity
         self.output_activity = vec![0.0; n_o];
@@ -4059,6 +4108,7 @@ impl App {
                         !topo.layers.is_empty()
                             || !topo.sensory_nodes.is_empty()
                             || !topo.output_nodes.is_empty()
+                            || !topo.early_cells.is_empty()
                     })
                     .unwrap_or(false);
                 #[cfg(not(feature = "growth3d"))]
@@ -4097,6 +4147,7 @@ impl App {
                 snap.topo_sensory.clear();
                 snap.topo_hidden.clear();
                 snap.topo_output.clear();
+                snap.topo_early.clear();
             }
         }
         if changed {
@@ -5482,6 +5533,7 @@ fn centroid_of_projected_positions(
     sensory: &[egui::Pos2],
     hidden: &[Vec<egui::Pos2>],
     output: &[egui::Pos2],
+    early: &[egui::Pos2],
 ) -> Option<egui::Pos2> {
     let mut sum = egui::Vec2::ZERO;
     let mut count = 0usize;
@@ -5496,6 +5548,10 @@ fn centroid_of_projected_positions(
         }
     }
     for p in output {
+        sum += p.to_vec2();
+        count += 1;
+    }
+    for p in early {
         sum += p.to_vec2();
         count += 1;
     }
@@ -5588,6 +5644,8 @@ struct UiSnapshot {
     topo_hidden: Vec<Vec<crate::topology::Node3D>>,
     #[cfg(feature = "growth3d")]
     topo_output: Vec<crate::topology::Node3D>,
+    #[cfg(feature = "growth3d")]
+    topo_early: Vec<crate::topology::EarlyCell3D>,
 }
 
 #[cfg(feature = "ui")]
@@ -9154,7 +9212,7 @@ impl eframe::App for App {
                             let _ = self.sim_tx.send(SimControl::ApplyConfig(self.local_net.clone()));
                         }
                     } else {
-                        ui.label("(Default)").on_hover_text("Standard models use H0; AARNN uses H1");
+                        ui.label("(Default)").on_hover_text("Standard models use H0. AARNN uses profile-aware defaults: Human H1 (L4), compact profiles H0.");
                     }
                 });
                 ui.horizontal(|ui| {
@@ -9171,7 +9229,7 @@ impl eframe::App for App {
                             let _ = self.sim_tx.send(SimControl::ApplyConfig(self.local_net.clone()));
                         }
                     } else {
-                        ui.label("(Default)").on_hover_text("Standard models use H_last; AARNN uses H4");
+                        ui.label("(Default)").on_hover_text("Standard models use H_last. AARNN uses profile-aware defaults: Human H2 (L5), compact profiles H_last.");
                     }
                 });
                 ui.separator();
@@ -9436,6 +9494,7 @@ impl eframe::App for App {
                                     ui.selectable_value(&mut net.clumping_design, ClumpingDesign::FruitFlyLarva, "Fruit Fly (Larva)");
                                     ui.selectable_value(&mut net.clumping_design, ClumpingDesign::ZebraFish, "Zebra Fish");
                                     ui.selectable_value(&mut net.clumping_design, ClumpingDesign::NematodeWorm, "Nematode Worm");
+                                    ui.selectable_value(&mut net.clumping_design, ClumpingDesign::Hexapod, "Hexapod");
                                 });
                             if net.clumping_design != prev_design {
                                 apply_clumping_design(net, net.clumping_design);
@@ -10265,6 +10324,11 @@ impl eframe::App for App {
                                                 &mut spike_io.profile,
                                                 NetworkIoProfileSelector::Drosophila,
                                                 "drosophila",
+                                            );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::Hexapod,
+                                                "hexapod",
                                             );
                                             ui.selectable_value(
                                                 &mut spike_io.profile,
@@ -11867,7 +11931,8 @@ impl eframe::App for App {
                         && use_aarnn_layout
                         && (!snap.topo_hidden.is_empty()
                             || !snap.topo_sensory.is_empty()
-                            || !snap.topo_output.is_empty())
+                            || !snap.topo_output.is_empty()
+                            || !snap.topo_early.is_empty())
                 })
                 .unwrap_or(false);
             #[cfg(feature = "growth3d")]
@@ -11947,6 +12012,9 @@ impl eframe::App for App {
                                 }
                             }
                         }
+                        if self.early_positions.len() != cached_topo.early_cells.len() {
+                            need_recompute = true;
+                        }
                     }
                 } else if prefer_snapshot_topology {
                     if let Some(snap) = ui_snapshot_opt.as_ref() {
@@ -11959,6 +12027,9 @@ impl eframe::App for App {
                                 }
                             }
                         }
+                        if self.early_positions.len() != snap.topo_early.len() {
+                            need_recompute = true;
+                        }
                     }
                 } else if let Some(active_runner) = active_runner_opt {
                     let topo_layers_len = active_runner.topo.layers.len();
@@ -11969,6 +12040,9 @@ impl eframe::App for App {
                                 need_recompute = true; break;
                             }
                         }
+                    }
+                    if self.early_positions.len() != active_runner.topo.early_cells.len() {
+                        need_recompute = true;
                     }
                 }
             }
@@ -12025,6 +12099,7 @@ impl eframe::App for App {
                         !runner.topo.layers.is_empty()
                             || !runner.topo.sensory_nodes.is_empty()
                             || !runner.topo.output_nodes.is_empty()
+                            || !runner.topo.early_cells.is_empty()
                     })
                     .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
@@ -12033,6 +12108,7 @@ impl eframe::App for App {
                         !topo.layers.is_empty()
                             || !topo.sensory_nodes.is_empty()
                             || !topo.output_nodes.is_empty()
+                            || !topo.early_cells.is_empty()
                     })
                     .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
@@ -12071,6 +12147,12 @@ impl eframe::App for App {
                                     sumz += n.z;
                                     cnt += 1;
                                 }
+                                for n in &topo.early_cells {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
@@ -12089,6 +12171,12 @@ impl eframe::App for App {
                                     cnt += 1;
                                 }
                                 for n in &snap.topo_output {
+                                    sumx += n.x;
+                                    sumy += n.y;
+                                    sumz += n.z;
+                                    cnt += 1;
+                                }
+                                for n in &snap.topo_early {
                                     sumx += n.x;
                                     sumy += n.y;
                                     sumz += n.z;
@@ -12116,6 +12204,12 @@ impl eframe::App for App {
                                 sumz += n.z;
                                 cnt += 1;
                             }
+                            for n in &active_runner.topo.early_cells {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(topo) = cluster_topo_opt {
                             for l in &topo.layers {
                                 for n in l {
@@ -12137,6 +12231,12 @@ impl eframe::App for App {
                                 sumz += n.z;
                                 cnt += 1;
                             }
+                            for n in &topo.early_cells {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
                         } else if let Some(ref snap) = ui_snapshot_opt {
                             for l in &snap.topo_hidden {
                                 for n in l {
@@ -12153,6 +12253,12 @@ impl eframe::App for App {
                                 cnt += 1;
                             }
                             for n in &snap.topo_output {
+                                sumx += n.x;
+                                sumy += n.y;
+                                sumz += n.z;
+                                cnt += 1;
+                            }
+                            for n in &snap.topo_early {
                                 sumx += n.x;
                                 sumy += n.y;
                                 sumz += n.z;
@@ -12186,9 +12292,8 @@ impl eframe::App for App {
                         let pivot = self.cam_pivot_world;
                         let cam_pan = self.cam_pan;
 
-                        let project = |n: &crate::topology::Node3D| -> egui::Pos2 {
-                            let (mut x3, mut y3, mut z3) =
-                                (n.x - pivot.0, n.y - pivot.1, n.z - pivot.2);
+                        let project_xyz = |wx: f32, wy: f32, wz: f32| -> egui::Pos2 {
+                            let (mut x3, mut y3, mut z3) = (wx - pivot.0, wy - pivot.1, wz - pivot.2);
                             // Rotate by yaw (around Y) then pitch (around X) around the world pivot.
                             let xz = x3 * cy + z3 * sy;
                             let zz = -x3 * sy + z3 * cy;
@@ -12201,10 +12306,13 @@ impl eframe::App for App {
                                 y_ref - y3 * scale_y + cam_pan.y,
                             )
                         };
+                        let project =
+                            |n: &crate::topology::Node3D| -> egui::Pos2 { project_xyz(n.x, n.y, n.z) };
 
                         let mut target_sensory_positions: Vec<egui::Pos2> = Vec::new();
                         let mut target_output_positions: Vec<egui::Pos2> = Vec::new();
                         let mut target_hidden_positions: Vec<Vec<egui::Pos2>> = Vec::new();
+                        let mut target_early_positions: Vec<egui::Pos2> = Vec::new();
 
                         if cache_topology_active {
                             if let Some(topo) = self.cached_edge_topo.as_ref() {
@@ -12217,6 +12325,11 @@ impl eframe::App for App {
                                     .iter()
                                     .map(|layer| layer.iter().map(project).collect())
                                     .collect();
+                                target_early_positions = topo
+                                    .early_cells
+                                    .iter()
+                                    .map(|cell| project_xyz(cell.x, cell.y, cell.z))
+                                    .collect();
                             }
                         } else if prefer_snapshot_topology {
                             if let Some(ref snap) = ui_snapshot_opt {
@@ -12228,6 +12341,11 @@ impl eframe::App for App {
                                     .topo_hidden
                                     .iter()
                                     .map(|layer| layer.iter().map(project).collect())
+                                    .collect();
+                                target_early_positions = snap
+                                    .topo_early
+                                    .iter()
+                                    .map(|cell| project_xyz(cell.x, cell.y, cell.z))
                                     .collect();
                             }
                         } else if let Some(active_runner) = active_runner_opt {
@@ -12243,6 +12361,12 @@ impl eframe::App for App {
                                     layer.iter().map(project).collect()
                                 })
                                 .collect();
+                            target_early_positions = active_runner
+                                .topo
+                                .early_cells
+                                .iter()
+                                .map(|cell| project_xyz(cell.x, cell.y, cell.z))
+                                .collect();
                         } else if let Some(topo) = cluster_topo_opt {
                             target_sensory_positions =
                                 topo.sensory_nodes.iter().map(project).collect();
@@ -12253,6 +12377,11 @@ impl eframe::App for App {
                                 .iter()
                                 .map(|layer| layer.iter().map(project).collect())
                                 .collect();
+                            target_early_positions = topo
+                                .early_cells
+                                .iter()
+                                .map(|cell| project_xyz(cell.x, cell.y, cell.z))
+                                .collect();
                         } else if let Some(ref snap) = ui_snapshot_opt {
                             target_sensory_positions =
                                 snap.topo_sensory.iter().map(project).collect();
@@ -12262,6 +12391,11 @@ impl eframe::App for App {
                                 .topo_hidden
                                 .iter()
                                 .map(|layer| layer.iter().map(project).collect())
+                                .collect();
+                            target_early_positions = snap
+                                .topo_early
+                                .iter()
+                                .map(|cell| project_xyz(cell.x, cell.y, cell.z))
                                 .collect();
                         }
 
@@ -12300,12 +12434,21 @@ impl eframe::App for App {
                             0.0,
                             pos_kd,
                         );
+                        self.early_positions = pid_smooth_positions(
+                            &mut self.topo_pid_early,
+                            &target_early_positions,
+                            dt_s,
+                            pos_kp,
+                            0.0,
+                            pos_kd,
+                        );
                         let desired_center_2d = egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y);
                         let mut centroid_correction = egui::Vec2::ZERO;
                         if let Some(curr_center_2d) = centroid_of_projected_positions(
                             &self.sensory_positions,
                             &self.hidden_positions,
                             &self.output_positions,
+                            &self.early_positions,
                         ) {
                             centroid_correction = desired_center_2d - curr_center_2d;
                             if centroid_correction.length_sq() > 1e-6 {
@@ -12318,6 +12461,9 @@ impl eframe::App for App {
                                     }
                                 }
                                 for p in &mut self.output_positions {
+                                    *p += centroid_correction;
+                                }
+                                for p in &mut self.early_positions {
                                     *p += centroid_correction;
                                 }
                             }
@@ -12412,6 +12558,7 @@ impl eframe::App for App {
                             let y = top + height * ((k as f32 + 1.0) / (o as f32 + 1.0));
                             egui::pos2(x * self.camera_zoom + self.cam_pan.x, y * self.camera_zoom + self.cam_pan.y)
                         }).collect();
+                        self.early_positions.clear();
                     }
                 } else {
                     // Grid layout when growth is disabled (apply camera transform)
@@ -12440,6 +12587,7 @@ impl eframe::App for App {
                         let y = top + height * ((k as f32 + 1.0) / (o as f32 + 1.0));
                         egui::pos2(x * self.camera_zoom + self.cam_pan.x, y * self.camera_zoom + self.cam_pan.y)
                     }).collect();
+                    self.early_positions.clear();
                 }
                 #[cfg(not(feature = "growth3d"))]
                 {
@@ -12645,6 +12793,8 @@ impl eframe::App for App {
             let sensory_positions = &self.sensory_positions;
             let hidden_positions = &self.hidden_positions;
             let output_positions = &self.output_positions;
+            #[cfg(feature = "growth3d")]
+            let early_positions = &self.early_positions;
             let sensory_activity = &self.sensory_activity;
             let hidden_activity = &self.hidden_activity;
             let output_activity = &self.output_activity;
@@ -13047,6 +13197,94 @@ impl eframe::App for App {
                             }
                         } else {
                             tooltip_lines.push(format!("H{}:{}  a={:.2}", li+1, j, a));
+                        }
+                    }
+                }
+            }
+
+            #[cfg(feature = "growth3d")]
+            if growth_enabled && use_aarnn_layout && !early_positions.is_empty() {
+                for (idx, &p) in early_positions.iter().enumerate() {
+                    let early_cell_opt: Option<&crate::topology::EarlyCell3D> =
+                        if cache_topology_active {
+                            self.cached_edge_topo
+                                .as_ref()
+                                .and_then(|topo| topo.early_cells.get(idx))
+                        } else if prefer_snapshot_topology {
+                            ui_snapshot_opt
+                                .as_ref()
+                                .and_then(|snap| snap.topo_early.get(idx))
+                        } else if let Some(active_runner) = active_runner_opt {
+                            active_runner.topo.early_cells.get(idx)
+                        } else {
+                            ui_snapshot_opt
+                                .as_ref()
+                                .and_then(|snap| snap.topo_early.get(idx))
+                        };
+
+                    let (fill, stroke) = if let Some(cell) = early_cell_opt {
+                        match cell.phase {
+                            crate::topology::EarlyCellPhase::Specification => (
+                                egui::Color32::from_rgb(95, 175, 245),
+                                egui::Color32::from_rgb(165, 220, 255),
+                            ),
+                            crate::topology::EarlyCellPhase::Migration => (
+                                egui::Color32::from_rgb(165, 120, 240),
+                                egui::Color32::from_rgb(215, 175, 255),
+                            ),
+                            crate::topology::EarlyCellPhase::Differentiation => (
+                                egui::Color32::from_rgb(235, 150, 95),
+                                egui::Color32::from_rgb(255, 210, 170),
+                            ),
+                        }
+                    } else {
+                        (
+                            egui::Color32::from_rgb(140, 160, 220),
+                            egui::Color32::from_rgb(205, 220, 255),
+                        )
+                    };
+                    let r_early = radius_h * 0.78;
+                    painter.circle_filled(p, r_early, fill.gamma_multiply(0.92));
+                    painter.circle_stroke(p, r_early, egui::Stroke::new(1.2, stroke));
+                    let hit_rect =
+                        egui::Rect::from_center_size(p, egui::vec2(r_early * 2.4, r_early * 2.4));
+                    if response.hovered()
+                        && hit_rect.contains(
+                            ui.ctx()
+                                .pointer_hover_pos()
+                                .unwrap_or(egui::pos2(-1.0, -1.0)),
+                        )
+                    {
+                        if let Some(cell) = early_cell_opt {
+                            let progress =
+                                (cell.age_ms / cell.maturation_ms.max(1.0)).clamp(0.0, 1.0) * 100.0;
+                            let phase = match cell.phase {
+                                crate::topology::EarlyCellPhase::Specification => "specification",
+                                crate::topology::EarlyCellPhase::Migration => "migration",
+                                crate::topology::EarlyCellPhase::Differentiation => {
+                                    "differentiation"
+                                }
+                            };
+                            let target_type =
+                                cell.target_type_name.as_deref().unwrap_or("unassigned");
+                            tooltip_lines.push(format!(
+                                "E{}  {}  {:.0}%\n(x,y,z)=({:.2},{:.2},{:.2}) -> ({:.2},{:.2},{:.2})\nsource=H{}:{} target=H{} type={}",
+                                cell.id,
+                                phase,
+                                progress,
+                                cell.x,
+                                cell.y,
+                                cell.z,
+                                cell.target_x,
+                                cell.target_y,
+                                cell.target_z,
+                                cell.source_layer + 1,
+                                cell.source_parent,
+                                cell.target_layer + 1,
+                                target_type
+                            ));
+                        } else {
+                            tooltip_lines.push(format!("E{}  pre-differentiation cell", idx));
                         }
                     }
                 }

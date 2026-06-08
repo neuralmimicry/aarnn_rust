@@ -116,13 +116,14 @@ const DEFAULT_GA_STALL_TIMEOUT_SECS: u64 = 60;
 const GA_PROGRESS_TICK_MS: u64 = 500;
 const GA_AARNN_MAX_DEPTH: usize = 5;
 const GA_IZH_PRESETS: [&str; 8] = ["RS", "FS", "IB", "CH", "LTS", "RZ", "TC", "P"];
-const GA_CLUMPING_DESIGNS: [ClumpingDesign; 6] = [
+const GA_CLUMPING_DESIGNS: [ClumpingDesign; 7] = [
     ClumpingDesign::None,
     ClumpingDesign::HumanBrain,
     ClumpingDesign::FruitFly,
     ClumpingDesign::FruitFlyLarva,
     ClumpingDesign::ZebraFish,
     ClumpingDesign::NematodeWorm,
+    ClumpingDesign::Hexapod,
 ];
 const GA_NEUROMOD_SIGNALS: [NeuromodSignal; 8] = [
     NeuromodSignal::None,
@@ -3236,7 +3237,7 @@ impl GASearch {
         let gen_start = Instant::now();
         if self.generation == 0 && self.current_eval_idx == 0 {
             nm_log!(
-                "[info] GA tunables: growth[sat=0..2 win=20..10000 cooldown=0..10000 global=0..5000 spawn=0.01..2 split=1..256 layers=1..10] morpho[energy_win=100..30000 attract=0.05..5 sprout=0..2 contact=0.005..2 ambient=0..1 reson=0..1 decay=0..1 stabil=0..1 seg=0.1..2 out_cap=1..128 max_total=0..dynamic] aarnn_state[perceptual_lr=0..1 world_dim=2..32 sleep_cycle=1000..600000 theta_hz=0.5..12 thalamic_hz=0.5..20 neuromod_baseline=0..3 signal=all] io[target=auto or 0..9 source=auto or 0..9] bio[preset=RS FS IB CH LTS RZ TC P stp_u=0..1 tau_rec=10..5000 tau_facil=10..2000 ampa=1..50 nmda=10..300 gaba=1..50 nmda_ratio=0..1 gain=0.1..5 thresh_tau=10..1000 inc=0..5 min=-5..0 max=0..10 izh_refr=0..10 homeo_rate=0..20 tau=100..10000 gain=0..5 neuromod_gain=0.1..3] clumping[None HumanBrain FruitFly FruitFlyLarva ZebraFish NematodeWorm + spatial fine-tuning]."
+                "[info] GA tunables: growth[sat=0..2 win=20..10000 cooldown=0..10000 global=0..5000 spawn=0.01..2 split=1..256 layers=1..10] morpho[energy_win=100..30000 attract=0.05..5 sprout=0..2 contact=0.005..2 ambient=0..1 reson=0..1 decay=0..1 stabil=0..1 seg=0.1..2 out_cap=1..128 max_total=0..dynamic] aarnn_state[perceptual_lr=0..1 world_dim=2..32 sleep_cycle=1000..600000 theta_hz=0.5..12 thalamic_hz=0.5..20 neuromod_baseline=0..3 signal=all] io[target=auto or 0..9 source=auto or 0..9] bio[preset=RS FS IB CH LTS RZ TC P stp_u=0..1 tau_rec=10..5000 tau_facil=10..2000 ampa=1..50 nmda=10..300 gaba=1..50 nmda_ratio=0..1 gain=0.1..5 thresh_tau=10..1000 inc=0..5 min=-5..0 max=0..10 izh_refr=0..10 homeo_rate=0..20 tau=100..10000 gain=0..5 neuromod_gain=0.1..3] clumping[None HumanBrain FruitFly FruitFlyLarva ZebraFish NematodeWorm Hexapod + spatial fine-tuning]."
             );
         }
         let (_, gen_start_free_mb, gen_start_rss_mb, _) = update_sys_cache();

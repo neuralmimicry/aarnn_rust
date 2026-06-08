@@ -19,6 +19,7 @@ pub enum NetworkIoProfile {
     #[serde(rename = "celegans", alias = "c_elegans")]
     Celegans,
     Drosophila,
+    Hexapod,
     Nao,
     Generic,
 }
@@ -28,6 +29,7 @@ impl NetworkIoProfile {
         match self {
             Self::Celegans => "celegans",
             Self::Drosophila => "drosophila",
+            Self::Hexapod => "hexapod",
             Self::Nao => "nao",
             Self::Generic => "generic",
         }
@@ -42,6 +44,7 @@ pub enum NetworkIoProfileSelector {
     #[serde(rename = "celegans", alias = "c_elegans")]
     Celegans,
     Drosophila,
+    Hexapod,
     Nao,
     Generic,
 }
@@ -58,6 +61,7 @@ impl NetworkIoProfileSelector {
             Self::Auto => "auto",
             Self::Celegans => "celegans",
             Self::Drosophila => "drosophila",
+            Self::Hexapod => "hexapod",
             Self::Nao => "nao",
             Self::Generic => "generic",
         }
@@ -233,6 +237,7 @@ impl Default for SpikeIoConfig {
 pub struct ProfileInputEncoding {
     pub default_threshold: f32,
     pub drosophila_rate: RateEncoding,
+    pub hexapod_rate: RateEncoding,
     pub nao_rate: RateEncoding,
 }
 
@@ -243,6 +248,11 @@ impl Default for ProfileInputEncoding {
             drosophila_rate: RateEncoding {
                 low_gain: 0.34,
                 quiet_floor: 0.002,
+                ..RateEncoding::default()
+            },
+            hexapod_rate: RateEncoding {
+                low_gain: 0.24,
+                quiet_floor: 0.0015,
                 ..RateEncoding::default()
             },
             nao_rate: RateEncoding {
@@ -265,6 +275,9 @@ pub struct ProfileOutputEncoding {
     pub drosophila_output_gain: f32,
     pub drosophila_output_current_gain: f32,
     pub drosophila_output_current_mix: f32,
+    pub hexapod_output_gain: f32,
+    pub hexapod_output_current_gain: f32,
+    pub hexapod_output_current_mix: f32,
     pub nao_output_gain: f32,
     pub nao_output_current_gain: f32,
     pub nao_output_current_mix: f32,
@@ -281,6 +294,9 @@ impl Default for ProfileOutputEncoding {
             drosophila_output_gain: 0.82,
             drosophila_output_current_gain: 0.22,
             drosophila_output_current_mix: 0.18,
+            hexapod_output_gain: 0.88,
+            hexapod_output_current_gain: 0.28,
+            hexapod_output_current_mix: 0.24,
             nao_output_gain: 0.92,
             nao_output_current_gain: 0.42,
             nao_output_current_mix: 0.38,
@@ -295,6 +311,9 @@ pub fn classify_network_io_profile(sensory_count: usize, output_count: usize) ->
     }
     if output_count == 48 && (64..=4096).contains(&sensory_count) {
         return NetworkIoProfile::Drosophila;
+    }
+    if output_count == 18 && (24..=2048).contains(&sensory_count) {
+        return NetworkIoProfile::Hexapod;
     }
     if output_count == 40 && sensory_count >= 1024 {
         return NetworkIoProfile::Nao;
@@ -313,6 +332,7 @@ pub fn resolve_network_io_profile(
         NetworkIoProfileSelector::Auto => classify_network_io_profile(sensory_count, output_count),
         NetworkIoProfileSelector::Celegans => NetworkIoProfile::Celegans,
         NetworkIoProfileSelector::Drosophila => NetworkIoProfile::Drosophila,
+        NetworkIoProfileSelector::Hexapod => NetworkIoProfile::Hexapod,
         NetworkIoProfileSelector::Nao => NetworkIoProfile::Nao,
         NetworkIoProfileSelector::Generic => NetworkIoProfile::Generic,
     }
@@ -397,6 +417,9 @@ pub fn encode_profile_inputs_with<F>(
         }
         NetworkIoProfile::Drosophila => {
             rate_encode_with(inputs, dst, &mut sample, cfg.drosophila_rate);
+        }
+        NetworkIoProfile::Hexapod => {
+            rate_encode_with(inputs, dst, &mut sample, cfg.hexapod_rate);
         }
         NetworkIoProfile::Nao => {
             rate_encode_with(inputs, dst, &mut sample, cfg.nao_rate);
@@ -674,6 +697,13 @@ pub fn decode_profile_outputs(
             cfg.drosophila_output_current_gain,
             cfg.drosophila_output_current_mix,
         ),
+        NetworkIoProfile::Hexapod if cfg.non_celegans_graded_output => fill_graded_outputs(
+            runner,
+            dst,
+            cfg.hexapod_output_gain,
+            cfg.hexapod_output_current_gain,
+            cfg.hexapod_output_current_mix,
+        ),
         NetworkIoProfile::Nao if cfg.non_celegans_graded_output => fill_graded_outputs(
             runner,
             dst,
@@ -725,6 +755,13 @@ pub fn decode_network_outputs(io_cfg: &SpikeIoConfig, runner: &Runner, dst: &mut
                     cfg.drosophila_output_current_gain,
                     cfg.drosophila_output_current_mix,
                 ),
+                NetworkIoProfile::Hexapod => fill_graded_outputs(
+                    runner,
+                    dst,
+                    cfg.hexapod_output_gain,
+                    cfg.hexapod_output_current_gain,
+                    cfg.hexapod_output_current_mix,
+                ),
                 NetworkIoProfile::Nao => fill_graded_outputs(
                     runner,
                     dst,
@@ -752,6 +789,10 @@ mod tests {
         assert_eq!(
             classify_network_io_profile(128, 48),
             NetworkIoProfile::Drosophila
+        );
+        assert_eq!(
+            classify_network_io_profile(30, 18),
+            NetworkIoProfile::Hexapod
         );
         assert_eq!(
             classify_network_io_profile(16, 8),
@@ -786,6 +827,10 @@ mod tests {
             resolve_network_io_profile(NetworkIoProfileSelector::Generic, 24, 96),
             NetworkIoProfile::Generic
         );
+        assert_eq!(
+            resolve_network_io_profile(NetworkIoProfileSelector::Hexapod, 8, 3),
+            NetworkIoProfile::Hexapod
+        );
     }
 
     #[test]
@@ -808,6 +853,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&NetworkIoProfile::Celegans).unwrap(),
             "\"celegans\""
+        );
+    }
+
+    #[test]
+    fn hexapod_profile_serialization_roundtrip() {
+        let selector: NetworkIoProfileSelector = serde_json::from_str("\"hexapod\"").unwrap();
+        let profile: NetworkIoProfile = serde_json::from_str("\"hexapod\"").unwrap();
+        assert_eq!(selector, NetworkIoProfileSelector::Hexapod);
+        assert_eq!(profile, NetworkIoProfile::Hexapod);
+        assert_eq!(
+            serde_json::to_string(&NetworkIoProfileSelector::Hexapod).unwrap(),
+            "\"hexapod\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NetworkIoProfile::Hexapod).unwrap(),
+            "\"hexapod\""
         );
     }
 

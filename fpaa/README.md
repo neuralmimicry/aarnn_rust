@@ -54,6 +54,7 @@ Verification:
 - each kernel route is checked against its `*.okika.json` manifest
 - the runtime expects the named `.ahf` export to exist beside the manifest
 - a successful hardware programming step is expected to leave `fpaa/runtime_state.json`
+- repeated programming runs accumulate per-kernel records in `loaded_kernels` (merged by `kernel_id`)
 - the runtime compares the persisted `.ahf` fingerprint against the local `.ahf` and also checks the recorded transport type
 
 Supported startup behavior:

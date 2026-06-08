@@ -2687,6 +2687,7 @@ function buildGraph(snapshot, layout) {
 }
 function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
   if (snapshot.topo) {
+    const earlyCells = Array.isArray(snapshot.topo.early_cells) ? snapshot.topo.early_cells : [];
     return {
       sensory: snapshot.topo.sensory_nodes.map((n, index) => ({
         x: n.x,
@@ -2706,7 +2707,29 @@ function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
         kind: "hidden",
         layer: layerIndex,
         index
-      })))
+      }))),
+      early: earlyCells.map((n, index) => {
+        const maturation = Math.max(1, Number(n.maturation_ms || 0));
+        const age = Number(n.age_ms || 0);
+        return {
+          x: Number(n.x || 0),
+          y: Number(n.y || 0),
+          z: Number(n.z || 0),
+          tx: Number(n.target_x || n.x || 0),
+          ty: Number(n.target_y || n.y || 0),
+          tz: Number(n.target_z || n.z || 0),
+          kind: "early",
+          index,
+          id: Number(n.id || index),
+          phase: typeof n.phase === "string" ? n.phase : "specification",
+          progress: Math.max(0, Math.min(1, age / maturation)),
+          sourceLayer: Number.isFinite(Number(n.source_layer)) ? Number(n.source_layer) : 0,
+          sourceParent: Number.isFinite(Number(n.source_parent)) ? Number(n.source_parent) : 0,
+          targetLayer: Number.isFinite(Number(n.target_layer)) ? Number(n.target_layer) : 0,
+          targetTypeName: typeof n.target_type_name === "string" && n.target_type_name ? n.target_type_name : "unassigned",
+          regionName: typeof n.region_name === "string" ? n.region_name : ""
+        };
+      })
     };
   }
   return {
@@ -2719,7 +2742,8 @@ function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
     })),
     output: createRingNodes(outputCount, 0.65, Math.PI / 8, {
       kind: "output"
-    })
+    }),
+    early: []
   };
 }
 function buildConventionalNodes(sensoryCount, hiddenSizes, outputCount) {
@@ -2910,6 +2934,7 @@ function drawNetwork() {
     const activeIdx = hiddenActive[idx] ? hiddenActive[idx].indices || [] : [];
     drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes);
   });
+  drawEarlyNodes(nodes.early || [], centerX, centerY, radius, cosR, sinR, screenNodes);
   drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes);
 
   // Draw region labels if enabled
@@ -2966,7 +2991,7 @@ function drawNetwork() {
   state.instrumentation.screenNodes = screenNodes;
   renderInstrumentation();
 }
-function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = []) {
+function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true) {
   const activeSet = new Set(activeIndices);
   nodes.forEach((node, idx) => {
     const rotated = rotate(node.x, node.y, cosR, sinR);
@@ -2977,13 +3002,71 @@ function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, 
     ctx.beginPath();
     ctx.arc(x, y, active ? 3.4 : 2.2, 0, Math.PI * 2);
     ctx.fill();
-    screenNodes.push({
-      targetType: node.kind || "sensory",
-      layer: Number.isFinite(node.layer) ? node.layer : 0,
-      index: Number.isFinite(node.index) ? node.index : idx,
-      x,
-      y
-    });
+    if (includeInInstrumentation) {
+      screenNodes.push({
+        targetType: node.kind || "sensory",
+        layer: Number.isFinite(node.layer) ? node.layer : 0,
+        index: Number.isFinite(node.index) ? node.index : idx,
+        x,
+        y
+      });
+    }
+  });
+}
+function drawEarlyNodes(nodes, cx, cy, radius, cosR, sinR, screenNodes = []) {
+  nodes.forEach(node => {
+    const rotated = rotate(node.x, node.y, cosR, sinR);
+    const targetRot = rotate(node.tx, node.ty, cosR, sinR);
+    const x = cx + state.view.offsetX + rotated.x * radius;
+    const y = cy + state.view.offsetY + rotated.y * radius;
+    const tx = cx + state.view.offsetX + targetRot.x * radius;
+    const ty = cy + state.view.offsetY + targetRot.y * radius;
+    let fill = "#5fb0f5";
+    let stroke = "#bde4ff";
+    if (node.phase === "migration") {
+      fill = "#ad7df0";
+      stroke = "#d9b9ff";
+    } else if (node.phase === "differentiation") {
+      fill = "#e89d67";
+      stroke = "#ffd4b3";
+    }
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(tx, ty);
+    ctx.strokeStyle = "rgba(190, 210, 255, 0.25)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, 3.7, 0, Math.PI * 2 * Math.max(0.08, Math.min(1, node.progress || 0)));
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+    if (Array.isArray(screenNodes)) {
+      screenNodes.push({
+        targetType: "early",
+        layer: Number.isFinite(node.targetLayer) ? node.targetLayer : 0,
+        index: Number.isFinite(node.id) ? node.id : node.index,
+        x,
+        y,
+        phase: typeof node.phase === "string" ? node.phase : "specification",
+        progress: Number.isFinite(node.progress) ? node.progress : 0,
+        ex: Number.isFinite(node.x) ? node.x : 0,
+        ey: Number.isFinite(node.y) ? node.y : 0,
+        ez: Number.isFinite(node.z) ? node.z : 0,
+        tx: Number.isFinite(node.tx) ? node.tx : 0,
+        ty: Number.isFinite(node.ty) ? node.ty : 0,
+        tz: Number.isFinite(node.tz) ? node.tz : 0,
+        sourceLayer: Number.isFinite(node.sourceLayer) ? node.sourceLayer : 0,
+        sourceParent: Number.isFinite(node.sourceParent) ? node.sourceParent : 0,
+        targetLayer: Number.isFinite(node.targetLayer) ? node.targetLayer : 0,
+        targetTypeName: typeof node.targetTypeName === "string" ? node.targetTypeName : "unassigned",
+        regionName: typeof node.regionName === "string" ? node.regionName : ""
+      });
+    }
   });
 }
 function rotate(x, y, cosR, sinR) {
@@ -2994,6 +3077,9 @@ function rotate(x, y, cosR, sinR) {
 }
 function formatGraphTarget(target) {
   if (!target) return "Node";
+  if (target.targetType === "early") {
+    return `E${target.index}`;
+  }
   if (target.targetType === "hidden") {
     return `H${target.layer + 1}:${target.index}`;
   }
@@ -3253,6 +3339,10 @@ function renderInstrumentation() {
 }
 function addProbe(target) {
   if (!target) return null;
+  if (target.targetType === "early") {
+    setToolStatus("Spike probes are only supported for sensory/hidden/output neurons.");
+    return null;
+  }
   const maxIndex = target.targetType === "hidden" ? currentHiddenCount(target.layer) : target.targetType === "output" ? currentOutputCount() : currentSensoryCount();
   if (!maxIndex) {
     setToolStatus("Load an active network snapshot before adding probes.");
@@ -3386,10 +3476,24 @@ function hideGraphContextMenu() {
 function showGraphContextMenu(target, clientX, clientY) {
   if (!graphContextMenu || !graphContextTitle || !graphContextDetails || !graphAddProbeBtn) return;
   state.instrumentation.contextTarget = target;
-  const existing = findProbeByTarget(target);
   graphContextTitle.textContent = formatGraphTarget(target);
-  graphContextDetails.textContent = target.targetType === "hidden" ? `Hidden layer ${target.layer + 1}, neuron ${target.index}.` : target.targetType === "output" ? `Output neuron ${target.index}.` : `Sensory neuron ${target.index}.`;
-  graphAddProbeBtn.textContent = existing ? "Remove Probe" : "Add Probe";
+  if (target.targetType === "early") {
+    const phase = typeof target.phase === "string" ? target.phase : "specification";
+    const progress = Math.round(Math.max(0, Math.min(1, Number(target.progress || 0))) * 100);
+    const fromLayer = Number.isFinite(target.sourceLayer) ? target.sourceLayer + 1 : 1;
+    const fromParent = Number.isFinite(target.sourceParent) ? target.sourceParent : 0;
+    const toLayer = Number.isFinite(target.targetLayer) ? target.targetLayer + 1 : 1;
+    const typeName = typeof target.targetTypeName === "string" && target.targetTypeName ? target.targetTypeName : "unassigned";
+    const region = typeof target.regionName === "string" && target.regionName ? `, region ${target.regionName}` : "";
+    graphContextDetails.textContent = `Early cell ${target.index}: ${phase} ${progress}% | xyz (${target.ex.toFixed(2)}, ${target.ey.toFixed(2)}, ${target.ez.toFixed(2)}) -> (${target.tx.toFixed(2)}, ${target.ty.toFixed(2)}, ${target.tz.toFixed(2)}) | H${fromLayer}:${fromParent} -> H${toLayer} | type ${typeName}${region}.`;
+    graphAddProbeBtn.textContent = "No Probe";
+    graphAddProbeBtn.disabled = true;
+  } else {
+    const existing = findProbeByTarget(target);
+    graphContextDetails.textContent = target.targetType === "hidden" ? `Hidden layer ${target.layer + 1}, neuron ${target.index}.` : target.targetType === "output" ? `Output neuron ${target.index}.` : `Sensory neuron ${target.index}.`;
+    graphAddProbeBtn.textContent = existing ? "Remove Probe" : "Add Probe";
+    graphAddProbeBtn.disabled = false;
+  }
   graphContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 240, clientX + 12))}px`;
   graphContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 140, clientY + 12))}px`;
   graphContextMenu.classList.remove("hidden");

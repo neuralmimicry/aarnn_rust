@@ -56,15 +56,17 @@ use crate::cl_compute::{
 use crate::config::AarnnBioParams;
 use crate::config::{
     AarnnBiomimicryProfile, apply_clumping_layer_defaults,
-    backfill_aarnn_biomimicry_profile_missing_fields,
+    backfill_aarnn_biomimicry_profile_missing_fields, infer_biomimicry_profile,
 };
+#[cfg(feature = "growth3d")]
+use crate::config::{DevelopmentStage, DevelopmentStageMode};
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{EvolutionResult, Morphology};
 use crate::network::{BuiltNetwork, build_network};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
-use crate::topology::{Node3D, Topology3D};
+use crate::topology::{EarlyCell3D, EarlyCellPhase, Node3D, Topology3D};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -320,9 +322,15 @@ pub struct SnapshotRuntimeState {
     #[cfg(feature = "growth3d")]
     pub last_global_growth_ms: f32,
     #[cfg(feature = "growth3d")]
+    pub growth_accumulated_dt: f32,
+    #[cfg(feature = "growth3d")]
     pub last_sensory_formation_ms: f64,
     #[cfg(feature = "growth3d")]
     pub last_output_formation_ms: f64,
+    #[cfg(feature = "growth3d")]
+    pub pruning_accumulated_dt: f32,
+    #[cfg(feature = "growth3d")]
+    pub early_cell_next_id: u64,
     #[cfg(feature = "growth3d")]
     pub target_num_sensory: usize,
     #[cfg(feature = "growth3d")]
@@ -518,6 +526,388 @@ pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot
 }
 
 #[cfg(feature = "growth3d")]
+#[derive(Clone, Copy, Debug)]
+struct DevelopmentStagePolicy {
+    stage: DevelopmentStage,
+    growth_interval_scale: f32,
+    pruning_interval_scale: f32,
+    io_formation_interval_scale: f32,
+    stabilization_boost_scale: f32,
+    morpho_interval_scale: f32,
+    metabolic_interval_scale: f32,
+    pruning_enabled: bool,
+    myelination_enabled: bool,
+}
+
+#[cfg(feature = "growth3d")]
+#[derive(Clone, Copy, Debug)]
+struct EarlyCellGuidancePolicy {
+    specification_end: f32,
+    migration_end: f32,
+    migration_speed_scale: f32,
+    crowding_radius: f32,
+    crowding_repulsion: f32,
+    settling_gain: f32,
+}
+
+#[cfg(feature = "growth3d")]
+fn resolve_development_stage(cfg: &NetworkConfig, t_ms: f64) -> DevelopmentStage {
+    if matches!(cfg.development_stage_mode, DevelopmentStageMode::Manual) {
+        return cfg.development_stage;
+    }
+
+    let t = t_ms.max(0.0) as f32;
+    let s10 = cfg.development_stage_dendrite_start_ms.max(0.0);
+    let s11 = cfg.development_stage_synaptogenesis_start_ms.max(s10);
+    let s12 = cfg.development_stage_refinement_start_ms.max(s11);
+    let s13 = cfg.development_stage_myelination_start_ms.max(s12);
+
+    if t < s10 {
+        DevelopmentStage::AxonPathfinding
+    } else if t < s11 {
+        DevelopmentStage::DendriticArborization
+    } else if t < s12 {
+        DevelopmentStage::Synaptogenesis
+    } else if t < s13 {
+        DevelopmentStage::RefinementPruning
+    } else {
+        DevelopmentStage::MyelinationStabilization
+    }
+}
+
+#[cfg(feature = "growth3d")]
+fn stage_policy_for_profile(
+    stage: DevelopmentStage,
+    profile: AarnnBiomimicryProfile,
+) -> DevelopmentStagePolicy {
+    match (profile, stage) {
+        (AarnnBiomimicryProfile::Human, DevelopmentStage::AxonPathfinding) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.70,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.90,
+                stabilization_boost_scale: 0.90,
+                morpho_interval_scale: 0.85,
+                metabolic_interval_scale: 0.90,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Human, DevelopmentStage::DendriticArborization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.85,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.95,
+                stabilization_boost_scale: 1.00,
+                morpho_interval_scale: 0.90,
+                metabolic_interval_scale: 1.00,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Human, DevelopmentStage::Synaptogenesis) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.00,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 1.00,
+                stabilization_boost_scale: 1.15,
+                morpho_interval_scale: 1.00,
+                metabolic_interval_scale: 1.05,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Human, DevelopmentStage::RefinementPruning) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.25,
+                pruning_interval_scale: 0.60,
+                io_formation_interval_scale: 1.10,
+                stabilization_boost_scale: 1.35,
+                morpho_interval_scale: 1.15,
+                metabolic_interval_scale: 1.15,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Human, DevelopmentStage::MyelinationStabilization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.50,
+                pruning_interval_scale: 0.90,
+                io_formation_interval_scale: 1.20,
+                stabilization_boost_scale: 1.45,
+                morpho_interval_scale: 1.30,
+                metabolic_interval_scale: 1.25,
+                pruning_enabled: true,
+                myelination_enabled: true,
+            }
+        }
+        (AarnnBiomimicryProfile::Celegans, DevelopmentStage::AxonPathfinding) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.55,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.80,
+                stabilization_boost_scale: 0.90,
+                morpho_interval_scale: 0.75,
+                metabolic_interval_scale: 0.80,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Celegans, DevelopmentStage::DendriticArborization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.70,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.85,
+                stabilization_boost_scale: 1.00,
+                morpho_interval_scale: 0.80,
+                metabolic_interval_scale: 0.85,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Celegans, DevelopmentStage::Synaptogenesis) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.85,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.95,
+                stabilization_boost_scale: 1.10,
+                morpho_interval_scale: 0.90,
+                metabolic_interval_scale: 0.95,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Celegans, DevelopmentStage::RefinementPruning) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.95,
+                pruning_interval_scale: 0.50,
+                io_formation_interval_scale: 1.00,
+                stabilization_boost_scale: 1.20,
+                morpho_interval_scale: 1.00,
+                metabolic_interval_scale: 1.00,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Celegans, DevelopmentStage::MyelinationStabilization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.10,
+                pruning_interval_scale: 0.70,
+                io_formation_interval_scale: 1.05,
+                stabilization_boost_scale: 1.25,
+                morpho_interval_scale: 1.05,
+                metabolic_interval_scale: 1.05,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Drosophila, DevelopmentStage::AxonPathfinding) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.60,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.85,
+                stabilization_boost_scale: 0.90,
+                morpho_interval_scale: 0.80,
+                metabolic_interval_scale: 0.85,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Drosophila, DevelopmentStage::DendriticArborization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.75,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.90,
+                stabilization_boost_scale: 1.00,
+                morpho_interval_scale: 0.90,
+                metabolic_interval_scale: 0.90,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Drosophila, DevelopmentStage::Synaptogenesis) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.90,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.95,
+                stabilization_boost_scale: 1.15,
+                morpho_interval_scale: 0.95,
+                metabolic_interval_scale: 1.00,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Drosophila, DevelopmentStage::RefinementPruning) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.05,
+                pruning_interval_scale: 0.55,
+                io_formation_interval_scale: 1.05,
+                stabilization_boost_scale: 1.30,
+                morpho_interval_scale: 1.05,
+                metabolic_interval_scale: 1.05,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Drosophila, DevelopmentStage::MyelinationStabilization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.20,
+                pruning_interval_scale: 0.80,
+                io_formation_interval_scale: 1.10,
+                stabilization_boost_scale: 1.35,
+                morpho_interval_scale: 1.15,
+                metabolic_interval_scale: 1.10,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Hexapod, DevelopmentStage::AxonPathfinding) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.58,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.82,
+                stabilization_boost_scale: 0.92,
+                morpho_interval_scale: 0.78,
+                metabolic_interval_scale: 0.82,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Hexapod, DevelopmentStage::DendriticArborization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.72,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.88,
+                stabilization_boost_scale: 1.00,
+                morpho_interval_scale: 0.86,
+                metabolic_interval_scale: 0.88,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Hexapod, DevelopmentStage::Synaptogenesis) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.88,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.95,
+                stabilization_boost_scale: 1.14,
+                morpho_interval_scale: 0.94,
+                metabolic_interval_scale: 0.98,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Hexapod, DevelopmentStage::RefinementPruning) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.00,
+                pruning_interval_scale: 0.54,
+                io_formation_interval_scale: 1.04,
+                stabilization_boost_scale: 1.28,
+                morpho_interval_scale: 1.02,
+                metabolic_interval_scale: 1.04,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::Hexapod, DevelopmentStage::MyelinationStabilization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.14,
+                pruning_interval_scale: 0.76,
+                io_formation_interval_scale: 1.08,
+                stabilization_boost_scale: 1.32,
+                morpho_interval_scale: 1.10,
+                metabolic_interval_scale: 1.08,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+    }
+}
+
+#[cfg(feature = "growth3d")]
+fn early_cell_guidance_policy(
+    stage: DevelopmentStage,
+    profile: AarnnBiomimicryProfile,
+) -> EarlyCellGuidancePolicy {
+    let (mut specification_end, mut migration_end, migration_speed_scale, crowding_radius): (
+        f32,
+        f32,
+        f32,
+        f32,
+    ) = match profile {
+        // Longer staging and stronger crowding constraints in larger, slower-developing brains.
+        AarnnBiomimicryProfile::Human => (0.22f32, 0.84f32, 0.95f32, 0.18f32),
+        AarnnBiomimicryProfile::Drosophila => (0.19f32, 0.81f32, 1.10f32, 0.14f32),
+        AarnnBiomimicryProfile::Celegans => (0.16f32, 0.78f32, 1.25f32, 0.12f32),
+        AarnnBiomimicryProfile::Hexapod => (0.18f32, 0.80f32, 1.16f32, 0.13f32),
+    };
+
+    let (spec_delta, mig_delta, speed_scale, repulsion_scale, settling_scale): (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) = match stage {
+        DevelopmentStage::AxonPathfinding => (0.03f32, 0.03f32, 1.08f32, 0.85f32, 0.85f32),
+        DevelopmentStage::DendriticArborization => (0.02f32, 0.01f32, 1.00f32, 1.00f32, 1.00f32),
+        DevelopmentStage::Synaptogenesis => (0.00f32, 0.00f32, 0.95f32, 1.10f32, 1.08f32),
+        DevelopmentStage::RefinementPruning => (-0.01f32, -0.02f32, 0.85f32, 1.22f32, 1.22f32),
+        DevelopmentStage::MyelinationStabilization => {
+            (-0.02f32, -0.03f32, 0.75f32, 1.30f32, 1.35f32)
+        }
+    };
+
+    specification_end = (specification_end + spec_delta).clamp(0.12, 0.35);
+    migration_end = (migration_end + mig_delta).clamp(0.68, 0.95);
+    if migration_end <= specification_end + 0.20 {
+        migration_end = (specification_end + 0.20).clamp(0.68, 0.95);
+    }
+
+    EarlyCellGuidancePolicy {
+        specification_end,
+        migration_end,
+        migration_speed_scale: (migration_speed_scale * speed_scale).clamp(0.35, 2.0),
+        crowding_radius,
+        crowding_repulsion: repulsion_scale.clamp(0.3, 2.0),
+        settling_gain: settling_scale.clamp(0.5, 2.0),
+    }
+}
+
+#[cfg(feature = "growth3d")]
+fn development_stage_policy(cfg: &NetworkConfig, t_ms: f64) -> DevelopmentStagePolicy {
+    let stage = resolve_development_stage(cfg, t_ms);
+    let profile = infer_biomimicry_profile(cfg);
+    stage_policy_for_profile(stage, profile)
+}
+
+#[cfg(feature = "growth3d")]
+#[inline]
+fn myelination_effect_enabled(cfg: &NetworkConfig, t_ms: f64) -> bool {
+    cfg.aarnn_myelination_enabled && development_stage_policy(cfg, t_ms).myelination_enabled
+}
+
+#[cfg(feature = "growth3d")]
 #[derive(Clone, Debug)]
 struct ImportTopoNodeMeta {
     x: f32,
@@ -551,6 +941,16 @@ struct GrowthAction {
     parent: usize,
     // target layer to place the new neuron (either `layer` or `layer+1`)
     target_layer: usize,
+}
+
+#[cfg(feature = "growth3d")]
+#[derive(Clone, Debug)]
+struct SpawnPlacementOverride {
+    x: f32,
+    y: f32,
+    z: f32,
+    region_name: Option<String>,
+    type_name: Option<String>,
 }
 
 #[cfg(feature = "growth3d")]
@@ -732,9 +1132,15 @@ pub struct Runner {
     // Global inter-step cooldown timer (ms)
     last_global_growth_ms: f32,
     #[cfg(feature = "growth3d")]
+    growth_accumulated_dt: f32,
+    #[cfg(feature = "growth3d")]
     last_sensory_formation_ms: f64,
     #[cfg(feature = "growth3d")]
     last_output_formation_ms: f64,
+    #[cfg(feature = "growth3d")]
+    pruning_accumulated_dt: f32,
+    #[cfg(feature = "growth3d")]
+    early_cell_next_id: u64,
     #[cfg(feature = "growth3d")]
     pub target_num_sensory: usize,
     #[cfg(feature = "growth3d")]
@@ -742,6 +1148,8 @@ pub struct Runner {
     #[cfg(feature = "growth3d")]
     // Localized depletion zones: each neuron spawn halves local energy around this region.
     spawn_energy_depletion_zones: Vec<SpawnEnergyDepletionZone>,
+    #[cfg(feature = "growth3d")]
+    spawn_override: Option<SpawnPlacementOverride>,
     // Spike history per hidden layer for AARNN delays (most-recent at front)
     pub spk_hist_h: Vec<VecDeque<Array1<i8>>>,
     // Sensory spike history for AARNN delays on S→H0
@@ -1086,7 +1494,9 @@ impl Runner {
 
     /// Identify which hidden layers connect to Sensory inputs and Output nodes.
     /// Default: Sensory -> H0, H_last -> Output.
-    /// AARNN: Sensory -> H1, H4 -> Output (falling back to what is available if network is small).
+    /// AARNN defaults are profile-aware:
+    /// - Human/cortical mapping: Sensory -> H1 (L4), Output -> H2 (L5), with size-aware fallback.
+    /// - Non-cortical compact profiles (e.g. C. elegans, Drosophila, Hexapod): Sensory -> H0, Output -> H_last.
     /// These defaults are overridden by `sensory_target_layer` and `output_source_layer` if set in config.
     pub fn get_io_layers(&self) -> (usize, usize) {
         let num = self.net.num_hidden_layers;
@@ -1094,23 +1504,42 @@ impl Runner {
             return (0, 0);
         }
 
-        let in_l = self.net.sensory_target_layer.unwrap_or_else(|| {
-            if matches!(self.neuron_model, NeuronModel::Aarnn) {
-                if num > 1 { 1 } else { 0 }
-            } else {
-                0
+        let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
+        let (default_in, default_out) = if is_aarnn {
+            match infer_biomimicry_profile(&self.net) {
+                // Canonical cortical flow: thalamocortical/sensory ingress in L4,
+                // projection/motor readout from deeper L5 when available.
+                AarnnBiomimicryProfile::Human => (
+                    if num > 1 { 1 } else { 0 },
+                    if num > 2 { 2 } else { num.saturating_sub(1) },
+                ),
+                // Non-cortical profiles are kept as compact feed-through stacks.
+                AarnnBiomimicryProfile::Celegans
+                | AarnnBiomimicryProfile::Drosophila
+                | AarnnBiomimicryProfile::Hexapod => (0, num.saturating_sub(1)),
             }
-        });
+        } else {
+            (0, num.saturating_sub(1))
+        };
 
-        let out_l = self.net.output_source_layer.unwrap_or_else(|| {
-            if matches!(self.neuron_model, NeuronModel::Aarnn) {
-                if num > 4 { 4 } else { num.saturating_sub(1) }
-            } else {
-                num.saturating_sub(1)
-            }
-        });
+        let mut in_l = self
+            .net
+            .sensory_target_layer
+            .unwrap_or(default_in)
+            .min(num - 1);
+        let mut out_l = self
+            .net
+            .output_source_layer
+            .unwrap_or(default_out)
+            .min(num - 1);
 
-        (in_l.min(num - 1), out_l.min(num - 1))
+        if is_aarnn && out_l < in_l {
+            out_l = in_l;
+        }
+
+        in_l = in_l.min(num - 1);
+        out_l = out_l.min(num - 1);
+        (in_l, out_l)
     }
 
     fn default_aarnn_izh_params(&self) -> IzhikevichParams {
@@ -3641,15 +4070,23 @@ impl Runner {
             #[cfg(feature = "growth3d")]
             last_global_growth_ms: 0.0,
             #[cfg(feature = "growth3d")]
+            growth_accumulated_dt: 0.0,
+            #[cfg(feature = "growth3d")]
             last_sensory_formation_ms: 0.0,
             #[cfg(feature = "growth3d")]
             last_output_formation_ms: 0.0,
+            #[cfg(feature = "growth3d")]
+            pruning_accumulated_dt: 0.0,
+            #[cfg(feature = "growth3d")]
+            early_cell_next_id: 1,
             #[cfg(feature = "growth3d")]
             target_num_sensory: net.num_sensory_neurons,
             #[cfg(feature = "growth3d")]
             target_num_output: net.num_output_neurons,
             #[cfg(feature = "growth3d")]
             spawn_energy_depletion_zones: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            spawn_override: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             morpho_accumulated_dt: 0.0,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -3946,9 +4383,15 @@ impl Runner {
             #[cfg(feature = "growth3d")]
             last_global_growth_ms: self.last_global_growth_ms,
             #[cfg(feature = "growth3d")]
+            growth_accumulated_dt: self.growth_accumulated_dt,
+            #[cfg(feature = "growth3d")]
             last_sensory_formation_ms: self.last_sensory_formation_ms,
             #[cfg(feature = "growth3d")]
             last_output_formation_ms: self.last_output_formation_ms,
+            #[cfg(feature = "growth3d")]
+            pruning_accumulated_dt: self.pruning_accumulated_dt,
+            #[cfg(feature = "growth3d")]
+            early_cell_next_id: self.early_cell_next_id,
             #[cfg(feature = "growth3d")]
             target_num_sensory: self.target_num_sensory,
             #[cfg(feature = "growth3d")]
@@ -4122,8 +4565,18 @@ impl Runner {
                 layers_from_vec_f32(&state.since_last_bouton_ms, &hidden_sizes);
             self.growth_queue = state.growth_queue;
             self.last_global_growth_ms = state.last_global_growth_ms;
+            self.growth_accumulated_dt = state.growth_accumulated_dt;
             self.last_sensory_formation_ms = state.last_sensory_formation_ms;
             self.last_output_formation_ms = state.last_output_formation_ms;
+            self.pruning_accumulated_dt = state.pruning_accumulated_dt;
+            self.early_cell_next_id = state.early_cell_next_id.max(
+                self.topo
+                    .early_cells
+                    .iter()
+                    .map(|cell| cell.id.saturating_add(1))
+                    .max()
+                    .unwrap_or(1),
+            );
             self.target_num_sensory = state.target_num_sensory.max(self.net.num_sensory_neurons);
             self.target_num_output = state.target_num_output.max(self.net.num_output_neurons);
             self.spawn_energy_depletion_zones = state.spawn_energy_depletion_zones;
@@ -4920,6 +5373,7 @@ impl Runner {
             if !topo_matches_state {
                 self.rebuild_default_topology();
             }
+            self.topo.early_cells.clear();
             // reset spike histories to one zero frame with current sizes
             self.spk_hist_h.clear();
             for l in 0..num_hidden_layers {
@@ -4931,7 +5385,11 @@ impl Runner {
             self.spk_hist_s
                 .push_front(Array1::<i8>::zeros(self.net.num_sensory_neurons));
             self.last_global_growth_ms = 0.0;
+            self.growth_accumulated_dt = 0.0;
+            self.pruning_accumulated_dt = 0.0;
+            self.early_cell_next_id = 1;
             self.spawn_energy_depletion_zones.clear();
+            self.spawn_override = None;
         }
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -5221,6 +5679,8 @@ impl Runner {
             }
         }
         self.topo = topo;
+        self.early_cell_next_id = 1;
+        self.spawn_override = None;
     }
 
     /// Advance simulation state by one synchronized step with dynamic Δt.
@@ -11567,10 +12027,25 @@ impl Runner {
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         let rt_force_morpho_off =
             rt_policy.enabled && self.morph.synapses.len() > rt_policy.morpho_safe_max_synapses;
+        #[cfg(feature = "growth3d")]
+        let stage_policy = development_stage_policy(&self.net, self.t_ms);
+        #[cfg(feature = "growth3d")]
+        let _development_stage = stage_policy.stage;
+        #[cfg(all(feature = "growth3d", not(feature = "morpho")))]
+        let _unused_stage_scales = (
+            stage_policy.pruning_interval_scale,
+            stage_policy.stabilization_boost_scale,
+            stage_policy.morpho_interval_scale,
+            stage_policy.metabolic_interval_scale,
+            stage_policy.pruning_enabled,
+            stage_policy.myelination_enabled,
+        );
 
         // Growth mechanics: collect and apply spawns
         #[cfg(feature = "growth3d")]
-        let mut did_spawn = false;
+        let mut did_spawn: bool;
+        #[cfg(feature = "growth3d")]
+        let mut ran_growth_pass = false;
         #[cfg(feature = "growth3d")]
         {
             let growth_allowed = {
@@ -11584,34 +12059,72 @@ impl Runner {
                 }
             };
             if self.net.growth_enabled && growth_allowed {
-                observe_time!("Runner::step/growth");
-                self.collect_growth_candidates();
-                did_spawn = self.apply_growth_queue();
+                did_spawn = false;
+                // Keep growth/plastic structural updates on a slower cadence than spike traversal.
+                let growth_interval = (self.net.development_growth_interval_ms
+                    * stage_policy.growth_interval_scale.max(0.05))
+                .max(dt_ms);
+                self.growth_accumulated_dt += dt_ms;
+                if self.growth_accumulated_dt >= growth_interval {
+                    ran_growth_pass = true;
+                    let growth_dt = self.growth_accumulated_dt;
+                    self.growth_accumulated_dt = 0.0;
+                    observe_time!("Runner::step/growth");
+                    let neurons_before = self.total_neurons();
+                    did_spawn = self.advance_early_cells(growth_dt);
+                    let mut did_growth_event = did_spawn;
+                    self.collect_growth_candidates();
+                    did_growth_event |= self.apply_growth_queue();
+                    did_spawn |= self.total_neurons() > neurons_before;
 
-                // Spontaneous neuron addition
-                if !did_spawn
-                    && self.last_global_growth_ms >= self.net.spontaneous_neuron_interval_ms
-                {
-                    let l = 0; // default to layer 0 for spontaneous spawns
-                    let n = self.layer_size(l);
-                    if n > 0 {
-                        let pj = fastrand::usize(..n);
-                        self.spawn_neuron_in_layer(l, pj);
-                        did_spawn = true;
-                        self.last_global_growth_ms = 0.0;
-                        nm_log!(
-                            "[growth] Spontaneous neuron addition in layer {}: parent index {}",
-                            l,
-                            pj
-                        );
+                    // Spontaneous neuron addition
+                    if !did_growth_event
+                        && self.last_global_growth_ms >= self.net.spontaneous_neuron_interval_ms
+                    {
+                        let l = 0; // default to layer 0 for spontaneous spawns
+                        let n = self.layer_size(l);
+                        if n > 0 {
+                            let pj = fastrand::usize(..n);
+                            if self.early_cell_lifecycle_enabled() {
+                                did_growth_event =
+                                    self.create_early_cell_from_action(GrowthAction {
+                                        layer: l,
+                                        parent: pj,
+                                        target_layer: l,
+                                    });
+                                if did_growth_event {
+                                    self.last_global_growth_ms = 0.0;
+                                    nm_log!(
+                                        "[growth] Spontaneous early-cell formed in layer {}: parent index {}",
+                                        l,
+                                        pj
+                                    );
+                                }
+                            } else {
+                                self.spawn_neuron_in_layer(l, pj);
+                                did_spawn = true;
+                                did_growth_event = true;
+                                self.last_global_growth_ms = 0.0;
+                                nm_log!(
+                                    "[growth] Spontaneous neuron addition in layer {}: parent index {}",
+                                    l,
+                                    pj
+                                );
+                            }
+                        }
+                    }
+
+                    if did_growth_event {
+                        observe_hit!("growth_spawn");
                     }
                 }
-
-                if did_spawn {
-                    observe_hit!("growth_spawn");
-                }
+            } else {
+                did_spawn = false;
+                self.growth_accumulated_dt = 0.0;
             }
         }
+        #[cfg(all(feature = "growth3d", not(feature = "morpho")))]
+        let _ = did_spawn;
 
         // After any potential growth, refresh morphology snapshot for overlays/debug
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -11622,8 +12135,9 @@ impl Runner {
                 && !(rt_policy.enabled && (rt_policy.disable_morpho || rt_force_morpho_off));
             let metabolic_allowed =
                 !(rt_policy.enabled && (rt_policy.disable_metabolic || rt_force_morpho_off));
-            let pruning_allowed =
-                !(rt_policy.enabled && (rt_policy.disable_pruning || rt_force_morpho_off));
+            let pruning_allowed = !(rt_policy.enabled
+                && (rt_policy.disable_pruning || rt_force_morpho_off))
+                && stage_policy.pruning_enabled;
             if did_spawn && self.morpho_async_rx.is_some() {
                 // Topology changed locally; drop any stale async evolution result.
                 self.morpho_async_rx = None;
@@ -11644,7 +12158,8 @@ impl Runner {
 
             if morpho_allowed {
                 // Update stimuli for synapses that released a spike this frame (Activity-dependent stabilization)
-                let boost = self.net.synaptic_stabilization_strength;
+                let boost = self.net.synaptic_stabilization_strength
+                    * stage_policy.stabilization_boost_scale.max(0.0);
                 for ev in &self.released_events {
                     let idx = if let Some(syn_idx) = ev.syn_idx {
                         Some(syn_idx)
@@ -11774,7 +12289,7 @@ impl Runner {
                     2 => 50.0,
                     1 => 200.0,
                     _ => f32::MAX,
-                };
+                } * stage_policy.morpho_interval_scale.max(0.05);
                 if let Some(override_ms) = rt_policy.morpho_interval_override_ms {
                     morpho_interval = override_ms.max(self.lif.dt as f32);
                 }
@@ -11800,7 +12315,7 @@ impl Runner {
                 d if d >= 3 => 20.0,
                 2 => 100.0,
                 _ => f32::MAX,
-            };
+            } * stage_policy.metabolic_interval_scale.max(0.05);
             if let Some(override_ms) = rt_policy.metabolic_interval_override_ms {
                 metabolic_interval = override_ms.max(self.lif.dt as f32);
             }
@@ -11814,7 +12329,23 @@ impl Runner {
                 self.metabolic_accumulated_dt = 0.0;
             }
 
-            if pruning_allowed {
+            let run_pruning = if pruning_allowed {
+                let pruning_interval = (self.net.development_pruning_interval_ms
+                    * stage_policy.pruning_interval_scale.max(0.05))
+                .max(dt_ms);
+                self.pruning_accumulated_dt += dt_ms;
+                if self.pruning_accumulated_dt >= pruning_interval {
+                    self.pruning_accumulated_dt = 0.0;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                self.pruning_accumulated_dt = 0.0;
+                false
+            };
+
+            if run_pruning {
                 // Neuron removal check: track time since each hidden neuron last had a bouton/synapse
                 let num_h_layers = self.net.num_hidden_layers;
                 let mut bouton_counts = (0..num_h_layers)
@@ -11899,14 +12430,16 @@ impl Runner {
         }
 
         #[cfg(feature = "growth3d")]
-        if is_aarnn {
+        if is_aarnn && ran_growth_pass {
             let (target_in_layer, target_out_layer) = self.get_io_layers();
+            let io_interval = (self.net.development_io_formation_interval_ms
+                * stage_policy.io_formation_interval_scale.max(0.0))
+            .max(0.0) as f64;
             // Sensory formation: target_in_layer exists
             if self.net.num_hidden_layers > target_in_layer && self.layer_size(target_in_layer) > 0
             {
                 if self.net.num_sensory_neurons < self.target_num_sensory {
-                    // Growth rate limit: one neuron every 500ms
-                    if self.t_ms - self.last_sensory_formation_ms >= 500.0 {
+                    if self.t_ms - self.last_sensory_formation_ms >= io_interval {
                         self.last_sensory_formation_ms = self.t_ms;
                         let next_s = self.net.num_sensory_neurons + 1;
                         self.resize_sensory(next_s);
@@ -11923,7 +12456,7 @@ impl Runner {
                 && self.layer_size(target_out_layer) > 0
             {
                 if self.net.num_output_neurons < self.target_num_output {
-                    if self.t_ms - self.last_output_formation_ms >= 500.0 {
+                    if self.t_ms - self.last_output_formation_ms >= io_interval {
                         self.last_output_formation_ms = self.t_ms;
                         let next_o = self.net.num_output_neurons + 1;
                         self.resize_output(next_o);
@@ -12194,6 +12727,11 @@ impl Runner {
         }
         for n in &self.topo.output_nodes {
             if Self::dist3(p, (n.x, n.y, n.z)) < min_sep {
+                return false;
+            }
+        }
+        for cell in &self.topo.early_cells {
+            if Self::dist3(p, (cell.x, cell.y, cell.z)) < min_sep {
                 return false;
             }
         }
@@ -12572,7 +13110,7 @@ impl Runner {
         if max_dist == 0.0 {
             max_dist = 1.0;
         }
-        let myelin_delay_scale = if self.net.aarnn_myelination_enabled {
+        let myelin_delay_scale = if myelination_effect_enabled(&self.net, self.t_ms) {
             1.0 / self.net.aarnn_myelin_min_conduction_gain.max(0.1)
         } else {
             1.0
@@ -12987,7 +13525,7 @@ impl Runner {
                 self.net.aarnn_velocity.max(1e-6)
             };
             let base_lat = self.net.bouton_latency_ms.max(0.0);
-            let myelin_delay_scale = if self.net.aarnn_myelination_enabled {
+            let myelin_delay_scale = if myelination_effect_enabled(&self.net, self.t_ms) {
                 1.0 / self.net.aarnn_myelin_min_conduction_gain.max(0.1)
             } else {
                 1.0
@@ -13355,6 +13893,10 @@ impl Runner {
         if !self.net.aarnn_myelination_enabled {
             return;
         }
+        let stage_policy = development_stage_policy(&self.net, self.t_ms);
+        if !stage_policy.myelination_enabled {
+            return;
+        }
         let grow_rate = self.net.aarnn_myelination_rate.max(0.0);
         let decay_rate = self.net.aarnn_demyelination_rate.max(0.0);
         if grow_rate <= 0.0 && decay_rate <= 0.0 {
@@ -13574,7 +14116,7 @@ impl Runner {
             is_backward_path: matches!(syn.kind, crate::morphology::SynKind::HiddenBwd),
         });
 
-        let myelination = if self.net.aarnn_myelination_enabled {
+        let myelination = if myelination_effect_enabled(&self.net, self.t_ms) {
             Some(MyelinationProfile {
                 level: self
                     .syn_myelin
@@ -14039,8 +14581,20 @@ impl Runner {
         } else {
             (0.0, 0.0, 0.0)
         };
-        let (nx, ny, nz) = self.place_node_near(0, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, 0);
+        let spawn_override = self.spawn_override.take();
+        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
+            (
+                override_pos.x,
+                override_pos.y,
+                override_pos.z,
+                override_pos.region_name,
+                override_pos.type_name,
+            )
+        } else {
+            let (sx, sy, sz) = self.place_node_near(0, (px, py, pz));
+            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, 0);
+            (sx, sy, sz, region_name, type_name)
+        };
         self.topo.add_neuron(
             0,
             Node3D {
@@ -15526,6 +16080,319 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    #[inline]
+    fn early_cell_lifecycle_enabled(&self) -> bool {
+        (matches!(self.neuron_model, NeuronModel::Aarnn)
+            || matches!(self.learning, Learning::Aarnn))
+            && self.net.growth_enabled
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[inline]
+    fn next_early_cell_id(&mut self) -> u64 {
+        let id = self.early_cell_next_id;
+        self.early_cell_next_id = self.early_cell_next_id.saturating_add(1).max(1);
+        id
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn growth_parent_position(&self, layer: usize, parent: usize) -> (f32, f32, f32) {
+        if layer < self.topo.layers.len() {
+            if let Some(node) = self.topo.layers[layer].get(parent) {
+                return (node.x, node.y, node.z);
+            }
+        }
+        if layer == 0 {
+            if let Some(node) = self.topo.sensory_nodes.get(parent) {
+                return (node.x, node.y, node.z);
+            }
+        }
+        (0.0, 0.0, 0.0)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn early_cell_maturation_ms(
+        &self,
+        target_layer: usize,
+        start: (f32, f32, f32),
+        target: (f32, f32, f32),
+    ) -> f32 {
+        let stage = resolve_development_stage(&self.net, self.t_ms);
+        let profile = infer_biomimicry_profile(&self.net);
+        let stage_scale = match stage {
+            DevelopmentStage::AxonPathfinding => 1.00,
+            DevelopmentStage::DendriticArborization => 1.20,
+            DevelopmentStage::Synaptogenesis => 1.35,
+            DevelopmentStage::RefinementPruning => 1.65,
+            DevelopmentStage::MyelinationStabilization => 1.90,
+        };
+        let profile_scale = match profile {
+            AarnnBiomimicryProfile::Human => 1.00,
+            AarnnBiomimicryProfile::Drosophila => 0.75,
+            AarnnBiomimicryProfile::Celegans => 0.50,
+            AarnnBiomimicryProfile::Hexapod => 0.68,
+        };
+        let depth_scale = 1.0 + target_layer as f32 * 0.08;
+        let migration_dist = Self::dist3(start, target).max(0.0);
+        let migration_scale = 1.0 + migration_dist * 1.6;
+        let base = self
+            .net
+            .development_growth_interval_ms
+            .max(self.lif.dt as f32)
+            .max(1.0)
+            * 10.0;
+        (base * stage_scale * profile_scale * depth_scale * migration_scale).clamp(25.0, 900.0)
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn create_early_cell_from_action(&mut self, act: GrowthAction) -> bool {
+        let max_neurons = self.net.max_total_neurons;
+        if max_neurons > 0 {
+            let pending_total = self
+                .total_neurons()
+                .saturating_add(self.topo.early_cells.len());
+            if pending_total as u64 >= max_neurons {
+                return false;
+            }
+        }
+        let max_layers = self.effective_max_layers();
+        if max_layers == 0 || act.target_layer >= max_layers {
+            return false;
+        }
+        if act.target_layer == self.net.num_hidden_layers {
+            self.ensure_layer_exists(act.target_layer);
+        }
+        if act.target_layer >= self.topo.layers.len() {
+            return false;
+        }
+
+        let start = self.growth_parent_position(act.layer, act.parent);
+        let target = self.place_node_near(act.target_layer, start);
+        let (region_name, target_type_name) =
+            self.allocate_region_and_type(target.0, target.1, target.2, act.target_layer);
+        let maturation_ms = self.early_cell_maturation_ms(act.target_layer, start, target);
+        let early_id = self.next_early_cell_id();
+
+        self.topo.add_early_cell(EarlyCell3D {
+            id: early_id,
+            source_layer: act.layer,
+            source_parent: act.parent,
+            target_layer: act.target_layer,
+            x: start.0,
+            y: start.1,
+            z: start.2,
+            start_x: start.0,
+            start_y: start.1,
+            start_z: start.2,
+            target_x: target.0,
+            target_y: target.1,
+            target_z: target.2,
+            age_ms: 0.0,
+            maturation_ms,
+            phase: EarlyCellPhase::Specification,
+            region_name,
+            target_type_name,
+        });
+
+        if let Some(cooldown_layer) = self.since_growth_ms.get_mut(act.layer) {
+            if act.parent < cooldown_layer.len() {
+                cooldown_layer[act.parent] = 0.0;
+            }
+        }
+        if let Some(rate_layer) = self.rate_h.get_mut(act.layer) {
+            if act.parent < rate_layer.len() {
+                rate_layer[act.parent] *= 0.6;
+            }
+        }
+        true
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn advance_early_cells(&mut self, dt_ms: f32) -> bool {
+        if !self.early_cell_lifecycle_enabled() || self.topo.early_cells.is_empty() {
+            return false;
+        }
+        let dt = dt_ms.max(self.lif.dt as f32).max(0.0);
+        if dt <= 0.0 {
+            return false;
+        }
+        let stage = resolve_development_stage(&self.net, self.t_ms);
+        let profile = infer_biomimicry_profile(&self.net);
+        let guidance = early_cell_guidance_policy(stage, profile);
+        let mature_positions: Vec<(f32, f32, f32)> = self
+            .topo
+            .layers
+            .iter()
+            .flat_map(|layer| layer.iter().map(|n| (n.x, n.y, n.z)))
+            .chain(self.topo.sensory_nodes.iter().map(|n| (n.x, n.y, n.z)))
+            .chain(self.topo.output_nodes.iter().map(|n| (n.x, n.y, n.z)))
+            .collect();
+        let early_snapshot: Vec<(u64, f32, f32, f32)> = self
+            .topo
+            .early_cells
+            .iter()
+            .map(|c| (c.id, c.x, c.y, c.z))
+            .collect();
+        let max_neurons = self.net.max_total_neurons;
+        let mut available_slots = if max_neurons > 0 {
+            max_neurons.saturating_sub(self.total_neurons() as u64) as usize
+        } else {
+            usize::MAX
+        };
+        let mut matured: Vec<EarlyCell3D> = Vec::new();
+        let mut idx = 0usize;
+        while idx < self.topo.early_cells.len() {
+            let cell = &mut self.topo.early_cells[idx];
+            let maturation = cell.maturation_ms.max(1.0);
+            cell.age_ms = (cell.age_ms + dt).min(maturation);
+            let progress = (cell.age_ms / maturation).clamp(0.0, 1.0);
+            let dt_norm = (dt / maturation).clamp(0.0, 1.0);
+            let start = (cell.start_x, cell.start_y, cell.start_z);
+            let target = (cell.target_x, cell.target_y, cell.target_z);
+            let path_len = Self::dist3(start, target).max(1.0e-4);
+            let mut next = (cell.x, cell.y, cell.z);
+            let phase = if progress < guidance.specification_end {
+                EarlyCellPhase::Specification
+            } else if progress < guidance.migration_end {
+                EarlyCellPhase::Migration
+            } else {
+                EarlyCellPhase::Differentiation
+            };
+
+            match phase {
+                EarlyCellPhase::Specification => {
+                    // Radial-glia-like anchoring: identity specification starts near the origin niche.
+                    let spec_span = guidance.specification_end.max(1.0e-3);
+                    let spec_t = (progress / spec_span).clamp(0.0, 1.0);
+                    let ease = spec_t * spec_t * (3.0 - 2.0 * spec_t);
+                    let primer_fraction = (0.04 + 0.10 * spec_t).clamp(0.0, 0.18);
+                    next.0 = start.0 + (target.0 - start.0) * primer_fraction * ease;
+                    next.1 = start.1 + (target.1 - start.1) * primer_fraction * ease;
+                    next.2 = start.2 + (target.2 - start.2) * primer_fraction * ease;
+                }
+                EarlyCellPhase::Migration => {
+                    // Directed migration by regional cues plus crowding repulsion from occupied tissue.
+                    let rem_x = target.0 - cell.x;
+                    let rem_y = target.1 - cell.y;
+                    let rem_z = target.2 - cell.z;
+                    let remaining = (rem_x * rem_x + rem_y * rem_y + rem_z * rem_z).sqrt();
+                    if remaining > 1.0e-6 {
+                        let inv_remaining = 1.0 / remaining;
+                        let dir_x = rem_x * inv_remaining;
+                        let dir_y = rem_y * inv_remaining;
+                        let dir_z = rem_z * inv_remaining;
+                        let directed_step = (path_len * dt_norm * guidance.migration_speed_scale)
+                            .max(1.0e-3)
+                            .min(remaining);
+
+                        let mut rep_x = 0.0f32;
+                        let mut rep_y = 0.0f32;
+                        let mut rep_z = 0.0f32;
+                        let mut accumulate_repulsion = |px: f32, py: f32, pz: f32| {
+                            let dx = cell.x - px;
+                            let dy = cell.y - py;
+                            let dz = cell.z - pz;
+                            let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                            if d > 1.0e-5 && d < guidance.crowding_radius {
+                                let inv_d = 1.0 / d;
+                                let falloff = (1.0 - d / guidance.crowding_radius).clamp(0.0, 1.0);
+                                let strength = falloff * falloff;
+                                rep_x += dx * inv_d * strength;
+                                rep_y += dy * inv_d * strength;
+                                rep_z += dz * inv_d * strength;
+                            }
+                        };
+                        for &(px, py, pz) in &mature_positions {
+                            accumulate_repulsion(px, py, pz);
+                        }
+                        for &(other_id, px, py, pz) in &early_snapshot {
+                            if other_id != cell.id {
+                                accumulate_repulsion(px, py, pz);
+                            }
+                        }
+
+                        let rep_norm = (rep_x * rep_x + rep_y * rep_y + rep_z * rep_z).sqrt();
+                        let (rep_dir_x, rep_dir_y, rep_dir_z, rep_step) = if rep_norm > 1.0e-6 {
+                            let inv_rep = 1.0 / rep_norm;
+                            let step = (path_len
+                                * dt_norm
+                                * guidance.crowding_repulsion
+                                * rep_norm.clamp(0.0, 1.5))
+                            .min(path_len * 0.45);
+                            (rep_x * inv_rep, rep_y * inv_rep, rep_z * inv_rep, step)
+                        } else {
+                            (0.0, 0.0, 0.0, 0.0)
+                        };
+
+                        next.0 = cell.x + dir_x * directed_step + rep_dir_x * rep_step;
+                        next.1 = cell.y + dir_y * directed_step + rep_dir_y * rep_step;
+                        next.2 = cell.z + dir_z * directed_step + rep_dir_z * rep_step;
+                    }
+                }
+                EarlyCellPhase::Differentiation => {
+                    // Terminal settling: movement slows near destination while identity stabilizes.
+                    let diff_span = (1.0 - guidance.migration_end).max(1.0e-3);
+                    let diff_t = ((progress - guidance.migration_end) / diff_span).clamp(0.0, 1.0);
+                    let settle_alpha =
+                        ((0.18 + 0.72 * diff_t * diff_t) * guidance.settling_gain).clamp(0.05, 1.0);
+                    next.0 = cell.x + (target.0 - cell.x) * settle_alpha;
+                    next.1 = cell.y + (target.1 - cell.y) * settle_alpha;
+                    next.2 = cell.z + (target.2 - cell.z) * settle_alpha;
+                }
+            }
+
+            next.0 = next.0.clamp(-0.98, 0.98);
+            next.1 = next.1.clamp(-0.98, 0.98);
+            next.2 = next.2.clamp(-0.98, 0.98);
+            if matches!(phase, EarlyCellPhase::Differentiation) && Self::dist3(next, target) < 0.015
+            {
+                next = target;
+            }
+
+            cell.x = next.0;
+            cell.y = next.1;
+            cell.z = next.2;
+            cell.phase = phase;
+
+            if progress >= 1.0 {
+                cell.phase = EarlyCellPhase::Differentiation;
+                cell.x = target.0;
+                cell.y = target.1;
+                cell.z = target.2;
+                if available_slots > 0 {
+                    available_slots = available_slots.saturating_sub(1);
+                    matured.push(self.topo.early_cells.swap_remove(idx));
+                    continue;
+                }
+            }
+            idx += 1;
+        }
+
+        let mut did_spawn = false;
+        for cell in matured {
+            self.spawn_override = Some(SpawnPlacementOverride {
+                x: cell.target_x,
+                y: cell.target_y,
+                z: cell.target_z,
+                region_name: cell.region_name.clone(),
+                type_name: cell.target_type_name.clone(),
+            });
+            let before_total = self.total_neurons();
+            if cell.target_layer == cell.source_layer {
+                self.spawn_neuron_in_layer(cell.source_layer, cell.source_parent);
+            } else {
+                if cell.target_layer == self.net.num_hidden_layers {
+                    self.ensure_layer_exists(cell.target_layer);
+                }
+                self.spawn_neuron_into_next_layer(cell.source_layer, cell.source_parent);
+            }
+            self.spawn_override = None;
+            did_spawn |= self.total_neurons() > before_total;
+        }
+        did_spawn
+    }
+
+    #[cfg(feature = "growth3d")]
     fn collect_growth_candidates(&mut self) {
         self.growth_queue.clear();
         // Global cooldown gate
@@ -15533,7 +16400,15 @@ impl Runner {
             return;
         }
 
-        if self.is_at_max_neurons() {
+        let max_neurons = self.net.max_total_neurons;
+        let pending_total =
+            self.total_neurons()
+                .saturating_add(if self.early_cell_lifecycle_enabled() {
+                    self.topo.early_cells.len()
+                } else {
+                    0
+                });
+        if max_neurons > 0 && pending_total as u64 >= max_neurons {
             return;
         }
 
@@ -15580,13 +16455,27 @@ impl Runner {
     #[cfg(feature = "growth3d")]
     fn apply_growth_queue(&mut self) -> bool {
         let actions = std::mem::take(&mut self.growth_queue);
-        let mut did_spawn = false;
+        let mut did_growth = false;
+        let early_lifecycle = self.early_cell_lifecycle_enabled();
 
-        let mut current_total = self.total_neurons() as u64;
+        let mut current_total = self.total_neurons() as u64
+            + if early_lifecycle {
+                self.topo.early_cells.len() as u64
+            } else {
+                0
+            };
         let max_neurons = self.net.max_total_neurons;
 
         for act in actions {
             if max_neurons > 0 && current_total >= max_neurons {
+                continue;
+            }
+
+            if early_lifecycle {
+                if self.create_early_cell_from_action(act) {
+                    did_growth = true;
+                    current_total += 1;
+                }
                 continue;
             }
 
@@ -15599,14 +16488,14 @@ impl Runner {
                 }
                 self.spawn_neuron_into_next_layer(act.layer, act.parent);
             }
-            did_spawn = true;
+            did_growth = true;
             current_total += 1;
         }
-        if did_spawn {
+        if did_growth {
             // reset global cooldown timer after any spawn
             self.last_global_growth_ms = 0.0;
         }
-        did_spawn
+        did_growth
     }
 
     #[cfg(feature = "growth3d")]
@@ -15843,8 +16732,20 @@ impl Runner {
         } else {
             (0.0, 0.0, 0.0)
         };
-        let (nx, ny, nz) = self.place_node_near(l, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, l);
+        let spawn_override = self.spawn_override.take();
+        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
+            (
+                override_pos.x,
+                override_pos.y,
+                override_pos.z,
+                override_pos.region_name,
+                override_pos.type_name,
+            )
+        } else {
+            let (sx, sy, sz) = self.place_node_near(l, (px, py, pz));
+            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, l);
+            (sx, sy, sz, region_name, type_name)
+        };
         self.topo.add_neuron(
             l,
             Node3D {
@@ -16465,8 +17366,20 @@ impl Runner {
         } else {
             (0.0, 0.0, 0.0)
         };
-        let (nx, ny, nz) = self.place_node_near(target, (px, py, pz));
-        let (region_name, type_name) = self.allocate_region_and_type(nx, ny, nz, target);
+        let spawn_override = self.spawn_override.take();
+        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
+            (
+                override_pos.x,
+                override_pos.y,
+                override_pos.z,
+                override_pos.region_name,
+                override_pos.type_name,
+            )
+        } else {
+            let (sx, sy, sz) = self.place_node_near(target, (px, py, pz));
+            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, target);
+            (sx, sy, sz, region_name, type_name)
+        };
         self.topo.add_neuron(
             target,
             Node3D {
@@ -17049,6 +17962,16 @@ impl Runner {
         let mut node = self.topo.layers[l].remove(j);
         node.layer = target_l;
         self.topo.layers[target_l].push(node);
+        for cell in &mut self.topo.early_cells {
+            if cell.source_layer == l {
+                if cell.source_parent == j {
+                    cell.source_layer = target_l;
+                    cell.source_parent = new_j;
+                } else if cell.source_parent > j {
+                    cell.source_parent -= 1;
+                }
+            }
+        }
 
         // 3. Morphology
         let mut soma = self.morph.somas[l].remove(j);
@@ -17305,6 +18228,15 @@ impl Runner {
                 layer.remove(j);
             }
         }
+        for cell in &mut self.topo.early_cells {
+            if cell.source_layer == l {
+                if cell.source_parent > j {
+                    cell.source_parent -= 1;
+                } else if cell.source_parent == j {
+                    cell.source_parent = cell.source_parent.saturating_sub(1);
+                }
+            }
+        }
 
         self.ensure_state_dimensions(); // Final sync
         self.sync_presence_sizes();
@@ -17512,6 +18444,172 @@ mod tests {
         Runner::new(lif, stdp, net, NeuronModel::Lif, Learning::Stdp)
     }
 
+    fn mk_aarnn_growth_runner() -> Runner {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.growth_enabled = true;
+        net.saturation_threshold = 0.01;
+        net.saturation_window_ms = 10.0;
+        net.growth_cooldown_ms = 0.0;
+        net.global_growth_cooldown_ms = 0.0;
+        Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn)
+    }
+
+    #[test]
+    fn development_stage_auto_and_manual_resolution() {
+        let mut net = NetworkConfig::default();
+        net.development_stage_mode = DevelopmentStageMode::Auto;
+        net.development_stage_dendrite_start_ms = 10.0;
+        net.development_stage_synaptogenesis_start_ms = 20.0;
+        net.development_stage_refinement_start_ms = 30.0;
+        net.development_stage_myelination_start_ms = 40.0;
+
+        assert_eq!(
+            resolve_development_stage(&net, 0.0),
+            DevelopmentStage::AxonPathfinding
+        );
+        assert_eq!(
+            resolve_development_stage(&net, 10.0),
+            DevelopmentStage::DendriticArborization
+        );
+        assert_eq!(
+            resolve_development_stage(&net, 20.0),
+            DevelopmentStage::Synaptogenesis
+        );
+        assert_eq!(
+            resolve_development_stage(&net, 30.0),
+            DevelopmentStage::RefinementPruning
+        );
+        assert_eq!(
+            resolve_development_stage(&net, 40.0),
+            DevelopmentStage::MyelinationStabilization
+        );
+
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::Synaptogenesis;
+        assert_eq!(
+            resolve_development_stage(&net, 1_000_000.0),
+            DevelopmentStage::Synaptogenesis
+        );
+    }
+
+    #[test]
+    fn development_stage_policy_enforces_profile_specific_pruning_and_myelination() {
+        let human_early = stage_policy_for_profile(
+            DevelopmentStage::Synaptogenesis,
+            AarnnBiomimicryProfile::Human,
+        );
+        let human_refine = stage_policy_for_profile(
+            DevelopmentStage::RefinementPruning,
+            AarnnBiomimicryProfile::Human,
+        );
+        let human_myelin = stage_policy_for_profile(
+            DevelopmentStage::MyelinationStabilization,
+            AarnnBiomimicryProfile::Human,
+        );
+        let celegans_myelin = stage_policy_for_profile(
+            DevelopmentStage::MyelinationStabilization,
+            AarnnBiomimicryProfile::Celegans,
+        );
+        let hexapod_myelin = stage_policy_for_profile(
+            DevelopmentStage::MyelinationStabilization,
+            AarnnBiomimicryProfile::Hexapod,
+        );
+
+        assert!(!human_early.pruning_enabled);
+        assert!(human_refine.pruning_enabled);
+        assert!(human_myelin.myelination_enabled);
+        assert!(!celegans_myelin.myelination_enabled);
+        assert!(!hexapod_myelin.myelination_enabled);
+        assert!(human_early.growth_interval_scale < human_refine.growth_interval_scale);
+    }
+
+    #[test]
+    fn aarnn_io_layers_default_to_biologically_plausible_human_laminar_targets() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        crate::config::apply_aarnn_human_biomimicry_defaults(&mut net);
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_per_layer_initial = 4;
+
+        let r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let (in_l, out_l) = r.get_io_layers();
+        assert_eq!(in_l, 1, "human AARNN sensory input should target L4 (H1)");
+        assert_eq!(out_l, 2, "human AARNN output should source from L5 (H2)");
+    }
+
+    #[test]
+    fn aarnn_io_layers_default_to_compact_profile_feedthrough_for_celegans() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        crate::config::apply_aarnn_celegans_biomimicry_defaults(&mut net);
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_per_layer_initial = 4;
+
+        let expected_last = net.num_hidden_layers.saturating_sub(1);
+        let r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let (in_l, out_l) = r.get_io_layers();
+        assert_eq!(
+            in_l, 0,
+            "celegans-style profile should ingress at first layer"
+        );
+        assert_eq!(
+            out_l, expected_last,
+            "celegans-style profile should egress at terminal layer"
+        );
+    }
+
+    #[test]
+    fn aarnn_io_layers_default_to_compact_profile_feedthrough_for_hexapod() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        crate::config::apply_aarnn_hexapod_biomimicry_defaults(&mut net);
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_per_layer_initial = 4;
+
+        let expected_last = net.num_hidden_layers.saturating_sub(1);
+        let r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let (in_l, out_l) = r.get_io_layers();
+        assert_eq!(in_l, 0, "hexapod profile should ingress at first layer");
+        assert_eq!(
+            out_l, expected_last,
+            "hexapod profile should egress at terminal layer"
+        );
+    }
+
+    #[test]
+    fn aarnn_io_layer_selection_prevents_output_source_before_sensory_target() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_layers = 6;
+        net.num_hidden_per_layer_initial = 2;
+        net.sensory_target_layer = Some(4);
+        net.output_source_layer = Some(1);
+
+        let r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let (in_l, out_l) = r.get_io_layers();
+        assert_eq!(in_l, 4);
+        assert_eq!(
+            out_l, in_l,
+            "AARNN output source should not precede sensory target layer"
+        );
+    }
+
     #[test]
     #[cfg(feature = "growth3d")]
     fn import_network_json_preserves_snapshot_topology() {
@@ -17690,6 +18788,176 @@ mod tests {
     }
 
     #[test]
+    fn aarnn_growth_creates_early_cell_before_differentiation() {
+        let mut r = mk_aarnn_growth_runner();
+        let hidden_before = r.layer_size(0);
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = r.net.growth_cooldown_ms + 1.0;
+        r.last_global_growth_ms = r.net.global_growth_cooldown_ms + 1.0;
+        r.collect_growth_candidates();
+        assert_eq!(r.growth_queue.len(), 1);
+        assert!(r.apply_growth_queue());
+
+        assert_eq!(
+            r.layer_size(0),
+            hidden_before,
+            "AARNN growth should stage an early cell before adding a neuron"
+        );
+        assert_eq!(r.topo.early_cells.len(), 1);
+        let early = &r.topo.early_cells[0];
+        assert_eq!(early.phase, EarlyCellPhase::Specification);
+        assert!(early.maturation_ms > 0.0);
+    }
+
+    #[test]
+    fn aarnn_early_cell_matures_into_neuron_with_target_position_and_type() {
+        let mut r = mk_aarnn_growth_runner();
+        let hidden_before = r.layer_size(0);
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = r.net.growth_cooldown_ms + 1.0;
+        r.last_global_growth_ms = r.net.global_growth_cooldown_ms + 1.0;
+        r.collect_growth_candidates();
+        assert!(r.apply_growth_queue());
+        assert_eq!(r.topo.early_cells.len(), 1);
+        let early = r.topo.early_cells[0].clone();
+
+        assert!(
+            r.advance_early_cells(10_000.0),
+            "matured early cells should differentiate into real neurons"
+        );
+        assert_eq!(r.topo.early_cells.len(), 0);
+        assert_eq!(r.layer_size(0), hidden_before + 1);
+        let new_node = r.topo.layers[0]
+            .last()
+            .expect("new differentiated neuron should exist");
+        assert!((new_node.x - early.target_x).abs() < 1.0e-4);
+        assert!((new_node.y - early.target_y).abs() < 1.0e-4);
+        assert!((new_node.z - early.target_z).abs() < 1.0e-4);
+        assert_eq!(
+            new_node.type_name.as_deref(),
+            early.target_type_name.as_deref()
+        );
+    }
+
+    #[test]
+    fn aarnn_early_cell_progresses_phase_and_xyz_before_maturation() {
+        let mut r = mk_aarnn_growth_runner();
+        let hidden_before = r.layer_size(0);
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = r.net.growth_cooldown_ms + 1.0;
+        r.last_global_growth_ms = r.net.global_growth_cooldown_ms + 1.0;
+        r.collect_growth_candidates();
+        assert!(r.apply_growth_queue());
+        assert_eq!(r.topo.early_cells.len(), 1);
+
+        {
+            let cell = &mut r.topo.early_cells[0];
+            cell.start_x = 0.0;
+            cell.start_y = 0.0;
+            cell.start_z = 0.0;
+            cell.x = 0.0;
+            cell.y = 0.0;
+            cell.z = 0.0;
+            cell.target_x = 1.0;
+            cell.target_y = -0.5;
+            cell.target_z = 0.25;
+            cell.maturation_ms = 100.0;
+            cell.age_ms = 0.0;
+            cell.phase = EarlyCellPhase::Specification;
+        }
+        let guidance = early_cell_guidance_policy(
+            resolve_development_stage(&r.net, r.t_ms),
+            infer_biomimicry_profile(&r.net),
+        );
+        let spec_progress = (guidance.specification_end * 0.8)
+            .clamp(0.05, (guidance.specification_end - 0.01).max(0.05));
+        let migration_progress = (guidance.specification_end
+            + (guidance.migration_end - guidance.specification_end) * 0.45)
+            .clamp(
+                guidance.specification_end + 0.02,
+                (guidance.migration_end - 0.02).max(guidance.specification_end + 0.02),
+            );
+        let differentiation_progress = (guidance.migration_end
+            + (1.0 - guidance.migration_end) * 0.45)
+            .clamp(guidance.migration_end + 0.02, 0.98);
+        let dt_spec = spec_progress * 100.0;
+        let dt_mig = (migration_progress - spec_progress) * 100.0;
+        let dt_diff = (differentiation_progress - migration_progress) * 100.0;
+        let dt_final = (100.0 - (dt_spec + dt_mig + dt_diff)).max(1.0);
+
+        assert!(
+            !r.advance_early_cells(dt_spec.max(1.0)),
+            "specification window must stay pre-differentiation"
+        );
+        {
+            let c = &r.topo.early_cells[0];
+            assert_eq!(c.phase, EarlyCellPhase::Specification);
+            assert!(c.x > 0.0 && c.y < 0.0 && c.z > 0.0);
+        }
+
+        assert!(
+            !r.advance_early_cells(dt_mig.max(1.0)),
+            "migration window must stay pre-differentiation"
+        );
+        let pos_mid = {
+            let c = &r.topo.early_cells[0];
+            assert_eq!(c.phase, EarlyCellPhase::Migration);
+            (c.x, c.y, c.z)
+        };
+
+        assert!(
+            !r.advance_early_cells(dt_diff.max(1.0)),
+            "differentiation phase should occur before final maturation"
+        );
+        {
+            let c = &r.topo.early_cells[0];
+            assert_eq!(c.phase, EarlyCellPhase::Differentiation);
+            assert!(c.x > pos_mid.0);
+            assert!(c.y < pos_mid.1);
+            assert!(c.z > pos_mid.2);
+        }
+
+        assert!(
+            r.advance_early_cells(dt_final),
+            "full maturation should finalize into a differentiated neuron"
+        );
+        assert_eq!(r.topo.early_cells.len(), 0);
+        assert_eq!(r.layer_size(0), hidden_before + 1);
+        let new_node = r.topo.layers[0]
+            .last()
+            .expect("new differentiated neuron should exist");
+        assert!((new_node.x - 1.0).abs() < 1.0e-4);
+        assert!((new_node.y + 0.5).abs() < 1.0e-4);
+        assert!((new_node.z - 0.25).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn aarnn_max_total_neurons_counts_pending_early_cells() {
+        let mut r = mk_aarnn_growth_runner();
+        r.net.max_total_neurons = (r.total_neurons() + 1) as u64;
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = 1000.0;
+        r.last_global_growth_ms = 1000.0;
+        r.collect_growth_candidates();
+        assert!(r.apply_growth_queue());
+        assert_eq!(r.topo.early_cells.len(), 1);
+        assert_eq!(r.layer_size(0), 1);
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = 1000.0;
+        r.last_global_growth_ms = 1000.0;
+        r.collect_growth_candidates();
+        assert!(
+            r.growth_queue.is_empty(),
+            "pending early cells should consume neuron-cap budget before maturation"
+        );
+    }
+
+    #[test]
     fn global_cooldown_blocks_growth() {
         let mut r = mk_runner();
         r.net.global_growth_cooldown_ms = 1000.0;
@@ -17703,6 +18971,128 @@ mod tests {
         r.last_global_growth_ms = 2000.0;
         r.collect_growth_candidates();
         assert_eq!(r.growth_queue.len(), 1);
+    }
+
+    #[test]
+    fn growth_scheduler_interval_decouples_growth_from_spike_steps() {
+        let mut r = mk_runner();
+        r.net.development_growth_interval_ms = 5.0;
+        r.net.development_stage_mode = DevelopmentStageMode::Manual;
+        r.net.development_stage = DevelopmentStage::Synaptogenesis;
+        r.net.growth_cooldown_ms = 0.0;
+        r.net.global_growth_cooldown_ms = 0.0;
+
+        let initial = r.layer_size(0);
+        for _ in 0..4 {
+            r.rate_h[0][0] = 1.0;
+            r.since_growth_ms[0][0] = 10_000.0;
+            r.last_global_growth_ms = 10_000.0;
+            r.step(None);
+        }
+        assert_eq!(
+            r.layer_size(0),
+            initial,
+            "growth should not run before interval elapses"
+        );
+
+        r.rate_h[0][0] = 1.0;
+        r.since_growth_ms[0][0] = 10_000.0;
+        r.last_global_growth_ms = 10_000.0;
+        r.step(None);
+        assert!(
+            r.layer_size(0) > initial,
+            "growth should run once scheduler interval elapses"
+        );
+    }
+
+    #[test]
+    fn chunk3_workflow_alignment_sections_1_to_11_observed_runtime() {
+        // Sections 1-8: early cells must exist and migrate before differentiation finalizes.
+        let mut pre = mk_aarnn_growth_runner();
+        let hidden_before = pre.layer_size(0);
+        pre.rate_h[0][0] = 1.0;
+        pre.since_growth_ms[0][0] = 10_000.0;
+        pre.last_global_growth_ms = 10_000.0;
+        pre.collect_growth_candidates();
+        assert!(pre.apply_growth_queue());
+        assert_eq!(pre.layer_size(0), hidden_before);
+        assert_eq!(pre.topo.early_cells.len(), 1);
+        let staged = pre.topo.early_cells[0].clone();
+        let start_dist = Runner::dist3(
+            (staged.start_x, staged.start_y, staged.start_z),
+            (staged.target_x, staged.target_y, staged.target_z),
+        );
+
+        assert!(start_dist.is_finite());
+        assert!(start_dist >= 0.0);
+        assert!(staged.maturation_ms > 0.0);
+
+        assert!(
+            !pre.advance_early_cells((staged.maturation_ms * 0.70).max(1.0)),
+            "sections 1-8 check: cell should still be pre-differentiation mid-trajectory"
+        );
+        assert_eq!(pre.layer_size(0), hidden_before);
+        let mid = pre.topo.early_cells[0].clone();
+        let mid_dist = Runner::dist3(
+            (mid.x, mid.y, mid.z),
+            (mid.target_x, mid.target_y, mid.target_z),
+        );
+        assert!(mid_dist <= start_dist + 1.0e-4);
+        assert!(
+            matches!(
+                mid.phase,
+                EarlyCellPhase::Migration | EarlyCellPhase::Differentiation
+            ),
+            "sections 1-8 check: phase should move beyond initial specification"
+        );
+
+        assert!(pre.advance_early_cells(staged.maturation_ms.max(1.0)));
+        assert_eq!(pre.topo.early_cells.len(), 0);
+        assert_eq!(pre.layer_size(0), hidden_before + 1);
+
+        // Sections 9-11: spike steps run every frame while growth stays cadence-gated.
+        let mut s911 = mk_aarnn_growth_runner();
+        s911.net.development_stage_mode = DevelopmentStageMode::Manual;
+        s911.net.development_stage = DevelopmentStage::Synaptogenesis;
+        s911.net.development_growth_interval_ms = 8.0;
+        s911.net.growth_cooldown_ms = 0.0;
+        s911.net.global_growth_cooldown_ms = 0.0;
+
+        let hidden_initial = s911.layer_size(0);
+        let sensory_zero = vec![0; s911.net.num_sensory_neurons];
+        for _ in 0..7 {
+            s911.rate_h[0][0] = 1.0;
+            s911.since_growth_ms[0][0] = 10_000.0;
+            s911.last_global_growth_ms = 10_000.0;
+            let t_prev = s911.t;
+            s911.step(Some(&sensory_zero));
+            assert_eq!(
+                s911.t,
+                t_prev + 1,
+                "spike traversal must advance every step"
+            );
+        }
+        assert_eq!(
+            s911.layer_size(0),
+            hidden_initial,
+            "sections 9-11 check: growth must not run before growth interval elapses"
+        );
+        assert_eq!(s911.topo.early_cells.len(), 0);
+
+        s911.rate_h[0][0] = 1.0;
+        s911.since_growth_ms[0][0] = 10_000.0;
+        s911.last_global_growth_ms = 10_000.0;
+        s911.step(Some(&sensory_zero));
+        assert_eq!(
+            s911.layer_size(0),
+            hidden_initial,
+            "growth pass should stage early cell first, not directly grow hidden layer"
+        );
+        assert_eq!(
+            s911.topo.early_cells.len(),
+            1,
+            "sections 9-11 check: growth cadence should stage a migratory early cell after interval"
+        );
     }
 
     #[test]
@@ -19223,6 +20613,8 @@ mod tests {
 
         let mut net = NetworkConfig::default();
         net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::MyelinationStabilization;
         net.aarnn_layer_depth = 2;
         net.aarnn_myelination_enabled = true;
         net.aarnn_myelin_min_conduction_gain = 0.6;
@@ -19263,6 +20655,60 @@ mod tests {
         r.syn_myelin[0] = 1.0;
         let (fast_steps, _) = r.syn_delay_and_atten(0);
         assert!(fast_steps < slow_steps);
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn test_myelin_level_does_not_modulate_delay_before_stage_13() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::AxonPathfinding;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelin_min_conduction_gain = 0.6;
+        net.aarnn_myelin_max_conduction_gain = 2.4;
+        net.aarnn_myelin_initial = 0.0;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::HiddenRec,
+            pre_layer: 0,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: None,
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_ax_steps = vec![12];
+        r.syn_den_steps = vec![0];
+        r.syn_ax_len = vec![0.0];
+        r.syn_den_len = vec![0.0];
+        r.syn_myelin = vec![0.0];
+
+        let (slow_steps, _) = r.syn_delay_and_atten(0);
+        r.syn_myelin[0] = 1.0;
+        let (fast_steps, _) = r.syn_delay_and_atten(0);
+        assert_eq!(
+            fast_steps, slow_steps,
+            "myelination must have no conduction effect before section 13"
+        );
     }
 
     #[cfg(feature = "morpho")]
@@ -19322,6 +20768,231 @@ mod tests {
         r.x_post_h[0][0] = 0.0;
         r.update_activity_dependent_myelination(50.0);
         assert!(r.syn_myelin[0] < after_growth);
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn test_myelination_requires_stage_13_for_human_profile() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::AxonPathfinding;
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelination_rate = 0.02;
+        net.aarnn_demyelination_rate = 0.02;
+        net.aarnn_myelination_activity_target = 0.2;
+        net.aarnn_myelin_initial = 0.2;
+        net.num_sensory_neurons = 1;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::In,
+            pre_layer: -1,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: None,
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_myelin = vec![0.2];
+        if r.x_pre_in.is_empty() {
+            r.x_pre_in = Array1::from_vec(vec![0.0]);
+        }
+        if r.x_post_h.is_empty() {
+            r.x_post_h.push(Array1::from_vec(vec![0.0]));
+        } else if r.x_post_h[0].is_empty() {
+            r.x_post_h[0] = Array1::from_vec(vec![0.0]);
+        }
+        r.x_pre_in[0] = 1.0;
+        r.x_post_h[0][0] = 1.0;
+
+        r.update_activity_dependent_myelination(10.0);
+        assert!(
+            (r.syn_myelin[0] - 0.2).abs() < 1.0e-6,
+            "myelination should stay gated before stage 13"
+        );
+
+        r.net.development_stage = DevelopmentStage::MyelinationStabilization;
+        r.update_activity_dependent_myelination(10.0);
+        assert!(r.syn_myelin[0] > 0.2);
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn test_celegans_profile_stays_unmyelinated_even_in_stage_13() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let mut net = NetworkConfig::default();
+        crate::config::apply_aarnn_celegans_biomimicry_defaults(&mut net);
+        net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::MyelinationStabilization;
+        // Force base toggle on; profile policy should still gate myelination off.
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelination_rate = 0.02;
+        net.aarnn_demyelination_rate = 0.02;
+        net.aarnn_myelination_activity_target = 0.2;
+        net.aarnn_myelin_initial = 0.2;
+        net.num_sensory_neurons = 1;
+
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.morph.synapses = vec![Synapse {
+            kind: SynKind::In,
+            pre_layer: -1,
+            pre_id: 0,
+            post_layer: 0,
+            post_id: 0,
+            pre_site: Point3::default(),
+            post_site: Point3::default(),
+            axon_seg_idx: None,
+            dend_seg_idx: None,
+            bend: None,
+            weight: 0.0,
+            p_release: 0.0,
+            delay_ms: 0.0,
+            stimuli: 0.0,
+        }];
+        r.syn_myelin = vec![0.2];
+        if r.x_pre_in.is_empty() {
+            r.x_pre_in = Array1::from_vec(vec![0.0]);
+        }
+        if r.x_post_h.is_empty() {
+            r.x_post_h.push(Array1::from_vec(vec![0.0]));
+        } else if r.x_post_h[0].is_empty() {
+            r.x_post_h[0] = Array1::from_vec(vec![0.0]);
+        }
+        r.x_pre_in[0] = 1.0;
+        r.x_post_h[0][0] = 1.0;
+
+        r.update_activity_dependent_myelination(10.0);
+        assert!(
+            (r.syn_myelin[0] - 0.2).abs() < 1.0e-6,
+            "celegans policy should keep pathways unmyelinated"
+        );
+    }
+
+    #[cfg(feature = "morpho")]
+    #[test]
+    fn chunk3_workflow_alignment_sections_12_to_13_observed_runtime() {
+        use crate::morphology::{Point3, SynKind, Synapse};
+
+        let configure_single_synapse = |runner: &mut Runner| {
+            runner.morph.synapses = vec![Synapse {
+                kind: SynKind::HiddenRec,
+                pre_layer: 0,
+                pre_id: 0,
+                post_layer: 0,
+                post_id: 0,
+                pre_site: Point3::default(),
+                post_site: Point3::default(),
+                axon_seg_idx: None,
+                dend_seg_idx: None,
+                bend: None,
+                weight: 0.0,
+                p_release: 0.0,
+                delay_ms: 0.0,
+                stimuli: 0.0,
+            }];
+            runner.syn_ax_steps = vec![12];
+            runner.syn_den_steps = vec![0];
+            runner.syn_ax_len = vec![0.0];
+            runner.syn_den_len = vec![0.0];
+        };
+
+        // Section 12 (refinement/pruning): pruning on, myelination still off.
+        let refine_policy = stage_policy_for_profile(
+            DevelopmentStage::RefinementPruning,
+            AarnnBiomimicryProfile::Human,
+        );
+        assert!(
+            refine_policy.pruning_enabled && !refine_policy.myelination_enabled,
+            "section 12 policy must enable pruning while keeping myelination gated"
+        );
+
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::RefinementPruning;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_myelination_enabled = true;
+        net.aarnn_myelin_min_conduction_gain = 0.6;
+        net.aarnn_myelin_max_conduction_gain = 2.4;
+        net.aarnn_myelin_initial = 0.0;
+        let mut human = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        configure_single_synapse(&mut human);
+        human.syn_myelin = vec![0.0];
+        let (refine_slow, _) = human.syn_delay_and_atten(0);
+        human.syn_myelin[0] = 1.0;
+        let (refine_fast, _) = human.syn_delay_and_atten(0);
+        assert_eq!(
+            refine_fast, refine_slow,
+            "section 12 observation: myelination must not affect conduction yet"
+        );
+
+        // Section 13 (human): myelination may now modulate conduction.
+        human.net.development_stage = DevelopmentStage::MyelinationStabilization;
+        human.syn_myelin[0] = 0.0;
+        let (myelin_slow, _) = human.syn_delay_and_atten(0);
+        human.syn_myelin[0] = 1.0;
+        let (myelin_fast, _) = human.syn_delay_and_atten(0);
+        assert!(
+            myelin_fast < myelin_slow,
+            "section 13 observation: human profile should enable myelin-dependent acceleration"
+        );
+
+        // Section 13 (C. elegans): profile remains unmyelinated even in stage 13.
+        let mut ce_net = NetworkConfig::default();
+        crate::config::apply_aarnn_celegans_biomimicry_defaults(&mut ce_net);
+        ce_net.growth_enabled = true;
+        ce_net.development_stage_mode = DevelopmentStageMode::Manual;
+        ce_net.development_stage = DevelopmentStage::MyelinationStabilization;
+        ce_net.aarnn_myelination_enabled = true;
+        ce_net.aarnn_myelin_min_conduction_gain = 0.6;
+        ce_net.aarnn_myelin_max_conduction_gain = 2.4;
+        ce_net.aarnn_myelin_initial = 0.0;
+        let mut ce = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            ce_net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        configure_single_synapse(&mut ce);
+        ce.syn_myelin = vec![0.0];
+        let (ce_slow, _) = ce.syn_delay_and_atten(0);
+        ce.syn_myelin[0] = 1.0;
+        let (ce_fast, _) = ce.syn_delay_and_atten(0);
+        assert_eq!(
+            ce_fast, ce_slow,
+            "section 13 observation: celegans profile must keep conduction unmyelinated"
+        );
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]

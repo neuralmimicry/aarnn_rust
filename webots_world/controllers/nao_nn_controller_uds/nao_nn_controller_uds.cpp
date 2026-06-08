@@ -27,6 +27,7 @@
 #include <fcntl.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cctype>
 #include <chrono>
@@ -735,6 +736,121 @@ struct CelegansMuscleBridge {
     }
 };
 
+struct HexapodLegBridge {
+    // [leg][joint], joints order: coxa, femur, tibia
+    std::array<std::array<int, 3>, 6> joint_indices{};
+    std::vector<float> filtered;
+    bool active = false;
+
+    HexapodLegBridge() {
+        for (auto& leg : joint_indices) {
+            leg = { -1, -1, -1 };
+        }
+    }
+
+    static int leg_index(const std::string& leg) {
+        if (leg == "lf") return 0;
+        if (leg == "lm") return 1;
+        if (leg == "lr") return 2;
+        if (leg == "rf") return 3;
+        if (leg == "rm") return 4;
+        if (leg == "rr") return 5;
+        return -1;
+    }
+
+    static int joint_index(const std::string& joint) {
+        if (joint == "coxa") return 0;
+        if (joint == "femur") return 1;
+        if (joint == "tibia") return 2;
+        return -1;
+    }
+
+    void discover(const std::vector<std::string>& actuator_names) {
+        std::regex leg_re("^hex_o_([0-9]{3})_([A-Za-z]{2})_(coxa|femur|tibia)$");
+        std::smatch m;
+        int matched = 0;
+        for (size_t i = 0; i < actuator_names.size(); ++i) {
+            if (!std::regex_match(actuator_names[i], m, leg_re)) continue;
+            std::string leg = m[2];
+            std::string joint = m[3];
+            std::transform(leg.begin(), leg.end(), leg.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            std::transform(joint.begin(), joint.end(), joint.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            int li = leg_index(leg);
+            int ji = joint_index(joint);
+            if (li < 0 || ji < 0) continue;
+            joint_indices[(size_t)li][(size_t)ji] = (int)i;
+            matched++;
+        }
+
+        active = true;
+        for (const auto& leg : joint_indices) {
+            for (int idx : leg) {
+                if (idx < 0) {
+                    active = false;
+                    break;
+                }
+            }
+            if (!active) break;
+        }
+
+        filtered.assign(actuator_names.size(), 0.5f);
+
+        if (active) {
+            std::cout << "[nao_nn_controller_uds] Hexapod leg bridge active"
+                      << " (matched joints=" << matched << ")"
+                      << std::endl;
+        }
+    }
+
+    static inline float read_cmd(const std::vector<float>& all_a, int idx) {
+        if (idx < 0 || idx >= (int)all_a.size()) return 0.5f;
+        float v = all_a[(size_t)idx];
+        if (!std::isfinite(v)) return 0.5f;
+        if (v < 0.0f) return 0.0f;
+        if (v > 1.0f) return 1.0f;
+        return v;
+    }
+
+    static inline float clamp01(float v) {
+        if (v < 0.0f) return 0.0f;
+        if (v > 1.0f) return 1.0f;
+        return v;
+    }
+
+    void apply(std::vector<float>& all_a) {
+        if (!active) return;
+        if (filtered.size() < all_a.size()) filtered.resize(all_a.size(), 0.5f);
+
+        for (const auto& leg : joint_indices) {
+            for (int j = 0; j < 3; ++j) {
+                int idx = leg[(size_t)j];
+                if (idx < 0 || idx >= (int)all_a.size()) continue;
+                float cmd = read_cmd(all_a, idx);
+                float centered = cmd - 0.5f;
+
+                // Keep gait commands smooth and near neutral to reduce startup
+                // tip-over in simulation and keep trajectories hardware-safe.
+                float gain = (j == 0) ? 0.90f : 0.72f;
+                float target = 0.5f + centered * gain;
+                if (j == 0) {
+                    if (target < 0.06f) target = 0.06f;
+                    if (target > 0.94f) target = 0.94f;
+                } else {
+                    if (target < 0.10f) target = 0.10f;
+                    if (target > 0.90f) target = 0.90f;
+                }
+                float alpha = (j == 0) ? 0.20f : 0.16f;
+                filtered[(size_t)idx] = (1.0f - alpha) * filtered[(size_t)idx] + alpha * target;
+                all_a[(size_t)idx] = clamp01(filtered[(size_t)idx]);
+            }
+        }
+    }
+};
+
 int main(int argc, char** argv) {
     // 0. Parse pseudo-environment variables from controllerArgs
     // This allows setting NM_BRAINS=vision,motor etc in Webots controllerArgs
@@ -786,6 +902,8 @@ int main(int argc, char** argv) {
     auto all_o_names = mapper.get_actuator_names();
     CelegansMuscleBridge celegans_bridge;
     celegans_bridge.discover(all_o_names);
+    HexapodLegBridge hexapod_bridge;
+    hexapod_bridge.discover(all_o_names);
     const bool handshake_include_names = env_bool("NM_IPC_HANDSHAKE_INCLUDE_NAMES", false);
     const int handshake_max_bytes = env_int_range("NM_IPC_HANDSHAKE_MAX_BYTES", 7000, 256, 1 << 20);
 
@@ -1021,6 +1139,7 @@ int main(int argc, char** argv) {
 
         if (!motion_active) {
             celegans_bridge.apply(all_a);
+            hexapod_bridge.apply(all_a);
             mapper.apply_actuators(all_a);
         }
     }

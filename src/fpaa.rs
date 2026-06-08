@@ -24,8 +24,8 @@ use crate::aarnn::plasticity::{
     enforce_dale_matrix_cols_with_mask, stp_step, triplet_eta_scale,
 };
 use crate::aarnn::transmission::{
-    CompartmentClass, DelayAttenuationSpec, DendriticTransmissionProfile, MyelinationProfile,
-    compute_delay_and_attenuation,
+    CompartmentClass, DelayAttenuationSpec, DendriticTransmissionProfile, FatigueProfile,
+    MyelinationProfile, compute_delay_and_attenuation,
 };
 use crate::config::{
     FpaaConfig, FpaaKernelRoute, FpaaRoutingConfig, FpaaStartupMode, FpaaTransportPreference,
@@ -569,6 +569,19 @@ fn sample_test_adaptive_threshold_homeostasis() -> Result<(), String> {
     Ok(())
 }
 
+fn append_note(note: &mut Option<String>, extra: impl Into<String>) {
+    let extra = extra.into();
+    match note {
+        Some(existing) if !existing.is_empty() => {
+            existing.push_str(" | ");
+            existing.push_str(&extra);
+        }
+        _ => {
+            *note = Some(extra);
+        }
+    }
+}
+
 fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
     match kernel {
         FpaaKernel::SynapticFilter => {
@@ -599,21 +612,58 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
             if out[1] <= 0.0 {
                 return Err("excitatory drive did not produce positive output".to_string());
             }
+            if out[3] >= 0.0 {
+                return Err("inhibitory drive did not produce negative output".to_string());
+            }
+            let out_decay = apply_synaptic_filter(
+                &Array1::zeros(raw.len()),
+                &mut ampa,
+                &mut nmda,
+                &mut gaba,
+                Some(&vmem),
+                0.04,
+                |_| SynapticDriveParams {
+                    nmda_ratio: 0.25,
+                    synaptic_gain: 1.0,
+                    decay_ampa: 0.9,
+                    decay_nmda: 0.99,
+                    decay_gaba: 0.95,
+                    neuromod_excitability_gain: 1.0,
+                },
+            );
+            if out_decay[1] <= 0.0 || out_decay[1] >= out[1] {
+                return Err("synaptic filter decay state did not evolve plausibly".to_string());
+            }
             Ok(())
         }
         FpaaKernel::ShortTermPlasticity => {
             let mut state = ShortTermPlasticityState {
-                utilization: 0.2,
+                utilization: 0.8,
                 available_resources: 1.0,
             };
             let params = ShortTermPlasticityParams {
                 baseline_utilization: 0.2,
-                recovery_decay: 0.9,
+                recovery_decay: 0.99,
                 facilitation_decay: 0.9,
             };
-            let released = stp_step(&mut state, true, params);
-            if released <= 0.0 {
+            let released_first = stp_step(&mut state, true, params);
+            let released_second = stp_step(&mut state, true, params);
+            if released_first <= 0.0 {
                 return Err("STP release was not positive on spike".to_string());
+            }
+            if released_second >= released_first {
+                return Err("STP did not show resource depletion on repeated spikes".to_string());
+            }
+            let resources_after_second = state.available_resources;
+            for _ in 0..200 {
+                let _ = stp_step(&mut state, false, params);
+            }
+            if state.available_resources <= resources_after_second {
+                return Err("STP resources did not recover during quiet period".to_string());
+            }
+            let released_recovered = stp_step(&mut state, true, params);
+            if !released_recovered.is_finite() || released_recovered <= 0.0 {
+                return Err("STP recovery release became invalid".to_string());
             }
             Ok(())
         }
@@ -643,6 +693,30 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
             if curr <= 1.2 {
                 return Err("active dendrite did not boost excitatory current".to_string());
             }
+            let mut disabled_curr = 1.2;
+            let mut disabled_ca = 0.0;
+            let mut disabled_plateau = 0.0;
+            apply_active_dendritic_compartment(
+                &mut disabled_curr,
+                &mut disabled_ca,
+                &mut disabled_plateau,
+                1.0,
+                ActiveDendriteSpec {
+                    enabled: false,
+                    calcium_tau_ms: 120.0,
+                    plateau_tau_ms: 350.0,
+                    calcium_influx_gain: 1.0,
+                    plateau_threshold: 0.0,
+                    plateau_gain: 1.0,
+                },
+                DendriteStructureSignal {
+                    local_stimulus: 1.0,
+                    branching_gain: 2.0,
+                },
+            );
+            if (disabled_curr - 1.2).abs() > 1.0e-9 {
+                return Err("disabled active dendrite path should not modify current".to_string());
+            }
             Ok(())
         }
         FpaaKernel::GapJunctionField => {
@@ -668,6 +742,14 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                 });
             if !coupled || curr[1].abs() <= 0.0 {
                 return Err("gap junction coupling did not affect nearby node".to_string());
+            }
+            if curr[2].abs() > 1.0e-9 {
+                return Err(
+                    "gap junction coupling affected a node outside local radius".to_string()
+                );
+            }
+            if curr.sum().abs() > 1.0e-9 {
+                return Err("gap junction coupling did not preserve charge balance".to_string());
             }
             let factors = volume_transmission_factors_for_layer(
                 2,
@@ -697,10 +779,13 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                     "volume transmission factor did not exceed baseline near source".to_string(),
                 );
             }
+            if factors[1] <= 1.0 || factors[1] >= factors[0] {
+                return Err("volume transmission field did not decay with distance".to_string());
+            }
             Ok(())
         }
         FpaaKernel::MorphologyTransmission => {
-            let slow = compute_delay_and_attenuation(DelayAttenuationSpec {
+            let base_spec = DelayAttenuationSpec {
                 depth: 3,
                 dt_ms: 1.0,
                 time_seed: 0,
@@ -720,12 +805,16 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                     backprop_gain: 1.25,
                     is_backward_path: false,
                 }),
+                myelination: None,
+                fatigue: None,
+            };
+            let slow = compute_delay_and_attenuation(DelayAttenuationSpec {
                 myelination: Some(MyelinationProfile {
                     level: 0.0,
                     min_gain: 1.0,
                     max_gain: 3.0,
                 }),
-                fatigue: None,
+                ..base_spec
             });
             let fast = compute_delay_and_attenuation(DelayAttenuationSpec {
                 myelination: Some(MyelinationProfile {
@@ -733,26 +822,28 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                     min_gain: 1.0,
                     max_gain: 3.0,
                 }),
-                ..DelayAttenuationSpec {
-                    depth: 3,
-                    dt_ms: 1.0,
-                    time_seed: 0,
-                    synapse_index: 0,
-                    axon_steps: 10,
-                    dendrite_steps: 5,
-                    bouton_latency_steps: 1,
-                    jitter_ms: 0.0,
-                    attenuation_per_unit: 0.15,
-                    axon_length: 1.0,
-                    dendrite_length: 1.0,
-                    path_length_scale: 1.0,
-                    dendritic_profile: None,
-                    myelination: None,
-                    fatigue: None,
-                }
+                ..base_spec
             });
             if fast.steps >= slow.steps {
                 return Err("myelination did not reduce delay".to_string());
+            }
+            if fast.attenuation < slow.attenuation {
+                return Err("myelination unexpectedly reduced attenuation".to_string());
+            }
+            let fatigued = compute_delay_and_attenuation(DelayAttenuationSpec {
+                myelination: Some(MyelinationProfile {
+                    level: 1.0,
+                    min_gain: 1.0,
+                    max_gain: 3.0,
+                }),
+                fatigue: Some(FatigueProfile {
+                    axon_atp: 0.2,
+                    dendrite_atp: 0.2,
+                }),
+                ..base_spec
+            });
+            if fatigued.steps <= fast.steps {
+                return Err("fatigue did not increase transmission delay".to_string());
             }
             Ok(())
         }
@@ -763,12 +854,26 @@ fn run_kernel_sample_test(kernel: FpaaKernel) -> Result<(), String> {
                     "triplet eta scale did not potentiate under positive correlation".to_string(),
                 );
             }
-            let mut weights = Array2::from_shape_vec((2, 3), vec![0.3, -0.2, 0.1, 0.5, 0.2, -0.4])
-                .map_err(|e| e.to_string())?;
+            let mut weights: Array2<f64> =
+                Array2::from_shape_vec((2, 3), vec![0.3, -0.2, 0.1, 0.5, 0.2, -0.4])
+                    .map_err(|e| e.to_string())?;
+            let pre_row_err: f64 = weights
+                .rows()
+                .into_iter()
+                .map(|row| (row.iter().map(|w| (*w).abs()).sum::<f64>() - 1.0).abs())
+                .sum();
             apply_synaptic_scaling_matrix_rows(&mut weights, 0.2, 1.0);
             enforce_dale_matrix_cols_with_mask(&mut weights, &[false, true, false], 1.0, 1.0);
             if weights[(0, 1)] > 0.0 || weights[(1, 0)] < 0.0 {
                 return Err("Dale enforcement did not produce consistent column signs".to_string());
+            }
+            let post_row_err: f64 = weights
+                .rows()
+                .into_iter()
+                .map(|row| (row.iter().map(|w| (*w).abs()).sum::<f64>() - 1.0).abs())
+                .sum();
+            if post_row_err >= pre_row_err {
+                return Err("synaptic scaling did not move row norms toward target".to_string());
             }
             Ok(())
         }
@@ -860,7 +965,7 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
         let mut manifest_present = false;
         let mut ahf_present = false;
         let mut verification = FpaaKernelVerification::MissingManifest;
-        let mut note = String::new();
+        let mut note: Option<String> = None;
         let mut current_fingerprint = None;
 
         if let Ok(raw) = fs::read_to_string(&manifest_path) {
@@ -873,14 +978,14 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
                     ahf_path = Some(expected_ahf_path.display().to_string());
                     if !manifest_present {
                         verification = FpaaKernelVerification::MissingManifest;
-                        note = format!(
+                        note = Some(format!(
                             "manifest id mismatch: expected {}, found {}",
                             kernel.id(),
                             manifest.id
-                        );
+                        ));
                     } else if !ahf_present {
                         verification = FpaaKernelVerification::MissingAhf;
-                        note = "expected .ahf export is missing".to_string();
+                        note = Some("expected .ahf export is missing".to_string());
                     } else {
                         match validate_ahf_file(&expected_ahf_path) {
                             Ok(fingerprint) => {
@@ -891,65 +996,65 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
                                 {
                                     Some(_) if !state_schema_supported => {
                                         verification = FpaaKernelVerification::MissingProgramState;
-                                        note = state_schema_note.clone().unwrap_or_else(|| {
-                                            "runtime state schema is unsupported".to_string()
-                                        });
+                                        note =
+                                            Some(state_schema_note.clone().unwrap_or_else(|| {
+                                                "runtime state schema is unsupported".to_string()
+                                            }));
                                     }
                                     Some(_) if !state_transport_matches => {
                                         verification = FpaaKernelVerification::MissingProgramState;
-                                        note = state_transport_note.clone().unwrap_or_else(|| {
+                                        note = Some(state_transport_note.clone().unwrap_or_else(|| {
                                             "runtime state transport does not match detected hardware"
                                                 .to_string()
-                                        });
+                                        }));
                                     }
                                     Some(persisted) if persisted == fingerprint => {
                                         verification = FpaaKernelVerification::Loaded;
-                                        note = "programming state matches .ahf export".to_string();
                                     }
                                     Some(_) => {
                                         verification = FpaaKernelVerification::FingerprintMismatch;
-                                        note = "runtime state fingerprint differs from local .ahf export".to_string();
+                                        note = Some("runtime state fingerprint differs from local .ahf export".to_string());
                                     }
                                     None => {
                                         verification = FpaaKernelVerification::MissingProgramState;
-                                        note = "no persisted programming state for this kernel"
-                                            .to_string();
+                                        note = Some(
+                                            "no persisted programming state for this kernel"
+                                                .to_string(),
+                                        );
                                     }
                                 }
                             }
                             Err(err) => {
                                 verification = FpaaKernelVerification::InvalidAhf;
-                                note = err;
+                                note = Some(err);
                             }
                         }
                     }
                 }
                 Err(err) => {
                     verification = FpaaKernelVerification::MissingManifest;
-                    note = format!("manifest parse failed: {err}");
+                    note = Some(format!("manifest parse failed: {err}"));
                 }
             }
         } else {
-            note = "manifest file not found".to_string();
+            note = Some("manifest file not found".to_string());
         }
 
-        let sample_test = if ready && config.run_self_test_on_startup {
-            match run_kernel_sample_test(kernel) {
-                Ok(()) => FpaaSelfTestStatus::Passed,
-                Err(err) => {
-                    if note.is_empty() {
-                        note = err;
-                    } else {
-                        note = format!("{} | sample test: {}", note, err);
+        let sample_test =
+            if requested_route == FpaaKernelRoute::Fpaa && ready && config.run_self_test_on_startup
+            {
+                match run_kernel_sample_test(kernel) {
+                    Ok(()) => FpaaSelfTestStatus::Passed,
+                    Err(err) => {
+                        append_note(&mut note, format!("sample test: {err}"));
+                        FpaaSelfTestStatus::Failed
                     }
-                    FpaaSelfTestStatus::Failed
                 }
-            }
-        } else if available {
-            FpaaSelfTestStatus::NotRun
-        } else {
-            FpaaSelfTestStatus::Skipped
-        };
+            } else if requested_route == FpaaKernelRoute::Fpaa && available {
+                FpaaSelfTestStatus::NotRun
+            } else {
+                FpaaSelfTestStatus::Skipped
+            };
 
         let verified_for_fpaa = ready
             && verification == FpaaKernelVerification::Loaded
@@ -963,11 +1068,12 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
 
         if requested_route == FpaaKernelRoute::Fpaa
             && current_fingerprint.is_none()
-            && note.is_empty()
+            && note.is_none()
         {
-            note =
+            note = Some(
                 "requested FPAA route will fall back to software until a verified image is present"
-                    .to_string();
+                    .to_string(),
+            );
         }
 
         kernels.push(FpaaKernelStatus {
@@ -980,7 +1086,7 @@ pub fn startup_probe(config: &FpaaConfig) -> FpaaRuntimeStatus {
             ahf_present,
             verification,
             sample_test,
-            note,
+            note: note.unwrap_or_default(),
         });
     }
 
