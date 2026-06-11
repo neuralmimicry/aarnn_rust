@@ -21,7 +21,7 @@ PROTO HexapodRobot [
     name IS name
     controller IS controller
     controllerArgs IS controllerArgs
-    customData "{\"network\":\"../../network.json\",\"config\":\"../configs/config_hexapod_webots.json\"}"
+    customData "{\"network\":\"../../network_hexapod.json\",\"config\":\"../configs/config_hexapod_webots.json\"}"
     children [
       Transform {
         translation 0 0 0
@@ -152,6 +152,43 @@ PROTO HexapodRobot [
       }
       Transform { translation 0.036 0 0.158 rotation 0 0 1 1.5708 children [ Shape { appearance USE HEX_SENSOR_DARK_APP geometry Cylinder { radius 0.009 height 0.006 } } ] }
       Transform { translation 0.039 0 0.158 rotation 0 0 1 1.5708 children [ Shape { appearance USE HEX_ULTRASONIC_RING_APP geometry Cylinder { radius 0.005 height 0.003 } } ] }
+
+      # Active camera/ultrasonic devices aligned with the visual front module.
+      # Camera channels are event-encoded by DeviceMapper as:
+      #   <name>.on/off.rXXcYY
+      # with retina dimensions set via environment overrides.
+      Camera {
+        translation 0.165 0 0.050
+        rotation 0 1 0 0
+        name "hex_s_26_head_camera"
+        width 32
+        height 24
+        fieldOfView 1.117
+      }
+      DistanceSensor {
+        translation 0.165 0.024 0.050
+        rotation 0 0 1 1.5708
+        name "hex_s_27_ultrasonic_left"
+        type "sonar"
+        lookupTable [
+          0.00 1000 0
+          0.40 620 0
+          0.80 280 0
+          1.20 120 0
+        ]
+      }
+      DistanceSensor {
+        translation 0.165 -0.024 0.050
+        rotation 0 0 1 1.5708
+        name "hex_s_28_ultrasonic_right"
+        type "sonar"
+        lookupTable [
+          0.00 1000 0
+          0.40 620 0
+          0.80 280 0
+          1.20 120 0
+        ]
+      }
 
       # Simplified black servo blocks around the chassis, matching the Freenove kit silhouette.
       Transform { translation 0.125 0.115 0.004 rotation 0 0 1 0.785 children [ Shape { appearance DEF HEX_SERVO_APP PBRAppearance { baseColor 0.018 0.018 0.020 roughness 0.42 metalness 0.05 } geometry Box { size 0.045 0.030 0.028 } } ] }

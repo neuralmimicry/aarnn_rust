@@ -64,6 +64,9 @@ message NetworkActivityResponse {
   SpikeIndices sensory = 2;
   repeated SpikeIndices hidden = 3;
   SpikeIndices output = 4;
+  uint64 sim_step = 5;
+  double sim_time_ms = 6;
+  repeated SpikeIndices output_history = 7;
 }
 message NetworkResources {
   uint64 num_neurons = 1;

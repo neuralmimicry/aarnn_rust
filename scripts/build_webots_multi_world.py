@@ -53,6 +53,15 @@ def parse_csv(value: str) -> List[str]:
     return out
 
 
+def recorder_supervisor_node() -> str:
+    return """Robot {
+  name "NM_WORLD_RECORDER"
+  supervisor TRUE
+  controller "nm_world_recorder"
+}
+"""
+
+
 def rel_proto_ref(world_path: Path, proto_path: Path) -> str:
     return os.path.relpath(proto_path.resolve(), world_path.parent.resolve()).replace("\\", "/")
 
@@ -2232,6 +2241,7 @@ DirectionalLight {{
 }}
 {build_environment_block(entries, positions, arena_half_size, include_fridge)}
 {stimuli_nodes}
+{recorder_supervisor_node()}
 {''.join(robot_nodes)}
 """
     world_path.write_text(world, encoding="utf-8")

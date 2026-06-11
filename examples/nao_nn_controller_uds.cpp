@@ -411,6 +411,7 @@ int main(int argc, char** argv) {
         ss << "],\"o_names\":[";
         for (size_t i=0; i<brain.output_names.size(); ++i) ss << "\"" << brain.output_names[i] << "\"" << (i==brain.output_names.size()-1 ? "" : ",");
         ss << "],\"format\":\"" << (use_aer ? "aer" : "float") << "\"";
+        ss << ",\"dt_ms\":" << static_cast<float>(basic_time_step);
         ss << ",\"aer_s_base\":" << aer_s_base;
         ss << ",\"aer_o_base\":" << aer_o_base;
         ss << "}";

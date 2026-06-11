@@ -47,6 +47,15 @@ RUNTIME_ENV_DEFAULTS = {
     "NM_REALTIME_DISABLE_METABOLIC": "auto",
     "NM_REALTIME_DISABLE_PRUNING": "auto",
     "NM_MORPHO_ASYNC": "auto",
+    # Keep controller-side IPC defaults aligned with run_webot.sh wrappers.
+    "NM_UDS_RECV_TIMEOUT_MS": "150",
+    "NM_IPC_TIMEOUT_GRACE_MS": "1500",
+    "NM_IPC_TIMEOUT_LOG_INTERVAL_MS": "5000",
+    "NM_IPC_UDS_CTRL_BUF_BYTES": "524288",
+    "NM_IPC_WINDOW_MIN": "1",
+    "NM_IPC_WINDOW_INIT": "1",
+    "NM_IPC_WINDOW_MAX": "8",
+    "NM_IPC_SEND_BUDGET_MAX": "4",
 }
 RUNTIME_ENV_PASSTHROUGH = (
     "NM_REALTIME_MORPHO_INTERVAL_MS",

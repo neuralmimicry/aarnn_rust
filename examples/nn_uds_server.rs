@@ -47,6 +47,8 @@ struct HandshakeFrame {
     num_sensory_neurons: Option<usize>,
     #[serde(default)]
     num_output_neurons: Option<usize>,
+    #[serde(default)]
+    dt_ms: Option<f32>,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
@@ -408,6 +410,11 @@ fn main() -> io::Result<()> {
         let mut in_buf = vec![0f32; io_mapping_srv.total_sensor_values()];
         let mut spk_s = vec![0i8; io_mapping_srv.sensory_size];
         let mut out_buf = vec![0f32; io_mapping_srv.total_actuator_values()];
+        let mut ipc_dt_ms: f32 = std::env::var("NM_IPC_DT_MS")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
+            .unwrap_or(1.0);
 
         loop {
             let (bytes_received, peer_address) = match server_socket.recv_from(&mut request_buffer)
@@ -425,6 +432,19 @@ fn main() -> io::Result<()> {
             if payload[0] == b'{' {
                 match serde_json::from_slice::<HandshakeFrame>(payload) {
                     Ok(handshake) => {
+                        if let Some(handshake_dt_ms) = handshake
+                            .dt_ms
+                            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
+                        {
+                            if (ipc_dt_ms - handshake_dt_ms).abs() > f32::EPSILON {
+                                eprintln!(
+                                    "[nn_uds_server] applied handshake dt_ms={:.3}",
+                                    handshake_dt_ms
+                                );
+                            }
+                            ipc_dt_ms = handshake_dt_ms;
+                        }
+
                         let (mut requested_s, mut requested_o) = resolve_handshake_sizes(
                             &handshake,
                             io_mapping_srv.sensory_size,
@@ -513,6 +533,7 @@ fn main() -> io::Result<()> {
                     eprintln!("[nn_uds_server] bad AER payload");
                     continue;
                 }
+                runner.set_dt(ipc_dt_ms as f64);
                 let _out = runner.step(Some(&spk_s));
                 let out_vec: Vec<i8> = runner.last_spk_o.iter().copied().collect();
                 let ts_us = (runner.t_ms * 1000.0) as u64;

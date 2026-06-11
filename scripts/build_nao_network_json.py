@@ -3,7 +3,7 @@
 Build a NAO-focused Runner snapshot JSON and matching NetworkConfig JSON.
 
 Goal:
-  - Match NAO IPC dimensions observed at runtime (default O=40, S derived from camera event grid).
+  - Match NAO IPC dimensions observed at runtime (default O=40, S from a compressed camera event grid).
   - Produce a deterministic, multi-layer AARNN snapshot for embodied control.
   - Enable 3D growth + morphology + biological dynamics by default.
   - Reverse-engineer sensor/actuator labels from the NAO proto when available.
@@ -29,6 +29,35 @@ NAME_RE = re.compile(r'\bname\s+"([^"]+)"')
 TYPE_RE = re.compile(r'\btype\s+"([^"]+)"')
 EXTERNPROTO_RE = re.compile(r'^\s*EXTERNPROTO\s+"([^"]+)"', flags=re.MULTILINE)
 CAMERA_EVENT_RE = re.compile(r"^(?P<base>.+)\.(?P<polarity>on|off)\.r(?P<row>\d+)c(?P<col>\d+)$")
+
+
+# NAO hardware references (cross-checked from official NAO V6 docs):
+# - 25 DOF
+# - 2 cameras
+# - 4 microphones
+# - 2 sonar emitters + 2 sonar receivers
+# - 4 FSRs per foot
+# - tactile head / hands / foot bumpers
+NAO_HARDWARE_DOF = 25
+NAO_HARDWARE_CAMERAS = 2
+NAO_HARDWARE_MICROPHONES = 4
+NAO_HARDWARE_SONAR_EMITTERS = 2
+NAO_HARDWARE_SONAR_RECEIVERS = 2
+NAO_HARDWARE_FSR_PER_FOOT = 4
+NAO_HARDWARE_HEAD_TACTILE = 3
+NAO_HARDWARE_HAND_TACTILE_PER_HAND = 3
+NAO_HARDWARE_FOOT_BUMPERS = 4
+
+# Webots NAO mapper base channels excluding camera event pixels.
+NAO_BASE_NON_CAMERA_SENSORY = 58
+
+# Small-primate profile defaults (lower visual bandwidth, smaller hidden stack).
+DEFAULT_CAMERA_RETINA_WIDTH = 8
+DEFAULT_CAMERA_RETINA_HEIGHT = 6
+DEFAULT_HIDDEN_PER_LAYER = 64
+DEFAULT_HIDDEN_LAYERS = 4
+DEFAULT_AARNN_DEPTH = 3
+DEFAULT_GROWTH_HEADROOM = 1.6
 
 
 def iter_node_blocks(proto_text: str, node_type: str) -> Iterable[str]:
@@ -404,9 +433,9 @@ def synthetic_names(prefix: str, count: int, width: int) -> List[str]:
 
 
 def default_expected_sensory(camera_retina_width: int, camera_retina_height: int) -> int:
-    # NAO base sensors excluding both cameras = 58.
+    # NAO base sensors excluding both cameras = 58 (Webots NAO mapper channels).
     # Two cameras, per-pixel ON/OFF event channels: 2 * (W * H * 2) = 4 * W * H.
-    return 58 + 4 * camera_retina_width * camera_retina_height
+    return NAO_BASE_NON_CAMERA_SENSORY + 4 * camera_retina_width * camera_retina_height
 
 
 def resize_channels(
@@ -1223,7 +1252,10 @@ def main() -> None:
         "--expected-sensory",
         type=int,
         default=None,
-        help="Expected sensory channel count from NAO mapper (default: 58 + 4*camera-retina-width*camera-retina-height)",
+        help=(
+            "Expected sensory channel count from NAO mapper "
+            "(default: 58 + 4*camera-retina-width*camera-retina-height)"
+        ),
     )
     parser.add_argument(
         "--expected-output",
@@ -1234,46 +1266,52 @@ def main() -> None:
     parser.add_argument(
         "--camera-retina-width",
         type=int,
-        default=160,
-        help="Camera event encoder retina width per camera (default: 160 for full NAO camera width)",
+        default=DEFAULT_CAMERA_RETINA_WIDTH,
+        help=(
+            "Camera event encoder retina width per camera "
+            f"(default: {DEFAULT_CAMERA_RETINA_WIDTH}, small-primate profile)"
+        ),
     )
     parser.add_argument(
         "--camera-retina-height",
         type=int,
-        default=120,
-        help="Camera event encoder retina height per camera (default: 120 for full NAO camera height)",
+        default=DEFAULT_CAMERA_RETINA_HEIGHT,
+        help=(
+            "Camera event encoder retina height per camera "
+            f"(default: {DEFAULT_CAMERA_RETINA_HEIGHT}, small-primate profile)"
+        ),
     )
     parser.add_argument(
         "--hidden",
         dest="hidden_per_layer",
         type=int,
-        default=96,
+        default=DEFAULT_HIDDEN_PER_LAYER,
         help="(Deprecated alias) hidden neurons per layer",
     )
     parser.add_argument(
         "--hidden-per-layer",
         dest="hidden_per_layer",
         type=int,
-        default=96,
-        help="Hidden neurons per hidden layer (default: 96)",
+        default=DEFAULT_HIDDEN_PER_LAYER,
+        help=f"Hidden neurons per hidden layer (default: {DEFAULT_HIDDEN_PER_LAYER})",
     )
     parser.add_argument(
         "--hidden-layers",
         type=int,
-        default=6,
-        help="Number of hidden layers (default: 6)",
+        default=DEFAULT_HIDDEN_LAYERS,
+        help=f"Number of hidden layers (default: {DEFAULT_HIDDEN_LAYERS})",
     )
     parser.add_argument(
         "--aarnn-depth",
         type=int,
-        default=5,
-        help="AARNN biological depth level (clamped to 1..5, default: 5)",
+        default=DEFAULT_AARNN_DEPTH,
+        help=f"AARNN biological depth level (clamped to 1..5, default: {DEFAULT_AARNN_DEPTH})",
     )
     parser.add_argument(
         "--growth-headroom",
         type=float,
-        default=1.8,
-        help="Growth budget multiplier over initial neurons (>= 1.0, default: 1.8)",
+        default=DEFAULT_GROWTH_HEADROOM,
+        help=f"Growth budget multiplier over initial neurons (>= 1.0, default: {DEFAULT_GROWTH_HEADROOM})",
     )
     args = parser.parse_args()
 
@@ -1384,6 +1422,14 @@ def main() -> None:
     net["sensory_target_layer"] = sensory_target_layer
     net["output_source_layer"] = output_source_layer
 
+    # Ensure NAO-specific spike I/O profile is pinned even when template
+    # snapshots were generated for a different robot family.
+    spike_io = dict(net.get("spike_io") or {})
+    spike_io["profile"] = "nao"
+    spike_io["input_strategy"] = "profile_default"
+    spike_io["output_strategy"] = "profile_default"
+    net["spike_io"] = spike_io
+
     # Growth + morphology + bio detail
     net["growth_enabled"] = True
     net["morpho_growth_enabled"] = True
@@ -1420,6 +1466,8 @@ def main() -> None:
     net["p_in"] = 0.28
     net["p_hidden"] = 0.16
     net["p_out"] = 0.24
+    # Runtime currently supports a fixed clumping enum set; use HumanBrain for
+    # primate-style cortical clumping while keeping reduced NAO sizing.
     net["clumping_design"] = "HumanBrain"
     net["brain_regions"] = build_nao_regions()
     net["neuron_types"] = [
@@ -1529,7 +1577,7 @@ def main() -> None:
         "p_out": {"rows": output_count, "cols": out_cols, "data": flatten_row_major_u32(p_out)},
         "layer_range": None,
         "connectome_labels": {
-            "dataset": "NAO reverse engineered",
+            "dataset": "NAO reverse engineered (small-primate profile)",
             "sensory_nodes": sensory_names,
             "hidden_nodes": hidden_nodes,
             "hidden_layer_sizes": hidden_layer_sizes,
@@ -1556,6 +1604,18 @@ def main() -> None:
                 "channels_per_camera": int(2 * args.camera_retina_width * args.camera_retina_height),
                 "camera_count_assumed_for_default_expected_sensory": 2,
             },
+            "hardware_reference": {
+                "dof": NAO_HARDWARE_DOF,
+                "cameras": NAO_HARDWARE_CAMERAS,
+                "microphones": NAO_HARDWARE_MICROPHONES,
+                "sonar_emitters": NAO_HARDWARE_SONAR_EMITTERS,
+                "sonar_receivers": NAO_HARDWARE_SONAR_RECEIVERS,
+                "fsr_per_foot": NAO_HARDWARE_FSR_PER_FOOT,
+                "head_tactile": NAO_HARDWARE_HEAD_TACTILE,
+                "hand_tactile_per_hand": NAO_HARDWARE_HAND_TACTILE_PER_HAND,
+                "foot_bumpers": NAO_HARDWARE_FOOT_BUMPERS,
+                "webots_base_non_camera_sensory_channels": NAO_BASE_NON_CAMERA_SENSORY,
+            },
             "parse_error": parse_error or None,
             "generator": "build_nao_network_json.py",
             "growth_headroom": float(args.growth_headroom),
@@ -1563,13 +1623,13 @@ def main() -> None:
             "aarnn_depth_applied": aarnn_depth,
             "max_total_neurons": int(net["max_total_neurons"]),
             "topology_projection": {
-                "mode": "human_brain_biomimetic",
+                "mode": "small_primate_biomimetic",
                 "topo_region_counts": topo_region_counts,
                 "uses_role_guided_regioning": True,
             },
             "bio_profile": {
-                "species": "homo_sapiens_approx",
-                "dataset": "NAO reverse engineered",
+                "species": "small_primate_approx",
+                "dataset": "NAO reverse engineered (small-primate profile)",
                 "growth3d": True,
                 "morphology": True,
                 "aarnn_layer_depth": int(net["aarnn_layer_depth"]),

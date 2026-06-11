@@ -2165,12 +2165,25 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "type": "object",
             "properties": {
               "network_id": { "type": "string" },
+              "sim_step": { "type": "integer", "format": "uint64" },
+              "sim_time_ms": { "type": "number", "format": "double" },
               "sensory": { "$ref": "#/components/schemas/ActivityIndices" },
               "hidden": { "type": "array", "items": { "$ref": "#/components/schemas/ActivityIndices" } },
               "output": { "$ref": "#/components/schemas/ActivityIndices" },
+              "output_history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step": { "type": "integer", "format": "uint64" },
+                    "indices": { "type": "array", "items": { "type": "integer", "format": "uint32" } }
+                  },
+                  "required": ["step", "indices"]
+                }
+              },
               "source": { "type": "string" }
             },
-            "required": ["network_id", "sensory", "hidden", "output", "source"]
+            "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "hidden", "output", "output_history", "source"]
           },
           "UpdateNetworkPayload": {
             "type": "object",
@@ -4892,17 +4905,33 @@ async fn activity(
         {
             Ok(resp) => {
                 let resp = resp.into_inner();
+                let sim_step = resp.sim_step;
+                let sim_time_ms = resp.sim_time_ms;
                 let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
                 let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
                 let output = resp.output.map(|o| o.indices).unwrap_or_default();
+                let output_history = resp
+                    .output_history
+                    .into_iter()
+                    .enumerate()
+                    .map(|(offset, frame)| {
+                        json!({
+                            "step": sim_step.saturating_sub(offset as u64),
+                            "indices": frame.indices,
+                        })
+                    })
+                    .collect::<Vec<_>>();
 
                 return (
                     StatusCode::OK,
                     Json(json!({
                         "network_id": resp.network_id,
+                        "sim_step": sim_step,
+                        "sim_time_ms": sim_time_ms,
                         "sensory": { "indices": sensory },
                         "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
                         "output": { "indices": output },
+                        "output_history": output_history,
                         "source": target_addr,
                     })),
                 )

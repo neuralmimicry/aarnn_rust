@@ -130,13 +130,16 @@ const graphContextTitle = document.getElementById("graph-context-title");
 const graphContextDetails = document.getElementById("graph-context-details");
 const graphAddProbeBtn = document.getElementById("graph-add-probe");
 const POLL_MS = 2000;
-const ACTIVITY_POLL_MS = 500;
+const ACTIVITY_POLL_MS = 120;
 const SNAPSHOT_POLL_TICK_MS = 500;
 const SNAPSHOT_POLL_PLAYING_MS = 5000;
 const SNAPSHOT_POLL_IDLE_MS = 20000;
 const EQ_BANDS = 12;
 const PROBE_HISTORY = 220;
 const RASTER_HISTORY = 180;
+const MAX_RASTER_OUTPUTS = 4096;
+const PROBE_HOLD_SAMPLES = 3;
+const PROBE_RELEASE_STEP = 0.25;
 const PROBE_COLORS = ["#71e0b1", "#ffd37a", "#7db8ff", "#ff9b7a", "#d4a8ff", "#9ce67a", "#ffcf99", "#8dd8ff"];
 let bootstrapRuntimeDefaultUser = "";
 const state = {
@@ -362,7 +365,9 @@ function normalizeProbe(raw, fallbackId = 1) {
     label: raw && typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : probeDefaultLabel(targetType, layer, index),
     color: raw && typeof raw.color === "string" && raw.color.trim() ? raw.color.trim() : PROBE_COLORS[(id - 1) % PROBE_COLORS.length],
     enabled: (raw === null || raw === void 0 ? void 0 : raw.enabled) !== false,
-    samples: []
+    samples: [],
+    scopeLevel: 0,
+    holdSamples: 0
   };
 }
 function serializeProbe(probe) {
@@ -399,6 +404,7 @@ function loadInstrumentationState() {
       length: EQ_BANDS
     }, () => 0),
     outputRaster: [],
+    lastRasterStep: null,
     screenNodes: [],
     contextTarget: null
   };
@@ -420,11 +426,14 @@ function resetInstrumentationBuffers({
     length: EQ_BANDS
   }, () => 0);
   state.instrumentation.outputRaster = [];
+  state.instrumentation.lastRasterStep = null;
   state.instrumentation.screenNodes = [];
   state.instrumentation.contextTarget = null;
   if (keepProbes) {
     state.instrumentation.probes.forEach(probe => {
       probe.samples = [];
+      probe.scopeLevel = 0;
+      probe.holdSamples = 0;
     });
   } else {
     state.instrumentation.probes = [];
@@ -1426,18 +1435,20 @@ function syncTokenUi() {
     tokenRateModelEl.textContent = `${formatTokenAmount(rate, "")} / neuron / day`;
   }
   if (tokenStatusNoteEl) {
+    let tokenStatusText = "";
     if (state.authMode === "none") {
-      tokenStatusNoteEl.textContent = "Token accounting and checkout links are available after shared commercial sign-in.";
+      tokenStatusText = "Token accounting and checkout links are available after shared commercial sign-in.";
     } else if (!state.user) {
-      tokenStatusNoteEl.textContent = "Sign in to load your shared token balance.";
+      tokenStatusText = "Sign in to load your shared token balance.";
     } else if (state.token.error) {
-      tokenStatusNoteEl.textContent = state.token.error;
+      tokenStatusText = state.token.error;
     } else if (state.token.loading && state.token.balance === null) {
-      tokenStatusNoteEl.textContent = "Loading shared token balance...";
+      tokenStatusText = "Loading shared token balance...";
     } else {
       const updatedAt = formatTokenTimestamp(state.token.updatedAt);
-      tokenStatusNoteEl.textContent = updatedAt ? `Last updated ${updatedAt}.` : "Projected burn uses the active workspace and running fleet neuron totals.";
+      tokenStatusText = updatedAt ? `Last updated ${updatedAt}.` : "Projected burn uses the active workspace and running fleet neuron totals.";
     }
+    setStablePanelLine(tokenStatusNoteEl, tokenStatusText);
   }
   setLinkVisibility(tokenVaultLink, state.token.tokenVaultUrl || state.commerce.tokenVaultUrl);
   setLinkVisibility(tokenBuyLink, state.token.buyTokensUrl || state.commerce.buyTokensUrl);
@@ -2156,7 +2167,7 @@ function renderSidebar(nodes, networks, aggregate = null) {
   networksCountEl.textContent = dashboardNetworks.length.toString();
   const totalClusterEvals = dashboardNodes.reduce((sum, n) => sum + (n.ga_total_evaluations || 0), 0);
   clusterGaEvalsEl.textContent = totalClusterEvals.toString();
-  clusterNodesEl.innerHTML = dashboardNodes.map(n => {
+  const nodeRows = dashboardNodes.map(n => {
     const ramTotal = formatBytes(n.total_ram);
     const ramAvail = formatBytes(n.available_ram);
     const temp = Number(n.temperature_c || 0) > 0 ? `${Number(n.temperature_c).toFixed(1)} C` : "n/a";
@@ -2182,7 +2193,7 @@ function renderSidebar(nodes, networks, aggregate = null) {
     }
     return `<div class="line">${escapeHtml(`${nodeLabel} | CPU ${Number(n.cpu_usage || 0).toFixed(1)}% | RAM ${ramAvail}/${ramTotal} | Temp ${temp} | Neurons ${neurons} | Depth ${depth} | Cap ${capacity} | Comm ${comm} | ${pacing}`)}<br/><small>${escapeHtml(gaStatus)}</small></div>`;
   }).join("");
-  clusterNetworksEl.innerHTML = dashboardNetworks.map(n => {
+  const networkRows = dashboardNetworks.map(n => {
     const stateLabel = n.playing ? "running" : "stopped";
     const distribution = Array.isArray(n.distribution) ? n.distribution : [];
     const distText = distribution.map(d => {
@@ -2191,6 +2202,8 @@ function renderSidebar(nodes, networks, aggregate = null) {
     }).join(" | ");
     return `<div class="line">${escapeHtml(`${n.network_id} | ${stateLabel} | dt ${Number(n.current_dt || 0).toFixed(3)} ms | neurons ${Number(n.total_neurons || 0)} | layers ${Number(n.num_layers || 0)}`)}${distText ? `<br/><small>${escapeHtml(distText)}</small>` : ""}</div>`;
   }).join("");
+  setStableSublist(clusterNodesEl, nodeRows);
+  setStableSublist(clusterNetworksEl, networkRows);
 }
 function renderWorkspaceSidebar() {
   var _detail$summary$runni2, _detail$summary4, _ref8, _detail$status$sim_ti2, _detail$status3, _ref9, _detail$status$step2, _detail$status4, _ref0, _detail$status$total_, _detail$status5, _ref1, _ref10, _detail$status$num_hi, _detail$status6, _state$snapshot3, _ref11, _ref12, _detail$status$desire, _detail$status7, _state$snapshot4;
@@ -2298,37 +2311,46 @@ function setActiveNetworkPlaying(playing) {
 }
 function refreshControlNote() {
   if (!controlNoteEl) return;
+  let noteText = "";
   if (isWorkspaceMode()) {
     if (state.authMode !== "none" && !hasAarnnObserveAccess()) {
-      controlNoteEl.textContent = "AARNN observation authorisation is not granted for this session.";
+      noteText = "AARNN observation authorisation is not granted for this session.";
+      setStablePanelLine(controlNoteEl, noteText);
       return;
     }
     const workspace = getActiveWorkspaceMeta();
     if (!workspace) {
-      controlNoteEl.textContent = "Select a workspace or switch to cluster mode to control a runtime.";
+      noteText = "Select a workspace or switch to cluster mode to control a runtime.";
+      setStablePanelLine(controlNoteEl, noteText);
       return;
     }
     if (getActivePlaying() && !workspaceActionAllowed("stop")) {
-      controlNoteEl.textContent = `Workspace ${workspaceBaseLabel(workspace)} is running. AARNN control authorisation is required to stop, reset, or replace it.`;
+      noteText = `Workspace ${workspaceBaseLabel(workspace)} is running. AARNN control authorisation is required to stop, reset, or replace it.`;
+      setStablePanelLine(controlNoteEl, noteText);
       return;
     }
     if (!getActivePlaying() && !workspaceActionAllowed("start")) {
-      controlNoteEl.textContent = `Workspace ${workspaceBaseLabel(workspace)} is available. AARNN use authorisation is required to start or update it.`;
+      noteText = `Workspace ${workspaceBaseLabel(workspace)} is available. AARNN use authorisation is required to start or update it.`;
+      setStablePanelLine(controlNoteEl, noteText);
       return;
     }
-    controlNoteEl.textContent = `Controls go to workspace runtime ${workspaceBaseLabel(workspace)}.`;
+    noteText = `Controls go to workspace runtime ${workspaceBaseLabel(workspace)}.`;
+    setStablePanelLine(controlNoteEl, noteText);
     return;
   }
   const orchestrator = getActiveOrchestratorAddr();
   if (!orchestrator || !state.activeNetwork) {
-    controlNoteEl.textContent = "Select an orchestrator and cluster network to control.";
+    noteText = "Select an orchestrator and cluster network to control.";
+    setStablePanelLine(controlNoteEl, noteText);
     return;
   }
   if (state.activeNodeId) {
-    controlNoteEl.textContent = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus ${state.activeNodeId} only changes the snapshot and activity source.`;
+    noteText = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus ${state.activeNodeId} only changes the snapshot and activity source.`;
+    setStablePanelLine(controlNoteEl, noteText);
     return;
   }
-  controlNoteEl.textContent = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus only changes the snapshot and activity source.`;
+  noteText = `Controls go through orchestrator ${orchestrator} for cluster network ${state.activeNetwork}. Node focus only changes the snapshot and activity source.`;
+  setStablePanelLine(controlNoteEl, noteText);
 }
 function refreshControlButtons() {
   if (!startStopBtn || !repeatBtn || !resetBtn || !newBtn) return;
@@ -2362,7 +2384,9 @@ function refreshControlButtons() {
   refreshControlNote();
 }
 function isAarnnNetwork(meta) {
-  return Number((meta === null || meta === void 0 ? void 0 : meta.desired_aarnn_depth) || 0) > 0;
+  const depth = Number((meta === null || meta === void 0 ? void 0 : meta.desired_aarnn_depth) || 0);
+  const model = typeof (meta === null || meta === void 0 ? void 0 : meta.neuron_model) === "string" ? meta.neuron_model.toLowerCase() : "";
+  return depth > 0 || model === "aarnn";
 }
 function setLayout(layout, {
   save = true,
@@ -2381,7 +2405,19 @@ function setLayout(layout, {
 }
 function setLayoutForActiveNetwork() {
   const meta = getActiveNetworkMeta();
-  const desired = isAarnnNetwork(meta) ? "aarnn" : "conventional";
+  if (!meta || typeof meta !== "object") return;
+  const hasModelSignal = typeof meta.neuron_model === "string" && meta.neuron_model.length > 0;
+  const hasDepthSignal = Number(meta.desired_aarnn_depth || 0) > 0;
+  if (!hasModelSignal && !hasDepthSignal) {
+    return;
+  }
+  const model = hasModelSignal ? meta.neuron_model.toLowerCase() : "";
+  let desired = state.render.layout;
+  if (isAarnnNetwork(meta)) {
+    desired = "aarnn";
+  } else if (model && model !== "aarnn" && state.render.layout !== "aarnn") {
+    desired = "conventional";
+  }
   setLayout(desired, {
     save: false,
     resetView: true
@@ -2685,9 +2721,44 @@ function buildGraph(snapshot, layout) {
     edges
   };
 }
+function topologyHasNodes(topo) {
+  if (!topo || typeof topo !== "object") return false;
+  const layers = Array.isArray(topo.layers) ? topo.layers : [];
+  const sensory = Array.isArray(topo.sensory_nodes) ? topo.sensory_nodes : [];
+  const output = Array.isArray(topo.output_nodes) ? topo.output_nodes : [];
+  const early = Array.isArray(topo.early_cells) ? topo.early_cells : [];
+  const hasHidden = layers.some(layer => Array.isArray(layer) && layer.length > 0);
+  return hasHidden || sensory.length > 0 || output.length > 0 || early.length > 0;
+}
+function cloneAarnnNodes(nodes) {
+  const cloneNode = node => ({
+    ...node
+  });
+  return {
+    sensory: Array.isArray(nodes === null || nodes === void 0 ? void 0 : nodes.sensory) ? nodes.sensory.map(cloneNode) : [],
+    hidden: Array.isArray(nodes === null || nodes === void 0 ? void 0 : nodes.hidden) ? nodes.hidden.map(layer => Array.isArray(layer) ? layer.map(cloneNode) : []) : [],
+    output: Array.isArray(nodes === null || nodes === void 0 ? void 0 : nodes.output) ? nodes.output.map(cloneNode) : [],
+    early: Array.isArray(nodes === null || nodes === void 0 ? void 0 : nodes.early) ? nodes.early.map(cloneNode) : []
+  };
+}
 function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
-  if (snapshot.topo) {
+  const previousAarnnNodes = state.graph && state.render.layout === "aarnn" && state.graph.nodes ? state.graph.nodes : null;
+  if (topologyHasNodes(snapshot.topo)) {
     const earlyCells = Array.isArray(snapshot.topo.early_cells) ? snapshot.topo.early_cells : [];
+    const topoSensory = Array.isArray(snapshot.topo.sensory_nodes) ? snapshot.topo.sensory_nodes : [];
+    const topoOutput = Array.isArray(snapshot.topo.output_nodes) ? snapshot.topo.output_nodes : [];
+    const topoHidden = Array.isArray(snapshot.topo.layers) ? snapshot.topo.layers : [];
+    const topoHasPartialIo = topoSensory.length > 0 && topoSensory.length < sensoryCount || topoOutput.length > 0 && topoOutput.length < outputCount;
+    const topoHasPartialHidden = topoHidden.length > 0 && (topoHidden.length < hiddenSizes.length || topoHidden.some((layer, idx) => Array.isArray(layer) && Number(hiddenSizes[idx] || 0) > 0 && layer.length < Number(hiddenSizes[idx] || 0)));
+    if (previousAarnnNodes) {
+      const prevSensory = Array.isArray(previousAarnnNodes.sensory) ? previousAarnnNodes.sensory.length : 0;
+      const prevOutput = Array.isArray(previousAarnnNodes.output) ? previousAarnnNodes.output.length : 0;
+      const prevHidden = Array.isArray(previousAarnnNodes.hidden) ? previousAarnnNodes.hidden : [];
+      const hiddenShapeMatches = prevHidden.length === hiddenSizes.length && prevHidden.every((layer, idx) => (Array.isArray(layer) ? layer.length : 0) === Number(hiddenSizes[idx] || 0));
+      if ((topoHasPartialIo || topoHasPartialHidden) && prevSensory === sensoryCount && prevOutput === outputCount && hiddenShapeMatches) {
+        return cloneAarnnNodes(previousAarnnNodes);
+      }
+    }
     return {
       sensory: snapshot.topo.sensory_nodes.map((n, index) => ({
         x: n.x,
@@ -2731,6 +2802,15 @@ function buildAarnnNodes(snapshot, sensoryCount, hiddenSizes, outputCount) {
         };
       })
     };
+  }
+  if (previousAarnnNodes) {
+    const prevSensory = Array.isArray(previousAarnnNodes.sensory) ? previousAarnnNodes.sensory.length : 0;
+    const prevOutput = Array.isArray(previousAarnnNodes.output) ? previousAarnnNodes.output.length : 0;
+    const prevHidden = Array.isArray(previousAarnnNodes.hidden) ? previousAarnnNodes.hidden : [];
+    const hiddenShapeMatches = prevHidden.length === hiddenSizes.length && prevHidden.every((layer, idx) => (Array.isArray(layer) ? layer.length : 0) === Number(hiddenSizes[idx] || 0));
+    if (prevSensory === sensoryCount && prevOutput === outputCount && hiddenShapeMatches) {
+      return cloneAarnnNodes(previousAarnnNodes);
+    }
   }
   return {
     sensory: createRingNodes(sensoryCount, 0.65, 0, {
@@ -3096,6 +3176,14 @@ function currentOutputCount() {
   var _state$snapshot6, _state$graph2;
   return Number(((_state$snapshot6 = state.snapshot) === null || _state$snapshot6 === void 0 || (_state$snapshot6 = _state$snapshot6.net) === null || _state$snapshot6 === void 0 ? void 0 : _state$snapshot6.num_output_neurons) || ((_state$graph2 = state.graph) === null || _state$graph2 === void 0 || (_state$graph2 = _state$graph2.nodes) === null || _state$graph2 === void 0 || (_state$graph2 = _state$graph2.output) === null || _state$graph2 === void 0 ? void 0 : _state$graph2.length) || 0);
 }
+function currentRasterOutputCount() {
+  const frames = state.instrumentation.outputRaster || [];
+  const frameRows = frames.reduce((maxRows, frame) => {
+    if (!Array.isArray(frame)) return maxRows;
+    return Math.max(maxRows, frame.length);
+  }, 0);
+  return frameRows || currentOutputCount();
+}
 function currentHiddenCount(layer) {
   var _state$graph3;
   if (!Number.isFinite(layer) || layer < 0) return 0;
@@ -3112,13 +3200,11 @@ function findProbeByTarget(target) {
   return state.instrumentation.probes.find(probe => probeMatches(probe, target)) || null;
 }
 function setToolStatus(message) {
-  if (toolStatusEl) {
-    toolStatusEl.textContent = message;
-  }
+  setStablePanelLine(toolStatusEl, message);
 }
 function setWorkspaceFeedback(message, tone = "") {
   if (!workspaceFeedbackEl) return;
-  workspaceFeedbackEl.textContent = message || "Workspace actions appear here.";
+  setStablePanelLine(workspaceFeedbackEl, message || "Workspace actions appear here.");
   workspaceFeedbackEl.classList.remove("is-success", "is-error");
   if (tone === "success") workspaceFeedbackEl.classList.add("is-success");
   if (tone === "error") workspaceFeedbackEl.classList.add("is-error");
@@ -3223,11 +3309,14 @@ function drawScopePanel() {
   const width = rect.width - 24;
   const height = rect.height - 20;
   const laneHeight = height / probes.length;
+  let anyScopeEvents = false;
   for (let lane = 0; lane < probes.length; lane += 1) {
     const probe = probes[lane];
     const laneTop = top + lane * laneHeight;
     const laneBottom = laneTop + laneHeight - 6;
     const laneMid = laneBottom - (laneHeight - 16) * 0.5;
+    const lowY = laneBottom - 4;
+    const highY = laneBottom - (laneHeight - 18);
     scopeCtx.strokeStyle = "rgba(255,255,255,0.08)";
     scopeCtx.lineWidth = 1;
     scopeCtx.beginPath();
@@ -3240,19 +3329,38 @@ function drawScopePanel() {
     scopeCtx.fillText(formatGraphTarget(probe), left, laneTop + 9);
     const samples = probe.samples || [];
     if (!samples.length) continue;
+    let laneHasEvent = false;
+    let prevY = null;
     scopeCtx.strokeStyle = probe.color;
     scopeCtx.lineWidth = 1.5;
     scopeCtx.beginPath();
     samples.forEach((sample, index) => {
+      const normalized = Math.max(0, Math.min(1, Number(sample) || 0));
+      if (normalized > 0.001) {
+        laneHasEvent = true;
+      }
       const x = left + index / Math.max(1, PROBE_HISTORY - 1) * width;
-      const y = laneBottom - 4 - (sample ? laneHeight - 18 : 0);
+      const y = lowY - normalized * (lowY - highY);
       if (index === 0) {
         scopeCtx.moveTo(x, y);
       } else {
+        if (prevY !== null) {
+          scopeCtx.lineTo(x, prevY);
+        }
         scopeCtx.lineTo(x, y);
       }
+      prevY = y;
     });
     scopeCtx.stroke();
+    if (laneHasEvent) {
+      anyScopeEvents = true;
+    }
+  }
+  if (!anyScopeEvents) {
+    scopeCtx.fillStyle = "rgba(175,175,175,0.9)";
+    scopeCtx.font = "11px sans-serif";
+    scopeCtx.textAlign = "center";
+    scopeCtx.fillText("No spikes in selected probes", rect.width / 2, rect.height - 8);
   }
 }
 function drawRasterPanel() {
@@ -3266,7 +3374,7 @@ function drawRasterPanel() {
   if (rasterFramesEl) {
     rasterFramesEl.textContent = String(frames.length);
   }
-  const outputCount = currentOutputCount();
+  const outputCount = currentRasterOutputCount();
   if (!frames.length || !outputCount) {
     rasterCtx.fillStyle = "#8a8a8a";
     rasterCtx.font = "12px sans-serif";
@@ -3282,15 +3390,23 @@ function drawRasterPanel() {
   const ch = height / Math.max(1, outputCount);
   rasterCtx.fillStyle = "rgba(255,255,255,0.06)";
   rasterCtx.fillRect(left, top, width, height);
+  let rasterSpikeCount = 0;
   frames.forEach((frame, columnIndex) => {
     frame.forEach((value, outputIndex) => {
       if (!value) return;
+      rasterSpikeCount += 1;
       const x = left + columnIndex * cw;
       const y = top + (outputCount - outputIndex - 1) * ch;
       rasterCtx.fillStyle = "#9ce67a";
-      rasterCtx.fillRect(x, y, Math.max(1, cw - 1), Math.max(1, ch - 1));
+      rasterCtx.fillRect(x, y, Math.max(2, cw - 1), Math.max(2, ch - 1));
     });
   });
+  if (rasterSpikeCount > 0) {
+    rasterCtx.fillStyle = "rgba(210,210,210,0.9)";
+    rasterCtx.font = "10px sans-serif";
+    rasterCtx.textAlign = "right";
+    rasterCtx.fillText(`spikes ${rasterSpikeCount}`, rect.width - 10, 14);
+  }
 }
 function renderProbeList() {
   if (!scopeProbesEl) return;
@@ -3402,9 +3518,52 @@ function updateEqBands(sensoryIndices) {
     return previous * 0.72 + target * 0.28;
   });
 }
-function pushOutputRasterFrame(outputIndices) {
-  const outputCount = currentOutputCount();
-  if (!outputCount) return;
+function pushOutputRasterFrame(outputIndices, step = null) {
+  const numericStep = Number(step);
+  const hasStep = Number.isFinite(numericStep) && numericStep >= 0;
+  if (hasStep) {
+    const nextStep = Math.trunc(numericStep);
+    const rawLastStep = state.instrumentation.lastRasterStep;
+    const hasLastStep = rawLastStep !== null && rawLastStep !== undefined;
+    const lastStep = Number(rawLastStep);
+    if (hasLastStep && Number.isFinite(lastStep) && nextStep < lastStep && lastStep - nextStep > RASTER_HISTORY * 4) {
+      state.instrumentation.lastRasterStep = null;
+    } else if (hasLastStep && Number.isFinite(lastStep) && nextStep <= lastStep) {
+      return false;
+    }
+  }
+  const inferredFromIndices = outputIndices.reduce((maxCount, rawIndex) => {
+    const index = Number(rawIndex);
+    if (!Number.isFinite(index) || index < 0) return maxCount;
+    return Math.max(maxCount, Math.trunc(index) + 1);
+  }, 0);
+  const existingFrames = state.instrumentation.outputRaster || [];
+  const existingCount = currentRasterOutputCount();
+  const outputCount = Math.min(
+    MAX_RASTER_OUTPUTS,
+    existingFrames.length
+      ? Math.max(existingCount, inferredFromIndices)
+      : (inferredFromIndices || existingCount)
+  );
+  if (!outputCount) return false;
+  state.instrumentation.outputRaster = existingFrames.map(existing => {
+    if (!Array.isArray(existing)) {
+      return Array.from({
+        length: outputCount
+      }, () => 0);
+    }
+    if (existing.length === outputCount) {
+      return existing;
+    }
+    if (existing.length > outputCount) {
+      return existing.slice(0, outputCount);
+    }
+    const padded = existing.slice();
+    while (padded.length < outputCount) {
+      padded.push(0);
+    }
+    return padded;
+  });
   const frame = Array.from({
     length: outputCount
   }, () => 0);
@@ -3418,6 +3577,10 @@ function pushOutputRasterFrame(outputIndices) {
   while (state.instrumentation.outputRaster.length > RASTER_HISTORY) {
     state.instrumentation.outputRaster.shift();
   }
+  if (hasStep) {
+    state.instrumentation.lastRasterStep = Math.trunc(numericStep);
+  }
+  return true;
 }
 function readProbeValue(probe, sensorySet, hiddenSets, outputSet) {
   if (probe.targetType === "hidden") {
@@ -3434,7 +3597,17 @@ function pushProbeSamples(activity) {
   const hiddenSets = Array.isArray(activity === null || activity === void 0 ? void 0 : activity.hidden) ? activity.hidden.map(layer => new Set(((layer === null || layer === void 0 ? void 0 : layer.indices) || []).map(index => Number(index)))) : [];
   const outputSet = new Set(((activity === null || activity === void 0 || (_activity$output = activity.output) === null || _activity$output === void 0 ? void 0 : _activity$output.indices) || []).map(index => Number(index)));
   state.instrumentation.probes.forEach(probe => {
-    probe.samples.push(readProbeValue(probe, sensorySet, hiddenSets, outputSet));
+    const spike = readProbeValue(probe, sensorySet, hiddenSets, outputSet) > 0 ? 1 : 0;
+    if (spike) {
+      probe.scopeLevel = 1;
+      probe.holdSamples = PROBE_HOLD_SAMPLES;
+    } else if ((probe.holdSamples || 0) > 0) {
+      probe.holdSamples = Math.max(0, (probe.holdSamples || 0) - 1);
+    } else {
+      probe.scopeLevel = Math.max(0, Number(probe.scopeLevel || 0) - PROBE_RELEASE_STEP);
+    }
+    const sample = Number(probe.scopeLevel || 0);
+    probe.samples.push(sample > 0.0001 ? sample : 0);
     while (probe.samples.length > PROBE_HISTORY) {
       probe.samples.shift();
     }
@@ -3445,8 +3618,40 @@ function pushInstrumentationFrame(activity) {
   const sensoryIndices = (activity === null || activity === void 0 || (_activity$sensory2 = activity.sensory) === null || _activity$sensory2 === void 0 ? void 0 : _activity$sensory2.indices) || [];
   const outputIndices = (activity === null || activity === void 0 || (_activity$output2 = activity.output) === null || _activity$output2 === void 0 ? void 0 : _activity$output2.indices) || [];
   updateEqBands(sensoryIndices);
-  pushOutputRasterFrame(outputIndices);
-  pushProbeSamples(activity || {});
+  const outputHistory = Array.isArray(activity === null || activity === void 0 ? void 0 : activity.output_history) ? activity.output_history.slice() : [];
+  if (outputHistory.length) {
+    const ordered = outputHistory.sort((a, b) => {
+      const as = Number(a && a.step);
+      const bs = Number(b && b.step);
+      if (Number.isFinite(as) && Number.isFinite(bs)) return as - bs;
+      if (Number.isFinite(as)) return -1;
+      if (Number.isFinite(bs)) return 1;
+      return 0;
+    });
+    let appended = 0;
+    ordered.forEach(frame => {
+      const indices = Array.isArray(frame === null || frame === void 0 ? void 0 : frame.indices) ? frame.indices : [];
+      const didAppend = pushOutputRasterFrame(indices, frame === null || frame === void 0 ? void 0 : frame.step);
+      if (didAppend) {
+        appended += 1;
+        pushProbeSamples({
+          ...(activity || {}),
+          output: {
+            indices
+          }
+        });
+      }
+    });
+    if (!appended) {
+      renderInstrumentation();
+      return;
+    }
+  } else {
+    const didAppend = pushOutputRasterFrame(outputIndices, activity === null || activity === void 0 ? void 0 : activity.sim_step);
+    if (didAppend || !(activity !== null && activity !== void 0 && activity.sim_step != null)) {
+      pushProbeSamples(activity || {});
+    }
+  }
   renderInstrumentation();
 }
 function findNearestGraphNode(clientX, clientY) {
@@ -3625,20 +3830,39 @@ function normalizeIndicesEnvelope(raw) {
 function normalizeActivityPayload(activity) {
   if (!activity || typeof activity !== "object") {
     return {
+      sim_step: null,
+      sim_time_ms: null,
       sensory: {
         indices: []
       },
       hidden: [],
       output: {
         indices: []
-      }
+      },
+      output_history: []
     };
   }
+  const normalizeHistoryFrame = (frame, fallbackStep) => {
+    const envelope = normalizeIndicesEnvelope(frame);
+    const rawStep = Number(frame && frame.step != null ? frame.step : fallbackStep);
+    return {
+      step: Number.isFinite(rawStep) && rawStep >= 0 ? Math.trunc(rawStep) : null,
+      indices: envelope.indices
+    };
+  };
+  const simStep = Number(activity.sim_step);
+  const history = Array.isArray(activity.output_history) ? activity.output_history.map((frame, offset) => {
+    const fallbackStep = Number.isFinite(simStep) ? simStep - offset : null;
+    return normalizeHistoryFrame(frame, fallbackStep);
+  }) : [];
   return {
     ...activity,
+    sim_step: Number.isFinite(simStep) ? Math.trunc(simStep) : null,
+    sim_time_ms: Number.isFinite(Number(activity.sim_time_ms)) ? Number(activity.sim_time_ms) : null,
     sensory: normalizeIndicesEnvelope(activity.sensory),
     hidden: Array.isArray(activity.hidden) ? activity.hidden.map(layer => normalizeIndicesEnvelope(layer)) : [],
-    output: normalizeIndicesEnvelope(activity.output)
+    output: normalizeIndicesEnvelope(activity.output),
+    output_history: history
   };
 }
 function smoothHull(points, iterations = 2) {
@@ -3731,8 +3955,8 @@ function setPlaceholder() {
   activeTargetEl.textContent = "-";
   nodesCountEl.textContent = "0";
   networksCountEl.textContent = "0";
-  clusterNodesEl.innerHTML = "";
-  clusterNetworksEl.innerHTML = "";
+  setStableSublist(clusterNodesEl, "");
+  setStableSublist(clusterNetworksEl, "");
   resetInstrumentationBuffers();
   renderInstrumentation();
 }
@@ -4015,6 +4239,27 @@ function escapeHtml(str) {
         return c;
     }
   });
+}
+const STABLE_PANEL_BLANK = "\u00A0";
+function setStablePanelLine(el, message, fallback = STABLE_PANEL_BLANK) {
+  if (!el) return;
+  const text = typeof message === "string" ? message : "";
+  const normalized = text.trim().length ? text : fallback;
+  el.textContent = normalized;
+  if (normalized === fallback) {
+    el.removeAttribute("title");
+  } else {
+    el.title = text;
+  }
+}
+function setStableSublist(el, htmlRows, placeholder = STABLE_PANEL_BLANK) {
+  if (!el) return;
+  const rows = typeof htmlRows === "string" ? htmlRows.trim() : "";
+  if (rows.length > 0) {
+    el.innerHTML = rows;
+    return;
+  }
+  el.innerHTML = `<div class="line line-placeholder">${escapeHtml(placeholder)}</div>`;
 }
 function syncRenderControls() {
   fullTopologyToggle.checked = state.render.fullTopology;

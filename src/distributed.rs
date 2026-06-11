@@ -3374,10 +3374,39 @@ impl DistributedNode {
             let mut snapshot_layers: Option<u32> = None;
             let mut config_payload: Option<String> = None;
 
-            if let Some(snap_json) = network_snapshots.get(net_id) {
-                config_payload = Some(snap_json.clone());
-                if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(snap_json) {
-                    snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
+            if let Some(snap_json) = network_snapshots.get(net_id).cloned() {
+                let mut effective_snapshot = snap_json.clone();
+                if let Some(requested_cfg) =
+                    network_config_from_config_payload(&net_status.config_json)
+                {
+                    if let Ok(snap) =
+                        crate::runner::decode_snapshot_with_profile_backfill(&snap_json)
+                    {
+                        if network_config_shape_compatible(&snap.net, &requested_cfg) {
+                            if let Some(merged) =
+                                snapshot_with_network_config(&snap_json, &requested_cfg)
+                            {
+                                if merged != snap_json {
+                                    network_snapshots.insert(net_id.clone(), merged.clone());
+                                }
+                                effective_snapshot = merged;
+                            }
+                        } else {
+                            // Snapshot shape conflicts with requested config (e.g. stale S/O from
+                            // previous runs). Prefer config payload to keep hosted runners aligned.
+                            config_payload = serde_json::to_string(&requested_cfg).ok();
+                            snapshot_layers = Some((requested_cfg.num_hidden_layers + 1) as u32);
+                            network_snapshots.remove(net_id);
+                        }
+                    }
+                }
+                if config_payload.is_none() {
+                    config_payload = Some(effective_snapshot.clone());
+                    if let Ok(snap) =
+                        crate::runner::decode_snapshot_with_profile_backfill(&effective_snapshot)
+                    {
+                        snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
+                    }
                 }
             } else if !net_status.config_json.is_empty() {
                 if let Ok(snap) =
@@ -4771,34 +4800,52 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::not_found("network not hosted on this node"));
         };
 
-        let (hidden, output) = tokio::task::spawn_blocking(move || {
-            let net = net_arc.blocking_read();
-            let ts_us = (net.runner.t_ms * 1000.0) as u64;
-            let hidden = net
-                .runner
-                .last_spk_h
-                .iter()
-                .map(|layer| {
-                    let layer_vec: Vec<i8> = layer.iter().copied().collect();
-                    let exchange = encode_exchange(ts_us, 0, &layer_vec);
-                    SpikeIndices {
-                        indices: exchange.spike_indices,
-                        aer_payload: exchange.aer_payload,
-                        aer_base: exchange.aer_base,
-                    }
-                })
-                .collect::<Vec<_>>();
-            let output_vec: Vec<i8> = net.runner.last_spk_o.iter().copied().collect();
-            let exchange = encode_exchange(ts_us, 0, &output_vec);
-            let output = SpikeIndices {
-                indices: exchange.spike_indices,
-                aer_payload: exchange.aer_payload,
-                aer_base: exchange.aer_base,
-            };
-            (hidden, output)
-        })
-        .await
-        .map_err(|e| Status::internal(format!("activity task failed: {}", e)))?;
+        let (hidden, output, output_history, sim_step, sim_time_ms) =
+            tokio::task::spawn_blocking(move || {
+                let net = net_arc.blocking_read();
+                let ts_us = (net.runner.t_ms * 1000.0) as u64;
+                let sim_step = net.runner.t as u64;
+                let sim_time_ms = net.runner.t_ms;
+                let hidden = net
+                    .runner
+                    .last_spk_h
+                    .iter()
+                    .map(|layer| {
+                        let layer_vec: Vec<i8> = layer.iter().copied().collect();
+                        let exchange = encode_exchange(ts_us, 0, &layer_vec);
+                        SpikeIndices {
+                            indices: exchange.spike_indices,
+                            aer_payload: exchange.aer_payload,
+                            aer_base: exchange.aer_base,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let output_vec: Vec<i8> = net.runner.last_spk_o.iter().copied().collect();
+                let exchange = encode_exchange(ts_us, 0, &output_vec);
+                let output = SpikeIndices {
+                    indices: exchange.spike_indices,
+                    aer_payload: exchange.aer_payload,
+                    aer_base: exchange.aer_base,
+                };
+                let output_history = net
+                    .runner
+                    .spk_hist_o
+                    .iter()
+                    .take(128)
+                    .map(|frame| {
+                        let frame_vec: Vec<i8> = frame.iter().copied().collect();
+                        let exchange = encode_exchange(ts_us, 0, &frame_vec);
+                        SpikeIndices {
+                            indices: exchange.spike_indices,
+                            aer_payload: exchange.aer_payload,
+                            aer_base: exchange.aer_base,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (hidden, output, output_history, sim_step, sim_time_ms)
+            })
+            .await
+            .map_err(|e| Status::internal(format!("activity task failed: {}", e)))?;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
@@ -4809,6 +4856,9 @@ impl DistributedNeuromorphic for DistributedNode {
             }),
             hidden,
             output: Some(output),
+            sim_step,
+            sim_time_ms,
+            output_history,
         }))
     }
 }

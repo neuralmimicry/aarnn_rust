@@ -62,6 +62,20 @@ RUNTIME_ENV_DEFAULTS = {
     "NM_REALTIME_DISABLE_METABOLIC": "auto",
     "NM_REALTIME_DISABLE_PRUNING": "auto",
     "NM_MORPHO_ASYNC": "auto",
+    # Drosophila snapshots are large and can briefly saturate backend compute.
+    # Use conservative controller IPC defaults to reduce burst pressure.
+    "NM_UDS_RECV_TIMEOUT_MS": "250",
+    "NM_IPC_TIMEOUT_GRACE_MS": "5000",
+    "NM_IPC_TIMEOUT_LOG_INTERVAL_MS": "10000",
+    "NM_IPC_UDS_CTRL_BUF_BYTES": "524288",
+    "NM_IPC_WINDOW_MIN": "1",
+    "NM_IPC_WINDOW_INIT": "1",
+    "NM_IPC_WINDOW_MAX": "4",
+    "NM_IPC_SEND_BUDGET_MAX": "2",
+    "NM_IPC_FORCE_AER": "1",
+    "NM_IPC_MAX_RAW_BYTES": "60000",
+    "NM_IPC_AER_MAX_PACKET_BYTES": "60000",
+    "NM_IPC_AER_THRESHOLD": "0.20",
 }
 RUNTIME_ENV_PASSTHROUGH = (
     "NM_REALTIME_MORPHO_INTERVAL_MS",

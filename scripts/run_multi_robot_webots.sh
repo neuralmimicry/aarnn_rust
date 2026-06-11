@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 UI_MODE="${UI_MODE:-rust}"  # rust|web|cli
+UI_MODE_SET_BY_USER=0
 ROBOT_SPEC="${ROBOT_SPEC:-celegans=1}"
 REMOTE_COMPUTE="${REMOTE_COMPUTE:-0}"
 ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-50051}"
@@ -16,7 +17,12 @@ WEBOTS_RUNTIME_ROOT="${WEBOTS_RUNTIME_ROOT:-${NM_RUNTIME_ROOT:-$ROOT_DIR/data/ru
 WEBOTS_RUNTIME_USER="${WEBOTS_RUNTIME_USER:-webots}"
 WEBOTS_WORKSPACE_PREFIX="${WEBOTS_WORKSPACE_PREFIX:-webots}"
 WEBOTS_WORKSPACE_AUTOSAVE_STEPS="${WEBOTS_WORKSPACE_AUTOSAVE_STEPS:-10}"
+WEBOTS_WORKSPACE_RESUME_EXISTING_SET_BY_USER=0
+if [ -n "${WEBOTS_WORKSPACE_RESUME_EXISTING+x}" ]; then
+  WEBOTS_WORKSPACE_RESUME_EXISTING_SET_BY_USER=1
+fi
 WEBOTS_WORKSPACE_RESUME_EXISTING="${WEBOTS_WORKSPACE_RESUME_EXISTING:-1}"
+WEBOTS_WORKSPACE_RESUME_EFFECTIVE="$WEBOTS_WORKSPACE_RESUME_EXISTING"
 
 COUNT_CELEGANS_OVERRIDE=""
 COUNT_DROSOPHILA_BANC_OVERRIDE=""
@@ -39,9 +45,19 @@ DROSOPHILA_FAFB_PROTO_FILE="${DROSOPHILA_FAFB_PROTO_FILE:-$ROOT_DIR/webots_world
 NAO_NETWORK_FILE="${NAO_NETWORK_FILE:-$ROOT_DIR/network_nao.json}"
 NAO_CONFIG_FILE="${NAO_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_nao_webots.json}"
 
-HEXAPOD_NETWORK_FILE="${HEXAPOD_NETWORK_FILE:-$ROOT_DIR/network.json}"
+HEXAPOD_NETWORK_FILE="${HEXAPOD_NETWORK_FILE:-$ROOT_DIR/network_hexapod.json}"
 HEXAPOD_CONFIG_FILE="${HEXAPOD_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_hexapod_webots.json}"
 HEXAPOD_PROTO_FILE="${HEXAPOD_PROTO_FILE:-$ROOT_DIR/webots_world/protos/HexapodRobot.proto}"
+HEXAPOD_TEMPLATE_FILE="${HEXAPOD_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
+HEXAPOD_NETWORK_SCRIPT="${HEXAPOD_NETWORK_SCRIPT:-$ROOT_DIR/scripts/build_hexapod_network_json.py}"
+HEXAPOD_CAMERA_RETINA_WIDTH="${HEXAPOD_CAMERA_RETINA_WIDTH:-1}"
+HEXAPOD_CAMERA_RETINA_HEIGHT="${HEXAPOD_CAMERA_RETINA_HEIGHT:-1}"
+HEXAPOD_EXPECTED_OUTPUT="${HEXAPOD_EXPECTED_OUTPUT:-18}"
+HEXAPOD_HIDDEN_LAYERS="${HEXAPOD_HIDDEN_LAYERS:-6}"
+HEXAPOD_HIDDEN_PER_LAYER="${HEXAPOD_HIDDEN_PER_LAYER:-${HEXAPOD_HIDDEN_NEURONS:-96}}"
+HEXAPOD_AARNN_DEPTH="${HEXAPOD_AARNN_DEPTH:-4}"
+HEXAPOD_GROWTH_HEADROOM="${HEXAPOD_GROWTH_HEADROOM:-1.8}"
+HEXAPOD_REBUILD_NETWORK="${HEXAPOD_REBUILD_NETWORK:-0}"
 
 # Drosophila network build controls
 DROSOPHILA_BANC_DIR="${DROSOPHILA_BANC_DIR:-$ROOT_DIR/data/drosophila/BANC v626}"
@@ -89,6 +105,42 @@ for _v in DROSOPHILA_EXPECTED_SENSORY DROSOPHILA_MAX_SENSORY; do
   fi
 done
 
+for _v in HEXAPOD_CAMERA_RETINA_WIDTH HEXAPOD_CAMERA_RETINA_HEIGHT HEXAPOD_EXPECTED_OUTPUT HEXAPOD_HIDDEN_LAYERS HEXAPOD_HIDDEN_PER_LAYER HEXAPOD_AARNN_DEPTH; do
+  if ! [[ "${!_v}" =~ ^[0-9]+$ ]] || [ "${!_v}" -le 0 ]; then
+    echo "Invalid ${_v}='${!_v}' (must be positive integer)."
+    exit 1
+  fi
+done
+if ! python3 - "$HEXAPOD_GROWTH_HEADROOM" <<'PY'
+import sys
+try:
+    v = float(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+if v < 1.0:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+then
+  echo "Invalid HEXAPOD_GROWTH_HEADROOM='${HEXAPOD_GROWTH_HEADROOM}' (must be >= 1.0)."
+  exit 1
+fi
+
+# Hexapod base channels:
+#   18 joint position sensors
+#   6 foot contact sensors
+#   3 accelerometer channels
+#   3 gyro channels
+#   2 ultrasonic channels
+HEXAPOD_BASE_NON_CAMERA_SENSORY=32
+HEXAPOD_CAMERA_CHANNELS=$((2 * HEXAPOD_CAMERA_RETINA_WIDTH * HEXAPOD_CAMERA_RETINA_HEIGHT))
+HEXAPOD_EXPECTED_SENSORY_DEFAULT=$((HEXAPOD_BASE_NON_CAMERA_SENSORY + HEXAPOD_CAMERA_CHANNELS))
+HEXAPOD_EXPECTED_SENSORY="${HEXAPOD_EXPECTED_SENSORY:-$HEXAPOD_EXPECTED_SENSORY_DEFAULT}"
+if ! [[ "$HEXAPOD_EXPECTED_SENSORY" =~ ^[0-9]+$ ]] || [ "$HEXAPOD_EXPECTED_SENSORY" -le 0 ]; then
+  echo "Invalid HEXAPOD_EXPECTED_SENSORY='${HEXAPOD_EXPECTED_SENSORY}' (must be positive integer)."
+  exit 1
+fi
+
 CELEGANS_TEMPLATE_FILE="${CELEGANS_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
 CELEGANS_CONNECTOME_FILE="${CELEGANS_CONNECTOME_FILE:-$ROOT_DIR/celegans.py}"
 CELEGANS_REBUILD_NETWORK="${CELEGANS_REBUILD_NETWORK:-0}"
@@ -98,14 +150,14 @@ DROSOPHILA_REBUILD_ASSETS="${DROSOPHILA_REBUILD_ASSETS:-0}"
 NAO_TEMPLATE_FILE="${NAO_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
 NAO_NETWORK_SCRIPT="${NAO_NETWORK_SCRIPT:-$ROOT_DIR/scripts/build_nao_network_json.py}"
 NAO_PROTO_FILE="${NAO_PROTO_FILE:-}"
-NAO_CAMERA_RETINA_WIDTH="${NAO_CAMERA_RETINA_WIDTH:-160}"
-NAO_CAMERA_RETINA_HEIGHT="${NAO_CAMERA_RETINA_HEIGHT:-120}"
+NAO_CAMERA_RETINA_WIDTH="${NAO_CAMERA_RETINA_WIDTH:-8}"
+NAO_CAMERA_RETINA_HEIGHT="${NAO_CAMERA_RETINA_HEIGHT:-6}"
 NAO_EXPECTED_SENSORY="${NAO_EXPECTED_SENSORY:-$((58 + 4 * NAO_CAMERA_RETINA_WIDTH * NAO_CAMERA_RETINA_HEIGHT))}"
 NAO_EXPECTED_OUTPUT="${NAO_EXPECTED_OUTPUT:-40}"
-NAO_HIDDEN_LAYERS="${NAO_HIDDEN_LAYERS:-6}"
-NAO_HIDDEN_PER_LAYER="${NAO_HIDDEN_PER_LAYER:-${NAO_HIDDEN_NEURONS:-96}}"
-NAO_AARNN_DEPTH="${NAO_AARNN_DEPTH:-5}"
-NAO_GROWTH_HEADROOM="${NAO_GROWTH_HEADROOM:-1.8}"
+NAO_HIDDEN_LAYERS="${NAO_HIDDEN_LAYERS:-4}"
+NAO_HIDDEN_PER_LAYER="${NAO_HIDDEN_PER_LAYER:-${NAO_HIDDEN_NEURONS:-64}}"
+NAO_AARNN_DEPTH="${NAO_AARNN_DEPTH:-3}"
+NAO_GROWTH_HEADROOM="${NAO_GROWTH_HEADROOM:-1.6}"
 NAO_REBUILD_NETWORK="${NAO_REBUILD_NETWORK:-0}"
 
 # Keep runtime encoder dimensions aligned with generated NAO network I/O dimensions.
@@ -119,11 +171,53 @@ pass_through_has_arg() {
   local needle="$1"
   local arg
   for arg in "${PASS_THROUGH_ARGS[@]}"; do
-    if [ "$arg" = "$needle" ]; then
+    if [ "$arg" = "$needle" ] || [[ "$arg" == "$needle="* ]]; then
       return 0
     fi
   done
   return 1
+}
+
+webots_recording_requested() {
+  case "${NM_WEBOTS_RECORD:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+  esac
+
+  local arg
+  for arg in "${PASS_THROUGH_ARGS[@]}"; do
+    case "$arg" in
+      --webots-record|--webots-record-file|--webots-record-file=*|\
+      --webots-record-duration-ms|--webots-record-duration-ms=*|\
+      --webots-record-width|--webots-record-width=*|\
+      --webots-record-height|--webots-record-height=*|\
+      --webots-record-quality|--webots-record-quality=*|\
+      --webots-record-acceleration|--webots-record-acceleration=*|\
+      --webots-record-quit-on-done|--webots-record-progress)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+single_brain_config_io_defaults() {
+  local config_file="$1"
+  python3 - "$config_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    sensory = int(cfg.get("num_sensory_neurons", 0))
+    output = int(cfg.get("num_output_neurons", 0))
+except Exception:
+    raise SystemExit(0)
+
+if sensory > 0 and output > 0:
+    print(f"{sensory} {output}")
+PY
 }
 
 usage() {
@@ -131,7 +225,7 @@ usage() {
 Usage: scripts/run_multi_robot_webots.sh [options] [run_webot passthrough args]
 
 Options:
-  --ui-mode <rust|web|cli>   Frontend mode (default: rust).
+  --ui-mode <rust|web|cli>   Frontend mode (default: rust; recording forces cli).
   --robots <spec>            Robot count spec, e.g.
                              "drosophila_fafb=1,drosophila_banc=3,celegans=2,hexapod=1,nao=3"
   --celegans <n>             Override celegans count.
@@ -146,12 +240,30 @@ Environment:
   UI_MODE, ROBOT_SPEC, REMOTE_COMPUTE, ORCHESTRATOR_PORT, WEB_UI_LISTEN,
   WEBOTS_RUNTIME_ROOT, WEBOTS_RUNTIME_USER, WEBOTS_WORKSPACE_PREFIX,
   WEBOTS_WORKSPACE_AUTOSAVE_STEPS, WEBOTS_WORKSPACE_RESUME_EXISTING,
-  CELEGANS_* / DROSOPHILA_* / HEXAPOD_* / NAO_* path and build variables.
+  CELEGANS_* / DROSOPHILA_* / HEXAPOD_* / NAO_* path and build variables,
+  plus run_webot.sh passthrough env (notably NM_UDS_RECV_TIMEOUT_MS,
+  NM_IPC_TIMEOUT_GRACE_MS, NM_IPC_TIMEOUT_LOG_INTERVAL_MS,
+  NM_IPC_UDS_CTRL_BUF_BYTES, NM_IPC_WINDOW_MIN/INIT/MAX, NM_IPC_SEND_BUDGET_MAX,
+  NM_IPC_FORCE_AER, NM_IPC_AER_THRESHOLD, WEBOTS_CONNECT_TIMEOUT,
+  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT, NM_WEBOTS_RECORD, NM_WEBOTS_RECORD_FILE,
+  NM_WEBOTS_RECORD_WIDTH, NM_WEBOTS_RECORD_HEIGHT, NM_WEBOTS_RECORD_DURATION_MS,
+  NM_WEBOTS_RECORD_QUALITY, NM_WEBOTS_RECORD_ACCELERATION,
+  NM_WEBOTS_RECORD_PROGRESS, NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS).
+
+Recording:
+  Pass Webots recording options through after the robot options, for example:
+  scripts/run_multi_robot_webots.sh --robots celegans=1 \
+    --webots-mode fast --webots-headless --webots-record \
+    --webots-record-duration-ms 10000 --webots-record-progress
+  - Recording mode runs AARNN headless/cli so rendering can focus on Webots.
 
 Notes:
   - All robot instances are placed into a single Webots world.
   - Each instance gets a unique brain ID.
   - A single cluster runtime is launched with per-brain network/config mapping.
+  - When repeated robot kinds are launched, default workspace resume is auto-disabled
+    to keep all instances seeded from the same snapshot (override explicitly with
+    WEBOTS_WORKSPACE_RESUME_EXISTING=1).
 USAGE
 }
 
@@ -160,6 +272,7 @@ while [ "$#" -gt 0 ]; do
     --ui-mode)
       shift
       UI_MODE="${1:-$UI_MODE}"
+      UI_MODE_SET_BY_USER=1
       ;;
     --robots|--robot-counts)
       shift
@@ -208,6 +321,14 @@ done
 if [ "$UI_MODE" != "rust" ] && [ "$UI_MODE" != "web" ] && [ "$UI_MODE" != "cli" ]; then
   echo "Invalid --ui-mode '$UI_MODE' (must be rust, web, or cli)."
   exit 1
+fi
+if webots_recording_requested && [ "$UI_MODE" != "cli" ]; then
+  if [ "$UI_MODE_SET_BY_USER" -eq 1 ]; then
+    echo "Webots recording enabled; overriding --ui-mode $UI_MODE with cli so AARNN runs headless during capture."
+  else
+    echo "Webots recording enabled; using cli mode so AARNN runs headless during capture."
+  fi
+  UI_MODE="cli"
 fi
 
 # Preserve configured AARNN bio depth unless the caller explicitly opts into
@@ -340,6 +461,9 @@ if str(sel.get("long_range_policy", "")).strip().lower() != want_policy:
     raise SystemExit(1)
 net = data.get("net") or {}
 if int(net.get("num_sensory_neurons", -1)) != want_sensory:
+    raise SystemExit(1)
+spike_io = net.get("spike_io") or {}
+if str(spike_io.get("profile", "")).strip().lower() not in {"drosophila"}:
     raise SystemExit(1)
 if (labels.get("topology_projection") or {}).get("mode") != "region_inferred_balanced":
     raise SystemExit(1)
@@ -669,6 +793,237 @@ raise SystemExit(0)
 PY
 }
 
+hexapod_network_valid() {
+  local net_path="$1"
+  local cfg_path="$2"
+  local proto_path="$3"
+  python3 - "$net_path" "$cfg_path" "$proto_path" "$HEXAPOD_EXPECTED_SENSORY" "$HEXAPOD_EXPECTED_OUTPUT" "$HEXAPOD_HIDDEN_LAYERS" "$HEXAPOD_AARNN_DEPTH" "$HEXAPOD_CAMERA_RETINA_WIDTH" "$HEXAPOD_CAMERA_RETINA_HEIGHT" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+net_path = Path(sys.argv[1])
+cfg_path = Path(sys.argv[2])
+proto_path = Path(sys.argv[3])
+expected_s = int(sys.argv[4])
+expected_o = int(sys.argv[5])
+expected_layers = int(sys.argv[6])
+expected_depth = max(1, min(int(sys.argv[7]), 5))
+retina_w = int(sys.argv[8])
+retina_h = int(sys.argv[9])
+
+NAME_RE = re.compile(r'\bname\s+"([^"]+)"')
+TYPE_RE = re.compile(r'\btype\s+"([^"]+)"')
+CAM_RE = re.compile(r"^(?P<base>.+)\.(?P<polarity>on|off)\.r(?P<row>\d+)c(?P<col>\d+)$")
+
+def iter_node_blocks(text: str, node_type: str):
+    pat = re.compile(rf"\b{re.escape(node_type)}\b\s*\{{")
+    for m in pat.finditer(text):
+        start = m.end() - 1
+        depth = 0
+        i = start
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start : i + 1]
+                    break
+            i += 1
+
+def first_name(block: str):
+    m = NAME_RE.search(block)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    return name or None
+
+def index_digits(n: int) -> int:
+    max_index = max(0, n - 1)
+    digits = 1
+    while max_index >= 10:
+        max_index //= 10
+        digits += 1
+    return max(2, digits)
+
+def camera_channels(name: str):
+    row_digits = index_digits(retina_h)
+    col_digits = index_digits(retina_w)
+    out = []
+    for r in range(retina_h):
+        for c in range(retina_w):
+            out.append(f"{name}.on.r{r:0{row_digits}d}c{c:0{col_digits}d}")
+            out.append(f"{name}.off.r{r:0{row_digits}d}c{c:0{col_digits}d}")
+    return out
+
+def dedupe_keep_order(values):
+    seen = set()
+    out = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+def sort_sensor_channels(channels):
+    axis_order = {"x": 0, "y": 1, "z": 2, "mean": 3, "center": 4, "mean_gray": 3, "center_gray": 4}
+    def key(channel: str):
+        cam = CAM_RE.match(channel)
+        if cam:
+            base = cam.group("base")
+            row = int(cam.group("row"))
+            col = int(cam.group("col"))
+            polarity = 0 if cam.group("polarity") == "on" else 1
+            return (base, 0, 0, row, col, polarity, channel)
+        if "." in channel:
+            base, axis = channel.rsplit(".", 1)
+            if axis in axis_order:
+                return (base, 0, 1, axis_order[axis], 0, 0, channel)
+        return (channel, 1, 0, 0, 0, 0, channel)
+    return sorted(dedupe_keep_order(channels), key=key)
+
+def parse_proto_channels(path: Path):
+    text = path.read_text(encoding="utf-8")
+    sensor_devices = []
+    output_devices = []
+
+    for block in iter_node_blocks(text, "Accelerometer"):
+        name = first_name(block) or "accelerometer"
+        sensor_devices.append((name, [f"{name}.x", f"{name}.y", f"{name}.z"]))
+    for block in iter_node_blocks(text, "Camera"):
+        name = first_name(block)
+        if name:
+            sensor_devices.append((name, camera_channels(name)))
+    for block in iter_node_blocks(text, "Gyro"):
+        name = first_name(block) or "gyro"
+        sensor_devices.append((name, [f"{name}.x", f"{name}.y", f"{name}.z"]))
+    for node_type in ("DistanceSensor", "LightSensor", "PositionSensor"):
+        for block in iter_node_blocks(text, node_type):
+            name = first_name(block)
+            if name:
+                sensor_devices.append((name, [name]))
+    for block in iter_node_blocks(text, "TouchSensor"):
+        name = first_name(block)
+        if not name:
+            continue
+        t_match = TYPE_RE.search(block)
+        t = (t_match.group(1).strip().lower() if t_match else "")
+        if "force-3d" in t or "force3d" in t:
+            sensor_devices.append((name, [f"{name}.x", f"{name}.y", f"{name}.z"]))
+        else:
+            sensor_devices.append((name, [name]))
+
+    for node_type in ("RotationalMotor", "LinearMotor"):
+        for block in iter_node_blocks(text, node_type):
+            name = first_name(block)
+            if name:
+                output_devices.append(name)
+
+    sensory = []
+    for _, channels in sorted(sensor_devices, key=lambda it: it[0]):
+        sensory.extend(channels)
+    sensory = sort_sensor_channels(sensory)
+    outputs = sorted(dedupe_keep_order(output_devices))
+    return sensory, outputs
+
+try:
+    snap = json.loads(net_path.read_text(encoding="utf-8"))
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(snap, dict) or not isinstance(cfg, dict):
+    raise SystemExit(1)
+
+net = snap.get("net") or {}
+if not isinstance(net, dict):
+    raise SystemExit(1)
+
+if int(net.get("num_sensory_neurons", -1)) != expected_s:
+    raise SystemExit(1)
+if int(net.get("num_output_neurons", -1)) != expected_o:
+    raise SystemExit(1)
+if int(net.get("num_hidden_layers", 0) or 0) != expected_layers:
+    raise SystemExit(1)
+if int(net.get("aarnn_layer_depth", 0) or 0) != expected_depth:
+    raise SystemExit(1)
+if str((net.get("clumping_design") or "")).strip().lower() != "hexapod":
+    raise SystemExit(1)
+spike_io = net.get("spike_io") or {}
+if str((spike_io.get("profile") or "")).strip().lower() != "hexapod":
+    raise SystemExit(1)
+if not bool(net.get("growth_enabled", False)):
+    raise SystemExit(1)
+if not bool(net.get("use_morphology", False)):
+    raise SystemExit(1)
+
+if int(cfg.get("num_sensory_neurons", -1)) != expected_s:
+    raise SystemExit(1)
+if int(cfg.get("num_output_neurons", -1)) != expected_o:
+    raise SystemExit(1)
+if int(cfg.get("num_hidden_layers", 0) or 0) != expected_layers:
+    raise SystemExit(1)
+if int(cfg.get("aarnn_layer_depth", 0) or 0) != expected_depth:
+    raise SystemExit(1)
+cfg_spike = cfg.get("spike_io") or {}
+if str((cfg_spike.get("profile") or "")).strip().lower() != "hexapod":
+    raise SystemExit(1)
+
+w_in = snap.get("w_in") or {}
+w_out = snap.get("w_out") or {}
+w_fwd = snap.get("w_hh_fwd") or []
+w_bwd = snap.get("w_hh_bwd") or []
+w_rec = snap.get("w_hh_rec") or []
+if int(w_in.get("cols", 0) or 0) != expected_s:
+    raise SystemExit(1)
+if int(w_out.get("rows", 0) or 0) != expected_o:
+    raise SystemExit(1)
+if not isinstance(w_fwd, list) or len(w_fwd) != expected_layers - 1:
+    raise SystemExit(1)
+if not isinstance(w_bwd, list) or len(w_bwd) != expected_layers - 1:
+    raise SystemExit(1)
+if not isinstance(w_rec, list) or len(w_rec) != expected_layers:
+    raise SystemExit(1)
+
+labels = snap.get("connectome_labels") or {}
+s_nodes = labels.get("sensory_nodes")
+o_nodes = labels.get("output_nodes")
+if not isinstance(s_nodes, list) or len(s_nodes) != expected_s:
+    raise SystemExit(1)
+if not isinstance(o_nodes, list) or len(o_nodes) != expected_o:
+    raise SystemExit(1)
+
+proto_s, proto_o = parse_proto_channels(proto_path)
+if len(proto_s) != expected_s:
+    raise SystemExit(1)
+if len(proto_o) < expected_o:
+    raise SystemExit(1)
+if s_nodes != proto_s:
+    raise SystemExit(1)
+if o_nodes != proto_o[:expected_o]:
+    raise SystemExit(1)
+
+io_map_path = cfg_path.with_name(f"{cfg_path.stem}.io_alignment.json")
+if not io_map_path.exists():
+    raise SystemExit(1)
+try:
+    io_map = json.loads(io_map_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if int(len(io_map.get("sensory_channels") or [])) != expected_s:
+    raise SystemExit(1)
+if int(len(io_map.get("output_channels") or [])) != expected_o:
+    raise SystemExit(1)
+
+raise SystemExit(0)
+PY
+}
+
 if [ "$COUNT_CELEGANS" -gt 0 ]; then
   CELEGANS_NETWORK_SCRIPT="$ROOT_DIR/scripts/build_celegans_network_json.py"
   CELEGANS_ASSET_SCRIPT="$ROOT_DIR/scripts/build_webots_celegans_assets.py"
@@ -854,8 +1209,9 @@ if [ "$COUNT_NAO" -gt 0 ]; then
     exit 1
   fi
 
-  # Full-resolution NAO camera event streams must use compact AER packets and
-  # a larger UDS receive buffer to remain non-blocking and resilient.
+  # Keep NAO camera event transport on compact AER packets with a larger
+  # receive buffer for resilient non-blocking IPC (especially when retina
+  # resolution is increased via overrides).
   NM_IPC_FORCE_AER="${NM_IPC_FORCE_AER:-1}"
   NM_IPC_MAX_RAW_BYTES="${NM_IPC_MAX_RAW_BYTES:-60000}"
   NM_IPC_AER_MAX_PACKET_BYTES="${NM_IPC_AER_MAX_PACKET_BYTES:-60000}"
@@ -864,6 +1220,58 @@ if [ "$COUNT_NAO" -gt 0 ]; then
 fi
 
 if [ "$COUNT_HEXAPOD" -gt 0 ]; then
+  if [ ! -f "$HEXAPOD_PROTO_FILE" ]; then
+    echo "Missing hexapod proto file: $HEXAPOD_PROTO_FILE"
+    exit 1
+  fi
+  if [ ! -f "$HEXAPOD_NETWORK_SCRIPT" ]; then
+    echo "Missing hexapod network builder script: $HEXAPOD_NETWORK_SCRIPT"
+    exit 1
+  fi
+  if [ ! -f "$HEXAPOD_TEMPLATE_FILE" ]; then
+    echo "Missing hexapod template snapshot: $HEXAPOD_TEMPLATE_FILE"
+    exit 1
+  fi
+
+  # Keep runtime camera-event encoder dimensions aligned with generated
+  # hexapod sensory channels for the front camera device.
+  NM_CAMERA_RETINA_WIDTH_HEX_S_26_HEAD_CAMERA="${NM_CAMERA_RETINA_WIDTH_HEX_S_26_HEAD_CAMERA:-$HEXAPOD_CAMERA_RETINA_WIDTH}"
+  NM_CAMERA_RETINA_HEIGHT_HEX_S_26_HEAD_CAMERA="${NM_CAMERA_RETINA_HEIGHT_HEX_S_26_HEAD_CAMERA:-$HEXAPOD_CAMERA_RETINA_HEIGHT}"
+  export NM_CAMERA_RETINA_WIDTH_HEX_S_26_HEAD_CAMERA NM_CAMERA_RETINA_HEIGHT_HEX_S_26_HEAD_CAMERA
+
+  HEXAPOD_NETWORK_STALE=0
+  if [ ! -f "$HEXAPOD_NETWORK_FILE" ] || [ ! -f "$HEXAPOD_CONFIG_FILE" ]; then
+    HEXAPOD_NETWORK_STALE=1
+  fi
+  if [ "$HEXAPOD_NETWORK_SCRIPT" -nt "$HEXAPOD_NETWORK_FILE" ] || [ "$HEXAPOD_NETWORK_SCRIPT" -nt "$HEXAPOD_CONFIG_FILE" ]; then
+    HEXAPOD_NETWORK_STALE=1
+  fi
+  if [ "$HEXAPOD_TEMPLATE_FILE" -nt "$HEXAPOD_NETWORK_FILE" ] || [ "$HEXAPOD_TEMPLATE_FILE" -nt "$HEXAPOD_CONFIG_FILE" ]; then
+    HEXAPOD_NETWORK_STALE=1
+  fi
+  if [ "$HEXAPOD_PROTO_FILE" -nt "$HEXAPOD_NETWORK_FILE" ] || [ "$HEXAPOD_PROTO_FILE" -nt "$HEXAPOD_CONFIG_FILE" ]; then
+    HEXAPOD_NETWORK_STALE=1
+  fi
+  if [ -f "$HEXAPOD_NETWORK_FILE" ] && [ -f "$HEXAPOD_CONFIG_FILE" ] && ! hexapod_network_valid "$HEXAPOD_NETWORK_FILE" "$HEXAPOD_CONFIG_FILE" "$HEXAPOD_PROTO_FILE"; then
+    HEXAPOD_NETWORK_STALE=1
+  fi
+
+  if [ "$HEXAPOD_REBUILD_NETWORK" = "1" ] || [ "$HEXAPOD_NETWORK_STALE" = "1" ]; then
+    python3 "$HEXAPOD_NETWORK_SCRIPT" \
+      --template "$HEXAPOD_TEMPLATE_FILE" \
+      --output "$HEXAPOD_NETWORK_FILE" \
+      --config-output "$HEXAPOD_CONFIG_FILE" \
+      --hexapod-proto "$HEXAPOD_PROTO_FILE" \
+      --expected-sensory "$HEXAPOD_EXPECTED_SENSORY" \
+      --expected-output "$HEXAPOD_EXPECTED_OUTPUT" \
+      --camera-retina-width "$HEXAPOD_CAMERA_RETINA_WIDTH" \
+      --camera-retina-height "$HEXAPOD_CAMERA_RETINA_HEIGHT" \
+      --hidden-layers "$HEXAPOD_HIDDEN_LAYERS" \
+      --hidden-per-layer "$HEXAPOD_HIDDEN_PER_LAYER" \
+      --aarnn-depth "$HEXAPOD_AARNN_DEPTH" \
+      --growth-headroom "$HEXAPOD_GROWTH_HEADROOM"
+  fi
+
   if [ ! -f "$HEXAPOD_NETWORK_FILE" ]; then
     echo "Missing hexapod network snapshot: $HEXAPOD_NETWORK_FILE"
     exit 1
@@ -872,11 +1280,46 @@ if [ "$COUNT_HEXAPOD" -gt 0 ]; then
     echo "Missing hexapod config file: $HEXAPOD_CONFIG_FILE"
     exit 1
   fi
-  if [ ! -f "$HEXAPOD_PROTO_FILE" ]; then
-    echo "Missing hexapod proto file: $HEXAPOD_PROTO_FILE"
+  if ! hexapod_network_valid "$HEXAPOD_NETWORK_FILE" "$HEXAPOD_CONFIG_FILE" "$HEXAPOD_PROTO_FILE"; then
+    echo "Hexapod network/config validation failed for: $HEXAPOD_NETWORK_FILE / $HEXAPOD_CONFIG_FILE"
     exit 1
   fi
+
+  # Keep hexapod sensory ingress on explicit event transport so sparse sensor
+  # channels are visible in IPC diagnostics and spike raster views.
+  NM_IPC_FORCE_AER="${NM_IPC_FORCE_AER:-1}"
+  NM_IPC_MAX_RAW_BYTES="${NM_IPC_MAX_RAW_BYTES:-60000}"
+  NM_IPC_AER_MAX_PACKET_BYTES="${NM_IPC_AER_MAX_PACKET_BYTES:-60000}"
+  NM_IPC_AER_THRESHOLD="${NM_IPC_AER_THRESHOLD:-0.12}"
+  NM_IPC_UDS_RECV_BUF_BYTES="${NM_IPC_UDS_RECV_BUF_BYTES:-262144}"
+  export NM_IPC_FORCE_AER NM_IPC_MAX_RAW_BYTES NM_IPC_AER_MAX_PACKET_BYTES NM_IPC_AER_THRESHOLD NM_IPC_UDS_RECV_BUF_BYTES
 fi
+
+# Webots controller IPC pacing/logging defaults:
+# keep the UDS bridge non-blocking but less bursty so occasional reply jitter
+# does not show as repeated timeout chatter.
+NM_UDS_RECV_TIMEOUT_MS="${NM_UDS_RECV_TIMEOUT_MS:-150}"
+NM_IPC_TIMEOUT_GRACE_MS="${NM_IPC_TIMEOUT_GRACE_MS:-1500}"
+NM_IPC_TIMEOUT_LOG_INTERVAL_MS="${NM_IPC_TIMEOUT_LOG_INTERVAL_MS:-5000}"
+NM_IPC_UDS_CTRL_BUF_BYTES="${NM_IPC_UDS_CTRL_BUF_BYTES:-524288}"
+NM_IPC_WINDOW_MIN="${NM_IPC_WINDOW_MIN:-1}"
+NM_IPC_WINDOW_INIT="${NM_IPC_WINDOW_INIT:-1}"
+NM_IPC_WINDOW_MAX="${NM_IPC_WINDOW_MAX:-1}"
+NM_IPC_SEND_BUDGET_MAX="${NM_IPC_SEND_BUDGET_MAX:-1}"
+NM_IPC_STRICT_LOCKSTEP="${NM_IPC_STRICT_LOCKSTEP:-1}"
+# Slow Webots progression intentionally so AARNN compute has maximum wall-time headroom.
+# Set to 0 to disable.
+NM_WEBOTS_STEP_SLEEP_MS="${NM_WEBOTS_STEP_SLEEP_MS:-0}"
+export NM_UDS_RECV_TIMEOUT_MS \
+  NM_IPC_TIMEOUT_GRACE_MS \
+  NM_IPC_TIMEOUT_LOG_INTERVAL_MS \
+  NM_IPC_UDS_CTRL_BUF_BYTES \
+  NM_IPC_WINDOW_MIN \
+  NM_IPC_WINDOW_INIT \
+  NM_IPC_WINDOW_MAX \
+  NM_IPC_SEND_BUDGET_MAX \
+  NM_IPC_STRICT_LOCKSTEP \
+  NM_WEBOTS_STEP_SLEEP_MS
 
 declare -a BRAINS=()
 declare -a CELEGANS_BRAINS=()
@@ -991,12 +1434,42 @@ print(json.dumps(specs, separators=(",", ":")))
 PY
 )"
 
+  local resume_existing_effective="$WEBOTS_WORKSPACE_RESUME_EXISTING"
+  if [ "$WEBOTS_WORKSPACE_RESUME_EXISTING_SET_BY_USER" -eq 0 ] && [ "$resume_existing_effective" = "1" ]; then
+    local repeated_kinds
+    repeated_kinds="$(
+      python3 - "${BRAINS[@]}" <<'PY'
+import sys
+from collections import defaultdict
+brains = [b.strip() for b in sys.argv[1:] if b.strip()]
+
+groups = defaultdict(list)
+for brain in brains:
+    kind = brain.split("_", 1)[0]
+    groups[kind].append(brain)
+
+repeated = []
+for kind, members in groups.items():
+    if len(members) >= 2:
+        repeated.append(f"{kind}x{len(members)}")
+
+print(",".join(sorted(repeated)))
+PY
+    )"
+    if [ -n "$repeated_kinds" ]; then
+      echo "Workspace resume auto-disabled for repeated robot kinds: $repeated_kinds"
+      echo "  using WEBOTS_WORKSPACE_RESUME_EXISTING=0 so all instances start from the same seed snapshot."
+      echo "  set WEBOTS_WORKSPACE_RESUME_EXISTING=1 explicitly if you want per-instance historical state."
+      resume_existing_effective=0
+    fi
+  fi
+
   local bindings_json
   bindings_json="$(python3 "$helper" \
     --root "$WEBOTS_RUNTIME_ROOT" \
     --user "$WEBOTS_RUNTIME_USER" \
     --autosave-steps "$WEBOTS_WORKSPACE_AUTOSAVE_STEPS" \
-    --resume-existing "$WEBOTS_WORKSPACE_RESUME_EXISTING" \
+    --resume-existing "$resume_existing_effective" \
     --spec-json "$specs_json")" || {
       echo "Failed to prepare runtime workspaces."
       exit 1
@@ -1009,7 +1482,33 @@ PY
   export NM_RUNTIME_WORKSPACE_BINDINGS="$bindings_json"
   export NM_WEB_UI_RUNTIME_ROOT="$WEBOTS_RUNTIME_ROOT"
   export NM_WEB_UI_DEFAULT_RUNTIME_USER="$WEBOTS_RUNTIME_USER"
+  WEBOTS_WORKSPACE_RESUME_EFFECTIVE="$resume_existing_effective"
   rebuild_network_map_from_workspace_bindings "$bindings_json"
+}
+
+print_workspace_seed_summary() {
+  local bindings="${NM_RUNTIME_WORKSPACE_BINDINGS:-}"
+  if [ -z "$bindings" ]; then
+    return
+  fi
+  python3 - "$bindings" <<'PY'
+import json
+import sys
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(0)
+
+if not isinstance(data, dict) or not data:
+    raise SystemExit(0)
+
+print("  workspace seeds:")
+for brain in sorted(data):
+    entry = data.get(brain)
+    seed = str((entry or {}).get("seed_source", "")).strip() or "unknown"
+    print(f"    {brain}: {seed}")
+PY
 }
 
 for i in $(seq 1 "$COUNT_CELEGANS"); do
@@ -1077,6 +1576,165 @@ echo "  brains: $BRAINS_CSV"
 echo "  runtime root: $WEBOTS_RUNTIME_ROOT"
 echo "  runtime user: $WEBOTS_RUNTIME_USER"
 echo "  workspace prefix: $WEBOTS_WORKSPACE_PREFIX"
+echo "  workspace resume existing (requested/effective): $WEBOTS_WORKSPACE_RESUME_EXISTING/$WEBOTS_WORKSPACE_RESUME_EFFECTIVE"
+echo "  webots extra step sleep (ms): $NM_WEBOTS_STEP_SLEEP_MS"
+echo "  IPC strict lockstep/window/send: $NM_IPC_STRICT_LOCKSTEP $NM_IPC_WINDOW_MIN/$NM_IPC_WINDOW_INIT/$NM_IPC_WINDOW_MAX budget=$NM_IPC_SEND_BUDGET_MAX"
+print_workspace_seed_summary
+
+DEFAULT_SO_ARGS=()
+if [ "$TOTAL_ROBOTS" -eq 1 ] && [ -n "$PRIMARY_CONFIG_FILE" ] && [ -f "$PRIMARY_CONFIG_FILE" ]; then
+  config_defaults="$(single_brain_config_io_defaults "$PRIMARY_CONFIG_FILE" || true)"
+  if [ -n "$config_defaults" ]; then
+    config_default_s="${config_defaults%% *}"
+    config_default_o="${config_defaults##* }"
+
+    if [ -z "${NM_DEFAULT_SENSORY+x}" ] && ! pass_through_has_arg "--sensory"; then
+      DEFAULT_SO_ARGS+=(--sensory "$config_default_s")
+    fi
+    if [ -z "${NM_DEFAULT_OUTPUT+x}" ] && ! pass_through_has_arg "--output"; then
+      DEFAULT_SO_ARGS+=(--output "$config_default_o")
+    fi
+
+    if [ "${#DEFAULT_SO_ARGS[@]}" -gt 0 ]; then
+      echo "  pre-handshake fallback S/O (from config): $config_default_s/$config_default_o"
+    fi
+  fi
+fi
+
+MAX_NETWORK_BYTES=0
+for brain in "${BRAINS[@]}"; do
+  network_path="${BRAIN_NETWORK_FILES[$brain]:-}"
+  if [ -z "$network_path" ] || [ ! -f "$network_path" ]; then
+    continue
+  fi
+  network_bytes="$(stat -c%s "$network_path" 2>/dev/null || echo 0)"
+  if [[ "$network_bytes" =~ ^[0-9]+$ ]] && [ "$network_bytes" -gt "$MAX_NETWORK_BYTES" ]; then
+    MAX_NETWORK_BYTES="$network_bytes"
+  fi
+done
+
+MAX_NETWORK_MB=0
+if [ "$MAX_NETWORK_BYTES" -gt 0 ]; then
+  MAX_NETWORK_MB=$(( (MAX_NETWORK_BYTES + 1048575) / 1048576 ))
+fi
+
+AUTO_CONNECT_TIMEOUT=""
+AUTO_CONNECT_REASON=""
+if [ -z "${WEBOTS_CONNECT_TIMEOUT+x}" ] && ! pass_through_has_arg "--connect-timeout"; then
+  if [ "$MAX_NETWORK_BYTES" -ge $((512 * 1024 * 1024)) ]; then
+    AUTO_CONNECT_TIMEOUT=300
+  elif [ "$MAX_NETWORK_BYTES" -ge $((256 * 1024 * 1024)) ]; then
+    AUTO_CONNECT_TIMEOUT=240
+  elif [ "$MAX_NETWORK_BYTES" -ge $((128 * 1024 * 1024)) ]; then
+    AUTO_CONNECT_TIMEOUT=180
+  elif [ "$MAX_NETWORK_BYTES" -ge $((32 * 1024 * 1024)) ]; then
+    AUTO_CONNECT_TIMEOUT=120
+  else
+    AUTO_CONNECT_TIMEOUT=60
+  fi
+
+  if [ "$MAX_NETWORK_MB" -gt 0 ]; then
+    AUTO_CONNECT_REASON="max snapshot ${MAX_NETWORK_MB}MB"
+  fi
+fi
+
+AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=""
+AUTO_CLUSTER_DISTRIBUTION_REASON=""
+if [ -z "${WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT+x}" ] && ! pass_through_has_arg "--cluster-distribution-timeout"; then
+  if [ "$MAX_NETWORK_BYTES" -ge $((512 * 1024 * 1024)) ]; then
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=1800
+  elif [ "$MAX_NETWORK_BYTES" -ge $((256 * 1024 * 1024)) ]; then
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=1200
+  elif [ "$MAX_NETWORK_BYTES" -ge $((128 * 1024 * 1024)) ]; then
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=900
+  elif [ "$MAX_NETWORK_BYTES" -ge $((32 * 1024 * 1024)) ]; then
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=600
+  else
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=300
+  fi
+
+  if [ "$MAX_NETWORK_MB" -gt 0 ]; then
+    AUTO_CLUSTER_DISTRIBUTION_REASON="max snapshot ${MAX_NETWORK_MB}MB"
+  fi
+fi
+
+AUTO_IPC_PROFILE=""
+if [ "$MAX_NETWORK_BYTES" -ge $((128 * 1024 * 1024)) ]; then
+  tuned=0
+
+  # Heavy snapshots are usually coupled with expensive compute backends.
+  # Keep controller-side transport stable by reducing in-flight burst pressure
+  # and giving transient backend lag more grace before warning.
+  if [ "$NM_UDS_RECV_TIMEOUT_MS" = "150" ]; then
+    NM_UDS_RECV_TIMEOUT_MS=250
+    tuned=1
+  fi
+  if [ "$NM_IPC_TIMEOUT_GRACE_MS" = "1500" ]; then
+    NM_IPC_TIMEOUT_GRACE_MS=5000
+    tuned=1
+  fi
+  if [ "$NM_IPC_TIMEOUT_LOG_INTERVAL_MS" = "5000" ]; then
+    NM_IPC_TIMEOUT_LOG_INTERVAL_MS=10000
+    tuned=1
+  fi
+  if [ "$NM_IPC_WINDOW_MAX" = "8" ]; then
+    NM_IPC_WINDOW_MAX=4
+    tuned=1
+  fi
+  if [ "$NM_IPC_SEND_BUDGET_MAX" = "4" ]; then
+    NM_IPC_SEND_BUDGET_MAX=2
+    tuned=1
+  fi
+  if [ -z "${NM_IPC_FORCE_AER+x}" ]; then
+    NM_IPC_FORCE_AER=1
+    tuned=1
+  fi
+  if [ -z "${NM_IPC_MAX_RAW_BYTES+x}" ]; then
+    NM_IPC_MAX_RAW_BYTES=60000
+    tuned=1
+  fi
+  if [ -z "${NM_IPC_AER_MAX_PACKET_BYTES+x}" ]; then
+    NM_IPC_AER_MAX_PACKET_BYTES=60000
+    tuned=1
+  fi
+  if [ -z "${NM_IPC_AER_THRESHOLD+x}" ]; then
+    NM_IPC_AER_THRESHOLD=0.20
+    tuned=1
+  fi
+
+  if [ "$tuned" -eq 1 ]; then
+    export NM_UDS_RECV_TIMEOUT_MS \
+      NM_IPC_TIMEOUT_GRACE_MS \
+      NM_IPC_TIMEOUT_LOG_INTERVAL_MS \
+      NM_IPC_WINDOW_MAX \
+      NM_IPC_SEND_BUDGET_MAX \
+      NM_IPC_FORCE_AER \
+      NM_IPC_MAX_RAW_BYTES \
+      NM_IPC_AER_MAX_PACKET_BYTES \
+      NM_IPC_AER_THRESHOLD
+    AUTO_IPC_PROFILE="heavy snapshot defaults"
+  fi
+fi
+
+if [ -n "$AUTO_CONNECT_TIMEOUT" ]; then
+  if [ -n "$AUTO_CONNECT_REASON" ]; then
+    echo "  auto connect timeout (s): $AUTO_CONNECT_TIMEOUT ($AUTO_CONNECT_REASON)"
+  else
+    echo "  auto connect timeout (s): $AUTO_CONNECT_TIMEOUT"
+  fi
+fi
+
+if [ -n "$AUTO_CLUSTER_DISTRIBUTION_TIMEOUT" ]; then
+  if [ -n "$AUTO_CLUSTER_DISTRIBUTION_REASON" ]; then
+    echo "  auto cluster distribution timeout (s): $AUTO_CLUSTER_DISTRIBUTION_TIMEOUT ($AUTO_CLUSTER_DISTRIBUTION_REASON)"
+  else
+    echo "  auto cluster distribution timeout (s): $AUTO_CLUSTER_DISTRIBUTION_TIMEOUT"
+  fi
+fi
+
+if [ -n "$AUTO_IPC_PROFILE" ]; then
+  echo "  auto IPC profile: $AUTO_IPC_PROFILE (window_max=$NM_IPC_WINDOW_MAX send_budget_max=$NM_IPC_SEND_BUDGET_MAX recv_timeout_ms=$NM_UDS_RECV_TIMEOUT_MS grace_ms=$NM_IPC_TIMEOUT_GRACE_MS)"
+fi
 
 RUN_WEBOT_BASE=(
   "$ROOT_DIR/run_webot.sh"
@@ -1087,6 +1745,12 @@ RUN_WEBOT_BASE=(
   --network-map "$NETWORK_MAP_CSV"
   --config-map "$CONFIG_MAP_CSV"
 )
+if [ -n "$AUTO_CONNECT_TIMEOUT" ]; then
+  RUN_WEBOT_BASE+=(--connect-timeout "$AUTO_CONNECT_TIMEOUT")
+fi
+if [ -n "$AUTO_CLUSTER_DISTRIBUTION_TIMEOUT" ]; then
+  RUN_WEBOT_BASE+=(--cluster-distribution-timeout "$AUTO_CLUSTER_DISTRIBUTION_TIMEOUT")
+fi
 
 REMOTE_ARGS=()
 if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
@@ -1146,6 +1810,7 @@ if [ "$UI_MODE" = "rust" ]; then
   exec "${RUN_WEBOT_BASE[@]}" \
     "${EXTRA_ARGS[@]}" \
     "${REMOTE_ARGS[@]}" \
+    "${DEFAULT_SO_ARGS[@]}" \
     "${PASS_THROUGH_ARGS[@]}"
 fi
 
@@ -1160,6 +1825,7 @@ if [ "$UI_MODE" = "cli" ]; then
   exec "${RUN_WEBOT_BASE[@]}" \
     "${EXTRA_ARGS[@]}" \
     "${REMOTE_ARGS[@]}" \
+    "${DEFAULT_SO_ARGS[@]}" \
     "${PASS_THROUGH_ARGS[@]}"
 fi
 
@@ -1170,6 +1836,7 @@ if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
     --node-ui-hidden \
     --orchestrator-port "$ORCHESTRATOR_PORT" \
     "${REMOTE_ARGS[@]}" \
+    "${DEFAULT_SO_ARGS[@]}" \
     "${PASS_THROUGH_ARGS[@]}"
 fi
 
@@ -1200,6 +1867,7 @@ RUN_WEBOT_ARGS=(
 if [ "$PREBUILT_LOCAL_WEB_RUNTIME" -eq 1 ]; then
   RUN_WEBOT_ARGS+=(--no-build)
 fi
+RUN_WEBOT_ARGS+=("${DEFAULT_SO_ARGS[@]}")
 RUN_WEBOT_ARGS+=("${PASS_THROUGH_ARGS[@]}")
 
 "${RUN_WEBOT_ARGS[@]}" &

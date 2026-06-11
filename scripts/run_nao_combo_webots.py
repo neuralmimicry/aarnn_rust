@@ -41,12 +41,17 @@ DEFAULT_WEB_UI_PORT = 8080
 DEFAULT_NODE_PORT_START = 50070
 DEFAULT_CONNECT_TIMEOUT = 60
 DEFAULT_DISTRIBUTION_TIMEOUT = 300
-DEFAULT_NAO_SENSORY_COUNT = 58
+# Small-primate NAO profile:
+# - Keep Webots NAO base non-camera channels (58)
+# - Compress both camera event streams to a low-resolution retina
+DEFAULT_NAO_CAMERA_RETINA_WIDTH = 8
+DEFAULT_NAO_CAMERA_RETINA_HEIGHT = 6
+DEFAULT_NAO_SENSORY_COUNT = 58 + 4 * DEFAULT_NAO_CAMERA_RETINA_WIDTH * DEFAULT_NAO_CAMERA_RETINA_HEIGHT
 DEFAULT_NAO_OUTPUT_COUNT = 40
-DEFAULT_NAO_HIDDEN_LAYERS = 6
-DEFAULT_NAO_HIDDEN_PER_LAYER = 96
-DEFAULT_NAO_AARNN_DEPTH = 5
-DEFAULT_NAO_GROWTH_HEADROOM = 1.8
+DEFAULT_NAO_HIDDEN_LAYERS = 4
+DEFAULT_NAO_HIDDEN_PER_LAYER = 64
+DEFAULT_NAO_AARNN_DEPTH = 3
+DEFAULT_NAO_GROWTH_HEADROOM = 1.6
 NAO_CAMERA_EXCLUSION_REGEX = r"^(?!Camera(?:Top|Bottom)[.]).*"
 
 RUNTIME_ENV_DEFAULTS = {
@@ -56,6 +61,23 @@ RUNTIME_ENV_DEFAULTS = {
     "NM_REALTIME_DISABLE_METABOLIC": "auto",
     "NM_REALTIME_DISABLE_PRUNING": "auto",
     "NM_MORPHO_ASYNC": "auto",
+    # Keep controller-side IPC defaults aligned with run_webot.sh wrappers.
+    "NM_UDS_RECV_TIMEOUT_MS": "150",
+    "NM_IPC_TIMEOUT_GRACE_MS": "1500",
+    "NM_IPC_TIMEOUT_LOG_INTERVAL_MS": "5000",
+    "NM_IPC_UDS_CTRL_BUF_BYTES": "524288",
+    "NM_IPC_WINDOW_MIN": "1",
+    "NM_IPC_WINDOW_INIT": "1",
+    "NM_IPC_WINDOW_MAX": "8",
+    "NM_IPC_SEND_BUDGET_MAX": "4",
+    # NAO camera-heavy transport should stay on compact AER packets by default.
+    "NM_IPC_FORCE_AER": "1",
+    "NM_IPC_MAX_RAW_BYTES": "60000",
+    "NM_IPC_AER_MAX_PACKET_BYTES": "60000",
+    "NM_IPC_UDS_RECV_BUF_BYTES": "262144",
+    # Match runtime camera event encoding to generated NAO sensory dimensions.
+    "NM_CAMERA_RETINA_WIDTH": str(DEFAULT_NAO_CAMERA_RETINA_WIDTH),
+    "NM_CAMERA_RETINA_HEIGHT": str(DEFAULT_NAO_CAMERA_RETINA_HEIGHT),
 }
 RUNTIME_ENV_PASSTHROUGH = (
     "NM_REALTIME_MORPHO_INTERVAL_MS",
@@ -773,6 +795,10 @@ def ensure_nao_assets(
                 str(DEFAULT_NAO_SENSORY_COUNT),
                 "--expected-output",
                 str(DEFAULT_NAO_OUTPUT_COUNT),
+                "--camera-retina-width",
+                str(DEFAULT_NAO_CAMERA_RETINA_WIDTH),
+                "--camera-retina-height",
+                str(DEFAULT_NAO_CAMERA_RETINA_HEIGHT),
                 "--hidden-layers",
                 str(DEFAULT_NAO_HIDDEN_LAYERS),
                 "--hidden-per-layer",
@@ -872,7 +898,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rebuild-network",
         action="store_true",
-        help="Force rebuilding the NAO snapshot/config pair with the 58-sensor combo profile.",
+        help=(
+            "Force rebuilding the NAO snapshot/config pair with the small-primate profile "
+            "(58 base sensory + compressed camera event channels)."
+        ),
     )
     parser.add_argument(
         "--orchestrator-port",

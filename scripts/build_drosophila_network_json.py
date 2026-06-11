@@ -1771,6 +1771,13 @@ def build_projection_snapshot(
     net["aarnn_import_topology_rewire_enabled"] = True
     net["aarnn_import_topology_rewire_keep_fraction"] = 0.78
     net["aarnn_import_topology_rewire_region_bias"] = 0.24
+    # Pin drosophila I/O contract on generated snapshots so runtime sensory
+    # encoding/decoding matches the robot profile even when templates drift.
+    spike_io = dict(net.get("spike_io") or {})
+    spike_io["profile"] = "drosophila"
+    spike_io["input_strategy"] = "profile_default"
+    spike_io["output_strategy"] = "profile_default"
+    net["spike_io"] = spike_io
     net["brain_regions"] = build_fruitfly_regions()
     net["neuron_types"] = [
         {"name": "Sensory", "bio_params": {"izh_preset": "RS", "synaptic_gain": 1.0}},

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Script to start two example networks:
 # 1. A standalone network running in a single process.
@@ -61,7 +62,7 @@ NODE2_PORT="$(find_free_port 50087)"; reserve_port "$NODE2_PORT"
 echo "Selected ports -> Orchestrator gRPC: $ORCH_PORT, Node1 gRPC: $NODE1_PORT, Node2 gRPC: $NODE2_PORT"
 
 CONFIG_PATH="${CONFIG_PATH:-config.json}"
-NETWORK_PATH="${NETWORK_PATH:-network_aarnn_6layer.json}"
+NETWORK_PATH="${NETWORK_PATH:-network.json}"
 
 CONFIG_ARG=""
 if [ -f "$CONFIG_PATH" ]; then
@@ -81,11 +82,6 @@ fi
 
 echo "Building project..."
 cargo build --release --all-features
-
-if [ $? -ne 0 ]; then
-    echo "Build failed. Exiting."
-    exit 1
-fi
 
 #echo "Starting Standalone Network (Brain ID: standalone)..."
 # Using --continuous to keep it running in background

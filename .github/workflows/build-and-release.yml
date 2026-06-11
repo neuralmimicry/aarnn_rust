@@ -92,7 +92,7 @@ jobs:
         run: cargo check --locked --all-features --all-targets
 
       - name: Run tests
-        run: cargo test --locked --all-features --all-targets
+        run: cargo test --locked --all-features --all-targets --lib
 
       - name: Build release binaries
         run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui

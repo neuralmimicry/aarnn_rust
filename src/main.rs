@@ -815,6 +815,47 @@ fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig,
     }
 }
 
+fn load_io_contract_from_path(path: &str) -> Option<NetworkConfig> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let payload = std::fs::read_to_string(trimmed).ok()?;
+    if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&payload) {
+        return Some(cfg);
+    }
+    crate::runner::decode_snapshot_with_profile_backfill(&payload)
+        .ok()
+        .map(|snap| snap.net)
+}
+
+fn apply_io_contract(target: &mut NetworkConfig, contract: &NetworkConfig) -> bool {
+    let mut changed = false;
+    let desired_s = contract.num_sensory_neurons.max(1);
+    let desired_o = contract.num_output_neurons.max(1);
+    if target.num_sensory_neurons != desired_s {
+        target.num_sensory_neurons = desired_s;
+        changed = true;
+    }
+    if target.num_output_neurons != desired_o {
+        target.num_output_neurons = desired_o;
+        changed = true;
+    }
+    if target.sensory_target_layer != contract.sensory_target_layer {
+        target.sensory_target_layer = contract.sensory_target_layer;
+        changed = true;
+    }
+    if target.output_source_layer != contract.output_source_layer {
+        target.output_source_layer = contract.output_source_layer;
+        changed = true;
+    }
+    if target.spike_io != contract.spike_io {
+        target.spike_io = contract.spike_io.clone();
+        changed = true;
+    }
+    changed
+}
+
 fn build_orchestrator_startup_networks(
     args: &Cli,
     fallback_cfg: &NetworkConfig,
@@ -1413,6 +1454,7 @@ fn main() -> anyhow::Result<()> {
     // Load network configuration. Priority: Config file > CLI arguments > Defaults.
     let mut startup_config_json: Option<String> = None;
     let mut startup_snapshot_json: Option<String> = None;
+    let io_contract = load_io_contract_from_path(&args.config);
     let mut net_cfg: NetworkConfig = {
         use std::fs;
         use std::path::Path;
@@ -1447,6 +1489,16 @@ fn main() -> anyhow::Result<()> {
         let snap = crate::runner::decode_snapshot_with_profile_backfill(&s)?;
         startup_snapshot_json = Some(s);
         net_cfg = snap.net;
+        if let Some(contract) = io_contract.as_ref() {
+            if apply_io_contract(&mut net_cfg, contract) {
+                nm_log!(
+                    "[info] Applied I/O contract from config {} after loading network snapshot: S={} O={}",
+                    args.config,
+                    net_cfg.num_sensory_neurons,
+                    net_cfg.num_output_neurons
+                );
+            }
+        }
     }
 
     if args.theta_input {
@@ -1504,6 +1556,16 @@ fn main() -> anyhow::Result<()> {
         })?;
         let snap = crate::runner::decode_snapshot_with_profile_backfill(&snapshot.snapshot_json)?;
         net_cfg = snap.net;
+        if let Some(contract) = io_contract.as_ref() {
+            if apply_io_contract(&mut net_cfg, contract) {
+                nm_log!(
+                    "[info] Applied I/O contract from config {} after loading runtime workspace snapshot: S={} O={}",
+                    args.config,
+                    net_cfg.num_sensory_neurons,
+                    net_cfg.num_output_neurons
+                );
+            }
+        }
         resolve_deployment(&mut net_cfg, &args);
         apply_fpaa_cli_overrides(&mut net_cfg, &args)?;
         startup_snapshot_json = Some(snapshot.snapshot_json);
@@ -2180,6 +2242,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             };
             let mut preload_snapshot_json: Option<String> = None;
             let mut preload_cfg: Option<NetworkConfig> = None;
+            let preload_io_contract = load_io_contract_from_path(&args.config);
 
             if let Some(network_path) = args.network.as_deref() {
                 if let Ok(s) = std::fs::read_to_string(network_path) {
@@ -2222,6 +2285,17 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     cfg.aarnn_layer_depth = 5;
                 }
                 resolve_deployment(&mut cfg, args);
+                if let Some(contract) = preload_io_contract.as_ref() {
+                    if apply_io_contract(&mut cfg, contract) {
+                        nm_log!(
+                            "[info] Node preload I/O contract from config {} applied for {}: S={} O={}",
+                            args.config,
+                            args.brain_id,
+                            cfg.num_sensory_neurons,
+                            cfg.num_output_neurons
+                        );
+                    }
+                }
 
                 let model = match args.neuron_model {
                     NeuronModel::Lif => sim::NeuronModel::Lif,
@@ -2250,6 +2324,31 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                             e
                         );
                     }
+                }
+
+                // Ensure robot/runtime I/O contract comes from the active config,
+                // even when startup snapshots carry stale S/O dimensions.
+                let io_mismatch = runner.net.num_sensory_neurons != cfg.num_sensory_neurons
+                    || runner.net.num_output_neurons != cfg.num_output_neurons
+                    || runner.net.sensory_target_layer != cfg.sensory_target_layer
+                    || runner.net.output_source_layer != cfg.output_source_layer
+                    || runner.net.spike_io.profile != cfg.spike_io.profile;
+                if io_mismatch {
+                    let mut aligned = runner.net.clone();
+                    aligned.num_sensory_neurons = cfg.num_sensory_neurons.max(1);
+                    aligned.num_output_neurons = cfg.num_output_neurons.max(1);
+                    aligned.sensory_target_layer = cfg.sensory_target_layer;
+                    aligned.output_source_layer = cfg.output_source_layer;
+                    aligned.spike_io = cfg.spike_io.clone();
+                    runner.apply_config(aligned);
+                    nm_log!(
+                        "[info] IO alignment from config applied for {}: S={} O={} in_layer={:?} out_layer={:?}",
+                        args.brain_id,
+                        runner.net.num_sensory_neurons,
+                        runner.net.num_output_neurons,
+                        runner.net.sensory_target_layer,
+                        runner.net.output_source_layer
+                    );
                 }
 
                 let total_layers = (runner.net.num_hidden_layers + 1) as u32;

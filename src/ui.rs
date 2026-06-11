@@ -90,6 +90,28 @@ use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 
 #[cfg(feature = "ui")]
+fn grpc_max_message_bytes() -> usize {
+    const DEFAULT: usize = 512 * 1024 * 1024;
+    const MIN: usize = 4 * 1024 * 1024;
+    std::env::var("NM_GRPC_MAX_MESSAGE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= MIN)
+        .unwrap_or(DEFAULT)
+}
+
+#[cfg(feature = "ui")]
+async fn connect_cluster_client(
+    addr: String,
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, tonic::transport::Error> {
+    let grpc_max_msg_bytes = grpc_max_message_bytes();
+    let client = DistributedNeuromorphicClient::connect(addr).await?;
+    Ok(client
+        .max_decoding_message_size(grpc_max_msg_bytes)
+        .max_encoding_message_size(grpc_max_msg_bytes))
+}
+
+#[cfg(feature = "ui")]
 #[derive(Clone)]
 struct HttpAerInputStatus {
     connected: bool,
@@ -423,6 +445,8 @@ struct IpcHandshake {
     num_sensory_neurons: Option<usize>,
     #[serde(default)]
     num_output_neurons: Option<usize>,
+    #[serde(default)]
+    dt_ms: Option<f32>,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
@@ -448,6 +472,7 @@ struct IpcUdsServer {
     #[allow(dead_code)]
     recent_mismatches: u64,
     total_received: u64,
+    dt_ms: f32,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
@@ -464,15 +489,21 @@ impl IpcUdsServer {
             .and_then(|v| v.parse::<usize>().ok())
             .map(|v| v.clamp(8_192, 4 * 1024 * 1024))
             .unwrap_or(262_144);
+        let default_dt_ms = std::env::var("NM_IPC_DT_MS")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
+            .unwrap_or(1.0);
         let _ = std::fs::remove_file(path);
         let sock = UnixDatagram::bind(path)?;
         sock.set_nonblocking(true)?;
         nm_err!(
-            "[IpcUdsServer] Bound to {} with S={}, O={}, recv_buf={}B",
+            "[IpcUdsServer] Bound to {} with S={}, O={}, recv_buf={}B, default_dt_ms={:.3}",
             path,
             s,
             o,
-            req_buf_bytes
+            req_buf_bytes,
+            default_dt_ms
         );
         Ok(Self {
             sock,
@@ -486,11 +517,14 @@ impl IpcUdsServer {
             recent_drops: 0,
             recent_mismatches: 0,
             total_received: 0,
+            dt_ms: default_dt_ms,
         })
     }
     fn poll_next_event(&mut self, dst_inputs: &mut [f32]) -> Option<IpcEvent> {
         let need_data = (1 + self.s) * 4;
         let need_data_reward = (2 + self.s) * 4;
+        let mut latest_data: Option<IpcEvent> = None;
+        let mut latest_config: Option<IpcEvent> = None;
         loop {
             match self.sock.recv_from(&mut self.req_buf) {
                 Ok((n, addr)) => {
@@ -520,7 +554,8 @@ impl IpcUdsServer {
                                     .last_peer
                                     .as_ref()
                                     .map(|p| p.to_string_lossy().to_string());
-                                return Some(IpcEvent::Config(hs, peer_str));
+                                latest_config = Some(IpcEvent::Config(hs, peer_str));
+                                continue;
                             }
                             Err(err) => {
                                 nm_err!("[IpcUdsServer] Handshake parse failed: {}", err);
@@ -553,7 +588,8 @@ impl IpcUdsServer {
                                         dst_inputs[idx] = 1.0;
                                     }
                                 }
-                                return Some(IpcEvent::Data(0.0, 0.0, peer_str));
+                                latest_data = Some(IpcEvent::Data(self.dt_ms, 0.0, peer_str));
+                                continue;
                             }
                             Err(_) => {
                                 self.recent_mismatches = self.recent_mismatches.saturating_add(1);
@@ -584,7 +620,8 @@ impl IpcUdsServer {
                         } else {
                             0.0
                         };
-                        return Some(IpcEvent::Data(t_ms, reward, peer_str));
+                        latest_data = Some(IpcEvent::Data(t_ms, reward, peer_str));
+                        continue;
                     } else {
                         self.recent_mismatches = self.recent_mismatches.saturating_add(1);
                         self.send_size_hint_to_addr(&addr);
@@ -592,10 +629,14 @@ impl IpcUdsServer {
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    return None;
+                    // Prioritize data frames over handshake/config frames when both
+                    // are present in the same drain window. If config wins first,
+                    // IPC-driven stepping can be skipped and lock-step controllers
+                    // may wait indefinitely for a reply that never gets produced.
+                    return latest_data.or(latest_config);
                 }
                 Err(_) => {
-                    return None;
+                    return latest_data.or(latest_config);
                 }
             }
         }
@@ -673,6 +714,32 @@ fn resolve_ipc_handshake_sizes(
         .unwrap_or(fallback_o)
         .max(1);
     (sensory, output)
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+fn ipc_handshake_has_explicit_dimensions(handshake: &IpcHandshake) -> bool {
+    !handshake.s_names.is_empty()
+        || !handshake.o_names.is_empty()
+        || handshake.sensory.filter(|&v| v > 0).is_some()
+        || handshake.output.filter(|&v| v > 0).is_some()
+        || handshake.expected_s.filter(|&v| v > 0).is_some()
+        || handshake.expected_o.filter(|&v| v > 0).is_some()
+        || handshake.num_sensory_neurons.filter(|&v| v > 0).is_some()
+        || handshake.num_output_neurons.filter(|&v| v > 0).is_some()
+}
+
+#[cfg(feature = "ui")]
+fn network_config_from_payload(payload: &str) -> Option<NetworkConfig> {
+    if payload.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str::<NetworkConfig>(payload)
+        .ok()
+        .or_else(|| {
+            crate::runner::decode_snapshot_with_profile_backfill(payload)
+                .ok()
+                .map(|snap| snap.net)
+        })
 }
 
 #[cfg(all(feature = "ui", feature = "morpho", feature = "growth3d"))]
@@ -783,6 +850,8 @@ struct IpcStats {
     last_peer: Option<String>,
     last_receive_time: Option<std::time::Instant>,
     last_steps: usize,
+    last_input_spike_count: usize,
+    last_output_spike_count: usize,
     #[cfg(all(feature = "robot_io", unix))]
     last_handshake: Option<IpcHandshake>,
 }
@@ -1105,9 +1174,13 @@ struct App {
     sensory_activity: Vec<f32>,
     hidden_activity: Vec<Vec<f32>>, // per layer
     output_activity: Vec<f32>,
+    // Per-output decoded drive history (0..1), used to detect transient
+    // activations when explicit output spikes are not available.
+    output_drive_history: Vec<f32>,
     // Raster inset (recent output spikes)
     raster_cols: usize,
     raster_outputs: std::collections::VecDeque<Vec<i8>>, // time-major columns, each length = num_output_neurons
+    last_activity_rendered_step: Option<u64>,
     // View (camera) controls
     camera_zoom: f32,
     camera_yaw_degrees: f32,
@@ -1190,7 +1263,6 @@ struct App {
     fpaa_last_refresh: Instant,
     fpaa_last_signature: String,
     // External IPC (UDS) state (only when robot_io feature is on)
-    #[cfg(all(feature = "robot_io", unix))]
     ipc_sock_path: String,
     #[cfg(all(feature = "robot_io", unix))]
     ipc_connected: bool,
@@ -1226,6 +1298,10 @@ struct App {
     ipc_frame_count: u64,
     #[cfg(all(feature = "robot_io", unix))]
     ipc_last_steps: usize,
+    #[cfg(all(feature = "robot_io", unix))]
+    ipc_last_input_spike_count: usize,
+    #[cfg(all(feature = "robot_io", unix))]
+    ipc_last_output_spike_count: usize,
     #[cfg(all(feature = "robot_io", unix))]
     ipc_last_handshake: Option<IpcHandshake>,
     // Resource monitoring
@@ -1289,6 +1365,9 @@ struct App {
     sim_step_counter: Arc<AtomicU64>,
     sim_last_spike_count: Arc<AtomicU64>,
     sim_last_spike_len: Arc<AtomicU64>,
+    /// Lock-free NN simulation time (f64 bits stored as u64).
+    /// Updated by the sim thread after each step; read by the UI for display.
+    sim_t_ms_bits: Arc<AtomicU64>,
     runtime_handle: tokio::runtime::Handle,
     remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     remote_token_balance: Option<TokenBalanceResponse>,
@@ -1369,6 +1448,20 @@ struct App {
 
 #[cfg(feature = "ui")]
 impl App {
+    fn view_source_label(&self) -> String {
+        match &self.view_source {
+            ViewSource::Standalone => "Standalone".to_string(),
+            ViewSource::LocalManaged(id) => format!("Local managed: {}", id),
+            ViewSource::ClusterGlobal(id) => format!("Cluster: {}", id),
+        }
+    }
+
+    /// Read the latest NN simulation time from the lock-free atomic,
+    /// updated by the simulation thread after each step.
+    fn sim_t_ms(&self) -> f64 {
+        f64::from_bits(self.sim_t_ms_bits.load(Ordering::Acquire))
+    }
+
     #[allow(dead_code)]
     fn runner_try_r(&self) -> Option<tokio::sync::RwLockReadGuard<'_, Runner>> {
         self.runner.try_read().ok()
@@ -1454,9 +1547,11 @@ impl App {
         self.edge_shapes.clear();
         self.edge_shapes.shrink_to_fit();
         self.raster_outputs.clear();
+        self.last_activity_rendered_step = None;
         self.sensory_activity.clear();
         self.hidden_activity.clear();
         self.output_activity.clear();
+        self.output_drive_history.clear();
         self.previous_hidden_spikes.clear();
         self.last_sensory_spikes.clear();
         if let Ok(mut bands) = self.spectral_bands.try_write() {
@@ -1634,6 +1729,7 @@ impl App {
         let sim_step_counter = Arc::new(AtomicU64::new(0));
         let sim_last_spike_count = Arc::new(AtomicU64::new(0));
         let sim_last_spike_len = Arc::new(AtomicU64::new(0));
+        let sim_t_ms_bits = Arc::new(AtomicU64::new(0u64.to_le()));
         let (remote_status_tx, remote_status_rx) = std::sync::mpsc::channel::<RemoteStatusMsg>();
         let sim_throttle_ms = Arc::new(AtomicU32::new(0));
         let (tool_task_tx, tool_task_rx) = std::sync::mpsc::channel::<ToolTaskResult>();
@@ -1648,6 +1744,8 @@ impl App {
             last_peer: None,
             last_receive_time: None,
             last_steps: 0,
+            last_input_spike_count: 0,
+            last_output_spike_count: 0,
             #[cfg(all(feature = "robot_io", unix))]
             last_handshake: None,
         }));
@@ -1660,6 +1758,7 @@ impl App {
         let sim_step_counter_thread = sim_step_counter.clone();
         let sim_last_spike_count_thread = sim_last_spike_count.clone();
         let sim_last_spike_len_thread = sim_last_spike_len.clone();
+        let sim_t_ms_bits_thread = sim_t_ms_bits.clone();
         let sim_remote_only = remote_only;
         let sim_throttle = sim_throttle_ms.clone();
         let sim_idle_sleep_ms = std::env::var("NM_SIM_IDLE_SLEEP_MS")
@@ -1846,17 +1945,49 @@ impl App {
                         .unwrap_or(0.38)
                         .clamp(0.0, 1.0);
                 #[cfg(all(feature = "robot_io", unix))]
+                let ipc_input_debug_interval = std::env::var("NM_IPC_INPUT_DEBUG_INTERVAL")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0)
+                    .min(100_000);
+                #[cfg(all(feature = "robot_io", unix))]
                 let ipc_celegans_debug_interval =
                     std::env::var("NM_IPC_CELEGANS_DEBUG_INTERVAL")
                         .ok()
                         .and_then(|v| v.trim().parse::<usize>().ok())
-                        .unwrap_or(0)
+                        .unwrap_or(ipc_input_debug_interval)
                         .min(100_000);
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_force_threshold_on_silence =
+                    std::env::var("NM_IPC_FORCE_THRESHOLD_ON_SILENCE")
+                        .ok()
+                        .map(|v| {
+                            matches!(
+                                v.trim().to_ascii_lowercase().as_str(),
+                                "1" | "true" | "yes" | "on"
+                            )
+                        })
+                        .unwrap_or(true);
+                let ipc_inner_step_ms = std::env::var("NM_IPC_INNER_STEP_MS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .unwrap_or(0.0);
+                let ipc_max_substeps = std::env::var("NM_IPC_MAX_SUBSTEPS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(4096)
+                    .clamp(1, 100_000);
                 #[cfg(all(feature = "robot_io", unix))]
                 let ipc_input_encoding = ProfileInputEncoding {
                     drosophila_rate: crate::spike_io::encoding::RateEncoding {
                         low_gain: ipc_dros_input_rate_gain,
                         quiet_floor: 0.002,
+                        ..crate::spike_io::encoding::RateEncoding::default()
+                    },
+                    hexapod_rate: crate::spike_io::encoding::RateEncoding {
+                        low_gain: ipc_hexapod_input_rate_gain,
+                        quiet_floor: 0.001,
                         ..crate::spike_io::encoding::RateEncoding::default()
                     },
                     nao_rate: crate::spike_io::encoding::RateEncoding {
@@ -1886,7 +2017,15 @@ impl App {
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_celegans_debug_counter: usize = 0;
                 #[cfg(all(feature = "robot_io", unix))]
+                let mut ipc_input_debug_counter: usize = 0;
+                #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_last_reply_values: Vec<f32> = Vec::new();
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut pending_ipc_spikes: Option<Vec<i8>> = None;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut pending_ipc_dt: Option<f64> = None;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut pending_ipc_reward: Option<f32> = None;
                 loop {
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
@@ -1997,7 +2136,18 @@ impl App {
                     #[allow(unused_mut)]
                     let mut reward_source: Option<f32> = None;
 
+                    // Restore buffered IPC frame from a previous iteration where
+                    // the runner write-lock was busy (UI rendering).  The Webots
+                    // controller is still in lockstep wait because we never replied.
                     #[cfg(all(feature = "robot_io", unix))]
+                    if let Some(buffered_spikes) = pending_ipc_spikes.take() {
+                        spikes_source = Some(buffered_spikes);
+                        ipc_dt = pending_ipc_dt.take();
+                        reward_source = pending_ipc_reward.take();
+                    }
+
+                    #[cfg(all(feature = "robot_io", unix))]
+                    if spikes_source.is_none() {
                     if let Some(ref mut srv) = sim_ipc_server {
                         let mut inputs = vec![0.0f32; srv.s];
                         if let Some(ev) = srv.poll_next_event(&mut inputs) {
@@ -2068,6 +2218,54 @@ impl App {
                                             encode_ctx,
                                         );
                                     }
+                                    let recv_ge_half = inputs
+                                        .iter()
+                                        .take(spk.len())
+                                        .filter(|v| v.is_finite() && **v >= 0.5)
+                                        .count();
+                                    let recv_nonzero = inputs
+                                        .iter()
+                                        .take(spk.len())
+                                        .filter(|v| v.is_finite() && **v > 1.0e-3)
+                                        .count();
+                                    let encoded_nonzero_before =
+                                        spk.iter().filter(|&&v| v != 0).count();
+                                    if ipc_force_threshold_on_silence
+                                        && matches!(
+                                            io_cfg.input_strategy,
+                                            SpikeInputEncodingStrategy::ProfileDefault
+                                        )
+                                        && matches!(io_profile, NetworkIoProfile::Celegans)
+                                        && recv_ge_half > 0
+                                        && encoded_nonzero_before == 0
+                                    {
+                                        for (dst, src) in spk.iter_mut().zip(inputs.iter()) {
+                                            if src.is_finite() && *src >= 0.5 {
+                                                *dst = 1;
+                                            }
+                                        }
+                                    }
+                                    let encoded_nonzero_after =
+                                        spk.iter().filter(|&&v| v != 0).count();
+                                    if ipc_input_debug_interval > 0 {
+                                        ipc_input_debug_counter =
+                                            ipc_input_debug_counter.saturating_add(1);
+                                        if ipc_input_debug_counter
+                                            .is_multiple_of(ipc_input_debug_interval)
+                                        {
+                                            nm_err!(
+                                                "[IPC in dbg] profile={} strategy={} recv_ge_half={} recv_gt_zero={} enc_before={} enc_after={} dt_ms={:.3} S={}",
+                                                io_profile.as_str(),
+                                                io_cfg.input_strategy.as_str(),
+                                                recv_ge_half,
+                                                recv_nonzero,
+                                                encoded_nonzero_before,
+                                                encoded_nonzero_after,
+                                                encode_ctx.dt_ms,
+                                                srv.s
+                                            );
+                                        }
+                                    }
                                     spikes_source = Some(spk);
                                     if t_ms > 0.0 {
                                         ipc_dt = Some(t_ms as f64);
@@ -2078,11 +2276,26 @@ impl App {
                                         stats.frame_count += 1;
                                         stats.last_peer = peer; // peer is already Option<String>
                                         stats.last_receive_time = Some(std::time::Instant::now());
+                                        stats.last_input_spike_count = encoded_nonzero_after;
                                     }
                                 }
                                 IpcEvent::Config(hs, peer) => {
+                                    if let Some(handshake_dt_ms) = hs
+                                        .dt_ms
+                                        .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
+                                    {
+                                        if (srv.dt_ms - handshake_dt_ms).abs() > f32::EPSILON {
+                                            nm_err!(
+                                                "[IpcUdsServer] Applying handshake dt_ms={:.3}",
+                                                handshake_dt_ms
+                                            );
+                                        }
+                                        srv.dt_ms = handshake_dt_ms;
+                                    }
                                     let (new_s, new_o) =
                                         resolve_ipc_handshake_sizes(&hs, srv.s, srv.o);
+                                    let explicit_dims =
+                                        ipc_handshake_has_explicit_dimensions(&hs);
                                     let resized = new_s != srv.s || new_o != srv.o;
                                     if resized {
                                         nm_err!(
@@ -2101,7 +2314,9 @@ impl App {
                                         stats.connected = true;
                                         stats.last_peer = peer;
                                         stats.last_receive_time = Some(std::time::Instant::now());
-                                        stats.last_handshake = Some(hs);
+                                        if explicit_dims {
+                                            stats.last_handshake = Some(hs);
+                                        }
                                         if resized {
                                             stats.size_mismatch_count =
                                                 stats.size_mismatch_count.saturating_add(1);
@@ -2111,6 +2326,7 @@ impl App {
                             }
                         }
                     }
+                    } // if spikes_source.is_none() — no buffered IPC frame
 
                     if !sim_playing.load(Ordering::SeqCst) && spikes_source.is_none() {
                         let mut idle_sleep_ms = sim_idle_sleep_ms;
@@ -2130,7 +2346,21 @@ impl App {
                         continue;
                     }
 
-                    if sim_playing.load(Ordering::SeqCst) || spikes_source.is_some() {
+                    #[cfg(all(feature = "robot_io", unix))]
+                    let ipc_driven = sim_ipc_server.is_some();
+                    #[cfg(not(all(feature = "robot_io", unix)))]
+                    let ipc_driven = false;
+
+                    // When a robot IPC bridge is bound, only advance the simulation on fresh
+                    // IPC frames. Advancing with local provider spikes between robot frames can
+                    // mask robot-driven activity in last-step probes/raster.
+                    let should_step = if ipc_driven {
+                        spikes_source.is_some() || ipc_dt.is_some()
+                    } else {
+                        sim_playing.load(Ordering::SeqCst) || spikes_source.is_some()
+                    };
+
+                    if should_step {
                         // Use try_read to avoid ever blocking the sim thread on lock contention.
                         // Fall back to sim_batch_steps if the runner is momentarily locked.
                         let batch_steps: usize = if let Ok(r) = sim_runner.try_read() {
@@ -2143,6 +2373,9 @@ impl App {
                         if spikes_source.is_some() || ipc_dt.is_some() {
                             #[cfg(all(feature = "robot_io", unix))]
                             let mut ipc_reply_values: Option<Vec<f32>> = None;
+                            let mut ipc_steps_taken: usize = 0;
+                            let mut ipc_output_spikes_frame: Option<Vec<i8>> = None;
+                            let mut ipc_output_spike_frames: Vec<Vec<i8>> = Vec::new();
                             let spikes = if let Some(s) = spikes_source {
                                 s
                             } else {
@@ -2176,14 +2409,95 @@ impl App {
                                         }
                                     }
                                 }
+                                let mut merge_step_output = |step_out: crate::runner::StepOut| {
+                                    let step_spikes: Vec<i8> =
+                                        step_out.spk_o.iter().copied().collect();
+                                    ipc_output_spike_frames.push(step_spikes.clone());
+                                    if let Some(dst) = ipc_output_spikes_frame.as_mut() {
+                                        if dst.len() != step_spikes.len() {
+                                            dst.resize(step_spikes.len(), 0);
+                                        }
+                                        for (d, s) in dst.iter_mut().zip(step_spikes.iter()) {
+                                            if *s != 0 {
+                                                *d = 1;
+                                            }
+                                        }
+                                    } else {
+                                        let mut merged = vec![0i8; step_spikes.len()];
+                                        for (d, s) in merged.iter_mut().zip(step_spikes.iter()) {
+                                            if *s != 0 {
+                                                *d = 1;
+                                            }
+                                        }
+                                        ipc_output_spikes_frame = Some(merged);
+                                    }
+                                };
                                 if let Some(dt) = ipc_dt {
-                                    r.step_sync(dt, Some(&spikes));
+                                    let target_dt_ms = dt.max(0.001);
+                                    let base_inner_dt_ms = if ipc_inner_step_ms > 0.0 {
+                                        ipc_inner_step_ms
+                                    } else {
+                                        r.lif.dt.max(0.001)
+                                    };
+                                    if target_dt_ms <= base_inner_dt_ms {
+                                        let step_out = r.step_sync(target_dt_ms, Some(&spikes));
+                                        merge_step_output(step_out);
+                                        ipc_steps_taken = 1;
+                                    } else {
+                                        let zero_spikes = vec![0i8; spikes.len()];
+                                        let mut use_frame_spikes = true;
+                                        let mut remaining_ms = target_dt_ms;
+                                        while remaining_ms > 1.0e-9
+                                            && ipc_steps_taken < ipc_max_substeps
+                                        {
+                                            let step_dt_ms = remaining_ms.min(base_inner_dt_ms);
+                                            let step_input = if use_frame_spikes {
+                                                spikes.as_slice()
+                                            } else {
+                                                zero_spikes.as_slice()
+                                            };
+                                            let step_out = r.step_sync(step_dt_ms, Some(step_input));
+                                            merge_step_output(step_out);
+                                            remaining_ms -= step_dt_ms;
+                                            ipc_steps_taken = ipc_steps_taken.saturating_add(1);
+                                            use_frame_spikes = false;
+                                        }
+                                        if remaining_ms > 1.0e-9 {
+                                            let step_input = if use_frame_spikes {
+                                                spikes.as_slice()
+                                            } else {
+                                                zero_spikes.as_slice()
+                                            };
+                                            let step_out = r.step_sync(remaining_ms, Some(step_input));
+                                            merge_step_output(step_out);
+                                            ipc_steps_taken = ipc_steps_taken.saturating_add(1);
+                                        }
+                                    }
+                                    // Keep the network's internal integration dt stable for the
+                                    // next IPC frame; Webots dt only defines the total slice.
+                                    r.set_dt(base_inner_dt_ms);
                                 } else {
-                                    r.step(Some(&spikes));
+                                    let step_out = r.step(Some(&spikes));
+                                    merge_step_output(step_out);
+                                    ipc_steps_taken = 1;
+                                }
+                                if let Some(frame_spikes) = ipc_output_spikes_frame.as_ref() {
+                                    if r.last_spk_o.len() != frame_spikes.len() {
+                                        r.last_spk_o = ndarray::Array1::<i8>::zeros(frame_spikes.len());
+                                    }
+                                    if let Some(dst) = r.last_spk_o.as_slice_mut() {
+                                        dst.copy_from_slice(frame_spikes);
+                                    } else {
+                                        for (dst, src) in r.last_spk_o.iter_mut().zip(frame_spikes.iter()) {
+                                            *dst = *src;
+                                        }
+                                    }
                                 }
                                 if let Some(link) = aer_link.as_mut() {
                                     let ts_us = (r.t_ms * 1000.0) as u64;
-                                    if let Some(out) = r.last_spk_o.as_slice() {
+                                    if let Some(frame_spikes) = ipc_output_spikes_frame.as_deref() {
+                                        link.send_output_spikes(ts_us, frame_spikes);
+                                    } else if let Some(out) = r.last_spk_o.as_slice() {
                                         link.send_output_spikes(ts_us, out);
                                     }
                                 }
@@ -2205,6 +2519,18 @@ impl App {
                                         );
                                     } else {
                                         decode_network_outputs(&io_cfg, &r, &mut out);
+                                    }
+                                    if let Some(frame_spikes) = ipc_output_spikes_frame.as_ref() {
+                                        // Keep actuator channels neutral unless that channel
+                                        // actually spiked within this IPC frame window.
+                                        // This avoids frame-level substep aggregation showing
+                                        // persistent non-neutral drive on silent channels.
+                                        let neutral = 0.5f32;
+                                        for (idx, dst) in out.iter_mut().enumerate() {
+                                            if frame_spikes.get(idx).copied().unwrap_or(0) == 0 {
+                                                *dst = neutral;
+                                            }
+                                        }
                                     }
                                     let celegans_debug_enabled =
                                         matches!(io_profile, NetworkIoProfile::Celegans)
@@ -2236,13 +2562,35 @@ impl App {
                                                 };
                                                 let in_spk =
                                                     spikes.iter().filter(|&&v| v != 0).count();
-                                                let h_spk = r
+                                                let h0_spk = r
                                                     .last_spk_h
                                                     .first()
                                                     .map(|h| h.iter().filter(|&&v| v != 0).count())
                                                     .unwrap_or(0);
+                                                let (_, out_src_layer) = r.get_io_layers();
+                                                let h_out_spk = r
+                                                    .last_spk_h
+                                                    .get(out_src_layer)
+                                                    .map(|h| h.iter().filter(|&&v| v != 0).count())
+                                                    .unwrap_or(0);
                                                 let (recv_in_total, recv_in_w_sum, recv_in_w_max) =
                                                     r.w_in.iter().fold(
+                                                        (0usize, 0.0f64, 0.0f64),
+                                                        |(count, sum, max_w), &w| {
+                                                            let abs_w = w.abs();
+                                                            if abs_w > 0.0 {
+                                                                (
+                                                                    count + 1,
+                                                                    sum + abs_w,
+                                                                    max_w.max(abs_w),
+                                                                )
+                                                            } else {
+                                                                (count, sum, max_w)
+                                                            }
+                                                        },
+                                                    );
+                                                let (recv_out_total, recv_out_w_sum, recv_out_w_max) =
+                                                    r.w_out.iter().fold(
                                                         (0usize, 0.0f64, 0.0f64),
                                                         |(count, sum, max_w), &w| {
                                                             let abs_w = w.abs();
@@ -2289,6 +2637,18 @@ impl App {
                                                         )
                                                     })
                                                     .unwrap_or((0.0, 0.0));
+                                                let (i_o_min, i_o_max) = r
+                                                    .last_i_o
+                                                    .as_ref()
+                                                    .map(|arr| {
+                                                        arr.iter().fold(
+                                                            (f64::INFINITY, f64::NEG_INFINITY),
+                                                            |(mn, mx), &v| {
+                                                                (mn.min(v), mx.max(v))
+                                                            },
+                                                        )
+                                                    })
+                                                    .unwrap_or((0.0, 0.0));
                                                 let v_h0_max = r
                                                     .v_h
                                                     .first()
@@ -2299,25 +2659,42 @@ impl App {
                                                         )
                                                     })
                                                     .unwrap_or(0.0);
+                                                let v_o_max =
+                                                    r.v_o.iter().fold(f64::NEG_INFINITY, |mx, &v| {
+                                                        mx.max(v)
+                                                    });
                                                 let o_spk = r
                                                     .last_spk_o
                                                     .iter()
                                                     .filter(|&&v| v != 0)
                                                     .count();
+                                                let o_spk = ipc_output_spikes_frame
+                                                    .as_ref()
+                                                    .map(|spk| {
+                                                        spk.iter().filter(|&&v| v != 0).count()
+                                                    })
+                                                    .unwrap_or(o_spk);
                                                 nm_err!(
-                                                    "[IPC celegans dbg] in_spk={} h0_spk={} out_spk={} recv_in={} w_sum={:.3} w_max={:.3} p_rel={:.3} delay=[{},{}] i_h0=[{:.3},{:.3}] v_h0_max={:.3} out_min={:.3} out_max={:.3} out_mean={:.3} O={}",
+                                                    "[IPC celegans dbg] in_spk={} h0_spk={} hsrc_spk={} out_spk={} recv_in={} recv_out={} w_in_sum={:.3} w_in_max={:.3} w_out_sum={:.3} w_out_max={:.3} p_rel={:.3} delay=[{},{}] i_h0=[{:.3},{:.3}] i_o=[{:.3},{:.3}] v_h0_max={:.3} v_o_max={:.3} out_min={:.3} out_max={:.3} out_mean={:.3} O={}",
                                                     in_spk,
-                                                    h_spk,
+                                                    h0_spk,
+                                                    h_out_spk,
                                                     o_spk,
                                                     recv_in_total,
+                                                    recv_out_total,
                                                     recv_in_w_sum,
                                                     recv_in_w_max,
+                                                    recv_out_w_sum,
+                                                    recv_out_w_max,
                                                     r.net.p_release_default,
                                                     in_delay_min,
                                                     in_delay_max,
                                                     i_h0_min,
                                                     i_h0_max,
+                                                    i_o_min,
+                                                    i_o_max,
                                                     v_h0_max,
+                                                    v_o_max,
                                                     out_min,
                                                     out_max,
                                                     out_mean,
@@ -2348,7 +2725,12 @@ impl App {
                                             dst.extend(src.iter().copied());
                                         }
                                     }
-                                    if let Some(src_slice) = r.last_spk_o.as_slice() {
+                                    if let Some(frame_spikes) = ipc_output_spikes_frame.as_ref() {
+                                        if snap.output_spikes.len() != frame_spikes.len() {
+                                            snap.output_spikes.resize(frame_spikes.len(), 0);
+                                        }
+                                        snap.output_spikes.copy_from_slice(frame_spikes);
+                                    } else if let Some(src_slice) = r.last_spk_o.as_slice() {
                                         if snap.output_spikes.len() != src_slice.len() {
                                             snap.output_spikes.resize(src_slice.len(), 0);
                                         }
@@ -2357,6 +2739,9 @@ impl App {
                                         snap.output_spikes.clear();
                                         snap.output_spikes.extend(r.last_spk_o.iter().copied());
                                     }
+                                    snap.output_spike_frames.clear();
+                                    snap.output_spike_frames
+                                        .extend(ipc_output_spike_frames.iter().cloned());
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
@@ -2401,15 +2786,31 @@ impl App {
                                         }
                                     }
                                 }
+                                // Publish t_ms atomically so the UI can always
+                                // display the latest NN time without the runner lock.
+                                sim_t_ms_bits_thread.store(
+                                    r.t_ms.to_bits(),
+                                    Ordering::Release,
+                                );
                             } else {
-                                // If the runner lock is briefly busy, still reply with the last
-                                // known actuator frame so Webots controller IO doesn't stall.
+                                // Runner lock is busy (UI rendering).
                                 #[cfg(all(feature = "robot_io", unix))]
-                                if let Some(ref srv) = sim_ipc_server {
-                                    if ipc_last_reply_values.len() != srv.o {
-                                        ipc_last_reply_values.resize(srv.o, 0.5);
+                                if ipc_dt.is_some() {
+                                    // IPC-driven frame: buffer it for retry on the
+                                    // next iteration and do NOT reply to the Webots
+                                    // controller, keeping it in lockstep wait.
+                                    pending_ipc_spikes = Some(spikes.clone());
+                                    pending_ipc_dt = ipc_dt;
+                                    pending_ipc_reward = reward_source;
+                                } else {
+                                    // Non-IPC playback: reply with stale data to
+                                    // avoid blocking the local step loop.
+                                    if let Some(ref srv) = sim_ipc_server {
+                                        if ipc_last_reply_values.len() != srv.o {
+                                            ipc_last_reply_values.resize(srv.o, 0.5);
+                                        }
+                                        ipc_reply_values = Some(ipc_last_reply_values.clone());
                                     }
-                                    ipc_reply_values = Some(ipc_last_reply_values.clone());
                                 }
                             }
                             #[cfg(all(feature = "robot_io", unix))]
@@ -2418,7 +2819,25 @@ impl App {
                                     ipc_last_reply_values = out_vals.clone();
                                     let _ = srv.send_outputs(&out_vals);
                                     if let Ok(mut stats) = sim_ipc_stats.try_write() {
-                                        stats.last_steps = 1;
+                                        stats.last_steps = ipc_steps_taken;
+                                    if let Some(frame_spikes) = ipc_output_spikes_frame.as_ref() {
+                                        let substep_spikes = ipc_output_spike_frames
+                                            .iter()
+                                            .map(|frame| frame.iter().filter(|&&v| v != 0).count())
+                                            .sum::<usize>();
+                                        stats.last_output_spike_count = substep_spikes.max(
+                                            frame_spikes.iter().filter(|&&v| v != 0).count(),
+                                        );
+                                    }
+                                        // Periodic time-sync diagnostics
+                                        if stats.frame_count % 100 == 0 {
+                                            if let Ok(r) = sim_runner.try_read() {
+                                                eprintln!(
+                                                    "[IPC time-sync] nn_t_ms={:.1} ipc_frames={} substeps_this_frame={}",
+                                                    r.t_ms, stats.frame_count, ipc_steps_taken
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2456,9 +2875,14 @@ impl App {
                                             snap.output_spikes.resize(src_slice.len(), 0);
                                         }
                                         snap.output_spikes.copy_from_slice(src_slice);
+                                        snap.output_spike_frames.clear();
+                                        snap.output_spike_frames.push(src_slice.to_vec());
                                     } else {
                                         snap.output_spikes.clear();
                                         snap.output_spikes.extend(r.last_spk_o.iter().copied());
+                                        snap.output_spike_frames.clear();
+                                        let output_spikes = snap.output_spikes.clone();
+                                        snap.output_spike_frames.push(output_spikes);
                                     }
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
@@ -2544,6 +2968,10 @@ impl App {
                                         }
                                     }
                                     update_ui_snapshot(&r);
+                                    sim_t_ms_bits_thread.store(
+                                        r.t_ms.to_bits(),
+                                        Ordering::Release,
+                                    );
                                     // Write lock is dropped here at end of this block.
                                     // Yield between batch steps so the UI event loop and
                                     // any pending try_read() callers can proceed.
@@ -2568,7 +2996,15 @@ impl App {
                             std::thread::sleep(std::time::Duration::from_millis(throttle as u64));
                         }
                     } else {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        #[cfg(all(feature = "robot_io", unix))]
+                        let idle_ms = if ipc_driven {
+                            sim_ipc_idle_sleep_ms.max(1)
+                        } else {
+                            10
+                        };
+                        #[cfg(not(all(feature = "robot_io", unix)))]
+                        let idle_ms = 10;
+                        std::thread::sleep(std::time::Duration::from_millis(idle_ms));
                     }
                 }
             })
@@ -2778,8 +3214,10 @@ impl App {
             sensory_activity: vec![0.0; n_s],
             hidden_activity: act_h,
             output_activity: vec![0.0; o],
+            output_drive_history: vec![0.5; o],
             raster_cols: 240,
             raster_outputs: std::collections::VecDeque::new(),
+            last_activity_rendered_step: None,
             camera_zoom: 1.0,
             camera_yaw_degrees: 0.0,
             camera_pitch_degrees: 0.0,
@@ -2899,7 +3337,6 @@ impl App {
             detail_last_neuron: None,
             detail_waiting_for_activation: false,
             last_ui_render_time: std::time::Instant::now(),
-            #[cfg(all(feature = "robot_io", unix))]
             ipc_sock_path: {
                 if let Ok(home) = std::env::var("HOME") {
                     if brain_id == "default" {
@@ -2949,6 +3386,10 @@ impl App {
             ipc_frame_count: 0,
             #[cfg(all(feature = "robot_io", unix))]
             ipc_last_steps: 0,
+            #[cfg(all(feature = "robot_io", unix))]
+            ipc_last_input_spike_count: 0,
+            #[cfg(all(feature = "robot_io", unix))]
+            ipc_last_output_spike_count: 0,
             #[cfg(all(feature = "robot_io", unix))]
             ipc_last_handshake: None,
             ipc_stats: ipc_stats.clone(),
@@ -3013,6 +3454,7 @@ impl App {
             sim_step_counter,
             sim_last_spike_count,
             sim_last_spike_len,
+            sim_t_ms_bits,
             runtime_handle,
             remote_workspace_binding,
             remote_token_balance: None,
@@ -3219,7 +3661,7 @@ impl App {
                 if stop_clone.load(Ordering::SeqCst) {
                     break;
                 }
-                match DistributedNeuromorphicClient::connect(addr_clone.clone()).await {
+                match connect_cluster_client(addr_clone.clone()).await {
                     Ok(mut client) => {
                         match client
                             .get_system_status(Request::new(StatusRequest {}))
@@ -3967,13 +4409,7 @@ impl App {
             ViewSource::ClusterGlobal(id) => {
                 let mut cfg_opt: Option<NetworkConfig> = None;
                 if let Some(net_status) = self.dist_network_registry.get(id) {
-                    if !net_status.config_json.is_empty() {
-                        if let Ok(cfg) =
-                            serde_json::from_str::<NetworkConfig>(&net_status.config_json)
-                        {
-                            cfg_opt = Some(cfg);
-                        }
-                    }
+                    cfg_opt = network_config_from_payload(&net_status.config_json);
                     let mut layers = net_status.num_layers.max(1) as usize;
                     let mut layer_sizes = vec![0usize; layers];
                     for range in net_status.distribution.values() {
@@ -4011,6 +4447,20 @@ impl App {
                 }
             }
             ViewSource::LocalManaged(id) => {
+                let stable_fallback = (
+                    self.sensory_count
+                        .max(self.sensory_positions.len())
+                        .max(self.local_net.num_sensory_neurons)
+                        .max(1),
+                    self.hidden_positions
+                        .len()
+                        .max(self.local_net.num_hidden_layers.max(1))
+                        .max(1),
+                    self.output_count
+                        .max(self.output_positions.len())
+                        .max(self.local_net.num_output_neurons)
+                        .max(1),
+                );
                 if let Some(ref node) = self.distributed_node {
                     if let Ok(state) = node.state.try_read() {
                         if let Some(net_arc) = state.networks.get(id) {
@@ -4021,32 +4471,16 @@ impl App {
                                     net.runner.net.num_output_neurons,
                                 )
                             } else {
-                                (
-                                    self.local_net.num_sensory_neurons,
-                                    self.local_net.num_hidden_layers,
-                                    self.local_net.num_output_neurons,
-                                )
+                                stable_fallback
                             }
                         } else {
-                            (
-                                self.local_net.num_sensory_neurons,
-                                self.local_net.num_hidden_layers,
-                                self.local_net.num_output_neurons,
-                            )
+                            stable_fallback
                         }
                     } else {
-                        (
-                            self.local_net.num_sensory_neurons,
-                            self.local_net.num_hidden_layers,
-                            self.local_net.num_output_neurons,
-                        )
+                        stable_fallback
                     }
                 } else {
-                    (
-                        self.local_net.num_sensory_neurons,
-                        self.local_net.num_hidden_layers,
-                        self.local_net.num_output_neurons,
-                    )
+                    stable_fallback
                 }
             }
         };
@@ -4061,9 +4495,11 @@ impl App {
         self.sensory_activity = vec![0.0; n_s];
         self.hidden_activity = (0..n_l).map(|_| Vec::new()).collect(); // will be resized in update_activity
         self.output_activity = vec![0.0; n_o];
+        self.output_drive_history = vec![0.5; n_o];
         self.previous_hidden_spikes = (0..n_l).map(|_| Vec::new()).collect();
         self.last_sensory_spikes = vec![0; n_s];
         self.raster_outputs.clear();
+        self.last_activity_rendered_step = None;
     }
 
     fn preferred_layout_for_view(
@@ -4071,6 +4507,9 @@ impl App {
         model: &NeuronModel,
         network_registry: &HashMap<String, NetworkStatus>,
     ) -> NetworkLayout {
+        let config_prefers_aarnn = |cfg: &NetworkConfig| {
+            cfg.aarnn_layer_depth > 0 || !matches!(cfg.clumping_design, ClumpingDesign::None)
+        };
         match &self.view_source {
             ViewSource::Standalone => {
                 if matches!(model, NeuronModel::Aarnn) {
@@ -4080,14 +4519,52 @@ impl App {
                 }
             }
             ViewSource::LocalManaged(id) => {
-                if network_registry
+                // Prefer direct local managed state when available.
+                if let Some(node) = self.distributed_node.as_ref() {
+                    match node.state.try_read() {
+                        Ok(state) => {
+                            if let Some(net_arc) = state.networks.get(id) {
+                                match net_arc.try_read() {
+                                    Ok(net) => {
+                                        if matches!(net.runner.neuron_model, NeuronModel::Aarnn)
+                                            || config_prefers_aarnn(&net.runner.net)
+                                        {
+                                            return NetworkLayout::Aarnn;
+                                        }
+                                        return NetworkLayout::Conventional;
+                                    }
+                                    Err(_) => {
+                                        // Preserve current layout while managed state is busy.
+                                        return self.network_layout;
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Preserve current layout while cluster state is busy.
+                            return self.network_layout;
+                        }
+                    }
+                }
+
+                // Fall back to registry/config metadata.
+                let from_registry = network_registry
                     .get(id)
-                    .map(|net| net.desired_aarnn_depth > 0)
-                    .unwrap_or(false)
-                {
+                    .map(|net| {
+                        net.desired_aarnn_depth > 0
+                            || net.neuron_model.eq_ignore_ascii_case("aarnn")
+                    })
+                    .unwrap_or(false);
+                let from_config = network_registry
+                    .get(id)
+                    .and_then(|net| network_config_from_payload(&net.config_json))
+                    .map(|cfg| config_prefers_aarnn(&cfg))
+                    .unwrap_or(false);
+                if from_registry || from_config {
                     NetworkLayout::Aarnn
                 } else {
-                    NetworkLayout::Conventional
+                    // Keep current layout to avoid frame-to-frame oscillation when metadata is transiently missing.
+                    self.network_layout
                 }
             }
             ViewSource::ClusterGlobal(id) => {
@@ -4099,6 +4576,11 @@ impl App {
                         net.desired_aarnn_depth > 0
                             || net.neuron_model.eq_ignore_ascii_case("aarnn")
                     })
+                    .unwrap_or(false);
+                let from_config = network_registry
+                    .get(id)
+                    .and_then(|net| network_config_from_payload(&net.config_json))
+                    .map(|cfg| config_prefers_aarnn(&cfg))
                     .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
                 let from_topo = self
@@ -4113,12 +4595,118 @@ impl App {
                     .unwrap_or(false);
                 #[cfg(not(feature = "growth3d"))]
                 let from_topo = false;
-                if from_registry || from_topo {
+                if from_registry || from_config || from_topo {
                     NetworkLayout::Aarnn
                 } else {
-                    NetworkLayout::Conventional
+                    // Keep current layout to avoid frame-to-frame oscillation when
+                    // cluster metadata/topology is transiently unavailable.
+                    self.network_layout
                 }
             }
+        }
+    }
+
+    fn sync_displayed_io_counts(&mut self) {
+        let stable_fallback = (
+            self.sensory_count
+                .max(self.sensory_positions.len())
+                .max(self.local_net.num_sensory_neurons)
+                .max(1),
+            self.hidden_positions
+                .len()
+                .max(self.local_net.num_hidden_layers.max(1))
+                .max(1),
+            self.output_count
+                .max(self.output_positions.len())
+                .max(self.local_net.num_output_neurons)
+                .max(1),
+        );
+        let mut resolved: Option<(usize, usize, usize)> = None;
+
+        match &self.view_source {
+            ViewSource::Standalone => {
+                if let Ok(snap) = self.ui_snapshot.try_read() {
+                    resolved = Some((
+                        snap.num_sensory.max(snap.sensory_spikes.len()).max(1),
+                        snap.num_hidden_layers.max(1),
+                        snap.num_output.max(snap.output_spikes.len()).max(1),
+                    ));
+                } else if let Ok(r) = self.runner.try_read() {
+                    resolved = Some((
+                        r.net.num_sensory_neurons.max(1),
+                        r.net.num_hidden_layers.max(1),
+                        r.net.num_output_neurons.max(1),
+                    ));
+                }
+            }
+            ViewSource::LocalManaged(id) => {
+                if let Some(node) = self.distributed_node.as_ref() {
+                    if let Ok(state) = node.state.try_read() {
+                        if let Some(net_arc) = state.networks.get(id) {
+                            if let Ok(net) = net_arc.try_read() {
+                                resolved = Some((
+                                    net.runner.net.num_sensory_neurons.max(1),
+                                    net.runner.net.num_hidden_layers.max(1),
+                                    net.runner.net.num_output_neurons.max(1),
+                                ));
+                            }
+                        }
+                    }
+                }
+                if resolved.is_none() {
+                    if let Some(net_status) = self.dist_network_registry.get(id) {
+                        if let Some(cfg) = network_config_from_payload(&net_status.config_json) {
+                            resolved = Some((
+                                cfg.num_sensory_neurons.max(1),
+                                cfg.num_hidden_layers.max(1),
+                                cfg.num_output_neurons.max(1),
+                            ));
+                        }
+                    }
+                }
+                if resolved.is_none() {
+                    if let Some(mapping) = self.ipc_mapping.as_ref() {
+                        resolved = Some((
+                            mapping.sensory_size.max(1),
+                            stable_fallback.1,
+                            mapping.output_size.max(1),
+                        ));
+                    }
+                }
+            }
+            ViewSource::ClusterGlobal(id) => {
+                if let Some(net_status) = self.dist_network_registry.get(id) {
+                    if let Some(cfg) = network_config_from_payload(&net_status.config_json) {
+                        resolved = Some((
+                            cfg.num_sensory_neurons.max(1),
+                            cfg.num_hidden_layers.max(1),
+                            cfg.num_output_neurons.max(1),
+                        ));
+                    }
+                    if resolved.is_none() && net_status.num_layers > 0 {
+                        resolved = Some((
+                            stable_fallback.0,
+                            net_status.num_layers as usize,
+                            stable_fallback.2,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let resolved_from_authoritative_source = resolved.is_some();
+        let (ns, nl, no) = resolved.unwrap_or(stable_fallback);
+        self.sensory_count = ns.max(1);
+        self.output_count = no.max(1);
+        let update_local_net = match self.view_source {
+            ViewSource::Standalone => true,
+            ViewSource::LocalManaged(_) => resolved_from_authoritative_source,
+            ViewSource::ClusterGlobal(_) => false,
+        };
+        if update_local_net {
+            self.local_net.num_sensory_neurons = self.sensory_count;
+            self.local_net.num_output_neurons = self.output_count;
+            self.local_net.num_hidden_layers = nl.max(1);
         }
     }
 
@@ -4521,9 +5109,7 @@ impl App {
                         }
                         let net_id_c = net_id.clone();
                         rt.spawn(async move {
-                            if let Ok(mut client) =
-                                DistributedNeuromorphicClient::connect(addr).await
-                            {
+                            if let Ok(mut client) = connect_cluster_client(addr).await {
                                 let req = NetworkUpdateRequest {
                                     network_id: net_id_c,
                                     update: Some(network_update_request::Update::Control(
@@ -4728,6 +5314,13 @@ impl App {
             net_guard.runner.apply_config(net.clone());
         }
         net_guard.initial_config = net;
+        if matches!(&self.view_source, ViewSource::LocalManaged(id) if id == network_id) {
+            let ns = net_guard.runner.net.num_sensory_neurons.max(1);
+            let no = net_guard.runner.net.num_output_neurons.max(1);
+            self.local_net = net_guard.runner.net.clone();
+            self.sensory_count = ns;
+            self.output_count = no;
+        }
         Ok(())
     }
 
@@ -4811,6 +5404,13 @@ impl App {
             hidden_summary,
             net_guard.runner.net.num_output_neurons
         );
+        if matches!(&self.view_source, ViewSource::LocalManaged(id) if id == network_id) {
+            let ns = net_guard.runner.net.num_sensory_neurons.max(1);
+            let no = net_guard.runner.net.num_output_neurons.max(1);
+            self.local_net = net_guard.runner.net.clone();
+            self.sensory_count = ns;
+            self.output_count = no;
+        }
         self.cached_layer_sizes.clear();
         self.cached_conn_counts.clear();
         self.cached_output_conn_count = None;
@@ -4832,75 +5432,373 @@ impl App {
     fn pull_activity(&mut self) {
         let node_opt = self.distributed_node.clone();
         let _runner_arc = self.runner.clone();
-        match &self.view_source {
-            ViewSource::Standalone => {
-                // Done in run_simulation_step if playing.
-                // If not playing, decay slightly.
-                if !self.playing {
-                    let decay = 0.95f32;
-                    for v in &mut self.sensory_activity {
+        if matches!(self.view_source, ViewSource::Standalone) {
+            // Done in run_simulation_step if playing.
+            // If not playing, decay slightly.
+            if !self.playing {
+                let decay = 0.95f32;
+                for v in &mut self.sensory_activity {
+                    *v *= decay;
+                }
+                for layer in &mut self.hidden_activity {
+                    for v in layer {
                         *v *= decay;
                     }
-                    for layer in &mut self.hidden_activity {
-                        for v in layer {
-                            *v *= decay;
-                        }
-                    }
-                    for v in &mut self.output_activity {
-                        *v *= decay;
-                    }
+                }
+                for v in &mut self.output_activity {
+                    *v *= decay;
                 }
             }
-            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => {
-                if let Some(node) = node_opt {
-                    if let Ok(state) = node.state.try_read() {
-                        if let Some(net_arc) = state.networks.get(id) {
-                            if let Ok(net) = net_arc.try_read() {
-                                self.sync_activity_from_runner(&net.runner);
-                            }
-                        } else {
-                            // Decay if no data
-                            let decay = 0.95f32;
-                            for v in &mut self.sensory_activity {
-                                *v *= decay;
-                            }
-                            for layer in &mut self.hidden_activity {
-                                for v in layer {
-                                    *v *= decay;
-                                }
-                            }
-                            for v in &mut self.output_activity {
-                                *v *= decay;
-                            }
-                            if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-                                self.status = "Watching Cluster".into();
-                            }
-                        }
+            return;
+        }
+
+        let (id, cluster_mode) = match self.view_source.clone() {
+            ViewSource::LocalManaged(id) => (id, false),
+            ViewSource::ClusterGlobal(id) => (id, true),
+            ViewSource::Standalone => return,
+        };
+
+        let mut synced_from_source = false;
+        if let Some(node) = node_opt {
+            if let Ok(state) = node.state.try_read() {
+                if let Some(net_arc) = state.networks.get(&id) {
+                    if let Ok(net) = net_arc.try_read() {
+                        self.sync_activity_from_runner(&net.runner);
+                        synced_from_source = true;
                     } else {
-                        // Locked, skip frame but decay to avoid stale activity
-                        let decay = 0.95f32;
-                        for v in &mut self.sensory_activity {
-                            *v *= decay;
-                        }
-                        for layer in &mut self.hidden_activity {
-                            for v in layer {
-                                *v *= decay;
-                            }
-                        }
-                        for v in &mut self.output_activity {
-                            *v *= decay;
-                        }
-                        if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-                            self.status = "Watching Cluster".into();
-                        }
+                        synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
                     }
+                } else {
+                    synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
                 }
+            } else {
+                synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
+            }
+        } else {
+            synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
+        }
+
+        if !synced_from_source {
+            // Decay if no data
+            let decay = 0.95f32;
+            for v in &mut self.sensory_activity {
+                *v *= decay;
+            }
+            for layer in &mut self.hidden_activity {
+                for v in layer {
+                    *v *= decay;
+                }
+            }
+            for v in &mut self.output_activity {
+                *v *= decay;
+            }
+            if cluster_mode {
+                self.status = "Watching Cluster".into();
             }
         }
     }
 
+    fn ensure_output_drive_history_len(&mut self, len: usize) {
+        if self.output_drive_history.len() != len {
+            self.output_drive_history = vec![0.5; len];
+        }
+    }
+
+    fn mark_output_transients_from_drive(
+        &mut self,
+        drive_raw: &[f32],
+        raster_col: &mut [i8],
+        mut output_spikes: Option<&mut [i8]>,
+    ) -> bool {
+        const FALLBACK_GAIN: f32 = 0.92;
+        const FALLBACK_LEVEL_EPS: f32 = 0.02;
+        const FALLBACK_DELTA_EPS: f32 = 0.02;
+
+        let count = raster_col.len().min(drive_raw.len());
+        self.ensure_output_drive_history_len(raster_col.len());
+        let mut any = false;
+        for k in 0..count {
+            let raw = drive_raw[k];
+            if !raw.is_finite() {
+                self.output_drive_history[k] = 0.5;
+                continue;
+            }
+            let unit = (0.5 + 0.5 * (FALLBACK_GAIN * raw).tanh()).clamp(0.0, 1.0);
+            let prev = self.output_drive_history[k];
+            let dev = (unit - 0.5).abs();
+            let delta = (unit - prev).abs();
+            let crossed_midline = (prev <= 0.5 && unit >= 0.5 + FALLBACK_LEVEL_EPS)
+                || (prev >= 0.5 && unit <= 0.5 - FALLBACK_LEVEL_EPS);
+            let transient =
+                (dev >= FALLBACK_LEVEL_EPS && delta >= FALLBACK_DELTA_EPS) || crossed_midline;
+            if transient {
+                self.output_activity[k] = 1.0;
+                raster_col[k] = 1;
+                if let Some(spikes) = output_spikes.as_deref_mut() {
+                    if k < spikes.len() {
+                        spikes[k] = 1;
+                    }
+                }
+                any = true;
+            }
+            self.output_drive_history[k] = unit;
+        }
+        for k in count..self.output_drive_history.len() {
+            self.output_drive_history[k] = 0.5;
+        }
+        any
+    }
+
+    fn push_output_raster_column(&mut self, frame: &[i8]) {
+        if self.output_activity.len() != frame.len() {
+            self.output_activity.resize(frame.len(), 0.0);
+        }
+        let mut col = vec![0i8; frame.len()];
+        for (k, &sv) in frame.iter().enumerate() {
+            if sv != 0 {
+                self.output_activity[k] = 1.0;
+                col[k] = 1;
+            }
+        }
+        self.raster_outputs.push_back(col);
+        if self.raster_outputs.len() > self.raster_cols {
+            self.raster_outputs.pop_front();
+        }
+    }
+
+    fn append_output_raster_step_frames(&mut self, frames: Vec<(u64, Vec<i8>)>) -> usize {
+        if frames.is_empty() {
+            return 0;
+        }
+        if let (Some(last), Some((latest, _))) = (self.last_activity_rendered_step, frames.last()) {
+            if *latest < last {
+                self.last_activity_rendered_step = None;
+            }
+        }
+        let mut appended = 0usize;
+        for (step, frame) in frames {
+            if self
+                .last_activity_rendered_step
+                .is_some_and(|last_step| step <= last_step)
+            {
+                continue;
+            }
+            self.push_output_raster_column(&frame);
+            self.last_activity_rendered_step = Some(step);
+            appended = appended.saturating_add(1);
+        }
+        appended
+    }
+
+    fn sync_activity_from_cluster_snapshot(&mut self, network_id: &str) -> bool {
+        let (
+            net_s,
+            net_h,
+            net_o,
+            sensory_spikes,
+            hidden_spikes,
+            output_spikes,
+            output_history_frames,
+            x_pre_in,
+            v_h,
+            v_o,
+            sim_step,
+            sim_time_ms,
+            dt_ms,
+        ) = {
+            let snap = match self.cluster_snapshot_cache.as_ref() {
+                Some(snap)
+                    if self.cluster_snapshot_network_id.as_deref() == Some(network_id)
+                        || self.cluster_snapshot_network_id.is_none() =>
+                {
+                    snap.as_ref()
+                }
+                _ => return false,
+            };
+            let runtime = match snap.runtime_state.as_ref() {
+                Some(runtime) => runtime,
+                None => return false,
+            };
+
+            let net_s = snap.net.num_sensory_neurons.max(1);
+            let net_h = snap.net.num_hidden_layers.max(1);
+            let net_o = snap.net.num_output_neurons.max(1);
+            let sensory_spikes = runtime
+                .spk_hist_s
+                .first()
+                .cloned()
+                .unwrap_or_else(|| vec![0; net_s]);
+            let hidden_spikes = runtime.last_spk_h.clone();
+            let output_spikes = runtime.last_spk_o.clone();
+            let sim_step = snap.t as u64;
+            let mut output_history_frames: Vec<(u64, Vec<i8>)> = runtime
+                .spk_hist_o
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, frame)| {
+                    sim_step
+                        .checked_sub(offset as u64)
+                        .map(|step| (step, frame.clone()))
+                })
+                .collect();
+            output_history_frames.reverse();
+            if output_history_frames.is_empty() {
+                output_history_frames.push((sim_step, output_spikes.clone()));
+            }
+            let x_pre_in: Vec<f32> = runtime.x_pre_in.iter().map(|&v| v as f32).collect();
+            let v_h: Vec<Vec<f32>> = runtime
+                .v_h
+                .iter()
+                .map(|layer| layer.iter().map(|&v| v as f32).collect())
+                .collect();
+            let v_o: Vec<f32> = runtime.v_o.iter().map(|&v| v as f32).collect();
+            let dt_ms = if self.initial_lif.dt > 0.0 {
+                self.initial_lif.dt
+            } else {
+                1.0
+            };
+            (
+                net_s,
+                net_h,
+                net_o,
+                sensory_spikes,
+                hidden_spikes,
+                output_spikes,
+                output_history_frames,
+                x_pre_in,
+                v_h,
+                v_o,
+                sim_step,
+                snap.t_ms,
+                dt_ms,
+            )
+        };
+
+        let decay = 0.90f32;
+
+        if self.sensory_activity.len() != net_s {
+            self.sensory_activity.resize(net_s, 0.0);
+        }
+        for v in &mut self.sensory_activity {
+            *v *= decay;
+        }
+        let mut sensory_spikes = sensory_spikes;
+        if sensory_spikes.len() != net_s {
+            sensory_spikes.resize(net_s, 0);
+        }
+        self.last_sensory_spikes = sensory_spikes.clone();
+        for (i, &sv) in sensory_spikes.iter().enumerate() {
+            if sv != 0 && i < self.sensory_activity.len() {
+                self.sensory_activity[i] = 1.0;
+            }
+        }
+        for (i, &trace) in x_pre_in.iter().enumerate() {
+            if trace > 0.1 && i < self.sensory_activity.len() {
+                self.sensory_activity[i] = 1.0;
+            }
+        }
+
+        let hidden_layers = hidden_spikes.len().max(net_h);
+        if self.hidden_activity.len() != hidden_layers {
+            self.hidden_activity = (0..hidden_layers).map(|_| Vec::new()).collect();
+        }
+        if self.previous_hidden_spikes.len() != hidden_layers {
+            self.previous_hidden_spikes = (0..hidden_layers).map(|_| Vec::new()).collect();
+        }
+        for li in 0..hidden_layers {
+            let src = hidden_spikes.get(li).map(|v| v.as_slice()).unwrap_or(&[]);
+            if self.hidden_activity[li].len() != src.len() {
+                self.hidden_activity[li].resize(src.len(), 0.0);
+            }
+            if self.previous_hidden_spikes[li].len() != src.len() {
+                self.previous_hidden_spikes[li].resize(src.len(), 0);
+            }
+            for (j, &spk) in src.iter().enumerate() {
+                self.hidden_activity[li][j] *= decay;
+                if spk != 0 {
+                    self.hidden_activity[li][j] = 1.0;
+                    self.previous_hidden_spikes[li][j] = 1;
+                } else {
+                    self.previous_hidden_spikes[li][j] = 0;
+                }
+            }
+        }
+
+        if self.output_activity.len() != net_o {
+            self.output_activity.resize(net_o, 0.0);
+        }
+        for v in &mut self.output_activity {
+            *v *= decay;
+        }
+        let mut output_spikes = output_spikes;
+        if output_spikes.len() != net_o {
+            output_spikes.resize(net_o, 0);
+        }
+        let mut any_output = false;
+        for (k, &sv) in output_spikes.iter().enumerate() {
+            if sv != 0 {
+                self.output_activity[k] = 1.0;
+                any_output = true;
+            }
+        }
+        let appended_frames = self.append_output_raster_step_frames(output_history_frames);
+        if appended_frames == 0
+            && self.last_activity_rendered_step.is_none()
+            && !any_output
+            && !v_o.is_empty()
+        {
+            let mut raster_col = vec![0i8; net_o];
+            self.mark_output_transients_from_drive(
+                &v_o,
+                &mut raster_col,
+                Some(output_spikes.as_mut_slice()),
+            );
+            self.raster_outputs.push_back(raster_col);
+            if self.raster_outputs.len() > self.raster_cols {
+                self.raster_outputs.pop_front();
+            }
+        }
+
+        let mut probe_snapshot = UiSnapshot::default();
+        probe_snapshot.sensory_spikes = sensory_spikes;
+        probe_snapshot.hidden_spikes = hidden_spikes;
+        probe_snapshot.output_spikes = output_spikes;
+        probe_snapshot.num_sensory = net_s;
+        probe_snapshot.num_hidden_layers = net_h;
+        probe_snapshot.num_output = net_o;
+        probe_snapshot.v_h = v_h;
+        probe_snapshot.v_o = v_o;
+        probe_snapshot.x_pre_in = x_pre_in;
+        probe_snapshot.sim_step = sim_step;
+        probe_snapshot.sim_time_ms = sim_time_ms;
+        probe_snapshot.dt_ms = dt_ms;
+        self.update_probes_from_ui_snapshot(&probe_snapshot);
+
+        let display_t = {
+            let atomic_t = self.sim_t_ms();
+            if atomic_t > 0.0 { atomic_t } else { sim_time_ms }
+        };
+        self.status = format!(
+            "Watching {} ({}): t={} ms",
+            network_id,
+            self.view_source_label(),
+            display_t as i64
+        );
+        true
+    }
+
     fn sync_activity_from_runner(&mut self, runner: &Runner) {
         let decay = 0.90f32;
+        if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+            let ns = runner.net.num_sensory_neurons.max(1);
+            let no = runner.net.num_output_neurons.max(1);
+            self.local_net = runner.net.clone();
+            self.sensory_count = ns;
+            self.output_count = no;
+            self.local_net.num_sensory_neurons = ns;
+            self.local_net.num_output_neurons = no;
+            self.local_net.num_hidden_layers = runner.net.num_hidden_layers.max(1);
+        }
 
         // 1. Sensory
         if self.sensory_activity.len() != runner.net.num_sensory_neurons {
@@ -4960,44 +5858,69 @@ impl App {
             self.output_activity
                 .resize(runner.net.num_output_neurons, 0.0);
         }
-        let mut col = vec![0i8; runner.net.num_output_neurons];
-        let mut any = false;
         for k in 0..runner.net.num_output_neurons {
             self.output_activity[k] *= decay;
-            if runner.last_spk_o[k] != 0 {
-                self.output_activity[k] = 1.0;
-                col[k] = 1;
-                any = true;
-            }
         }
-
-        if any || (runner.t % 5 == 0) {
+        let current_step = runner.t as u64;
+        let mut stepped_frames: Vec<(u64, Vec<i8>)> = runner
+            .spk_hist_o
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, frame)| {
+                current_step
+                    .checked_sub(offset as u64)
+                    .map(|step| (step, frame.to_vec()))
+            })
+            .collect();
+        stepped_frames.reverse();
+        if stepped_frames.is_empty() {
+            stepped_frames.push((current_step, runner.last_spk_o.to_vec()));
+        }
+        let appended_frames = self.append_output_raster_step_frames(stepped_frames);
+        if appended_frames == 0
+            && self.last_activity_rendered_step.is_none()
+            && !runner.last_spk_o.iter().any(|&v| v != 0)
+            && !runner.v_o.is_empty()
+        {
+            let mut col = vec![0i8; runner.net.num_output_neurons];
+            let drive: Vec<f32> = runner.v_o.iter().map(|&v| v as f32).collect();
+            self.mark_output_transients_from_drive(&drive, &mut col, None);
             self.raster_outputs.push_back(col);
             if self.raster_outputs.len() > self.raster_cols {
                 self.raster_outputs.pop_front();
             }
         }
 
+        // Use the lock-free atomic t_ms which is always up to date,
+        // even when the runner write-lock is held by the sim thread.
+        let display_t = {
+            let atomic_t = self.sim_t_ms();
+            if atomic_t > 0.0 { atomic_t } else { runner.t_ms }
+        };
         self.status = format!(
             "Watching {}: t={} ms",
-            match &self.view_source {
-                ViewSource::Standalone => "Standalone",
-                ViewSource::LocalManaged(id) => id,
-                ViewSource::ClusterGlobal(id) => id,
-            },
-            runner.t_ms as i64
+            self.view_source_label(),
+            display_t as i64
         );
+
+        // Keep oscilloscope probes live in managed/cluster views too.
+        // Previously probes were only updated in standalone snapshot mode.
+        self.update_probes_from_standalone(runner);
     }
 
     fn sync_activity_from_standalone(&mut self, runner: &Runner) {
-        let (runner_t, num_sensory, num_hidden, num_output, runner_t_ms, x_pre_in) = (
-            runner.t,
+        let (num_sensory, num_hidden, num_output, runner_t_ms, x_pre_in) = (
             runner.net.num_sensory_neurons,
             runner.net.num_hidden_layers,
             runner.net.num_output_neurons,
             runner.t_ms,
             runner.x_pre_in.to_vec(),
         );
+        self.sensory_count = num_sensory.max(1);
+        self.output_count = num_output.max(1);
+        self.local_net.num_sensory_neurons = self.sensory_count;
+        self.local_net.num_output_neurons = self.output_count;
+        self.local_net.num_hidden_layers = num_hidden.max(1);
 
         let decay = 0.90f32;
         if self.sensory_activity.len() != num_sensory {
@@ -5047,24 +5970,43 @@ impl App {
         if self.output_activity.len() != num_output {
             self.output_activity.resize(num_output, 0.0);
         }
-        let last_spk_o = runner.last_spk_o.to_vec();
-        let mut col = vec![0i8; num_output];
-        let mut any = false;
         for k in 0..num_output {
             self.output_activity[k] *= decay;
-            if last_spk_o[k] != 0 {
-                self.output_activity[k] = 1.0;
-                col[k] = 1;
-                any = true;
-            }
         }
-        if any || (runner_t % 5 == 0) {
+        let current_step = runner.t as u64;
+        let mut stepped_frames: Vec<(u64, Vec<i8>)> = runner
+            .spk_hist_o
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, frame)| {
+                current_step
+                    .checked_sub(offset as u64)
+                    .map(|step| (step, frame.to_vec()))
+            })
+            .collect();
+        stepped_frames.reverse();
+        if stepped_frames.is_empty() {
+            stepped_frames.push((current_step, runner.last_spk_o.to_vec()));
+        }
+        let appended_frames = self.append_output_raster_step_frames(stepped_frames);
+        if appended_frames == 0
+            && self.last_activity_rendered_step.is_none()
+            && !runner.last_spk_o.iter().any(|&v| v != 0)
+            && !runner.v_o.is_empty()
+        {
+            let mut col = vec![0i8; num_output];
+            let drive: Vec<f32> = runner.v_o.iter().map(|&v| v as f32).collect();
+            self.mark_output_transients_from_drive(&drive, &mut col, None);
             self.raster_outputs.push_back(col);
             if self.raster_outputs.len() > self.raster_cols {
                 self.raster_outputs.pop_front();
             }
         }
-        self.status = format!("Watching Standalone: t={} ms", runner_t_ms as i64);
+        let display_t = {
+            let atomic_t = self.sim_t_ms();
+            if atomic_t > 0.0 { atomic_t } else { runner_t_ms }
+        };
+        self.status = format!("Watching Standalone: t={} ms", display_t as i64);
     }
 
     fn get_layer_visuals(
@@ -5118,6 +6060,30 @@ impl App {
         (default_color, true)
     }
 
+    fn shape_probe_sample(probe: &mut Probe, value: f32) -> f32 {
+        if value.is_nan() {
+            return f32::NAN;
+        }
+        if !matches!(probe.kind, ProbeKind::Spike) {
+            return value;
+        }
+
+        if value > 0.5 {
+            probe.scope_level = 1.0;
+            probe.scope_hold_samples = SCOPE_SPIKE_HOLD_SAMPLES;
+        } else if probe.scope_hold_samples > 0 {
+            probe.scope_hold_samples = probe.scope_hold_samples.saturating_sub(1);
+        } else {
+            probe.scope_level = (probe.scope_level - SCOPE_SPIKE_RELEASE_STEP).max(0.0);
+        }
+
+        if probe.scope_level <= 1.0e-4 {
+            0.0
+        } else {
+            probe.scope_level
+        }
+    }
+
     fn update_probes_from_standalone(&mut self, runner: &Runner) {
         if self.scope_paused {
             return;
@@ -5167,8 +6133,11 @@ impl App {
                 pr.data.resize(desired_cap, 0.0);
                 pr.capacity = desired_cap;
                 pr.write_idx = 0;
+                pr.scope_level = 0.0;
+                pr.scope_hold_samples = 0;
             }
-            pr.push(val);
+            let shaped = Self::shape_probe_sample(pr, val);
+            pr.push(shaped);
         }
     }
 
@@ -5211,8 +6180,11 @@ impl App {
                 pr.data.resize(desired_cap, 0.0);
                 pr.capacity = desired_cap;
                 pr.write_idx = 0;
+                pr.scope_level = 0.0;
+                pr.scope_hold_samples = 0;
             }
-            pr.push(val);
+            let shaped = Self::shape_probe_sample(pr, val);
+            pr.push(shaped);
         }
     }
 
@@ -5284,14 +6256,24 @@ impl App {
                 pr.data.resize(desired_cap, 0.0);
                 pr.capacity = desired_cap;
                 pr.write_idx = 0;
+                pr.scope_level = 0.0;
+                pr.scope_hold_samples = 0;
             }
-            pr.push(val);
+            let shaped = Self::shape_probe_sample(pr, val);
+            pr.push(shaped);
         }
     }
 
     #[cfg(all(feature = "robot_io", unix))]
     fn apply_ipc_config(&mut self, handshake: IpcHandshake) {
         self.ipc_last_handshake = Some(handshake.clone());
+        if !ipc_handshake_has_explicit_dimensions(&handshake) {
+            self.status =
+                "IPC handshake observed without explicit size hints; keeping existing I/O".into();
+            return;
+        }
+
+        let apply_resize_to_local_runner = matches!(self.view_source, ViewSource::Standalone);
         let (n_s_raw, n_o_raw) = resolve_ipc_handshake_sizes(
             &handshake,
             self.local_net.num_sensory_neurons.max(1),
@@ -5328,17 +6310,75 @@ impl App {
         }
         self.ipc_mapping = Some(mapping);
 
-        // Keep UI fallback config in sync with negotiated IPC dimensions so
-        // diagnostics and manual rebind actions don't regress to stale S/O.
-        self.local_net.num_sensory_neurons = s_total;
-        self.local_net.num_output_neurons = o_total;
+        let managed_target = self.distributed_node.as_ref().and_then(|node| {
+            node.state.try_read().ok().and_then(|state| {
+                let preferred = match &self.view_source {
+                    ViewSource::LocalManaged(id) => Some(id.clone()),
+                    _ => None,
+                }
+                .filter(|id| state.networks.contains_key(id));
+                let fallback = state
+                    .networks
+                    .contains_key(&self.brain_id)
+                    .then(|| self.brain_id.clone());
+                let target_id = preferred.or(fallback)?;
+                let arc = state.networks.get(&target_id).cloned()?;
+                Some((target_id, arc))
+            })
+        });
+        let mut applied_to_managed_runner = false;
+        if let Some((target_id, net_arc)) = managed_target {
+            if let Ok(mut net) = net_arc.try_write() {
+                let mut aligned = net.runner.net.clone();
+                aligned.num_sensory_neurons = s_total;
+                aligned.num_output_neurons = o_total;
+                if net.initial_config.sensory_target_layer.is_some() {
+                    aligned.sensory_target_layer = net.initial_config.sensory_target_layer;
+                }
+                if net.initial_config.output_source_layer.is_some() {
+                    aligned.output_source_layer = net.initial_config.output_source_layer;
+                }
+                aligned.spike_io = net.initial_config.spike_io.clone();
+                net.runner.apply_config(aligned);
+                net.initial_config.num_sensory_neurons = s_total;
+                net.initial_config.num_output_neurons = o_total;
+                applied_to_managed_runner = true;
 
-        let _ = self.sim_tx.send(SimControl::ResizeSensory(s_total));
-        let _ = self.sim_tx.send(SimControl::ResizeOutput(o_total));
+                if matches!(&self.view_source, ViewSource::LocalManaged(id) if id == &target_id) {
+                    self.local_net = net.runner.net.clone();
+                    self.sensory_count = self.local_net.num_sensory_neurons.max(1);
+                    self.output_count = self.local_net.num_output_neurons.max(1);
+                }
+            }
+        }
+
+        if apply_resize_to_local_runner {
+            // Keep UI fallback config in sync with negotiated IPC dimensions so
+            // diagnostics and manual rebind actions don't regress to stale S/O.
+            self.local_net.num_sensory_neurons = s_total;
+            self.local_net.num_output_neurons = o_total;
+
+            let _ = self.sim_tx.send(SimControl::ResizeSensory(s_total));
+            let _ = self.sim_tx.send(SimControl::ResizeOutput(o_total));
+        }
         let reward_note = handshake.reward_name.as_deref().unwrap_or("none");
         self.status = format!(
-            "IPC configured: S={}x{}, O={}x{} (reward: {})",
-            n_s_raw, k, n_o_raw, k, reward_note
+            "IPC configured: S={}x{}, O={}x{} (reward: {}) [standalone:{} managed:{}]",
+            n_s_raw,
+            k,
+            n_o_raw,
+            k,
+            reward_note,
+            if apply_resize_to_local_runner {
+                "yes"
+            } else {
+                "no"
+            },
+            if applied_to_managed_runner {
+                "yes"
+            } else {
+                "no"
+            }
         );
     }
 }
@@ -5611,7 +6651,14 @@ struct Probe {
     data: Vec<f32>,
     write_idx: usize,
     capacity: usize,
+    scope_level: f32,
+    scope_hold_samples: u8,
 }
+
+#[cfg(feature = "ui")]
+const SCOPE_SPIKE_HOLD_SAMPLES: u8 = 3;
+#[cfg(feature = "ui")]
+const SCOPE_SPIKE_RELEASE_STEP: f32 = 0.25;
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Default)]
@@ -5619,6 +6666,7 @@ struct UiSnapshot {
     sensory_spikes: Vec<i8>,
     hidden_spikes: Vec<Vec<i8>>,
     output_spikes: Vec<i8>,
+    output_spike_frames: Vec<Vec<i8>>,
     num_sensory: usize,
     num_hidden_layers: usize,
     num_output: usize,
@@ -5677,6 +6725,8 @@ impl Probe {
             data: vec![0.0; capacity],
             write_idx: 0,
             capacity,
+            scope_level: 0.0,
+            scope_hold_samples: 0,
         }
     }
     fn push(&mut self, v: f32) {
@@ -6442,7 +7492,14 @@ impl eframe::App for App {
                     self.cluster_snapshot_node_id = Some(node_id);
                     #[cfg(feature = "growth3d")]
                     {
-                        self.cluster_topo_cache = snap.topo.clone();
+                        if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                            !topo.layers.is_empty()
+                                || !topo.sensory_nodes.is_empty()
+                                || !topo.output_nodes.is_empty()
+                                || !topo.early_cells.is_empty()
+                        }) {
+                            self.cluster_topo_cache = Some(topo.clone());
+                        }
                     }
 
                     // Re-calculate edges from the remote snapshot
@@ -6455,7 +7512,14 @@ impl eframe::App for App {
                     self.cached_output_conn_count = Some(output_count);
                     #[cfg(feature = "growth3d")]
                     {
-                        self.cached_edge_topo = snap.topo.clone();
+                        if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                            !topo.layers.is_empty()
+                                || !topo.sensory_nodes.is_empty()
+                                || !topo.output_nodes.is_empty()
+                                || !topo.early_cells.is_empty()
+                        }) {
+                            self.cached_edge_topo = Some(topo.clone());
+                        }
                     }
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
@@ -6467,8 +7531,8 @@ impl eframe::App for App {
                     self.cluster_snapshot_cache = Some(snap);
                     self.status = "Remote snapshot updated (with connections)".to_string();
 
-                    // Trigger layout recompute to ensure nodes are aligned
-                    self.refresh_ui_buffers();
+                    // Trigger a soft layout recompute without clearing cached positions.
+                    self.last_rendered_panel_size = egui::Vec2::ZERO;
                 }
                 ClusterSnapshotMsg::Err {
                     network_id,
@@ -6517,7 +7581,7 @@ impl eframe::App for App {
                             let node_id_clone = node_id.clone();
                             let rt = self.runtime_handle.clone();
                             rt.spawn(async move {
-                                match DistributedNeuromorphicClient::connect(addr.clone()).await {
+                                match connect_cluster_client(addr.clone()).await {
                                     Ok(mut client) => {
                                         match client.get_network_snapshot(Request::new(NetworkSnapshotRequest {
                                             network_id: net_id_clone.clone(),
@@ -6589,7 +7653,14 @@ impl eframe::App for App {
                             self.cluster_snapshot_node_id = Some(local_node_id.clone());
                             #[cfg(feature = "growth3d")]
                             {
-                                self.cluster_topo_cache = snap.topo.clone();
+                                if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                                    !topo.layers.is_empty()
+                                        || !topo.sensory_nodes.is_empty()
+                                        || !topo.output_nodes.is_empty()
+                                        || !topo.early_cells.is_empty()
+                                }) {
+                                    self.cluster_topo_cache = Some(topo.clone());
+                                }
                             }
                             let density = self.overlay_density;
                             let (edges, sizes, counts, output_count) =
@@ -6600,7 +7671,14 @@ impl eframe::App for App {
                             self.cached_output_conn_count = Some(output_count);
                             #[cfg(feature = "growth3d")]
                             {
-                                self.cached_edge_topo = snap.topo.clone();
+                                if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                                    !topo.layers.is_empty()
+                                        || !topo.sensory_nodes.is_empty()
+                                        || !topo.output_nodes.is_empty()
+                                        || !topo.early_cells.is_empty()
+                                }) {
+                                    self.cached_edge_topo = Some(topo.clone());
+                                }
                             }
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             {
@@ -6610,7 +7688,7 @@ impl eframe::App for App {
                             self.pending_edge_cache = false;
                             if self.cluster_snapshot_cache.is_none() || needs_refresh {
                                 self.status = "Cluster snapshot updated (local)".to_string();
-                                self.refresh_ui_buffers();
+                                self.last_rendered_panel_size = egui::Vec2::ZERO;
                             }
                             self.cluster_snapshot_cache = Some(Box::new(snap));
                         }
@@ -7465,7 +8543,14 @@ impl eframe::App for App {
                         self.cached_output_conn_count = Some(output_count);
                         #[cfg(feature = "growth3d")]
                         {
-                            self.cached_edge_topo = snap.topo.clone();
+                            if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                                !topo.layers.is_empty()
+                                    || !topo.sensory_nodes.is_empty()
+                                    || !topo.output_nodes.is_empty()
+                                    || !topo.early_cells.is_empty()
+                            }) {
+                                self.cached_edge_topo = Some(topo.clone());
+                            }
                         }
                         #[cfg(all(feature = "morpho", feature = "growth3d"))]
                         {
@@ -7495,7 +8580,13 @@ impl eframe::App for App {
             #[cfg(feature = "growth3d")]
             {
                 if let Some(topo) = msg.topo {
-                    self.cached_edge_topo = Some(topo);
+                    let has_content = !topo.layers.is_empty()
+                        || !topo.sensory_nodes.is_empty()
+                        || !topo.output_nodes.is_empty()
+                        || !topo.early_cells.is_empty();
+                    if has_content {
+                        self.cached_edge_topo = Some(topo);
+                    }
                 } else if !preserve_cached_edges {
                     self.cached_edge_topo = None;
                 }
@@ -7521,7 +8612,14 @@ impl eframe::App for App {
                     self.cached_output_conn_count = Some(output_count);
                     #[cfg(feature = "growth3d")]
                     {
-                        self.cached_edge_topo = snap.topo.clone();
+                        if let Some(topo) = snap.topo.as_ref().filter(|topo| {
+                            !topo.layers.is_empty()
+                                || !topo.sensory_nodes.is_empty()
+                                || !topo.output_nodes.is_empty()
+                                || !topo.early_cells.is_empty()
+                        }) {
+                            self.cached_edge_topo = Some(topo.clone());
+                        }
                     }
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
@@ -7639,13 +8737,31 @@ impl eframe::App for App {
             self.ipc_packet_drop_count = stats.drop_count;
             self.ipc_size_mismatch_count = stats.size_mismatch_count;
             self.ipc_last_steps = stats.last_steps;
+            self.ipc_last_input_spike_count = stats.last_input_spike_count;
+            self.ipc_last_output_spike_count = stats.last_output_spike_count;
             if let Some(hs) = stats.last_handshake.clone() {
                 let unchanged = self
                     .ipc_last_handshake
                     .as_ref()
                     .map(|old| old == &hs)
                     .unwrap_or(false);
-                if !unchanged {
+                let (hs_s, hs_o) = resolve_ipc_handshake_sizes(
+                    &hs,
+                    self.sensory_count.max(1),
+                    self.output_count.max(1),
+                );
+                let expected_s = hs_s
+                    .saturating_mul(self.ipc_neurons_per_value.max(1))
+                    .max(1);
+                let expected_o = hs_o
+                    .saturating_mul(self.ipc_neurons_per_value.max(1))
+                    .max(1);
+                let needs_retry = matches!(
+                    self.view_source,
+                    ViewSource::LocalManaged(_) | ViewSource::ClusterGlobal(_)
+                ) && (self.sensory_count != expected_s
+                    || self.output_count != expected_o);
+                if !unchanged || needs_retry {
                     self.apply_ipc_config(hs);
                 }
             }
@@ -7673,7 +8789,18 @@ impl eframe::App for App {
 
             // Collect all snapshot data into owned values; the RwLockReadGuard
             // is dropped at the end of this block, before any &mut self call.
-            let snap_clone: Option<UiSnapshot> = if let Ok(snap) = self.ui_snapshot.try_read() {
+            // Clone the snapshot and drop the read guard immediately so we
+            // can borrow `self` mutably below (append_output_raster_step_frames, etc.).
+            let snap_owned = self.ui_snapshot.try_read().ok().map(|g| g.clone());
+            let snap_clone: Option<UiSnapshot> = if let Some(snap) = snap_owned {
+                let snap_ns = snap.num_sensory.max(snap.sensory_spikes.len()).max(1);
+                let snap_no = snap.num_output.max(snap.output_spikes.len()).max(1);
+                self.sensory_count = snap_ns;
+                self.output_count = snap_no;
+                self.local_net.num_sensory_neurons = snap_ns;
+                self.local_net.num_output_neurons = snap_no;
+                self.local_net.num_hidden_layers = snap.num_hidden_layers.max(1);
+
                 // Sensory: prefer eligibility traces; fall back to spike flags.
                 if !snap.x_pre_in.is_empty() {
                     if self.sensory_activity.len() != snap.x_pre_in.len() {
@@ -7724,16 +8851,41 @@ impl eframe::App for App {
                 if self.output_activity.len() != num_out {
                     self.output_activity.resize(num_out, 0.0);
                 }
-                let mut col = vec![0i8; num_out];
-                let mut any_out = false;
-                for (k, &sv) in snap.output_spikes.iter().enumerate() {
-                    if sv != 0 {
-                        self.output_activity[k] = 1.0;
-                        col[k] = 1;
-                        any_out = true;
+                let explicit_frames = !snap.output_spike_frames.is_empty();
+                let output_frames = if explicit_frames {
+                    snap.output_spike_frames.clone()
+                } else {
+                    vec![snap.output_spikes.clone()]
+                };
+                let first_step = snap
+                    .sim_step
+                    .saturating_sub(output_frames.len().saturating_sub(1) as u64);
+                let stepped_frames = output_frames
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, frame)| (first_step.saturating_add(idx as u64), frame))
+                    .collect::<Vec<_>>();
+                let appended_frames = self.append_output_raster_step_frames(stepped_frames);
+                if appended_frames == 0
+                    && self.last_activity_rendered_step.is_none()
+                    && !explicit_frames
+                    && !snap.v_o.is_empty()
+                {
+                    let mut col = vec![0i8; num_out];
+                    const FALLBACK_GAIN: f32 = 0.92;
+                    const FALLBACK_EPS: f32 = 0.015;
+                    let count = num_out.min(snap.v_o.len());
+                    for k in 0..count {
+                        let raw = snap.v_o[k];
+                        if !raw.is_finite() {
+                            continue;
+                        }
+                        let unit = (0.5 + 0.5 * (FALLBACK_GAIN * raw).tanh()).clamp(0.0, 1.0);
+                        if (unit - 0.5).abs() >= FALLBACK_EPS {
+                            self.output_activity[k] = 1.0;
+                            col[k] = 1;
+                        }
                     }
-                }
-                if any_out || (snap.sim_step % 5 == 0) {
                     self.raster_outputs.push_back(col);
                     if self.raster_outputs.len() > self.raster_cols {
                         self.raster_outputs.pop_front();
@@ -7748,10 +8900,13 @@ impl eframe::App for App {
                 }
 
                 // Status line.
-                self.status = format!("Watching Standalone: t={} ms", snap.sim_time_ms as i64);
+                let display_t = {
+                    let atomic_t = self.sim_t_ms();
+                    if atomic_t > 0.0 { atomic_t } else { snap.sim_time_ms }
+                };
+                self.status = format!("Watching Standalone: t={} ms", display_t as i64);
 
-                Some(snap.clone())
-                // snap (RwLockReadGuard) is dropped here — before the mutable call below
+                Some(snap)
             } else {
                 None
             };
@@ -7763,6 +8918,7 @@ impl eframe::App for App {
         } else {
             self.pull_activity();
         }
+        self.sync_displayed_io_counts();
         #[cfg(all(feature = "robot_io", unix))]
         if matches!(self.view_source, ViewSource::Standalone)
             && self.ipc_connected
@@ -7799,8 +8955,14 @@ impl eframe::App for App {
                     } else {
                         "busy"
                     };
-                    ui.label(format!("Status: {} | Sleep: {}", self.status, sleep_label));
-                    ui.small(format!("FPAA: {}", self.fpaa_status.summary));
+                    ui.add(
+                        egui::Label::new(format!("Status: {} | Sleep: {}", self.status, sleep_label))
+                            .truncate(),
+                    );
+                    ui.add(
+                        egui::Label::new(format!("FPAA: {}", self.fpaa_status.summary))
+                            .truncate(),
+                    );
                     ui.separator();
 
                     if let Some(binding) = self.remote_workspace_binding.clone() {
@@ -8074,73 +9236,88 @@ impl eframe::App for App {
                                     .map(|cl| (cl.execution_target(), cl.is_cuda_backend()))
                             })
                             .ok();
-                        match cl_status {
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, true))) => {
-                                ui.label("GPU: Detected (CUDA)");
+                        let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
+                        let (gpu_line, gpu_status_line) = match cl_status {
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, true))) => (
+                                "GPU: Detected (CUDA)".to_string(),
                                 if self.playing {
-                                    let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
                                     if !use_aarnn || !net_cloned.use_morphology {
-                                        ui.label("GPU Status: Active (Dense CUDA path)");
+                                        "GPU Status: Active (Dense CUDA path)".to_string()
                                     } else {
-                                        ui.label("GPU Status: Active (Sparse CUDA path)");
+                                        "GPU Status: Active (Sparse CUDA path)".to_string()
                                     }
                                 } else {
-                                    ui.label("GPU Status: Inactive");
-                                }
-                            }
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, false))) => {
-                                ui.label("GPU: Detected (OpenCL)");
+                                    "GPU Status: Inactive".to_string()
+                                },
+                            ),
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, false))) => (
+                                "GPU: Detected (OpenCL)".to_string(),
                                 if self.playing {
-                                    let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
                                     if !use_aarnn || !net_cloned.use_morphology {
-                                        ui.label("GPU Status: Active (Dense path)");
+                                        "GPU Status: Active (Dense path)".to_string()
                                     } else {
-                                        ui.label("GPU Status: Active (Sparse path)");
+                                        "GPU Status: Active (Sparse path)".to_string()
                                     }
                                 } else {
-                                    ui.label("GPU Status: Inactive");
-                                }
-                            }
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Cpu, _))) => {
-                                ui.label("GPU: Not Detected (OpenCL CPU fallback)");
+                                    "GPU Status: Inactive".to_string()
+                                },
+                            ),
+                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Cpu, _))) => (
+                                "GPU: Not Detected (OpenCL CPU fallback)".to_string(),
                                 if self.playing {
-                                    ui.label("GPU Status: Active (OpenCL CPU path)");
+                                    "GPU Status: Active (OpenCL CPU path)".to_string()
                                 } else {
-                                    ui.label("GPU Status: Inactive");
-                                }
-                            }
-                            Some(None) => {
-                                ui.label("GPU: Not Detected");
-                            }
-                            None => {
-                                ui.label("GPU: Busy");
-                            }
-                        }
+                                    "GPU Status: Inactive".to_string()
+                                },
+                            ),
+                            Some(None) => (
+                                "GPU: Not Detected".to_string(),
+                                "GPU Status: Inactive".to_string(),
+                            ),
+                            None => ("GPU: Busy".to_string(), "GPU Status: busy".to_string()),
+                        };
+                        ui.label(gpu_line);
+                        ui.label(gpu_status_line);
                     }
                     ui.label(format!("Rayon Pool Threads: {}", rayon::current_num_threads()));
-                    if let Ok(r) = self.runner.try_read() {
-                        let sim_parallel = r.sim_parallel_status();
-                        if sim_parallel.enabled {
-                            ui.label(format!(
-                                "Sim Parallel Workers: {}/{}",
-                                sim_parallel.worker_budget,
-                                sim_parallel.max_workers
-                            ));
-                            ui.label(format!(
-                                "Sim Parallel Ramp/Health: {:.0}% / {:.0}%",
-                                sim_parallel.ramp_ratio * 100.0,
-                                sim_parallel.health_ratio * 100.0
-                            ));
-                            ui.label(format!(
-                                "Sim Parallel Thresholds: light {} heavy {} matrix {} ops",
-                                sim_parallel.light_neuron_threshold,
-                                sim_parallel.heavy_neuron_threshold,
-                                sim_parallel.matrix_ops_threshold
-                            ));
+                    let (sim_parallel_line_1, sim_parallel_line_2, sim_parallel_line_3) =
+                        if let Ok(r) = self.runner.try_read() {
+                            let sim_parallel = r.sim_parallel_status();
+                            if sim_parallel.enabled {
+                                (
+                                    format!(
+                                        "Sim Parallel Workers: {}/{}",
+                                        sim_parallel.worker_budget, sim_parallel.max_workers
+                                    ),
+                                    format!(
+                                        "Sim Parallel Ramp/Health: {:.0}% / {:.0}%",
+                                        sim_parallel.ramp_ratio * 100.0,
+                                        sim_parallel.health_ratio * 100.0
+                                    ),
+                                    format!(
+                                        "Sim Parallel Thresholds: light {} heavy {} matrix {} ops",
+                                        sim_parallel.light_neuron_threshold,
+                                        sim_parallel.heavy_neuron_threshold,
+                                        sim_parallel.matrix_ops_threshold
+                                    ),
+                                )
+                            } else {
+                                (
+                                    "Sim Parallel: Single-worker".to_string(),
+                                    " ".to_string(),
+                                    " ".to_string(),
+                                )
+                            }
                         } else {
-                            ui.label("Sim Parallel: Single-worker");
-                        }
-                    }
+                            (
+                                "Sim Parallel: busy".to_string(),
+                                " ".to_string(),
+                                " ".to_string(),
+                            )
+                        };
+                    ui.label(sim_parallel_line_1);
+                    ui.label(sim_parallel_line_2);
+                    ui.label(sim_parallel_line_3);
                     ui.label(format!(
                         "Affinity Rotation: {}",
                         if crate::affinity::affinity_rotation_enabled() { "On" } else { "Off" }
@@ -8287,6 +9464,32 @@ impl eframe::App for App {
 
                         if net_ids.is_empty() {
                             ui.label("  (None)");
+                        }
+                        if let ViewSource::LocalManaged(selected_id) = &self.view_source {
+                            if !net_ids.iter().any(|id| id == selected_id) {
+                                if let Some(first_id) = net_ids.first().cloned() {
+                                    new_source = Some(ViewSource::LocalManaged(first_id.clone()));
+                                    self.status = format!(
+                                        "Local managed '{}' unavailable; switched to '{}'",
+                                        selected_id, first_id
+                                    );
+                                } else {
+                                    let definitely_missing = self
+                                        .distributed_node
+                                        .as_ref()
+                                        .and_then(|node| node.state.try_read().ok())
+                                        .map(|state| !state.networks.contains_key(selected_id))
+                                        .unwrap_or(false);
+                                    if definitely_missing {
+                                        new_source = Some(ViewSource::Standalone);
+                                        clear_filter = true;
+                                        self.status = format!(
+                                            "Local managed '{}' unavailable; switched to Standalone",
+                                            selected_id
+                                        );
+                                    }
+                                }
+                            }
                         }
                         for id in net_ids {
                             if ui.selectable_label(self.view_source == ViewSource::LocalManaged(id.clone()), format!("Local: {}", id)).clicked() {
@@ -8628,6 +9831,7 @@ impl eframe::App for App {
                             ui.add(egui::ProgressBar::new(gate).text(format!("Theta gate {:.2} {}", gate, if active { "on" } else { "off" })));
                             ui.label(format!("Theta phase {:.2} rad", phase));
                         } else {
+                            ui.add(egui::ProgressBar::new(0.0).text(" "));
                             ui.label("Theta phase: busy");
                         }
                     } else if ui.add(egui::Slider::new(&mut net.aarnn_synaptic_energy_randomness, 0.0..=1.0).text("Synaptic Energy Randomness"))
@@ -8674,6 +9878,7 @@ impl eframe::App for App {
                                 ui.add(egui::ProgressBar::new(pass).text(format!("Gate {:.2} {}", pass, if open { "open" } else { "closed" })));
                                 ui.label(format!("Thalamic phase {:.2} rad", phase));
                             } else {
+                                ui.add(egui::ProgressBar::new(0.0).text(" "));
                                 ui.label("Thalamic phase: busy");
                             }
                         }
@@ -8766,9 +9971,15 @@ impl eframe::App for App {
                                 .on_hover_text("Boost consolidation during sleep")
                                 .changed();
                         }
-                    if let Ok(r) = runner_arc.try_read() {
-                        ui.label(format!("Sleep state: {}", if r.sleep_active { "sleeping" } else { "awake" }));
-                    }
+                    let sleep_state_line = if let Ok(r) = runner_arc.try_read() {
+                        format!(
+                            "Sleep state: {}",
+                            if r.sleep_active { "sleeping" } else { "awake" }
+                        )
+                    } else {
+                        " ".to_string()
+                    };
+                    ui.label(sleep_state_line);
                     if sleep_changed {
                         let _ = self.sim_tx.send(SimControl::ApplyConfig(net.clone()));
                     }
@@ -9175,28 +10386,47 @@ impl eframe::App for App {
                             let _ = self.sim_tx.send(SimControl::ApplyConfig(self.local_net.clone()));
                         }
                     }
-                } else {
-                    ui.label("Simulation busy; model changes paused.");
                 }
+                let model_change_pause_notice = if runner_ready {
+                    " "
+                } else {
+                    "Simulation busy; model changes paused."
+                };
+                ui.label(model_change_pause_notice);
                 ui.separator();
                 ui.separator();
                 });
                 ui.separator();
                 ui.collapsing("Topology / Morphology", |ui| {
 
-                if ui.add(egui::Slider::new(&mut self.sensory_count, 10..=200).text("Sensory neurons")).on_hover_text("Number of sensory input neurons").changed() {
+                let io_resize_enabled = matches!(self.view_source, ViewSource::Standalone);
+                let sensory_resize = ui
+                    .add_enabled(
+                        io_resize_enabled,
+                        egui::Slider::new(&mut self.sensory_count, 1..=200)
+                            .text("Sensory neurons"),
+                    )
+                    .on_hover_text("Number of sensory input neurons");
+                if sensory_resize.changed() && io_resize_enabled {
                     let _ = self.sim_tx.send(SimControl::ResizeSensory(self.sensory_count));
                     self.status = format!("Sensory resized to {}", self.sensory_count);
                     self.smoothed_equalizer_values.clear();
                 }
-                if ui
-                    .add(egui::Slider::new(&mut self.output_count, 1..=200).text("Output neurons"))
+                let output_resize = ui
+                    .add_enabled(
+                        io_resize_enabled,
+                        egui::Slider::new(&mut self.output_count, 1..=200).text("Output neurons"),
+                    )
                     .on_hover_text("Number of output neurons")
-                    .changed()
-                {
+                    ;
+                if output_resize.changed() && io_resize_enabled {
                     let _ = self.sim_tx.send(SimControl::ResizeOutput(self.output_count));
                     self.status = format!("Output resized to {}", self.output_count);
                     self.raster_outputs.clear();
+                    self.last_activity_rendered_step = None;
+                }
+                if !io_resize_enabled {
+                    ui.label("I/O counts are controlled by the managed network.");
                 }
                 ui.horizontal(|ui| {
                     ui.label("Sensory target layer:").on_hover_text("Hidden layer index receiving sensory input. Index 0 is the first hidden layer.");
@@ -10659,10 +11889,49 @@ impl eframe::App for App {
                                     net_cloned.num_output_neurons,
                                 )
                             };
-                            ui.label(format!("Frames processed: {}", self.ipc_frame_count));
+                            let raster_cols_buffered = self.raster_outputs.len();
+                            let raster_rows = self
+                                .raster_outputs
+                                .iter()
+                                .map(|col| col.len())
+                                .max()
+                                .unwrap_or(0);
+                            let raster_window_spikes = self
+                                .raster_outputs
+                                .iter()
+                                .map(|col| col.iter().filter(|&&v| v != 0).count())
+                                .sum::<usize>();
+                            let last_view_out_spikes = self
+                                .raster_outputs
+                                .back()
+                                .map(|col| col.iter().filter(|&&v| v != 0).count())
+                                .unwrap_or(0);
+                            ui.label(format!("Current view source: {}", self.view_source_label()));
+                            ui.label(format!(
+                                "Last output spikes in current view: {}",
+                                last_view_out_spikes
+                            ));
+                            ui.label(format!("Raster columns buffered: {}", raster_cols_buffered));
+                            ui.label(format!("Raster rows (from data): {}", raster_rows));
+                            ui.label(format!(
+                                "Raster spikes in buffer window: {}",
+                                raster_window_spikes
+                            ));
+                            ui.label(format!(
+                                "Frames processed (IPC packets): {}",
+                                self.ipc_frame_count
+                            ));
                             ui.label(format!("Drops: {}", self.ipc_packet_drop_count));
                             ui.label(format!("Size errors: {}", self.ipc_size_mismatch_count));
                             ui.label(format!("Last frame steps: {}", self.ipc_last_steps));
+                            ui.label(format!(
+                                "Last IPC decoded sensory spikes: {}",
+                                self.ipc_last_input_spike_count
+                            ));
+                            ui.label(format!(
+                                "Last IPC output spikes in frame: {}",
+                                self.ipc_last_output_spike_count
+                            ));
                             ui.label(format!("Runner S={} O={}", runner_s, runner_o));
                             if let Some(hs) = self.ipc_last_handshake.as_ref() {
                                 let (ipc_s, ipc_o) = resolve_ipc_handshake_sizes(hs, runner_s.max(1), runner_o.max(1));
@@ -10672,6 +11941,8 @@ impl eframe::App for App {
                                 self.ipc_frame_count = 0;
                                 self.ipc_packet_drop_count = 0;
                                 self.ipc_size_mismatch_count = 0;
+                                self.ipc_last_input_spike_count = 0;
+                                self.ipc_last_output_spike_count = 0;
                             }
                         });
 
@@ -11854,7 +13125,19 @@ impl eframe::App for App {
             if runner_busy {
                 ui.label("Simulation busy...");
             }
-            let active_net = active_runner_opt.map(|r| &r.net).unwrap_or(&net_cloned);
+            let managed_fallback_net = self.local_net.clone();
+            let active_net_fallback = match &self.view_source {
+                // In managed views, do not fall back to standalone runner topology.
+                // That creates visible count oscillation when lock acquisition is transient.
+                ViewSource::LocalManaged(_) | ViewSource::ClusterGlobal(_) => &managed_fallback_net,
+                ViewSource::Standalone => &net_cloned,
+            };
+            let active_net = active_runner_opt
+                .map(|r| &r.net)
+                .unwrap_or(active_net_fallback);
+            let active_net_ns = active_net.num_sensory_neurons;
+            let active_net_o = active_net.num_output_neurons;
+            let active_net_layers = active_net.num_hidden_layers;
             let mut cluster_layout_ns = None;
             let mut cluster_layout_o = None;
             let mut cluster_layout_layers = None;
@@ -11862,12 +13145,7 @@ impl eframe::App for App {
             let mut cluster_total_neurons = None;
             if let ViewSource::ClusterGlobal(id) = &self.view_source {
                 if let Some(net_status) = network_registry.get(id) {
-                    let mut cfg_opt: Option<NetworkConfig> = None;
-                    if !net_status.config_json.is_empty() {
-                        if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&net_status.config_json) {
-                            cfg_opt = Some(cfg);
-                        }
-                    }
+                    let cfg_opt = network_config_from_payload(&net_status.config_json);
                     let mut layers = net_status.num_layers.max(1) as usize;
                     let mut layer_sizes = vec![0usize; layers];
                     for range in net_status.distribution.values() {
@@ -11903,9 +13181,48 @@ impl eframe::App for App {
                     cluster_total_neurons = Some(total);
                 }
             }
-            let layout_ns = cluster_layout_ns.unwrap_or(active_net.num_sensory_neurons);
-            let layout_o = cluster_layout_o.unwrap_or(active_net.num_output_neurons);
-            let layout_layers = cluster_layout_layers.unwrap_or(active_net.num_hidden_layers.max(1));
+            let trusted_layout_ns =
+                cluster_layout_ns.or_else(|| active_runner_opt.map(|r| r.net.num_sensory_neurons));
+            let trusted_layout_o =
+                cluster_layout_o.or_else(|| active_runner_opt.map(|r| r.net.num_output_neurons));
+            let trusted_layout_layers =
+                cluster_layout_layers.or_else(|| active_runner_opt.map(|r| r.net.num_hidden_layers.max(1)));
+            let fallback_layout_ns = self
+                .sensory_positions
+                .len()
+                .max(self.sensory_count)
+                .max(self.local_net.num_sensory_neurons)
+                .max(1);
+            let fallback_layout_o = self
+                .output_positions
+                .len()
+                .max(self.output_count)
+                .max(self.local_net.num_output_neurons)
+                .max(1);
+            let fallback_layout_layers = self
+                .hidden_positions
+                .len()
+                .max(self.cached_layer_sizes.len())
+                .max(self.local_net.num_hidden_layers.max(1))
+                .max(1);
+            let layout_ns =
+                trusted_layout_ns.unwrap_or_else(|| active_net_ns.max(fallback_layout_ns).max(1));
+            let layout_o =
+                trusted_layout_o.unwrap_or_else(|| active_net_o.max(fallback_layout_o).max(1));
+            let layout_layers = trusted_layout_layers
+                .unwrap_or_else(|| active_net_layers.max(fallback_layout_layers).max(1));
+            if matches!(self.view_source, ViewSource::Standalone) {
+                self.sensory_count = layout_ns.max(1);
+                self.output_count = layout_o.max(1);
+            }
+            let sync_local_net = matches!(self.view_source, ViewSource::Standalone)
+                || (matches!(self.view_source, ViewSource::LocalManaged(_))
+                    && active_runner_opt.is_some());
+            if sync_local_net {
+                self.local_net.num_sensory_neurons = self.sensory_count;
+                self.local_net.num_output_neurons = self.output_count;
+                self.local_net.num_hidden_layers = layout_layers.max(1);
+            }
             // In ClusterGlobal mode the snapshot comes from one node only, so
             // cached_layer_sizes reflects a single node's neuron counts rather than the
             // cluster aggregate.  Always bypass the cache path so cluster_layer_sizes
@@ -11915,10 +13232,21 @@ impl eframe::App for App {
                 && !self.cached_edges.is_empty()
                 && !self.cached_layer_sizes.is_empty();
             #[cfg(feature = "growth3d")]
+            let topology_has_content = |topo: &crate::topology::Topology3D| {
+                !topo.layers.is_empty()
+                    || !topo.sensory_nodes.is_empty()
+                    || !topo.output_nodes.is_empty()
+                    || !topo.early_cells.is_empty()
+            };
+            #[cfg(feature = "growth3d")]
             let use_aarnn_layout = matches!(self.network_layout, NetworkLayout::Aarnn);
             #[cfg(feature = "growth3d")]
-            let cache_topology_active =
-                use_aarnn_layout && cache_layout_active && self.cached_edge_topo.is_some();
+            let cache_topology_active = use_aarnn_layout
+                && self
+                    .cached_edge_topo
+                    .as_ref()
+                    .map(|topo| topology_has_content(topo))
+                    .unwrap_or(false);
             #[cfg(feature = "growth3d")]
             let ui_snapshot_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
             #[cfg(feature = "growth3d")]
@@ -11949,6 +13277,11 @@ impl eframe::App for App {
                 sizes.clone()
             } else if !self.cached_layer_sizes.is_empty() {
                 self.cached_layer_sizes.clone()
+            } else if !self.hidden_positions.is_empty() {
+                self.hidden_positions
+                    .iter()
+                    .map(|layer| layer.len().max(1))
+                    .collect()
             } else {
                 vec![active_net.num_hidden_per_layer_initial.max(1); layout_layers]
             };
@@ -11992,9 +13325,33 @@ impl eframe::App for App {
                 }
             }
             #[cfg(feature = "growth3d")]
-            if self.growth_enabled && use_aarnn_layout {
+            if active_net.growth_enabled && use_aarnn_layout {
+                let cluster_topology_available_for_recompute =
+                    matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                        && self
+                            .cluster_topo_cache
+                            .as_ref()
+                            .map(|topo| {
+                                !topo.layers.is_empty()
+                                    || !topo.sensory_nodes.is_empty()
+                                    || !topo.output_nodes.is_empty()
+                                    || !topo.early_cells.is_empty()
+                            })
+                            .unwrap_or(false);
+                let active_runner_topology_available_for_recompute = active_runner_opt
+                    .map(|runner| {
+                        !runner.topo.layers.is_empty()
+                            || !runner.topo.sensory_nodes.is_empty()
+                            || !runner.topo.output_nodes.is_empty()
+                            || !runner.topo.early_cells.is_empty()
+                    })
+                    .unwrap_or(false);
+                let topology_source_available_for_recompute = cache_topology_active
+                    || prefer_snapshot_topology
+                    || active_runner_topology_available_for_recompute
+                    || cluster_topology_available_for_recompute;
                 // Avoid recomputing full topology layout on every frame while dragging.
-                if self.playing && !camera_interacting {
+                if self.playing && !camera_interacting && topology_source_available_for_recompute {
                     if self.last_layout_recompute.elapsed() >= std::time::Duration::from_millis(33) {
                         need_recompute = true;
                     }
@@ -12104,18 +13461,18 @@ impl eframe::App for App {
                     .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
                 let cluster_topology_available = cluster_topo_opt
-                    .map(|topo| {
-                        !topo.layers.is_empty()
-                            || !topo.sensory_nodes.is_empty()
-                            || !topo.output_nodes.is_empty()
-                            || !topo.early_cells.is_empty()
-                    })
+                    .map(|topo| topology_has_content(topo))
                     .unwrap_or(false);
                 #[cfg(feature = "growth3d")]
                 let topo_enabled = cache_topology_active
                     || snapshot_topology_available
                     || active_runner_topology_available
                     || cluster_topology_available;
+                #[cfg(feature = "growth3d")]
+                let keep_last_topology_projection = use_aarnn_layout
+                    && !topo_enabled
+                    && !self.topo_pid_hidden.is_empty()
+                    && !self.hidden_positions.is_empty();
 
                 #[cfg(feature = "growth3d")]
                 if use_aarnn_layout {
@@ -12399,10 +13756,110 @@ impl eframe::App for App {
                                 .collect();
                         }
 
-                        // Fallback if no hidden layers exist yet.
-                        if target_hidden_positions.is_empty() {
-                            target_hidden_positions
-                                .push(vec![egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y)]);
+                        // Normalize projected topology targets to the expected S/H/O counts.
+                        // This prevents transient topology fetch gaps from collapsing IO columns.
+                        let fallback_column_positions = |x: f32, count: usize| -> Vec<egui::Pos2> {
+                            (0..count)
+                                .map(|idx| {
+                                    let y = top + height * ((idx as f32 + 1.0) / (count as f32 + 1.0));
+                                    egui::pos2(
+                                        x * zoom + cam_pan.x,
+                                        y * zoom + cam_pan.y,
+                                    )
+                                })
+                                .collect()
+                        };
+                        if target_sensory_positions.len() != ns {
+                            if target_sensory_positions.len() < ns
+                                && self.sensory_positions.len() == ns
+                                && !self.topo_pid_sensory.is_empty()
+                            {
+                                target_sensory_positions = self.sensory_positions.clone();
+                            } else {
+                                let fallback = fallback_column_positions(left + dx, ns);
+                                if target_sensory_positions.is_empty() {
+                                    target_sensory_positions = fallback;
+                                } else {
+                                    target_sensory_positions.truncate(ns);
+                                    if target_sensory_positions.len() < ns {
+                                        target_sensory_positions.extend_from_slice(
+                                            &fallback[target_sensory_positions.len()..],
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        if target_output_positions.len() != o {
+                            if target_output_positions.len() < o
+                                && self.output_positions.len() == o
+                                && !self.topo_pid_output.is_empty()
+                            {
+                                target_output_positions = self.output_positions.clone();
+                            } else {
+                                let fallback = fallback_column_positions(
+                                    left + dx * (2.0 + layout_layers as f32),
+                                    o,
+                                );
+                                if target_output_positions.is_empty() {
+                                    target_output_positions = fallback;
+                                } else {
+                                    target_output_positions.truncate(o);
+                                    if target_output_positions.len() < o {
+                                        target_output_positions.extend_from_slice(
+                                            &fallback[target_output_positions.len()..],
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        let fallback_hidden_layer_positions =
+                            |layer_idx: usize, count: usize| -> Vec<egui::Pos2> {
+                                let x = left + dx * (2.0 + layer_idx as f32);
+                                fallback_column_positions(x, count.max(1))
+                            };
+                        if target_hidden_positions.len() != layout_layers {
+                            if target_hidden_positions.len() < layout_layers
+                                && self.hidden_positions.len() == layout_layers
+                                && !self.topo_pid_hidden.is_empty()
+                            {
+                                target_hidden_positions = self.hidden_positions.clone();
+                            } else {
+                                target_hidden_positions.truncate(layout_layers);
+                                for li in target_hidden_positions.len()..layout_layers {
+                                    let count = layer_sizes.get(li).copied().unwrap_or(1).max(1);
+                                    target_hidden_positions
+                                        .push(fallback_hidden_layer_positions(li, count));
+                                }
+                            }
+                        }
+                        for li in 0..layout_layers {
+                            let expected = layer_sizes.get(li).copied().unwrap_or(1).max(1);
+                            if let Some(layer) = target_hidden_positions.get_mut(li) {
+                                if layer.len() != expected {
+                                    if layer.len() < expected
+                                        && self
+                                            .hidden_positions
+                                            .get(li)
+                                            .map(|prev| prev.len())
+                                            .unwrap_or(0)
+                                            == expected
+                                        && !self.topo_pid_hidden.is_empty()
+                                    {
+                                        *layer = self.hidden_positions[li].clone();
+                                    } else {
+                                        let fallback =
+                                            fallback_hidden_layer_positions(li, expected);
+                                        if layer.is_empty() {
+                                            *layer = fallback;
+                                        } else {
+                                            layer.truncate(expected);
+                                            if layer.len() < expected {
+                                                layer.extend_from_slice(&fallback[layer.len()..]);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         let (pos_kp, pos_kd) = if camera_interacting {
@@ -12531,6 +13988,9 @@ impl eframe::App for App {
                                 self.region_label_positions.push((name, *label_entry, target_pos));
                             }
                         }
+                    } else if keep_last_topology_projection {
+                        // Preserve the last stable projected topology if the source is
+                        // temporarily unavailable to avoid oscillating into column fallback.
                     } else {
                         // Grid layout when growth is disabled (apply camera transform)
                         self.reset_topology_pid_states();
@@ -13471,14 +14931,17 @@ impl eframe::App for App {
                 let col_in = egui::Color32::from_rgb(110, 170, 255).gamma_multiply(alpha);
                 let col_fwd = egui::Color32::from_rgb(255, 190, 80).gamma_multiply(alpha);
                 let col_out = egui::Color32::from_rgb(160, 240, 120).gamma_multiply(alpha);
+                let (in_l, out_l) = active_runner.get_io_layers();
                 let mut drawn = 0usize;
                 for evt in &active_runner.released_events {
                     if drawn >= 256 { break; }
                     match evt.kind {
                         ReleasedKind::In => {
                             let i = evt.pre_id; let j = evt.post_id;
-                            if j < hidden_positions.get(0).map(|v| v.len()).unwrap_or(0) && i < sensory_positions.len() {
-                                painter.line_segment([sensory_positions[i], hidden_positions[0][j]], egui::Stroke { width: 2.0, color: col_in });
+                            if in_l < hidden_positions.len()
+                                && j < hidden_positions[in_l].len()
+                                && i < sensory_positions.len() {
+                                painter.line_segment([sensory_positions[i], hidden_positions[in_l][j]], egui::Stroke { width: 2.0, color: col_in });
                                 drawn += 1;
                             }
                         }
@@ -13513,11 +14976,10 @@ impl eframe::App for App {
                             }
                         }
                         ReleasedKind::Out => {
-                            let llast = hidden_positions.len().saturating_sub(1);
-                            if !hidden_positions.is_empty() {
+                            if out_l < hidden_positions.len() {
                                 let j = evt.pre_id; let k = evt.post_id;
-                                if j < hidden_positions[llast].len() && k < output_positions.len() {
-                                    painter.line_segment([hidden_positions[llast][j], output_positions[k]], egui::Stroke { width: 2.0, color: col_out });
+                                if j < hidden_positions[out_l].len() && k < output_positions.len() {
+                                    painter.line_segment([hidden_positions[out_l][j], output_positions[k]], egui::Stroke { width: 2.0, color: col_out });
                                     drawn += 1;
                                 }
                             }
@@ -13843,9 +15305,10 @@ impl eframe::App for App {
                             }
                         };
 
-                        if !sensory_positions.is_empty() && !hidden_positions.is_empty() {
-                            let (_, vis_h0) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, 0, egui::Color32::TRANSPARENT, &network_registry);
-                            draw_overlay(&painter, &mut edge_shapes_vec, sensory_positions, &hidden_positions[0], &active_runner.w_in, egui::Color32::from_rgb(120, 170, 255), "overlay", "S", "H1:", vis_s, vis_h0, Box::new(move |r, i| active_runner.is_longterm_in(r, i)));
+                        let (in_l, out_l) = active_runner.get_io_layers();
+                        if in_l < hidden_positions.len() && !sensory_positions.is_empty() {
+                            let (_, vis_h_in) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, in_l as isize, egui::Color32::TRANSPARENT, &network_registry);
+                            draw_overlay(&painter, &mut edge_shapes_vec, sensory_positions, &hidden_positions[in_l], &active_runner.w_in, egui::Color32::from_rgb(120, 170, 255), "overlay", "S", &format!("H{}:", in_l + 1), vis_s, vis_h_in, Box::new(move |r, i| active_runner.is_longterm_in(r, i)));
                         }
                         for l in 1..hidden_positions.len() {
                             let (_, vis_prev) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l as isize - 1, egui::Color32::TRANSPARENT, &network_registry);
@@ -13867,10 +15330,10 @@ impl eframe::App for App {
                                 draw_overlay(&painter, &mut edge_shapes_vec, &hidden_positions[l], &hidden_positions[l], w, egui::Color32::from_rgb(200, 200, 255), "overlay", &format!("H{}:", l+1), &format!("H{}:", l+1), vis, vis, Box::new(move |r, i| active_runner.is_longterm_rec(l, r, i)));
                             }
                         }
-                        if let Some(last_h) = hidden_positions.last() {
-                            let l_last = hidden_positions.len() as isize - 1;
-                            let (_, vis_last) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, l_last, egui::Color32::TRANSPARENT, &network_registry);
-                            draw_overlay(&painter, &mut edge_shapes_vec, last_h, output_positions, &active_runner.w_out, egui::Color32::from_rgb(160, 240, 160), "overlay", &format!("H{}:", hidden_positions.len()), "O", vis_last, vis_o, Box::new(move |k, j| active_runner.is_longterm_out(k, j)));
+                        if out_l < hidden_positions.len() {
+                            let source_h = &hidden_positions[out_l];
+                            let (_, vis_source) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, out_l as isize, egui::Color32::TRANSPARENT, &network_registry);
+                            draw_overlay(&painter, &mut edge_shapes_vec, source_h, output_positions, &active_runner.w_out, egui::Color32::from_rgb(160, 240, 160), "overlay", &format!("H{}:", out_l + 1), "O", vis_source, vis_o, Box::new(move |k, j| active_runner.is_longterm_out(k, j)));
                         }
                     }
                 }
@@ -13982,10 +15445,26 @@ impl eframe::App for App {
                             }
                         }
                         let e = &edge_shapes_vec[idx];
+                        #[cfg(all(feature = "robot_io", unix))]
+                        let edge_label_display = |label: &str| -> String {
+                            if let Some(ref mapping) = ipc_mapping {
+                                if let Some(i) = label.strip_prefix('S').and_then(|v| v.parse::<usize>().ok()) {
+                                    return mapping.get_sensor_label(i);
+                                }
+                                if let Some(i) = label.strip_prefix('O').and_then(|v| v.parse::<usize>().ok()) {
+                                    return mapping.get_actuator_label(i);
+                                }
+                            }
+                            label.to_string()
+                        };
+                        #[cfg(not(all(feature = "robot_io", unix)))]
+                        let edge_label_display = |label: &str| -> String { label.to_string() };
+                        let from_display = edge_label_display(&e.from_label);
+                        let to_display = edge_label_display(&e.to_label);
                         let text = if let Some(w) = e.weight {
-                            format!("{} → {}  kind={}  w={:.3}{}", e.from_label, e.to_label, e.kind, w, if e.is_longterm { " [Longterm]" } else { " [New]" })
+                            format!("{} → {}  kind={}  w={:.3}{}", from_display, to_display, e.kind, w, if e.is_longterm { " [Longterm]" } else { " [New]" })
                         } else {
-                            format!("{} → {}  kind={}{}", e.from_label, e.to_label, e.kind, if e.is_longterm { " [Longterm]" } else { " [New]" })
+                            format!("{} → {}  kind={}{}", from_display, to_display, e.kind, if e.is_longterm { " [Longterm]" } else { " [New]" })
                         };
                         tooltip_lines.push(text);
                     }
@@ -14089,8 +15568,9 @@ impl eframe::App for App {
                                             show_neuron_detail = true;
                                             tooltip_pinned = false;
                                         }
-                                        if ui.button("Spike (O)").clicked() {
+                                        if ui.button("Spike + Vm (O)").clicked() {
                                             add(format!("O{} spike", k), egui::Color32::from_rgb(160,240,120), ProbeTarget::Output(k), ProbeKind::Spike);
+                                            add(format!("O{} Vm", k), egui::Color32::from_rgb(130,220,210), ProbeTarget::Output(k), ProbeKind::Membrane);
                                             tooltip_suppression_counter = 12;
                                             tooltip_pinned = false;
                                         }
@@ -14206,25 +15686,79 @@ impl eframe::App for App {
             painter.rect_filled(rrect, 6.0, egui::Color32::from_gray(20));
             painter.rect_stroke(rrect, 6.0, egui::Stroke { width: 1.0, color: egui::Color32::from_gray(80) }, egui::StrokeKind::Outside);
             painter.text(rrect.left_top() + egui::vec2(8.0, 4.0), egui::Align2::LEFT_TOP, "Output raster", egui::FontId::proportional(12.0), egui::Color32::WHITE);
-            // draw cells
-            let cols = raster_cols.max(1) as f32;
-            let rows = active_net.num_output_neurons.max(1) as f32;
+            // Draw cells using pixel-space binning so spikes remain visible even
+            // when outputs/columns exceed available pixels.
+            let raster_rows = raster_outputs
+                .iter()
+                .map(|col| col.len())
+                .max()
+                .unwrap_or(0);
+            let rows_count = if raster_rows > 0 {
+                raster_rows
+            } else {
+                active_net.num_output_neurons.max(self.output_count).max(1)
+            };
             let left = rrect.left() + 8.0;
             let top = rrect.top() + 22.0;
-            let w = rrect.width() - 16.0;
-            let h = rrect.height() - 30.0;
-            let cw = w / cols;
-            let ch = h / rows;
+            let w = (rrect.width() - 16.0).max(1.0);
+            let h = (rrect.height() - 30.0).max(1.0);
             let first_col = raster_outputs.len().saturating_sub(raster_cols);
+            let visible_cols = raster_outputs.len().saturating_sub(first_col).max(1);
+            let col_bins = w.floor().max(1.0) as usize;
+            let row_bins = h.floor().max(1.0) as usize;
+            let bin_w = w / col_bins as f32;
+            let bin_h = h / row_bins as f32;
+            let mut occupied = vec![false; col_bins.saturating_mul(row_bins)];
+            let mut raster_spike_count = 0usize;
+
             for (ci, col) in raster_outputs.iter().skip(first_col).enumerate() {
-                let x = left + ci as f32 * cw;
+                let bx = (ci.saturating_mul(col_bins) / visible_cols).min(col_bins - 1);
                 for (k, &v) in col.iter().enumerate() {
-                    if v != 0 {
-                        let y = top + (rows - 1.0 - k as f32) * ch;
-                        let rr = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cw*0.9, ch*0.9));
-                        painter.rect_filled(rr, 1.0, egui::Color32::from_rgb(180, 240, 120));
+                    if v == 0 {
+                        continue;
                     }
+                    raster_spike_count = raster_spike_count.saturating_add(1);
+                    let row_from_bottom = rows_count.saturating_sub(1 + k);
+                    let by = (row_from_bottom.saturating_mul(row_bins) / rows_count)
+                        .min(row_bins - 1);
+                    occupied[by.saturating_mul(col_bins) + bx] = true;
                 }
+            }
+
+            let spike_col = egui::Color32::from_rgb(180, 240, 120);
+            let draw_w = (bin_w * 0.95).max(2.0);
+            let draw_h = (bin_h * 0.95).max(2.0);
+            let mut any_raster_spike = false;
+            for by in 0..row_bins {
+                for bx in 0..col_bins {
+                    if !occupied[by.saturating_mul(col_bins) + bx] {
+                        continue;
+                    }
+                    any_raster_spike = true;
+                    let x = left + bx as f32 * bin_w;
+                    let y = top + by as f32 * bin_h;
+                    let rr = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(draw_w, draw_h));
+                    painter.rect_filled(rr, 0.5, spike_col);
+                }
+            }
+            if any_raster_spike {
+                painter.text(
+                    rrect.right_top() + egui::vec2(-8.0, 5.0),
+                    egui::Align2::RIGHT_TOP,
+                    format!("spikes {}", raster_spike_count),
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_gray(170),
+                );
+            }
+            if !any_raster_spike {
+                let center = egui::pos2(left + w * 0.5, top + h * 0.5);
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    "No output spikes in current view",
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_gray(130),
+                );
             }
 
             // Oscilloscope window centered at bottom (multi-channel)
@@ -14267,59 +15801,144 @@ impl eframe::App for App {
                 }
             }
             // plot traces
-            let inner = egui::Rect::from_min_max(scope_rect.left_top() + egui::vec2(6.0, 18.0), scope_rect.right_bottom() - egui::vec2(6.0, 6.0));
+            let inner = egui::Rect::from_min_max(
+                scope_rect.left_top() + egui::vec2(6.0, 18.0),
+                scope_rect.right_bottom() - egui::vec2(6.0, 6.0),
+            );
             let enabled: Vec<&Probe> = probes_local.iter().filter(|p| p.enabled).collect();
-            let lanes = if scope_lanes { enabled.len().max(1) } else { 1 };
-            let lane_h = inner.height() / lanes as f32;
-            let dt = lif_cloned.dt.max(0.001) as f32;
-            let visible_samples = ((scope_time_ms / dt).ceil() as usize).clamp(10, 20000);
-            for (idx, pr) in enabled.iter().enumerate() {
-                let lane_top = inner.top() + idx as f32 * lane_h;
-                let lane_rect = if scope_lanes { egui::Rect::from_min_max(egui::pos2(inner.left(), lane_top), egui::pos2(inner.right(), lane_top + lane_h)) } else { inner };
-                // Stable per-pixel binning to avoid aliasing flicker: aggregate samples in each pixel column
-                let px: usize = lane_rect.width().max(1.0) as usize;
-                // Always span the full width: map the full visible time window across all pixel columns
-                let mut last: Option<egui::Pos2> = None;
-                let yrange: (f32, f32) = if matches!(pr.kind, ProbeKind::Spike) { (0.0, 1.0) } else { (-1.5, 1.5) };
-                let cap = pr.capacity.max(1);
-                let end = pr.write_idx % cap; // points to the index where next write will occur (newest is at end-1)
-                for col in 0..px {
-                    // Draw newest data at the RIGHT edge so time flows right -> left
-                    let x = egui::lerp(lane_rect.left()..=lane_rect.right(), 1.0 - ((col as f32 + 0.5) / px as f32));
-                    // Range [start_back, end_back) in samples back from newest that maps this pixel column.
-                    // This distributes the entire visible window across all columns, ensuring full-width fill.
-                    let start_back = (col * visible_samples) / px;
-                    let mut end_back = ((col + 1) * visible_samples) / px;
-                    if end_back <= start_back { end_back = (start_back + 1).min(visible_samples); }
-                    let mut have = false;
-                    let mut agg_val: f32 = if matches!(pr.kind, ProbeKind::Spike) { 0.0 } else { 0.0 };
-                    let mut count: usize = 0;
-                    for b in start_back..end_back {
-                        let ridx = (cap + end + cap - 1 - (b % cap)) % cap; // newest at b=0
-                        let v = pr.data.get(ridx).copied().unwrap_or(f32::NAN);
-                        if v.is_nan() { continue; }
-                        have = true;
-                        match pr.kind {
-                            ProbeKind::Spike => {
-                                if v > 0.5 { agg_val = 1.0; break; } // max over bin
+            if enabled.is_empty() {
+                painter.text(
+                    inner.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No probes selected",
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_gray(140),
+                );
+            } else {
+                let lanes = if scope_lanes { enabled.len().max(1) } else { 1 };
+                let lane_h = inner.height() / lanes as f32;
+                let dt = lif_cloned.dt.max(0.001) as f32;
+                let visible_samples = ((scope_time_ms / dt).ceil() as usize).clamp(10, 20000);
+                let all_spike = enabled.iter().all(|p| matches!(p.kind, ProbeKind::Spike));
+                let mut any_scope_data = false;
+                let mut any_scope_spike = false;
+
+                for (idx, pr) in enabled.iter().enumerate() {
+                    let lane_top = inner.top() + idx as f32 * lane_h;
+                    let lane_rect = if scope_lanes {
+                        egui::Rect::from_min_max(
+                            egui::pos2(inner.left(), lane_top),
+                            egui::pos2(inner.right(), lane_top + lane_h),
+                        )
+                    } else {
+                        inner
+                    };
+                    // Stable per-pixel binning to avoid aliasing flicker: aggregate
+                    // samples in each pixel column.
+                    let px: usize = lane_rect.width().max(1.0) as usize;
+                    // Always span the full width: map the full visible time window across
+                    // all pixel columns.
+                    let mut last: Option<egui::Pos2> = None;
+                    let yrange: (f32, f32) = match pr.kind {
+                        ProbeKind::Spike => (-0.1, 1.1),
+                        ProbeKind::Membrane => (-85.0, 40.0),
+                        ProbeKind::Current => (-10.0, 10.0),
+                        ProbeKind::Level => (0.0, 1.0),
+                    };
+                    let cap = pr.capacity.max(1);
+                    let end = pr.write_idx % cap; // next write index (newest is end-1)
+                    for col in 0..px {
+                        // Draw newest data at the RIGHT edge so time flows right -> left
+                        let x = egui::lerp(
+                            lane_rect.left()..=lane_rect.right(),
+                            1.0 - ((col as f32 + 0.5) / px as f32),
+                        );
+                        // Range [start_back, end_back) in samples-back from newest for this pixel.
+                        let start_back = (col * visible_samples) / px;
+                        let mut end_back = ((col + 1) * visible_samples) / px;
+                        if end_back <= start_back {
+                            end_back = (start_back + 1).min(visible_samples);
+                        }
+                        let mut have = false;
+                        let mut agg_val: f32 = 0.0;
+                        let mut count: usize = 0;
+                        for b in start_back..end_back {
+                            let ridx = (cap + end + cap - 1 - (b % cap)) % cap; // newest at b=0
+                            let v = pr.data.get(ridx).copied().unwrap_or(f32::NAN);
+                            if v.is_nan() {
+                                continue;
                             }
-                            _ => {
-                                agg_val += v;
-                                count += 1;
+                            have = true;
+                            match pr.kind {
+                                ProbeKind::Spike => {
+                                    agg_val = agg_val.max(v.clamp(0.0, 1.0));
+                                }
+                                _ => {
+                                    agg_val += v;
+                                    count += 1;
+                                }
                             }
                         }
+                        if !have {
+                            last = None;
+                            continue;
+                        }
+                        any_scope_data = true;
+                        let v = match pr.kind {
+                            ProbeKind::Spike => {
+                                if agg_val > 0.001 {
+                                    any_scope_spike = true;
+                                }
+                                agg_val // envelope level in [0,1], ignore gain for spikes
+                            }
+                            _ => {
+                                if count > 0 {
+                                    (agg_val / count as f32) * scope_gain
+                                } else {
+                                    f32::NAN
+                                }
+                            }
+                        };
+                        if v.is_nan() {
+                            last = None;
+                            continue;
+                        }
+                        let y_norm = ((v - yrange.0) / (yrange.1 - yrange.0)).clamp(0.0, 1.0);
+                        let y = lane_rect.bottom() - y_norm * lane_rect.height();
+                        let p = egui::pos2(x, y);
+                        if let Some(p0) = last {
+                            let stroke = egui::Stroke {
+                                width: 1.5,
+                                color: pr.color,
+                            };
+                            if matches!(pr.kind, ProbeKind::Spike) {
+                                let elbow = egui::pos2(p.x, p0.y);
+                                painter.line_segment([p0, elbow], stroke);
+                                painter.line_segment([elbow, p], stroke);
+                            } else {
+                                painter.line_segment([p0, p], stroke);
+                            }
+                        }
+                        last = Some(p);
                     }
-                    if !have { last = None; continue; }
-                    let v = match pr.kind {
-                        ProbeKind::Spike => agg_val, // 0 or 1, ignore gain for spikes
-                        _ => if count > 0 { (agg_val / count as f32) * scope_gain } else { f32::NAN },
-                    };
-                    if v.is_nan() { last = None; continue; }
-                    let y_norm = ((v - yrange.0) / (yrange.1 - yrange.0)).clamp(0.0, 1.0);
-                    let y = lane_rect.bottom() - y_norm * lane_rect.height();
-                    let p = egui::pos2(x, y);
-                    if let Some(p0) = last { painter.line_segment([p0, p], egui::Stroke{ width: 1.5, color: pr.color }); }
-                    last = Some(p);
+                }
+
+                if !any_scope_data {
+                    painter.text(
+                        inner.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Selected probes have no data",
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_gray(150),
+                    );
+                } else if all_spike && !any_scope_spike {
+                    painter.text(
+                        egui::pos2(inner.center().x, inner.top() + 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        "No spikes in selected probes (try Vm)",
+                        egui::FontId::proportional(10.0),
+                        egui::Color32::from_gray(120),
+                    );
                 }
             }
             }

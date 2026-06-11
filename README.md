@@ -308,6 +308,11 @@ Useful env overrides:
 - `WORLD_FILE=/abs/path/celegans_neuroworld.wbt`
 - `ORCHESTRATOR_PORT=50051` (used by Rust UI/Web UI wrappers)
 - `WEB_UI_LISTEN=0.0.0.0:8080` (web UI wrapper only)
+- IPC tuning (controller async bridge):
+  `NM_UDS_RECV_TIMEOUT_MS`, `NM_IPC_TIMEOUT_GRACE_MS`,
+  `NM_IPC_TIMEOUT_LOG_INTERVAL_MS`, `NM_IPC_UDS_CTRL_BUF_BYTES`,
+  `NM_IPC_WINDOW_MIN`, `NM_IPC_WINDOW_INIT`, `NM_IPC_WINDOW_MAX`,
+  `NM_IPC_SEND_BUDGET_MAX`.
 
 ## Webots Drosophila Runtime
 
@@ -354,6 +359,11 @@ Useful env overrides:
 - `DROSOPHILA_REBUILD_NETWORK=1` to force rebuilding `network_drosophila.json`.
 - `DROSOPHILA_MAX_SENSORY`, `DROSOPHILA_MAX_HIDDEN`, `DROSOPHILA_MAX_OUTPUT`.
 - `DROSOPHILA_MIN_SYN_COUNT` and `DROSOPHILA_WEIGHT_TRANSFORM`.
+- IPC tuning (controller async bridge):
+  `NM_UDS_RECV_TIMEOUT_MS`, `NM_IPC_TIMEOUT_GRACE_MS`,
+  `NM_IPC_TIMEOUT_LOG_INTERVAL_MS`, `NM_IPC_UDS_CTRL_BUF_BYTES`,
+  `NM_IPC_WINDOW_MIN`, `NM_IPC_WINDOW_INIT`, `NM_IPC_WINDOW_MAX`,
+  `NM_IPC_SEND_BUDGET_MAX`.
 
 ## Repository map
 

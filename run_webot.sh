@@ -14,6 +14,8 @@ REMOTE_SSH_ARGV=()
 REMOTE_SSH_READY=0
 CLEANED_UP=0
 LOCAL_RUST_UI_LOG=""
+WEBOTS_RECORD_WORLD_FILE=""
+WEBOTS_RECORD_PROGRESS_PID=""
 
 cleanup() {
     if [ "$CLEANED_UP" -eq 1 ]; then
@@ -84,6 +86,10 @@ fi
 EOS
         done
     fi
+
+    if [ -n "${WEBOTS_RECORD_WORLD_FILE:-}" ]; then
+        rm -f "$WEBOTS_RECORD_WORLD_FILE" "${WEBOTS_RECORD_WORLD_FILE%.*}.wbproj" 2>/dev/null || true
+    fi
 }
 
 trap 'exit 0' SIGINT SIGTERM
@@ -101,8 +107,8 @@ Options:
   --no-diag                Skip UDS diagnostics after launch.
   --world <path>           World file to parse controllerArgs.
   --brains <csv>           Comma-separated brain IDs (overrides NM_BRAINS/world args).
-  --sensory <n>            Fallback sensory neuron count before handshake (default: 25).
-  --output <n>             Fallback output neuron count before handshake (default: 11).
+  --sensory <n>            Pre-handshake fallback sensory neuron count (default: 25).
+  --output <n>             Pre-handshake fallback output neuron count (default: 11).
   --threshold <f>          Spike threshold for IPC/UDS servers (default: 0.5).
   --config <path>          NetworkConfig JSON to load in backend nodes/servers.
   --network <path>         Snapshot JSON to import in backend nodes/servers.
@@ -144,7 +150,26 @@ Options:
   --no-webots              Do not launch Webots; run NN backend only.
   --webots-bin <path>      Webots executable path (default: auto-detect).
   --webots-mode <mode>     Webots mode: pause|realtime|fast (default: realtime).
-  --webots-headless        Launch Webots with --no-rendering --minimize.
+  --webots-headless        Launch Webots minimized; uses --no-rendering unless recording.
+  --webots-record          Record the Webots rendered view to an MP4 via Supervisor.
+  --webots-record-file <path>
+                           Output movie path (default: logs/webots_recording.mp4).
+  --webots-record-duration-ms <ms>
+                           Stop/finalize recording after this simulation duration.
+  --webots-record-width <px>
+                           Recording width in pixels (default: 1280).
+  --webots-record-height <px>
+                           Recording height in pixels (default: 720).
+  --webots-record-quality <1-100>
+                           Recording quality passed to Webots (default: 85).
+  --webots-record-acceleration <n>
+                           Movie playback acceleration passed to Webots (default: 1).
+  --webots-record-quit-on-done
+                           Quit Webots after a duration-limited recording is finalized.
+  --webots-record-progress
+                           Show a console progress bar for duration-limited recording.
+  --no-webots-record-progress
+                           Disable console recording progress.
   --skip-controller-build  Skip preflight build/check of nao_nn_controller_uds.
   --connect-timeout <sec>  Timeout waiting for controller brain connections (default: 60).
   --cluster-distribution-timeout <sec>
@@ -154,8 +179,16 @@ Options:
 Environment overrides:
   RUNTIME, NM_BRAINS, NM_INTERCONNECT, NM_AER_S_BASE, NM_AER_O_BASE,
   NM_IPC_THRESHOLD, NM_DEFAULT_SENSORY, NM_DEFAULT_OUTPUT, WORLD_FILE, LOG_DIR,
+  NM_UDS_RECV_TIMEOUT_MS, NM_IPC_TIMEOUT_GRACE_MS, NM_IPC_TIMEOUT_LOG_INTERVAL_MS,
+  NM_IPC_UDS_CTRL_BUF_BYTES, NM_IPC_WINDOW_MIN, NM_IPC_WINDOW_INIT, NM_IPC_WINDOW_MAX,
+  NM_IPC_SEND_BUDGET_MAX, NM_IPC_STRICT_LOCKSTEP, NM_IPC_QUEUE_MAX_FRAMES, NM_WEBOTS_STEP_SLEEP_MS,
+  NM_IPC_FORCE_AER, NM_IPC_DISABLE_AER, NM_IPC_MAX_RAW_BYTES,
+  NM_IPC_AER_THRESHOLD, NM_IPC_AER_MAX_EVENTS, NM_IPC_AER_MAX_PACKET_BYTES,
   START_WEBOTS, WEBOTS_BIN, WEBOTS_MODE, WEBOTS_HEADLESS, WEBOTS_CONNECT_TIMEOUT,
-  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT,
+  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT, NM_WEBOTS_RECORD, NM_WEBOTS_RECORD_FILE,
+  NM_WEBOTS_RECORD_WIDTH, NM_WEBOTS_RECORD_HEIGHT, NM_WEBOTS_RECORD_DURATION_MS,
+  NM_WEBOTS_RECORD_QUALITY, NM_WEBOTS_RECORD_ACCELERATION, NM_WEBOTS_RECORD_CODEC,
+  NM_WEBOTS_RECORD_PROGRESS, NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS,
   SKIP_CONTROLLER_BUILD, NM_CONFIG_FILE, NM_NETWORK_FILE, NM_CONFIG_MAP, NM_NETWORK_MAP, NM_ORCHESTRATOR_PORT,
   NM_NODE_UI_HIDDEN, NM_REMOTE_COMPUTE, NM_REMOTE_HOSTS, NM_REMOTE_HOST_WEIGHTS,
   NM_REMOTE_USER, NM_REMOTE_ROOT, NM_REMOTE_ORCHESTRATOR_HOST, NM_REMOTE_WEB_UI_HOST,
@@ -191,7 +224,29 @@ WEBOTS_MODE="${WEBOTS_MODE:-realtime}"
 WEBOTS_HEADLESS="${WEBOTS_HEADLESS:-0}"
 WEBOTS_CONNECT_TIMEOUT="${WEBOTS_CONNECT_TIMEOUT:-60}"
 WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT="${WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT:-300}"
+WEBOTS_RECORD="${NM_WEBOTS_RECORD:-0}"
+WEBOTS_RECORD_FILE="${NM_WEBOTS_RECORD_FILE:-}"
+WEBOTS_RECORD_WIDTH="${NM_WEBOTS_RECORD_WIDTH:-1280}"
+WEBOTS_RECORD_HEIGHT="${NM_WEBOTS_RECORD_HEIGHT:-720}"
+WEBOTS_RECORD_DURATION_MS="${NM_WEBOTS_RECORD_DURATION_MS:-0}"
+WEBOTS_RECORD_QUALITY="${NM_WEBOTS_RECORD_QUALITY:-85}"
+WEBOTS_RECORD_ACCELERATION="${NM_WEBOTS_RECORD_ACCELERATION:-1}"
+WEBOTS_RECORD_CODEC="${NM_WEBOTS_RECORD_CODEC:-0}"
+WEBOTS_RECORD_CAPTION="${NM_WEBOTS_RECORD_CAPTION:-0}"
+WEBOTS_RECORD_QUIT_ON_DONE="${NM_WEBOTS_RECORD_QUIT_ON_DONE:-}"
+WEBOTS_RECORD_PROGRESS="${NM_WEBOTS_RECORD_PROGRESS:-auto}"
+WEBOTS_RECORD_PROGRESS_INTERVAL_MS="${NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS:-500}"
 SKIP_CONTROLLER_BUILD="${SKIP_CONTROLLER_BUILD:-0}"
+UDS_RECV_TIMEOUT_MS="${NM_UDS_RECV_TIMEOUT_MS:-150}"
+IPC_TIMEOUT_GRACE_MS="${NM_IPC_TIMEOUT_GRACE_MS:-1500}"
+IPC_TIMEOUT_LOG_INTERVAL_MS="${NM_IPC_TIMEOUT_LOG_INTERVAL_MS:-5000}"
+IPC_UDS_CTRL_BUF_BYTES="${NM_IPC_UDS_CTRL_BUF_BYTES:-524288}"
+IPC_WINDOW_MIN="${NM_IPC_WINDOW_MIN:-1}"
+IPC_WINDOW_INIT="${NM_IPC_WINDOW_INIT:-1}"
+IPC_WINDOW_MAX="${NM_IPC_WINDOW_MAX:-1}"
+IPC_SEND_BUDGET_MAX="${NM_IPC_SEND_BUDGET_MAX:-1}"
+IPC_STRICT_LOCKSTEP="${NM_IPC_STRICT_LOCKSTEP:-1}"
+WEBOTS_STEP_SLEEP_MS="${NM_WEBOTS_STEP_SLEEP_MS:-0}"
 CONFIG_FILE="${NM_CONFIG_FILE:-}"
 NETWORK_FILE="${NM_NETWORK_FILE:-}"
 CONFIG_MAP_CSV="${NM_CONFIG_MAP:-}"
@@ -235,6 +290,19 @@ WEB_UI_DEFAULT_RUNTIME_USER="${NM_WEB_UI_DEFAULT_RUNTIME_USER:-}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
+export NM_UDS_RECV_TIMEOUT_MS="$UDS_RECV_TIMEOUT_MS"
+export NM_IPC_TIMEOUT_GRACE_MS="$IPC_TIMEOUT_GRACE_MS"
+export NM_IPC_TIMEOUT_LOG_INTERVAL_MS="$IPC_TIMEOUT_LOG_INTERVAL_MS"
+export NM_IPC_UDS_CTRL_BUF_BYTES="$IPC_UDS_CTRL_BUF_BYTES"
+export NM_IPC_WINDOW_MIN="$IPC_WINDOW_MIN"
+export NM_IPC_WINDOW_INIT="$IPC_WINDOW_INIT"
+export NM_IPC_WINDOW_MAX="$IPC_WINDOW_MAX"
+export NM_IPC_SEND_BUDGET_MAX="$IPC_SEND_BUDGET_MAX"
+export NM_IPC_STRICT_LOCKSTEP="$IPC_STRICT_LOCKSTEP"
+export NM_WEBOTS_STEP_SLEEP_MS="$WEBOTS_STEP_SLEEP_MS"
+export NM_AER_S_BASE="$AER_S_BASE"
+export NM_AER_O_BASE="$AER_O_BASE"
+
 normalize_bool() {
     local name="$1"
     local val="$2"
@@ -243,6 +311,20 @@ normalize_bool() {
         0|false|FALSE|no|NO|off|OFF) echo "0" ;;
         *)
             echo "Invalid boolean for $name: '$val' (use 0/1, true/false, yes/no)"
+            return 1
+            ;;
+    esac
+}
+
+normalize_bool_auto() {
+    local name="$1"
+    local val="$2"
+    case "$val" in
+        auto|AUTO) echo "auto" ;;
+        1|true|TRUE|yes|YES|on|ON) echo "1" ;;
+        0|false|FALSE|no|NO|off|OFF) echo "0" ;;
+        *)
+            echo "Invalid $name: '$val' (use auto, 0/1, true/false, yes/no)"
             return 1
             ;;
     esac
@@ -425,6 +507,50 @@ while [ "$#" -gt 0 ]; do
         --webots-headless)
             WEBOTS_HEADLESS=1
             ;;
+        --webots-record)
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-file)
+            shift
+            WEBOTS_RECORD_FILE="${1:-$WEBOTS_RECORD_FILE}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-duration-ms)
+            shift
+            WEBOTS_RECORD_DURATION_MS="${1:-$WEBOTS_RECORD_DURATION_MS}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-width)
+            shift
+            WEBOTS_RECORD_WIDTH="${1:-$WEBOTS_RECORD_WIDTH}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-height)
+            shift
+            WEBOTS_RECORD_HEIGHT="${1:-$WEBOTS_RECORD_HEIGHT}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-quality)
+            shift
+            WEBOTS_RECORD_QUALITY="${1:-$WEBOTS_RECORD_QUALITY}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-acceleration)
+            shift
+            WEBOTS_RECORD_ACCELERATION="${1:-$WEBOTS_RECORD_ACCELERATION}"
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-quit-on-done)
+            WEBOTS_RECORD_QUIT_ON_DONE=1
+            WEBOTS_RECORD=1
+            ;;
+        --webots-record-progress)
+            WEBOTS_RECORD_PROGRESS=1
+            WEBOTS_RECORD=1
+            ;;
+        --no-webots-record-progress)
+            WEBOTS_RECORD_PROGRESS=0
+            ;;
         --skip-controller-build)
             SKIP_CONTROLLER_BUILD=1
             ;;
@@ -456,6 +582,12 @@ fi
 
 START_WEBOTS="$(normalize_bool START_WEBOTS "$START_WEBOTS")" || exit 1
 WEBOTS_HEADLESS="$(normalize_bool WEBOTS_HEADLESS "$WEBOTS_HEADLESS")" || exit 1
+WEBOTS_RECORD="$(normalize_bool NM_WEBOTS_RECORD "$WEBOTS_RECORD")" || exit 1
+WEBOTS_RECORD_CAPTION="$(normalize_bool NM_WEBOTS_RECORD_CAPTION "$WEBOTS_RECORD_CAPTION")" || exit 1
+WEBOTS_RECORD_PROGRESS="$(normalize_bool_auto NM_WEBOTS_RECORD_PROGRESS "$WEBOTS_RECORD_PROGRESS")" || exit 1
+if [ -n "$WEBOTS_RECORD_QUIT_ON_DONE" ]; then
+    WEBOTS_RECORD_QUIT_ON_DONE="$(normalize_bool NM_WEBOTS_RECORD_QUIT_ON_DONE "$WEBOTS_RECORD_QUIT_ON_DONE")" || exit 1
+fi
 SKIP_CONTROLLER_BUILD="$(normalize_bool SKIP_CONTROLLER_BUILD "$SKIP_CONTROLLER_BUILD")" || exit 1
 NODE_UI_HIDDEN="$(normalize_bool NODE_UI_HIDDEN "$NODE_UI_HIDDEN")" || exit 1
 SINGLE_ORCHESTRATOR_UI="$(normalize_bool SINGLE_ORCHESTRATOR_UI "$SINGLE_ORCHESTRATOR_UI")" || exit 1
@@ -465,6 +597,23 @@ REMOTE_COMPUTE="$(normalize_bool REMOTE_COMPUTE "$REMOTE_COMPUTE")" || exit 1
 REMOTE_QUIET="$(normalize_bool REMOTE_QUIET "$REMOTE_QUIET")" || exit 1
 REMOTE_PRE_CLEAN="$(normalize_bool REMOTE_PRE_CLEAN "$REMOTE_PRE_CLEAN")" || exit 1
 LOCAL_RUST_UI="$(normalize_bool LOCAL_RUST_UI "$LOCAL_RUST_UI")" || exit 1
+
+if [ "$WEBOTS_RECORD" -eq 1 ]; then
+    if [ "$REMOTE_COMPUTE" -eq 0 ] && [ "$RUNTIME" = "cluster" ]; then
+        echo "Webots recording enabled; switching local AARNN runtime to uds for headless CLI capture."
+        RUNTIME="uds"
+        ORCHESTRATOR_UI=0
+        NODE_UI_HIDDEN=1
+        SINGLE_ORCHESTRATOR_UI=0
+        LOCAL_RUST_UI=0
+    elif [ "$REMOTE_COMPUTE" -eq 1 ]; then
+        echo "Webots recording enabled; disabling local AARNN UI surfaces for headless capture."
+        ORCHESTRATOR_UI=0
+        NODE_UI_HIDDEN=1
+        SINGLE_ORCHESTRATOR_UI=0
+        LOCAL_RUST_UI=0
+    fi
+fi
 
 case "${REALTIME_POLICY,,}" in
     conservative|safe|legacy)
@@ -569,6 +718,66 @@ fi
 
 if ! [[ "$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT" =~ ^[0-9]+$ ]]; then
     echo "Invalid --cluster-distribution-timeout '$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT' (must be a non-negative integer)."
+    exit 1
+fi
+
+for pair in \
+    "NM_WEBOTS_RECORD_WIDTH:$WEBOTS_RECORD_WIDTH" \
+    "NM_WEBOTS_RECORD_HEIGHT:$WEBOTS_RECORD_HEIGHT" \
+    "NM_WEBOTS_RECORD_DURATION_MS:$WEBOTS_RECORD_DURATION_MS" \
+    "NM_WEBOTS_RECORD_QUALITY:$WEBOTS_RECORD_QUALITY" \
+    "NM_WEBOTS_RECORD_ACCELERATION:$WEBOTS_RECORD_ACCELERATION" \
+    "NM_WEBOTS_RECORD_CODEC:$WEBOTS_RECORD_CODEC" \
+    "NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS:$WEBOTS_RECORD_PROGRESS_INTERVAL_MS"; do
+    key="${pair%%:*}"
+    val="${pair#*:}"
+    if ! [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "Invalid $key '$val' (must be a non-negative integer)."
+        exit 1
+    fi
+done
+if [ "$WEBOTS_RECORD_WIDTH" -lt 16 ] || [ "$WEBOTS_RECORD_WIDTH" -gt 16384 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_WIDTH '$WEBOTS_RECORD_WIDTH' (must be 16..16384)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_HEIGHT" -lt 16 ] || [ "$WEBOTS_RECORD_HEIGHT" -gt 16384 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_HEIGHT '$WEBOTS_RECORD_HEIGHT' (must be 16..16384)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_QUALITY" -lt 1 ] || [ "$WEBOTS_RECORD_QUALITY" -gt 100 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_QUALITY '$WEBOTS_RECORD_QUALITY' (must be 1..100)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_ACCELERATION" -lt 1 ] || [ "$WEBOTS_RECORD_ACCELERATION" -gt 512 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_ACCELERATION '$WEBOTS_RECORD_ACCELERATION' (must be 1..512)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_CODEC" -gt 64 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_CODEC '$WEBOTS_RECORD_CODEC' (must be 0..64)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_PROGRESS_INTERVAL_MS" -lt 100 ] || [ "$WEBOTS_RECORD_PROGRESS_INTERVAL_MS" -gt 600000 ]; then
+    echo "Invalid NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS '$WEBOTS_RECORD_PROGRESS_INTERVAL_MS' (must be 100..600000)."
+    exit 1
+fi
+if [ "$WEBOTS_RECORD_PROGRESS" = "auto" ]; then
+    if [ "$WEBOTS_RECORD" -eq 1 ] && [ "$WEBOTS_RECORD_DURATION_MS" -gt 0 ] && [ -t 1 ]; then
+        WEBOTS_RECORD_PROGRESS=1
+    else
+        WEBOTS_RECORD_PROGRESS=0
+    fi
+fi
+if [ "$WEBOTS_RECORD_PROGRESS" -eq 1 ] && [ "$WEBOTS_RECORD_DURATION_MS" -le 0 ]; then
+    echo "Webots recording progress requires --webots-record-duration-ms; disabling progress for open-ended recording."
+    WEBOTS_RECORD_PROGRESS=0
+fi
+
+if ! [[ "$WEBOTS_STEP_SLEEP_MS" =~ ^[0-9]+$ ]]; then
+    echo "Invalid NM_WEBOTS_STEP_SLEEP_MS '$WEBOTS_STEP_SLEEP_MS' (must be a non-negative integer in milliseconds)."
+    exit 1
+fi
+if [ "$WEBOTS_STEP_SLEEP_MS" -gt 600000 ]; then
+    echo "Invalid NM_WEBOTS_STEP_SLEEP_MS '$WEBOTS_STEP_SLEEP_MS' (must be <= 600000 milliseconds)."
     exit 1
 fi
 
@@ -1641,6 +1850,55 @@ parse_world_controller_args() {
     done < <(grep -Eo '"NM_[^"]+"' "$world_path" | tr -d '"')
 }
 
+prepare_recording_world() {
+    if [ "$WEBOTS_RECORD" -ne 1 ]; then
+        return 0
+    fi
+    if [ ! -f "$WORLD_FILE" ]; then
+        return 0
+    fi
+    if grep -Eq 'controller[[:space:]]+"nm_world_recorder"' "$WORLD_FILE" \
+        && grep -Eq 'supervisor[[:space:]]+TRUE' "$WORLD_FILE"; then
+        return 0
+    fi
+
+    local world_dir
+    local world_base
+    local world_stem
+    world_dir="$(cd "$(dirname "$WORLD_FILE")" && pwd)"
+    world_base="$(basename "$WORLD_FILE")"
+    world_stem="${world_base%.*}"
+
+    WEBOTS_RECORD_WORLD_FILE="$(mktemp "${world_dir}/.${world_stem}.recording.XXXXXX.wbt")"
+    python3 - "$WORLD_FILE" "$WEBOTS_RECORD_WORLD_FILE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+text = src.read_text(encoding="utf-8")
+text = re.sub(
+    r"\n?Supervisor\s*\{\s*name\s+\"NM_WORLD_RECORDER\"\s*controller\s+\"nm_world_recorder\"\s*\}\s*",
+    "\n",
+    text,
+    flags=re.MULTILINE,
+)
+dst.write_text(text, encoding="utf-8")
+PY
+    cat >>"$WEBOTS_RECORD_WORLD_FILE" <<'EOF'
+
+# Automatic movie recorder Supervisor added by run_webot.sh for --webots-record.
+Robot {
+  name "NM_WORLD_RECORDER"
+  supervisor TRUE
+  controller "nm_world_recorder"
+}
+EOF
+    WORLD_FILE="$WEBOTS_RECORD_WORLD_FILE"
+    echo "Recording Supervisor was not present; launching recording world copy: $WORLD_FILE"
+}
+
 socket_for_brain() {
     local brain="$1"
     if [ "$brain" = "default" ]; then
@@ -1788,7 +2046,9 @@ start_webots_world() {
         --stderr
         "--mode=$WEBOTS_MODE"
     )
-    if [ "$WEBOTS_HEADLESS" -eq 1 ]; then
+    if [ "$WEBOTS_HEADLESS" -eq 1 ] && [ "$WEBOTS_RECORD" -eq 1 ]; then
+        webots_cmd+=(--minimize)
+    elif [ "$WEBOTS_HEADLESS" -eq 1 ]; then
         webots_cmd+=(--no-rendering --minimize)
     fi
     webots_cmd+=("$WORLD_FILE")
@@ -1798,6 +2058,9 @@ start_webots_world() {
     echo "  world: $WORLD_FILE"
     echo "  mode: $WEBOTS_MODE"
     echo "  headless rendering: $WEBOTS_HEADLESS"
+    if [ "$WEBOTS_RECORD" -eq 1 ]; then
+        echo "  recording: $WEBOTS_RECORD_FILE"
+    fi
 
     "${webots_cmd[@]}" >"$WEBOTS_LOG" 2>&1 &
     WEBOTS_PID="$!"
@@ -1814,6 +2077,86 @@ start_webots_world() {
     echo "  pid: $WEBOTS_PID"
     echo "  log: $WEBOTS_LOG"
     return 0
+}
+
+render_recording_progress_bar() {
+    local pct="$1"
+    local elapsed_ms="$2"
+    local total_ms="$3"
+    local width=34
+    local filled=$((pct * width / 100))
+    local empty=$((width - filled))
+    local fill=""
+    local rest=""
+    printf -v fill '%*s' "$filled" ''
+    printf -v rest '%*s' "$empty" ''
+    fill="${fill// /#}"
+    rest="${rest// /-}"
+    printf "\rWebots recording [%s%s] %3d%% %s/%sms" "$fill" "$rest" "$pct" "$elapsed_ms" "$total_ms"
+}
+
+watch_webots_recording_progress() {
+    local log_file="$1"
+    local total_ms="$2"
+    local webots_pid="$3"
+    local last_pct=-1
+    local next_text_pct=0
+    local printed_inline=0
+    local line=""
+    local elapsed_ms=0
+    local duration_ms="$total_ms"
+    local pct=0
+
+    while kill -0 "$webots_pid" 2>/dev/null; do
+        line="$(grep -a '\[nm_world_recorder\] progress ' "$log_file" 2>/dev/null | tail -n 1 || true)"
+        if [[ "$line" =~ elapsed_ms=([0-9]+)[[:space:]]+duration_ms=([0-9]+)[[:space:]]+pct=([0-9]+) ]]; then
+            elapsed_ms="${BASH_REMATCH[1]}"
+            duration_ms="${BASH_REMATCH[2]}"
+            pct="${BASH_REMATCH[3]}"
+            if [ "$pct" -gt 100 ]; then
+                pct=100
+            fi
+            if [ "$pct" -ne "$last_pct" ]; then
+                if [ -t 1 ]; then
+                    render_recording_progress_bar "$pct" "$elapsed_ms" "$duration_ms"
+                    printed_inline=1
+                elif [ "$pct" -ge "$next_text_pct" ] || [ "$pct" -ge 100 ]; then
+                    echo "Webots recording progress: ${pct}% (${elapsed_ms}/${duration_ms}ms)"
+                    next_text_pct=$((pct + 5))
+                fi
+                last_pct="$pct"
+            fi
+        fi
+        if grep -aq 'Video creation finished\|recording ready' "$log_file" 2>/dev/null; then
+            if [ "$last_pct" -lt 100 ]; then
+                if [ -t 1 ]; then
+                    render_recording_progress_bar 100 "$total_ms" "$total_ms"
+                    printed_inline=1
+                else
+                    echo "Webots recording progress: 100% (${total_ms}/${total_ms}ms)"
+                fi
+            fi
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [ "$printed_inline" -eq 1 ]; then
+        printf "\n"
+    fi
+}
+
+start_webots_recording_progress() {
+    if [ "$WEBOTS_RECORD" -ne 1 ] || [ "$WEBOTS_RECORD_PROGRESS" -ne 1 ]; then
+        return 0
+    fi
+    if [ "$WEBOTS_RECORD_DURATION_MS" -le 0 ] || [ -z "${WEBOTS_PID:-}" ]; then
+        return 0
+    fi
+    echo "Webots recording progress enabled."
+    watch_webots_recording_progress "$WEBOTS_LOG" "$WEBOTS_RECORD_DURATION_MS" "$WEBOTS_PID" &
+    WEBOTS_RECORD_PROGRESS_PID="$!"
+    PIDS+=("$WEBOTS_RECORD_PROGRESS_PID")
 }
 
 wait_for_webots_connections() {
@@ -2686,6 +3029,7 @@ start_uds_runtime() {
     done
 }
 
+prepare_recording_world
 parse_world_controller_args "$WORLD_FILE"
 
 if [ -z "$BRAIN_CSV" ]; then
@@ -2762,20 +3106,59 @@ if [ "$RUNTIME" = "cluster" ] && [ "$REMOTE_COMPUTE" -eq 0 ] && [ "$NODE_UI" -eq
     RUNTIME="uds"
 fi
 
-if [ "$START_WEBOTS" -eq 1 ] && [ "$WEBOTS_HEADLESS" -eq 0 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+if [ "$START_WEBOTS" -eq 1 ] && [ "$WEBOTS_HEADLESS" -eq 0 ] && [ "$WEBOTS_RECORD" -eq 0 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     echo "No display detected for Webots; enabling --webots-headless mode."
     WEBOTS_HEADLESS=1
 fi
+if [ "$START_WEBOTS" -eq 1 ] && [ "$WEBOTS_RECORD" -eq 1 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    echo "Webots recording requested without DISPLAY/WAYLAND_DISPLAY; use a desktop or virtual framebuffer so rendered movie frames are available."
+fi
 
 mkdir -p "$LOG_DIR"
+if [ "$WEBOTS_RECORD" -eq 1 ]; then
+    if [ -z "$WEBOTS_RECORD_FILE" ]; then
+        WEBOTS_RECORD_FILE="$LOG_DIR/webots_recording.mp4"
+    fi
+    case "$WEBOTS_RECORD_FILE" in
+        /*) ;;
+        *) WEBOTS_RECORD_FILE="$ROOT_DIR/$WEBOTS_RECORD_FILE" ;;
+    esac
+    export NM_WEBOTS_RECORD=1
+    export NM_WEBOTS_RECORD_FILE="$WEBOTS_RECORD_FILE"
+    export NM_WEBOTS_RECORD_WIDTH="$WEBOTS_RECORD_WIDTH"
+    export NM_WEBOTS_RECORD_HEIGHT="$WEBOTS_RECORD_HEIGHT"
+    export NM_WEBOTS_RECORD_DURATION_MS="$WEBOTS_RECORD_DURATION_MS"
+    export NM_WEBOTS_RECORD_QUALITY="$WEBOTS_RECORD_QUALITY"
+    export NM_WEBOTS_RECORD_ACCELERATION="$WEBOTS_RECORD_ACCELERATION"
+    export NM_WEBOTS_RECORD_CODEC="$WEBOTS_RECORD_CODEC"
+    export NM_WEBOTS_RECORD_CAPTION="$WEBOTS_RECORD_CAPTION"
+    export NM_WEBOTS_RECORD_PROGRESS="$WEBOTS_RECORD_PROGRESS"
+    export NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS="$WEBOTS_RECORD_PROGRESS_INTERVAL_MS"
+    export NM_WEBOTS_RECORD_DIR="$LOG_DIR"
+    if [ -n "$WEBOTS_RECORD_QUIT_ON_DONE" ]; then
+        export NM_WEBOTS_RECORD_QUIT_ON_DONE="$WEBOTS_RECORD_QUIT_ON_DONE"
+    fi
+else
+    export NM_WEBOTS_RECORD=0
+fi
 
 echo "Webots bridge launch config:"
 echo "  runtime: $RUNTIME"
 echo "  world: $WORLD_FILE"
 echo "  brains: $BRAIN_CSV"
 echo "  interconnect: ${INTERCONNECT:-none}"
-echo "  fallback S/O: $DEFAULT_S/$DEFAULT_O"
+echo "  pre-handshake fallback S/O: $DEFAULT_S/$DEFAULT_O"
 echo "  AER base S/O: $AER_S_BASE/$AER_O_BASE"
+echo "  UDS recv timeout (ms): $UDS_RECV_TIMEOUT_MS"
+echo "  IPC timeout grace/log interval (ms): $IPC_TIMEOUT_GRACE_MS/$IPC_TIMEOUT_LOG_INTERVAL_MS"
+echo "  IPC UDS ctrl buffer (bytes): $IPC_UDS_CTRL_BUF_BYTES"
+echo "  IPC window min/init/max: $IPC_WINDOW_MIN/$IPC_WINDOW_INIT/$IPC_WINDOW_MAX"
+echo "  IPC send budget max: $IPC_SEND_BUDGET_MAX (strict_lockstep=$IPC_STRICT_LOCKSTEP)"
+echo "  webots extra step sleep (ms): $WEBOTS_STEP_SLEEP_MS"
+if [ "$WEBOTS_RECORD" -eq 1 ]; then
+    echo "  webots recording: $WEBOTS_RECORD_FILE (${WEBOTS_RECORD_WIDTH}x${WEBOTS_RECORD_HEIGHT}, duration_ms=$WEBOTS_RECORD_DURATION_MS)"
+    echo "  webots recording progress: $WEBOTS_RECORD_PROGRESS (interval_ms=$WEBOTS_RECORD_PROGRESS_INTERVAL_MS)"
+fi
 echo "  config file: ${CONFIG_FILE:-none}"
 echo "  network file: ${NETWORK_FILE:-none}"
 if [ "${#CONFIG_FILE_MAP[@]}" -gt 0 ]; then
@@ -2910,6 +3293,8 @@ else
 fi
 echo "Handshake auto-remap is enabled for UDS servers and IPC mismatch hints are active."
 echo "Press Ctrl+C to stop."
+
+start_webots_recording_progress
 
 if [ "$START_WEBOTS" -eq 1 ] && [ -n "$WEBOTS_PID" ]; then
     wait "$WEBOTS_PID" || true

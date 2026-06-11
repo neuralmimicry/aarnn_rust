@@ -1,0 +1,281 @@
+{
+  "profile": "hexapod",
+  "sensor_regex": "^hex_s_[0-9]{2}_.*$",
+  "actuator_regex": "^hex_o_[0-9]{3}_.*$",
+  "sensory_channels": [
+    {
+      "channel_index": 0,
+      "connectome_node_id": "hex_s_00_lf_coxa",
+      "device_port": "hex_s_00_lf_coxa"
+    },
+    {
+      "channel_index": 1,
+      "connectome_node_id": "hex_s_01_lf_femur",
+      "device_port": "hex_s_01_lf_femur"
+    },
+    {
+      "channel_index": 2,
+      "connectome_node_id": "hex_s_02_lf_tibia",
+      "device_port": "hex_s_02_lf_tibia"
+    },
+    {
+      "channel_index": 3,
+      "connectome_node_id": "hex_s_03_lm_coxa",
+      "device_port": "hex_s_03_lm_coxa"
+    },
+    {
+      "channel_index": 4,
+      "connectome_node_id": "hex_s_04_lm_femur",
+      "device_port": "hex_s_04_lm_femur"
+    },
+    {
+      "channel_index": 5,
+      "connectome_node_id": "hex_s_05_lm_tibia",
+      "device_port": "hex_s_05_lm_tibia"
+    },
+    {
+      "channel_index": 6,
+      "connectome_node_id": "hex_s_06_lr_coxa",
+      "device_port": "hex_s_06_lr_coxa"
+    },
+    {
+      "channel_index": 7,
+      "connectome_node_id": "hex_s_07_lr_femur",
+      "device_port": "hex_s_07_lr_femur"
+    },
+    {
+      "channel_index": 8,
+      "connectome_node_id": "hex_s_08_lr_tibia",
+      "device_port": "hex_s_08_lr_tibia"
+    },
+    {
+      "channel_index": 9,
+      "connectome_node_id": "hex_s_09_rf_coxa",
+      "device_port": "hex_s_09_rf_coxa"
+    },
+    {
+      "channel_index": 10,
+      "connectome_node_id": "hex_s_10_rf_femur",
+      "device_port": "hex_s_10_rf_femur"
+    },
+    {
+      "channel_index": 11,
+      "connectome_node_id": "hex_s_11_rf_tibia",
+      "device_port": "hex_s_11_rf_tibia"
+    },
+    {
+      "channel_index": 12,
+      "connectome_node_id": "hex_s_12_rm_coxa",
+      "device_port": "hex_s_12_rm_coxa"
+    },
+    {
+      "channel_index": 13,
+      "connectome_node_id": "hex_s_13_rm_femur",
+      "device_port": "hex_s_13_rm_femur"
+    },
+    {
+      "channel_index": 14,
+      "connectome_node_id": "hex_s_14_rm_tibia",
+      "device_port": "hex_s_14_rm_tibia"
+    },
+    {
+      "channel_index": 15,
+      "connectome_node_id": "hex_s_15_rr_coxa",
+      "device_port": "hex_s_15_rr_coxa"
+    },
+    {
+      "channel_index": 16,
+      "connectome_node_id": "hex_s_16_rr_femur",
+      "device_port": "hex_s_16_rr_femur"
+    },
+    {
+      "channel_index": 17,
+      "connectome_node_id": "hex_s_17_rr_tibia",
+      "device_port": "hex_s_17_rr_tibia"
+    },
+    {
+      "channel_index": 18,
+      "connectome_node_id": "hex_s_18_lf_foot",
+      "device_port": "hex_s_18_lf_foot"
+    },
+    {
+      "channel_index": 19,
+      "connectome_node_id": "hex_s_19_lm_foot",
+      "device_port": "hex_s_19_lm_foot"
+    },
+    {
+      "channel_index": 20,
+      "connectome_node_id": "hex_s_20_lr_foot",
+      "device_port": "hex_s_20_lr_foot"
+    },
+    {
+      "channel_index": 21,
+      "connectome_node_id": "hex_s_21_rf_foot",
+      "device_port": "hex_s_21_rf_foot"
+    },
+    {
+      "channel_index": 22,
+      "connectome_node_id": "hex_s_22_rm_foot",
+      "device_port": "hex_s_22_rm_foot"
+    },
+    {
+      "channel_index": 23,
+      "connectome_node_id": "hex_s_23_rr_foot",
+      "device_port": "hex_s_23_rr_foot"
+    },
+    {
+      "channel_index": 24,
+      "connectome_node_id": "hex_s_24_body_accel.x",
+      "device_port": "hex_s_24_body_accel.x"
+    },
+    {
+      "channel_index": 25,
+      "connectome_node_id": "hex_s_24_body_accel.y",
+      "device_port": "hex_s_24_body_accel.y"
+    },
+    {
+      "channel_index": 26,
+      "connectome_node_id": "hex_s_24_body_accel.z",
+      "device_port": "hex_s_24_body_accel.z"
+    },
+    {
+      "channel_index": 27,
+      "connectome_node_id": "hex_s_25_body_gyro.x",
+      "device_port": "hex_s_25_body_gyro.x"
+    },
+    {
+      "channel_index": 28,
+      "connectome_node_id": "hex_s_25_body_gyro.y",
+      "device_port": "hex_s_25_body_gyro.y"
+    },
+    {
+      "channel_index": 29,
+      "connectome_node_id": "hex_s_25_body_gyro.z",
+      "device_port": "hex_s_25_body_gyro.z"
+    },
+    {
+      "channel_index": 30,
+      "connectome_node_id": "hex_s_26_head_camera.on.r00c00",
+      "device_port": "hex_s_26_head_camera.on.r00c00"
+    },
+    {
+      "channel_index": 31,
+      "connectome_node_id": "hex_s_26_head_camera.off.r00c00",
+      "device_port": "hex_s_26_head_camera.off.r00c00"
+    },
+    {
+      "channel_index": 32,
+      "connectome_node_id": "hex_s_27_ultrasonic_left",
+      "device_port": "hex_s_27_ultrasonic_left"
+    },
+    {
+      "channel_index": 33,
+      "connectome_node_id": "hex_s_28_ultrasonic_right",
+      "device_port": "hex_s_28_ultrasonic_right"
+    }
+  ],
+  "output_channels": [
+    {
+      "channel_index": 0,
+      "connectome_node_id": "hex_o_000_lf_coxa",
+      "actuator_name": "hex_o_000_lf_coxa"
+    },
+    {
+      "channel_index": 1,
+      "connectome_node_id": "hex_o_001_lf_femur",
+      "actuator_name": "hex_o_001_lf_femur"
+    },
+    {
+      "channel_index": 2,
+      "connectome_node_id": "hex_o_002_lf_tibia",
+      "actuator_name": "hex_o_002_lf_tibia"
+    },
+    {
+      "channel_index": 3,
+      "connectome_node_id": "hex_o_003_lm_coxa",
+      "actuator_name": "hex_o_003_lm_coxa"
+    },
+    {
+      "channel_index": 4,
+      "connectome_node_id": "hex_o_004_lm_femur",
+      "actuator_name": "hex_o_004_lm_femur"
+    },
+    {
+      "channel_index": 5,
+      "connectome_node_id": "hex_o_005_lm_tibia",
+      "actuator_name": "hex_o_005_lm_tibia"
+    },
+    {
+      "channel_index": 6,
+      "connectome_node_id": "hex_o_006_lr_coxa",
+      "actuator_name": "hex_o_006_lr_coxa"
+    },
+    {
+      "channel_index": 7,
+      "connectome_node_id": "hex_o_007_lr_femur",
+      "actuator_name": "hex_o_007_lr_femur"
+    },
+    {
+      "channel_index": 8,
+      "connectome_node_id": "hex_o_008_lr_tibia",
+      "actuator_name": "hex_o_008_lr_tibia"
+    },
+    {
+      "channel_index": 9,
+      "connectome_node_id": "hex_o_009_rf_coxa",
+      "actuator_name": "hex_o_009_rf_coxa"
+    },
+    {
+      "channel_index": 10,
+      "connectome_node_id": "hex_o_010_rf_femur",
+      "actuator_name": "hex_o_010_rf_femur"
+    },
+    {
+      "channel_index": 11,
+      "connectome_node_id": "hex_o_011_rf_tibia",
+      "actuator_name": "hex_o_011_rf_tibia"
+    },
+    {
+      "channel_index": 12,
+      "connectome_node_id": "hex_o_012_rm_coxa",
+      "actuator_name": "hex_o_012_rm_coxa"
+    },
+    {
+      "channel_index": 13,
+      "connectome_node_id": "hex_o_013_rm_femur",
+      "actuator_name": "hex_o_013_rm_femur"
+    },
+    {
+      "channel_index": 14,
+      "connectome_node_id": "hex_o_014_rm_tibia",
+      "actuator_name": "hex_o_014_rm_tibia"
+    },
+    {
+      "channel_index": 15,
+      "connectome_node_id": "hex_o_015_rr_coxa",
+      "actuator_name": "hex_o_015_rr_coxa"
+    },
+    {
+      "channel_index": 16,
+      "connectome_node_id": "hex_o_016_rr_femur",
+      "actuator_name": "hex_o_016_rr_femur"
+    },
+    {
+      "channel_index": 17,
+      "connectome_node_id": "hex_o_017_rr_tibia",
+      "actuator_name": "hex_o_017_rr_tibia"
+    }
+  ],
+  "meta": {
+    "camera_event_encoder": {
+      "retina_width": 1,
+      "retina_height": 1,
+      "channels_per_camera": 2
+    },
+    "generator": "build_hexapod_network_json.py",
+    "drosophila_reference_datasets": [
+      "BANC v626",
+      "FAFB v783"
+    ]
+  }
+}

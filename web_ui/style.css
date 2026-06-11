@@ -776,6 +776,15 @@ body {
   padding-top: 6px;
   display: grid;
   gap: 6px;
+  min-height: 1.4em;
+}
+
+.panel-sublist .line {
+  min-height: 1.4em;
+}
+
+.panel-sublist .line-placeholder {
+  color: #8f8f8f;
 }
 
 input {
@@ -1163,6 +1172,16 @@ a.btn {
   color: #8f8f8f;
   font-size: 10px;
   line-height: 1.4;
+  min-height: 1.4em;
+}
+
+#control-note,
+#workspace-feedback,
+#token-status-note,
+#tool-status {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workspace-row {

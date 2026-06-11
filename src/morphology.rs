@@ -1293,6 +1293,73 @@ fn trunk_scale_for(dend_type: DendriteType, config: &crate::config::NetworkConfi
     }
 }
 
+#[inline]
+fn morphology_io_layers(
+    config: &crate::config::NetworkConfig,
+    is_aarnn: bool,
+    num_hidden_layers: usize,
+) -> (usize, usize) {
+    if num_hidden_layers == 0 {
+        return (0, 0);
+    }
+
+    let (default_in, default_out) = if is_aarnn {
+        match crate::config::infer_biomimicry_profile(config) {
+            crate::config::AarnnBiomimicryProfile::Human => (
+                if num_hidden_layers > 1 { 1 } else { 0 },
+                if num_hidden_layers > 2 {
+                    2
+                } else {
+                    num_hidden_layers.saturating_sub(1)
+                },
+            ),
+            crate::config::AarnnBiomimicryProfile::Celegans
+            | crate::config::AarnnBiomimicryProfile::Drosophila
+            | crate::config::AarnnBiomimicryProfile::Hexapod => {
+                (0, num_hidden_layers.saturating_sub(1))
+            }
+        }
+    } else {
+        (0, num_hidden_layers.saturating_sub(1))
+    };
+
+    let mut in_l = config
+        .sensory_target_layer
+        .unwrap_or(default_in)
+        .min(num_hidden_layers - 1);
+
+    let mut out_l = config
+        .output_source_layer
+        .unwrap_or(default_out)
+        .min(num_hidden_layers - 1);
+
+    if is_aarnn && out_l < in_l {
+        out_l = in_l;
+    }
+
+    in_l = in_l.min(num_hidden_layers - 1);
+    out_l = out_l.min(num_hidden_layers - 1);
+
+    (in_l, out_l)
+}
+
+#[inline]
+fn morphology_output_connectivity_floor(
+    config: &crate::config::NetworkConfig,
+    hidden_out_count: usize,
+) -> usize {
+    if hidden_out_count == 0 {
+        return 1;
+    }
+    let suggested = match crate::config::infer_biomimicry_profile(config) {
+        crate::config::AarnnBiomimicryProfile::Human => 1usize,
+        crate::config::AarnnBiomimicryProfile::Celegans
+        | crate::config::AarnnBiomimicryProfile::Drosophila
+        | crate::config::AarnnBiomimicryProfile::Hexapod => (hidden_out_count / 12).clamp(8, 32),
+    };
+    suggested.min(hidden_out_count.max(1))
+}
+
 impl Morphology {
     pub fn new() -> Self {
         Self::default()
@@ -3984,20 +4051,9 @@ impl Morphology {
         let ambient: f32 = config.aarnn_ambient_energy_level.max(0.001);
 
         let num_layers = self.dendrites.len();
-        let in_l = if is_aarnn {
-            if num_layers > 1 { 1 } else { 0 }
-        } else {
-            0
-        };
-        let out_l = if is_aarnn {
-            if num_layers > 4 {
-                4
-            } else {
-                num_layers.saturating_sub(1)
-            }
-        } else {
-            num_layers.saturating_sub(1)
-        };
+
+        let (in_l, out_l) = morphology_io_layers(config, is_aarnn, num_layers);
+
         let mut total_neurons = 0usize;
         let mut per_neuron_seg_cap = 0usize;
         let mut max_sample_segments = 0usize;
@@ -7648,20 +7704,27 @@ impl Morphology {
         // Keep IO links alive during growth while remaining sparse:
         // each sensory/output keeps at least one connection when feasible.
         if is_aarnn && config.growth_enabled {
-            let min_required = 1usize;
+            let min_required_sensory = 1usize;
             let sensory_count = self.sensory_somas.len().min(config.num_sensory_neurons);
             let output_count = self.output_somas.len().min(config.num_output_neurons);
             let hidden_in_count = self.dendrites.get(in_l).map(|l| l.len()).unwrap_or(0);
             let hidden_out_count = self.axons.get(out_l).map(|l| l.len()).unwrap_or(0);
+            let min_required_output =
+                morphology_output_connectivity_floor(config, hidden_out_count);
             let sensory_cap = if config.max_sensory_connections == 0 {
                 usize::MAX
             } else {
                 config.max_sensory_connections
             };
-            let output_cap = if config.max_output_connections == 0 {
+            let output_cap_base = if config.max_output_connections == 0 {
                 usize::MAX
             } else {
                 config.max_output_connections
+            };
+            let output_cap = if output_cap_base == usize::MAX {
+                usize::MAX
+            } else {
+                output_cap_base.max(min_required_output)
             };
 
             let mut sensory_conn_counts = vec![0usize; sensory_count];
@@ -7688,11 +7751,12 @@ impl Morphology {
 
             for sens_id in 0..sensory_count {
                 let current = sensory_conn_counts[sens_id];
-                if hidden_in_count == 0 || current >= min_required || current >= sensory_cap {
+                if hidden_in_count == 0 || current >= min_required_sensory || current >= sensory_cap
+                {
                     continue;
                 }
                 let max_add = sensory_cap.saturating_sub(current);
-                let needed = min_required.saturating_sub(current).min(max_add);
+                let needed = min_required_sensory.saturating_sub(current).min(max_add);
                 if needed == 0 {
                     continue;
                 }
@@ -7781,11 +7845,12 @@ impl Morphology {
 
             for out_id in 0..output_count {
                 let current = output_conn_counts[out_id];
-                if hidden_out_count == 0 || current >= min_required || current >= output_cap {
+                if hidden_out_count == 0 || current >= min_required_output || current >= output_cap
+                {
                     continue;
                 }
                 let max_add = output_cap.saturating_sub(current);
-                let needed = min_required.saturating_sub(current).min(max_add);
+                let needed = min_required_output.saturating_sub(current).min(max_add);
                 if needed == 0 {
                     continue;
                 }

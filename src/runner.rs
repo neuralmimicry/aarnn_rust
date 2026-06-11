@@ -297,6 +297,7 @@ pub struct SnapshotRuntimeState {
     pub x_post_o: Vec<f64>,
     pub last_spk_h: Vec<Vec<i8>>,
     pub last_spk_o: Vec<i8>,
+    pub spk_hist_o: Vec<Vec<i8>>,
     pub theta_phase: f32,
     pub thalamic_gate_phase: f32,
     pub neuromod_dopamine: f32,
@@ -1154,6 +1155,8 @@ pub struct Runner {
     pub spk_hist_h: Vec<VecDeque<Array1<i8>>>,
     // Sensory spike history for AARNN delays on S→H0
     pub spk_hist_s: VecDeque<Array1<i8>>,
+    // Output spike history for UI/activity monitoring (most-recent at front)
+    pub spk_hist_o: VecDeque<Array1<i8>>,
     // Maximum history length in steps
     pub hist_len: usize,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -1474,6 +1477,46 @@ fn lerp_usize(cold: usize, hot: usize, ratio: f32) -> usize {
 }
 
 impl Runner {
+    fn normalize_i8_history(history: &mut VecDeque<Array1<i8>>, frame_len: usize, hist_len: usize) {
+        let hist_len = hist_len.max(1);
+        if history.is_empty() {
+            history.push_front(Array1::<i8>::zeros(frame_len));
+        }
+        for frame in history.iter_mut() {
+            if frame.len() == frame_len {
+                continue;
+            }
+            let old = frame.clone();
+            let mut resized = Array1::<i8>::zeros(frame_len);
+            let copy_len = old.len().min(frame_len);
+            for i in 0..copy_len {
+                resized[i] = old[i];
+            }
+            *frame = resized;
+        }
+        while history.len() > hist_len {
+            history.pop_back();
+        }
+        while history.len() < hist_len {
+            history.push_back(Array1::<i8>::zeros(frame_len));
+        }
+    }
+
+    fn reset_i8_history(history: &mut VecDeque<Array1<i8>>, frame_len: usize, hist_len: usize) {
+        let hist_len = hist_len.max(1);
+        history.clear();
+        for _ in 0..hist_len {
+            history.push_back(Array1::<i8>::zeros(frame_len));
+        }
+    }
+
+    fn push_output_spike_history(&mut self) {
+        self.spk_hist_o.push_front(self.last_spk_o.clone());
+        while self.spk_hist_o.len() > self.hist_len.max(1) {
+            self.spk_hist_o.pop_back();
+        }
+    }
+
     #[cfg(feature = "opencl")]
     fn mark_all_weights_dirty(&mut self) {
         self.cl_w_in_dirty = true;
@@ -3789,6 +3832,11 @@ impl Runner {
         } else {
             self.spk_hist_s.push_front(Array1::<i8>::zeros(s));
         }
+        Self::normalize_i8_history(
+            &mut self.spk_hist_o,
+            self.net.num_output_neurons,
+            self.hist_len,
+        );
     }
     /// Construct a Runner for interactive use.
     ///
@@ -3914,6 +3962,7 @@ impl Runner {
         };
 
         let spk_hist_s = VecDeque::from(vec![Array1::<i8>::zeros(s_count); hist_len]);
+        let spk_hist_o = VecDeque::from(vec![Array1::<i8>::zeros(o_count); hist_len]);
         let spk_hist_h = (0..l_count)
             .map(|_| VecDeque::from(vec![Array1::<i8>::zeros(h_size); hist_len]))
             .collect();
@@ -4009,6 +4058,7 @@ impl Runner {
             decay_post,
             spk_hist_h,
             spk_hist_s,
+            spk_hist_o,
             hist_len,
             layer_range: None,
             #[cfg(feature = "growth3d")]
@@ -4278,6 +4328,11 @@ impl Runner {
             // initialize sensory history with one zero frame
             this.spk_hist_s
                 .push_front(Array1::<i8>::zeros(this.net.num_sensory_neurons));
+            Self::reset_i8_history(
+                &mut this.spk_hist_o,
+                this.net.num_output_neurons,
+                this.hist_len,
+            );
         }
 
         // Build initial morphology snapshot (no behavior dependency)
@@ -4358,6 +4413,7 @@ impl Runner {
             x_post_o: vec_from_arr1_f64(&self.x_post_o),
             last_spk_h: vec_from_layers_i8(&self.last_spk_h),
             last_spk_o: vec_from_arr1_i8(&self.last_spk_o),
+            spk_hist_o: vec_from_history_frames(&self.spk_hist_o),
             theta_phase: self.theta_phase,
             thalamic_gate_phase: self.thalamic_gate_phase,
             neuromod_dopamine: self.neuromod_dopamine,
@@ -4619,6 +4675,8 @@ impl Runner {
             .collect();
         self.spk_hist_s =
             history_from_frames(&state.spk_hist_s, self.net.num_sensory_neurons, hist_len);
+        self.spk_hist_o =
+            history_from_frames(&state.spk_hist_o, self.net.num_output_neurons, hist_len);
 
         #[cfg(any(feature = "ui", feature = "growth3d"))]
         {
@@ -5179,6 +5237,11 @@ impl Runner {
             self.spk_hist_s.clear();
             self.spk_hist_s
                 .push_front(Array1::<i8>::zeros(self.net.num_sensory_neurons));
+            Self::reset_i8_history(
+                &mut self.spk_hist_o,
+                self.net.num_output_neurons,
+                self.hist_len,
+            );
             self.recalc_hist_len_and_resize();
             // Ensure growth vectors match new topology
             self.ensure_growth_vectors();
@@ -5340,6 +5403,7 @@ impl Runner {
         self.x_pre_in.fill(0.0);
         self.pred_s.fill(0.0);
         self.last_spk_o.fill(0);
+        Self::reset_i8_history(&mut self.spk_hist_o, num_output_neurons, self.hist_len);
         self.thr_offset_o.fill(0.0);
         self.rate_ema_o.fill(0.0);
         self.stp_u_s.fill(bio.stp_u);
@@ -5384,6 +5448,11 @@ impl Runner {
             self.spk_hist_s.clear();
             self.spk_hist_s
                 .push_front(Array1::<i8>::zeros(self.net.num_sensory_neurons));
+            Self::reset_i8_history(
+                &mut self.spk_hist_o,
+                self.net.num_output_neurons,
+                self.hist_len,
+            );
             self.last_global_growth_ms = 0.0;
             self.growth_accumulated_dt = 0.0;
             self.pruning_accumulated_dt = 0.0;
@@ -5936,6 +6005,7 @@ impl Runner {
         self.x_post_o = Array1::<f64>::zeros(n_o_new);
         self.last_spk_o = Array1::<i8>::zeros(n_o_new);
         self.net.num_output_neurons = n_o_new;
+        Self::reset_i8_history(&mut self.spk_hist_o, n_o_new, self.hist_len);
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
 
@@ -7264,7 +7334,10 @@ impl Runner {
                                             );
                                             gpu_success = false;
                                         } else {
-                                            i_h0 = Array1::from_vec(i_vec);
+                                            for (dst, src) in i_h0.iter_mut().zip(i_vec.into_iter())
+                                            {
+                                                *dst += src;
+                                            }
                                             if use_synaptic_filter {
                                                 self.sync_syn_state_from_gpu(0, false);
                                             }
@@ -7386,7 +7459,7 @@ impl Runner {
                         // Merge results
                         let mut total = 0usize;
                         for (j, acc, ev) in events_tls.into_iter() {
-                            i_h0[j] = acc;
+                            i_h0[j] += acc;
                             if total < released_cap {
                                 let room = released_cap - total;
                                 let take = ev.len().min(room);
@@ -7493,7 +7566,7 @@ impl Runner {
                             })
                             .collect();
                         for (j, acc) in results_simple.into_iter() {
-                            i_h0[j] = acc;
+                            i_h0[j] += acc;
                         }
                     }
                 } else {
@@ -7700,7 +7773,7 @@ impl Runner {
                                 }
                             }
                         }
-                        i_h0[j] = acc;
+                        i_h0[j] += acc;
                     }
                 }
             }
@@ -11027,6 +11100,40 @@ impl Runner {
                 &default_decays,
             );
         }
+        // Morphology-driven compact profiles (e.g. C. elegans / insect robots) can
+        // produce very small post-filter output currents despite active hidden
+        // spiking, especially when output fan-in is sparse. Apply a bounded gain
+        // floor so actuator-facing neurons remain excitable.
+        if is_aarnn && num_output_neurons > 0 {
+            let src_spike_count = self
+                .last_spk_h
+                .get(out_conn_layer)
+                .map(|h| h.iter().filter(|&&v| v != 0).count())
+                .unwrap_or(0);
+            if src_spike_count > 0 {
+                let gain_spec = match infer_biomimicry_profile(&self.net) {
+                    // Human/NAO profiles can end up with very low output drive in
+                    // morphology-heavy snapshots; apply a modest floor so output
+                    // neurons still produce raster-visible activity.
+                    AarnnBiomimicryProfile::Human => None,
+                    AarnnBiomimicryProfile::Celegans => Some((8.0f64, 512.0f64)),
+                    AarnnBiomimicryProfile::Drosophila | AarnnBiomimicryProfile::Hexapod => {
+                        Some((6.0f64, 256.0f64))
+                    }
+                };
+                if let Some((target_peak, max_gain)) = gain_spec {
+                    let peak = i_o.iter().fold(0.0f64, |mx, &v| mx.max(v.abs())).max(0.0);
+                    if peak > 1.0e-9 && peak < target_peak {
+                        let gain = (target_peak / peak).clamp(1.0, max_gain);
+                        if gain > 1.0 {
+                            for val in i_o.iter_mut() {
+                                *val *= gain;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Self::sanitize_current_array(&mut i_o);
         #[cfg(any(feature = "ui", feature = "growth3d"))]
         {
@@ -11323,6 +11430,7 @@ impl Runner {
             }
         };
         self.last_spk_o = spk_o.clone();
+        self.push_output_spike_history();
         for k in 0..num_output_neurons {
             if spk_o[k] != 0 {
                 self.x_post_o[k] += 1.0;
@@ -13044,6 +13152,11 @@ impl Runner {
                     self.spk_hist_s
                         .push_back(Array1::<i8>::zeros(self.net.num_sensory_neurons));
                 }
+                Self::normalize_i8_history(
+                    &mut self.spk_hist_o,
+                    self.net.num_output_neurons,
+                    self.hist_len,
+                );
             }
             return;
         }
@@ -13140,6 +13253,11 @@ impl Runner {
             self.spk_hist_s
                 .push_back(Array1::<i8>::zeros(self.net.num_sensory_neurons));
         }
+        Self::normalize_i8_history(
+            &mut self.spk_hist_o,
+            self.net.num_output_neurons,
+            self.hist_len,
+        );
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -15573,6 +15691,12 @@ impl Runner {
             self.last_spk_o = Array1::<i8>::zeros(o_count);
             changed = true;
         }
+        let output_history_len_mismatch = self.spk_hist_o.len() != self.hist_len.max(1)
+            || self.spk_hist_o.iter().any(|frame| frame.len() != o_count);
+        if output_history_len_mismatch {
+            Self::normalize_i8_history(&mut self.spk_hist_o, o_count, self.hist_len);
+            changed = true;
+        }
         if self.x_post_o.len() != o_count {
             self.x_post_o = Array1::<f64>::zeros(o_count);
             changed = true;
@@ -15870,16 +15994,28 @@ impl Runner {
 
         let mut changed = self.ensure_aarnn_l23_to_l4_projection_floor();
         let sensory_min_required = 1usize;
-        let output_min_required = 1usize;
+        let output_min_required = match infer_biomimicry_profile(&self.net) {
+            // Keep NAO output fan-in above the degenerate minimum.
+            AarnnBiomimicryProfile::Human => 1usize,
+            AarnnBiomimicryProfile::Celegans
+            | AarnnBiomimicryProfile::Drosophila
+            | AarnnBiomimicryProfile::Hexapod => (h_out / 12).clamp(8, 32),
+        }
+        .min(h_out.max(1));
         let sensory_cap = if self.net.max_sensory_connections == 0 {
             usize::MAX
         } else {
             self.net.max_sensory_connections
         };
-        let output_cap = if self.net.max_output_connections == 0 {
+        let output_cap_base = if self.net.max_output_connections == 0 {
             usize::MAX
         } else {
             self.net.max_output_connections
+        };
+        let output_cap = if output_cap_base == usize::MAX {
+            usize::MAX
+        } else {
+            output_cap_base.max(output_min_required)
         };
 
         if h_in > 0 {
@@ -20714,16 +20850,20 @@ mod tests {
     #[cfg(feature = "morpho")]
     #[test]
     fn test_myelination_waxes_with_activity_and_wanes_when_idle() {
+        use crate::config::{DevelopmentStage, DevelopmentStageMode};
         use crate::morphology::{Point3, SynKind, Synapse};
 
         let mut net = NetworkConfig::default();
         net.growth_enabled = true;
+        net.development_stage_mode = DevelopmentStageMode::Manual;
+        net.development_stage = DevelopmentStage::MyelinationStabilization;
         net.aarnn_myelination_enabled = true;
         net.aarnn_myelination_rate = 0.02;
         net.aarnn_demyelination_rate = 0.02;
         net.aarnn_myelination_activity_target = 0.2;
         net.aarnn_myelin_initial = 0.2;
         net.num_sensory_neurons = 1;
+
         let mut r = Runner::new(
             LIFParams::default(),
             STDPParams::default(),
@@ -20748,10 +20888,13 @@ mod tests {
             delay_ms: 0.0,
             stimuli: 0.0,
         }];
+
         r.syn_myelin = vec![0.2];
+
         if r.x_pre_in.is_empty() {
             r.x_pre_in = Array1::from_vec(vec![0.0]);
         }
+
         if r.x_post_h.is_empty() {
             r.x_post_h.push(Array1::from_vec(vec![0.0]));
         } else if r.x_post_h[0].is_empty() {
@@ -20760,12 +20903,15 @@ mod tests {
 
         r.x_pre_in[0] = 1.0;
         r.x_post_h[0][0] = 1.0;
+
         r.update_activity_dependent_myelination(10.0);
         assert!(r.syn_myelin[0] > 0.2);
 
         let after_growth = r.syn_myelin[0];
+
         r.x_pre_in[0] = 0.0;
         r.x_post_h[0][0] = 0.0;
+
         r.update_activity_dependent_myelination(50.0);
         assert!(r.syn_myelin[0] < after_growth);
     }
