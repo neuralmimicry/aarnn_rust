@@ -3,7 +3,7 @@
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
-EXTERNPROTO "../protos/CelegansRobot.proto"
+EXTERNPROTO "../protos/HexapodRobot.proto"
 
 WorldInfo {
   # Slightly larger time step to keep Webots responsive with articulated
@@ -14,10 +14,10 @@ WorldInfo {
   gravity 9.81
 }
 Viewpoint {
-  fieldOfView 0.80
+  fieldOfView 0.88
   # Zero-roll camera solved from eye->scene-center with world +Z as "up".
-  orientation 0.321560 0.321560 -0.890617 1.686379
-  position 0.00 3.29 2.81
+  orientation 0.311215 0.311215 -0.897937 1.678244
+  position 0.00 5.38 4.60
 }
 TexturedBackground {
   texture "noon_cloudy_countryside"
@@ -36,8 +36,8 @@ DirectionalLight {
 }
 # Scene-aware demo hall with clear robot zones and low-profile staging.
 RectangleArena {
-  floorSize 8.30 8.30
-  wallHeight 1.55
+  floorSize 12.70 12.70
+  wallHeight 1.85
   floorAppearance PBRAppearance {
     baseColor 0.19 0.18 0.16
     roughness 0.97
@@ -59,12 +59,12 @@ Solid {
         roughness 0.94
       }
       geometry Box {
-        size 9.20 9.20 0.010
+        size 13.60 13.60 0.010
       }
     }
   ]
   boundingObject Box {
-    size 9.20 9.20 0.010
+    size 13.60 13.60 0.010
   }
 }
 Transform {
@@ -76,7 +76,7 @@ Transform {
         roughness 0.86
       }
       geometry Box {
-        size 5.24 5.24 0.002
+        size 8.75 8.75 0.002
       }
     }
   ]
@@ -91,33 +91,33 @@ Transform {
         transparency 0.22
       }
       geometry Box {
-        size 4.25 4.32 0.004
+        size 5.25 5.15 0.004
       }
     }
   ]
 }
 Solid {
-  translation 0.0000 -4.1800 0.065
+  translation 0.0000 -6.3800 0.065
   name "front_bench"
-  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.35 0.25 roughness 0.78 } geometry Box { size 3.74 0.24 0.13 } } ]
-  boundingObject Box { size 3.74 0.24 0.13 }
+  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.35 0.25 roughness 0.78 } geometry Box { size 4.62 0.24 0.13 } } ]
+  boundingObject Box { size 4.62 0.24 0.13 }
 }
 Solid {
-  translation 0.0000 4.1800 0.065
+  translation 0.0000 6.3800 0.065
   name "rear_bench"
-  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.35 0.25 roughness 0.78 } geometry Box { size 3.74 0.24 0.13 } } ]
-  boundingObject Box { size 3.74 0.24 0.13 }
+  children [ Shape { appearance PBRAppearance { baseColor 0.44 0.35 0.25 roughness 0.78 } geometry Box { size 4.62 0.24 0.13 } } ]
+  boundingObject Box { size 4.62 0.24 0.13 }
 }
 PointLight {
-  location 1.4000 1.2000 2.20
+  location 1.4287 1.2000 2.65
   color 1.00 0.93 0.82
   intensity 11.0
   attenuation 0 0 1.80
-  radius 7.00
+  radius 7.27
   castShadows FALSE
 }
 PointLight {
-  location -1.4000 -1.2000 2.02
+  location -1.4287 -1.2000 2.47
   color 0.82 0.91 1.00
   intensity 9.0
   attenuation 0 0 2.10
@@ -125,1184 +125,1128 @@ PointLight {
   castShadows FALSE
 }
 Transform {
-  translation -0.5250 -0.4600 0.004
+  translation -1.0250 -0.8750 0.005
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.29 0.50 0.58
-        roughness 0.74
-        metalness 0.02
-        transparency 0.22
+        baseColor 0.43 0.39 0.34
+        roughness 0.72
+        transparency 0.12
       }
-      geometry Cylinder {
-        radius 0.56
-        height 0.008
+      geometry Box {
+        size 2.40 2.04 0.010
       }
     }
   ]
 }
 Solid {
-  translation -1.4518 -1.6177 0.060
-  name "zone_c_elegans_01_lab_station"
+  translation -2.4762 -2.4557 0.220
+  name "zone_hexapod_01_service_bench"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.56 0.49 0.40
-        roughness 0.72
+        baseColor 0.58 0.53 0.47
+        roughness 0.62
       }
       geometry Box {
-        size 0.62 0.40 0.12
+        size 1.45 0.62 0.44
       }
     }
   ]
   boundingObject Box {
-    size 0.62 0.40 0.12
+    size 1.45 0.62 0.44
+  }
+}
+Solid {
+  translation -3.2269 -1.9921 0.210
+  name "zone_hexapod_01_marker_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
+  }
+}
+Solid {
+  translation -2.4738 -2.8744 0.210
+  name "zone_hexapod_01_marker_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
   }
 }
 Transform {
-  translation -1.4518 -1.6177 0.126
+  translation 1.0250 -0.8750 0.005
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.31 0.55 0.73
-        roughness 0.12
-        metalness 0.05
-        transparency 0.54
+        baseColor 0.43 0.39 0.34
+        roughness 0.72
+        transparency 0.12
       }
       geometry Box {
-        size 0.50 0.28 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation -0.8077 -0.1373 0.010
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.72 0.79 0.61
-        roughness 0.88
-      }
-      geometry Box {
-        size 0.28 0.18 0.014
-      }
-    }
-  ]
-}
-Transform {
-  translation 0.5250 -0.4600 0.004
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.29 0.50 0.58
-        roughness 0.74
-        metalness 0.02
-        transparency 0.22
-      }
-      geometry Cylinder {
-        radius 0.56
-        height 0.008
+        size 2.40 2.04 0.010
       }
     }
   ]
 }
 Solid {
-  translation 1.7945 -1.2266 0.060
-  name "zone_c_elegans_02_lab_station"
+  translation 2.8138 -2.0602 0.220
+  name "zone_hexapod_02_service_bench"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.56 0.49 0.40
-        roughness 0.72
+        baseColor 0.58 0.53 0.47
+        roughness 0.62
       }
       geometry Box {
-        size 0.62 0.40 0.12
+        size 1.45 0.62 0.44
       }
     }
   ]
   boundingObject Box {
-    size 0.62 0.40 0.12
+    size 1.45 0.62 0.44
+  }
+}
+Solid {
+  translation 2.4738 -2.8744 0.210
+  name "zone_hexapod_02_marker_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
+  }
+}
+Solid {
+  translation 3.2269 -1.9921 0.210
+  name "zone_hexapod_02_marker_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
   }
 }
 Transform {
-  translation 1.7945 -1.2266 0.126
+  translation -1.0250 0.8750 0.005
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.31 0.55 0.73
-        roughness 0.12
-        metalness 0.05
-        transparency 0.54
+        baseColor 0.43 0.39 0.34
+        roughness 0.72
+        transparency 0.12
       }
       geometry Box {
-        size 0.50 0.28 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 0.2423 -0.7827 0.010
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.72 0.79 0.61
-        roughness 0.88
-      }
-      geometry Box {
-        size 0.28 0.18 0.014
-      }
-    }
-  ]
-}
-Transform {
-  translation -0.5250 0.4600 0.004
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.29 0.50 0.58
-        roughness 0.74
-        metalness 0.02
-        transparency 0.22
-      }
-      geometry Cylinder {
-        radius 0.56
-        height 0.008
+        size 2.40 2.04 0.010
       }
     }
   ]
 }
 Solid {
-  translation -1.7945 1.2266 0.060
-  name "zone_c_elegans_03_lab_station"
+  translation -2.8138 2.0602 0.220
+  name "zone_hexapod_03_service_bench"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.56 0.49 0.40
-        roughness 0.72
+        baseColor 0.58 0.53 0.47
+        roughness 0.62
       }
       geometry Box {
-        size 0.62 0.40 0.12
+        size 1.45 0.62 0.44
       }
     }
   ]
   boundingObject Box {
-    size 0.62 0.40 0.12
+    size 1.45 0.62 0.44
+  }
+}
+Solid {
+  translation -2.4738 2.8744 0.210
+  name "zone_hexapod_03_marker_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
+  }
+}
+Solid {
+  translation -3.2269 1.9921 0.210
+  name "zone_hexapod_03_marker_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
+      }
+      geometry Box {
+        size 0.12 0.12 0.42
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
   }
 }
 Transform {
-  translation -1.7945 1.2266 0.126
+  translation 1.0250 0.8750 0.005
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.31 0.55 0.73
-        roughness 0.12
-        metalness 0.05
-        transparency 0.54
+        baseColor 0.43 0.39 0.34
+        roughness 0.72
+        transparency 0.12
       }
       geometry Box {
-        size 0.50 0.28 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation -0.2423 0.7827 0.010
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.72 0.79 0.61
-        roughness 0.88
-      }
-      geometry Box {
-        size 0.28 0.18 0.014
-      }
-    }
-  ]
-}
-Transform {
-  translation 0.5250 0.4600 0.004
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.29 0.50 0.58
-        roughness 0.74
-        metalness 0.02
-        transparency 0.22
-      }
-      geometry Cylinder {
-        radius 0.56
-        height 0.008
+        size 2.40 2.04 0.010
       }
     }
   ]
 }
 Solid {
-  translation 1.4518 1.6177 0.060
-  name "zone_c_elegans_04_lab_station"
+  translation 2.4762 2.4557 0.220
+  name "zone_hexapod_04_service_bench"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.56 0.49 0.40
-        roughness 0.72
+        baseColor 0.58 0.53 0.47
+        roughness 0.62
       }
       geometry Box {
-        size 0.62 0.40 0.12
+        size 1.45 0.62 0.44
       }
     }
   ]
   boundingObject Box {
-    size 0.62 0.40 0.12
+    size 1.45 0.62 0.44
   }
 }
-Transform {
-  translation 1.4518 1.6177 0.126
+Solid {
+  translation 3.2269 1.9921 0.210
+  name "zone_hexapod_04_marker_left"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.31 0.55 0.73
-        roughness 0.12
-        metalness 0.05
-        transparency 0.54
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
       }
       geometry Box {
-        size 0.50 0.28 0.010
+        size 0.12 0.12 0.42
       }
     }
   ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
+  }
 }
-Transform {
-  translation 0.8077 0.1373 0.010
+Solid {
+  translation 2.4738 2.8744 0.210
+  name "zone_hexapod_04_marker_right"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.72 0.79 0.61
-        roughness 0.88
+        baseColor 0.92 0.76 0.34
+        roughness 0.48
       }
       geometry Box {
-        size 0.28 0.18 0.014
+        size 0.12 0.12 0.42
       }
     }
   ]
+  boundingObject Box {
+    size 0.12 0.12 0.42
+  }
 }
 
 Transform {
-  translation -0.5250 -0.4600 0.0040
-  rotation 0.000000 0.000000 1.000000 0.71950
+  translation -1.0250 -0.8750 0.0040
+  rotation 0.000000 0.000000 1.000000 0.70661
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.81 0.78
-        roughness 0.90
-        metalness 0.00
-        transparency 0.34
-      }
-      geometry Box {
-        size 0.9200 0.6200 0.0040
-      }
-    }
-  ]
-}
-Solid {
-  translation -0.2625 -0.4561 0.0460
-  rotation 0.000000 0.000000 1.000000 0.71950
-  name "eco_c_elegans_01_maze_left"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.28 0.57 0.35
-        roughness 0.66
+        baseColor 0.37 0.40 0.36
+        roughness 0.84
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 2.3000 1.6400 0.0060
       }
     }
   ]
-  boundingObject Box {
-    size 0.4200 0.0400 0.0920
-  }
 }
-Solid {
-  translation -0.4866 -0.2003 0.0460
-  rotation 0.000000 0.000000 1.000000 0.71950
-  name "eco_c_elegans_01_maze_right"
+Transform {
+  translation -0.1884 -0.1608 0.0060
+  rotation 0.000000 0.000000 1.000000 0.70661
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.26 0.49 0.68
-        roughness 0.62
+        baseColor 0.92 0.76 0.34
+        roughness 0.52
+        metalness 0.00
+        transparency 0.12
+      }
+      geometry Box {
+        size 0.2200 1.0600 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation -0.3112 -0.8179 0.1400
+  name "eco_hexapod_01_push_ball"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.43 0.22
+        roughness 0.28
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.1400
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.1400
+  }
+  physics Physics {
+    density -1
+    mass 0.24000
+  }
+}
+Solid {
+  translation -0.8740 -0.2202 0.1300
+  name "eco_hexapod_01_push_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.32 0.62 0.78
+        roughness 0.40
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 0.2600 0.2600 0.2600
       }
     }
   ]
   boundingObject Box {
-    size 0.4200 0.0400 0.0920
+    size 0.2600 0.2600 0.2600
+  }
+  physics Physics {
+    density -1
+    mass 0.38000
   }
 }
 Solid {
-  translation -0.6604 -0.5786 0.0380
-  rotation 0.000000 0.000000 1.000000 2.29030
-  name "eco_c_elegans_01_rear_barrier"
+  translation -0.3273 -0.2137 0.1100
+  rotation -0.087323 0.236787 0.967629 0.72825
+  name "eco_hexapod_01_balance_ramp"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.62 0.35 0.23
-        roughness 0.60
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Box {
-        size 0.2800 0.0380 0.0760
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.2800 0.0380 0.0760
-  }
-}
-Solid {
-  translation -0.7011 -0.2287 0.0380
-  rotation -0.122559 0.325851 0.937444 0.76311
-  name "eco_c_elegans_01_ridge_ramp"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.67 0.56 0.28
+        baseColor 0.67 0.56 0.34
         roughness 0.58
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.2400 0.1800 0.0550
+        size 0.8200 0.6200 0.1400
       }
     }
   ]
   boundingObject Box {
-    size 0.2400 0.1800 0.0550
+    size 0.8200 0.6200 0.1400
   }
 }
 Solid {
-  translation -0.3746 -0.3282 0.0220
-  name "eco_c_elegans_01_taste_center"
+  translation 0.5304 -0.3098 0.4300
+  name "eco_hexapod_01_gate_left_post"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.92 0.74 0.30
-        roughness 0.44
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0300
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0300
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation -0.4489 -0.2737 0.0220
-  name "eco_c_elegans_01_taste_left"
+  translation 0.4915 -0.5260 0.5800
+  rotation 0.000000 0.000000 1.000000 0.70661
+  name "eco_hexapod_01_gate_left_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.80 0.56 0.22
-        roughness 0.44
+        baseColor 0.92 0.76 0.34
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.11 0.09 0.04
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation -0.2227 0.5725 0.4300
+  name "eco_hexapod_01_gate_right_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0280
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0280
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation -0.3303 -0.4091 0.0220
-  name "eco_c_elegans_01_taste_right"
+  translation -0.4424 0.5680 0.5800
+  rotation 0.000000 0.000000 1.000000 0.70661
+  name "eco_hexapod_01_gate_right_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.48 0.20
-        roughness 0.44
+        baseColor 0.30 0.78 0.84
+        roughness 0.36
         metalness 0.00
         transparency 0.00
+        emissiveColor 0.04 0.09 0.10
       }
-      geometry Sphere {
-        radius 0.0280
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.0280
-  }
-}
-PointLight {
-  location -0.2343 -0.4579 0.3100
-  color 1.00 0.62 0.28
-  intensity 0.55
-  attenuation 0 0 4.5000
-  radius 1.80
-  castShadows FALSE
-}
-PointLight {
-  location -0.7085 -0.3416 0.2900
-  color 0.72 0.87 1.00
-  intensity 0.42
-  attenuation 0 0 5.2000
-  radius 1.65
-  castShadows FALSE
-}
-Solid {
-  translation -0.8410 -0.5242 0.0460
-  linearVelocity 0.4082 0.1715 0.0000
-  angularVelocity 0.0000 0.0000 2.2000
-  name "eco_c_elegans_01_vibration_pellet"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.91 0.83 0.32
-        roughness 0.34
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Sphere {
-        radius 0.0460
+      geometry Box {
+        size 0.0320 0.4000 0.7000
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0460
-  }
-  physics Physics {
-    density -1
-    mass 0.01800
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
   }
 }
 Solid {
-  translation -0.3047 -0.6659 0.0280
-  rotation 0.000000 0.000000 1.000000 1.13950
-  linearVelocity -0.3049 0.1052 0.0000
-  angularVelocity 0.0000 0.0000 2.6000
-  name "eco_c_elegans_01_flow_bar"
+  translation 0.1539 0.1314 0.8300
+  rotation 0.000000 0.000000 1.000000 2.27741
+  name "eco_hexapod_01_gate_crossbar"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.86 0.44 0.18
-        roughness 0.38
+        baseColor 0.76 0.69 0.48
+        roughness 0.52
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.1800 0.0500 0.0440
+        size 1.2600 0.0800 0.0800
       }
     }
   ]
   boundingObject Box {
-    size 0.1800 0.0500 0.0440
-  }
-  physics Physics {
-    density -1
-    mass 0.02200
+    size 1.2600 0.0800 0.0800
   }
 }
 Transform {
-  translation 0.5250 -0.4600 0.0040
-  rotation 0.000000 0.000000 1.000000 2.42209
+  translation 1.0250 -0.8750 0.0040
+  rotation 0.000000 0.000000 1.000000 2.43498
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.81 0.78
-        roughness 0.90
-        metalness 0.00
-        transparency 0.34
-      }
-      geometry Box {
-        size 0.9200 0.6200 0.0040
-      }
-    }
-  ]
-}
-Solid {
-  translation 0.4866 -0.2003 0.0460
-  rotation 0.000000 0.000000 1.000000 2.42209
-  name "eco_c_elegans_02_maze_left"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.28 0.57 0.35
-        roughness 0.66
+        baseColor 0.37 0.40 0.36
+        roughness 0.84
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 2.3000 1.6400 0.0060
       }
     }
   ]
-  boundingObject Box {
-    size 0.4200 0.0400 0.0920
-  }
 }
-Solid {
-  translation 0.2625 -0.4561 0.0460
-  rotation 0.000000 0.000000 1.000000 2.42209
-  name "eco_c_elegans_02_maze_right"
+Transform {
+  translation 0.1884 -0.1608 0.0060
+  rotation 0.000000 0.000000 1.000000 2.43498
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.26 0.49 0.68
-        roughness 0.62
+        baseColor 0.92 0.76 0.34
+        roughness 0.52
+        metalness 0.00
+        transparency 0.12
+      }
+      geometry Box {
+        size 0.2200 1.0600 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation 0.8566 -0.1790 0.1400
+  name "eco_hexapod_02_push_ball"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.43 0.22
+        roughness 0.28
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.1400
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.1400
+  }
+  physics Physics {
+    density -1
+    mass 0.24000
+  }
+}
+Solid {
+  translation 0.3546 -0.8286 0.1300
+  name "eco_hexapod_02_push_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.32 0.62 0.78
+        roughness 0.40
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 0.2600 0.2600 0.2600
       }
     }
   ]
   boundingObject Box {
-    size 0.4200 0.0400 0.0920
+    size 0.2600 0.2600 0.2600
+  }
+  physics Physics {
+    density -1
+    mass 0.38000
   }
 }
 Solid {
-  translation 0.6604 -0.5786 0.0380
-  rotation 0.000000 0.000000 1.000000 3.99289
-  name "eco_c_elegans_02_rear_barrier"
+  translation 0.2624 -0.2897 0.1100
+  rotation -0.089829 0.033127 0.995406 2.43796
+  name "eco_hexapod_02_balance_ramp"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.62 0.35 0.23
-        roughness 0.60
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Box {
-        size 0.2800 0.0380 0.0760
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.2800 0.0380 0.0760
-  }
-}
-Solid {
-  translation 0.3188 -0.6649 0.0380
-  rotation -0.129480 0.048700 0.990385 2.42843
-  name "eco_c_elegans_02_ridge_ramp"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.67 0.56 0.28
+        baseColor 0.67 0.56 0.34
         roughness 0.58
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.2400 0.1800 0.0550
+        size 0.8200 0.6200 0.1400
       }
     }
   ]
   boundingObject Box {
-    size 0.2400 0.1800 0.0550
+    size 0.8200 0.6200 0.1400
   }
 }
 Solid {
-  translation 0.3746 -0.3282 0.0220
-  name "eco_c_elegans_02_taste_center"
+  translation 0.2227 0.5725 0.4300
+  name "eco_hexapod_02_gate_left_post"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.92 0.74 0.30
-        roughness 0.44
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0300
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0300
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation 0.3303 -0.4091 0.0220
-  name "eco_c_elegans_02_taste_left"
+  translation 0.4424 0.5680 0.5800
+  rotation 0.000000 0.000000 1.000000 2.43498
+  name "eco_hexapod_02_gate_left_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.80 0.56 0.22
-        roughness 0.44
+        baseColor 0.92 0.76 0.34
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.11 0.09 0.04
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation -0.5304 -0.3098 0.4300
+  name "eco_hexapod_02_gate_right_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0280
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0280
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation 0.4489 -0.2737 0.0220
-  name "eco_c_elegans_02_taste_right"
+  translation -0.4915 -0.5260 0.5800
+  rotation 0.000000 0.000000 1.000000 2.43498
+  name "eco_hexapod_02_gate_right_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.48 0.20
-        roughness 0.44
+        baseColor 0.30 0.78 0.84
+        roughness 0.36
         metalness 0.00
         transparency 0.00
+        emissiveColor 0.04 0.09 0.10
       }
-      geometry Sphere {
-        radius 0.0280
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.0280
-  }
-}
-PointLight {
-  location 0.4847 -0.1721 0.3100
-  color 1.00 0.62 0.28
-  intensity 0.55
-  attenuation 0 0 4.5000
-  radius 1.80
-  castShadows FALSE
-}
-PointLight {
-  location 0.4317 -0.6575 0.2900
-  color 0.72 0.87 1.00
-  intensity 0.42
-  attenuation 0 0 5.2000
-  radius 1.65
-  castShadows FALSE
-}
-Solid {
-  translation 0.6302 -0.7649 0.0460
-  linearVelocity -0.2236 0.3821 0.0000
-  angularVelocity 0.0000 0.0000 2.2000
-  name "eco_c_elegans_02_vibration_pellet"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.91 0.83 0.32
-        roughness 0.34
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Sphere {
-        radius 0.0460
+      geometry Box {
+        size 0.0320 0.4000 0.7000
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0460
-  }
-  physics Physics {
-    density -1
-    mass 0.01800
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
   }
 }
 Solid {
-  translation 0.7001 -0.2146 0.0280
-  rotation 0.000000 0.000000 1.000000 2.84209
-  linearVelocity -0.0642 -0.3160 0.0000
-  angularVelocity 0.0000 0.0000 2.6000
-  name "eco_c_elegans_02_flow_bar"
+  translation -0.1539 0.1314 0.8300
+  rotation 0.000000 0.000000 1.000000 4.00577
+  name "eco_hexapod_02_gate_crossbar"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.86 0.44 0.18
-        roughness 0.38
+        baseColor 0.76 0.69 0.48
+        roughness 0.52
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.1800 0.0500 0.0440
+        size 1.2600 0.0800 0.0800
       }
     }
   ]
   boundingObject Box {
-    size 0.1800 0.0500 0.0440
-  }
-  physics Physics {
-    density -1
-    mass 0.02200
+    size 1.2600 0.0800 0.0800
   }
 }
 Transform {
-  translation -0.5250 0.4600 0.0040
-  rotation 0.000000 0.000000 1.000000 -0.71950
+  translation -1.0250 0.8750 0.0040
+  rotation 0.000000 0.000000 1.000000 -0.70661
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.81 0.78
-        roughness 0.90
-        metalness 0.00
-        transparency 0.34
-      }
-      geometry Box {
-        size 0.9200 0.6200 0.0040
-      }
-    }
-  ]
-}
-Solid {
-  translation -0.4866 0.2003 0.0460
-  rotation 0.000000 0.000000 1.000000 -0.71950
-  name "eco_c_elegans_03_maze_left"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.28 0.57 0.35
-        roughness 0.66
+        baseColor 0.37 0.40 0.36
+        roughness 0.84
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 2.3000 1.6400 0.0060
       }
     }
   ]
-  boundingObject Box {
-    size 0.4200 0.0400 0.0920
-  }
 }
-Solid {
-  translation -0.2625 0.4561 0.0460
-  rotation 0.000000 0.000000 1.000000 -0.71950
-  name "eco_c_elegans_03_maze_right"
+Transform {
+  translation -0.1884 0.1608 0.0060
+  rotation 0.000000 0.000000 1.000000 -0.70661
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.26 0.49 0.68
-        roughness 0.62
+        baseColor 0.92 0.76 0.34
+        roughness 0.52
+        metalness 0.00
+        transparency 0.12
+      }
+      geometry Box {
+        size 0.2200 1.0600 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation -0.8566 0.1790 0.1400
+  name "eco_hexapod_03_push_ball"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.43 0.22
+        roughness 0.28
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.1400
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.1400
+  }
+  physics Physics {
+    density -1
+    mass 0.24000
+  }
+}
+Solid {
+  translation -0.3546 0.8286 0.1300
+  name "eco_hexapod_03_push_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.32 0.62 0.78
+        roughness 0.40
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 0.2600 0.2600 0.2600
       }
     }
   ]
   boundingObject Box {
-    size 0.4200 0.0400 0.0920
+    size 0.2600 0.2600 0.2600
+  }
+  physics Physics {
+    density -1
+    mass 0.38000
   }
 }
 Solid {
-  translation -0.6604 0.5786 0.0380
-  rotation 0.000000 0.000000 1.000000 0.85129
-  name "eco_c_elegans_03_rear_barrier"
+  translation -0.2624 0.2897 0.1100
+  rotation 0.087323 0.236787 -0.967629 0.72825
+  name "eco_hexapod_03_balance_ramp"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.62 0.35 0.23
-        roughness 0.60
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Box {
-        size 0.2800 0.0380 0.0760
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.2800 0.0380 0.0760
-  }
-}
-Solid {
-  translation -0.3188 0.6649 0.0380
-  rotation 0.122559 0.325851 -0.937444 0.76311
-  name "eco_c_elegans_03_ridge_ramp"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.67 0.56 0.28
+        baseColor 0.67 0.56 0.34
         roughness 0.58
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.2400 0.1800 0.0550
+        size 0.8200 0.6200 0.1400
       }
     }
   ]
   boundingObject Box {
-    size 0.2400 0.1800 0.0550
+    size 0.8200 0.6200 0.1400
   }
 }
 Solid {
-  translation -0.3746 0.3282 0.0220
-  name "eco_c_elegans_03_taste_center"
+  translation -0.2227 -0.5725 0.4300
+  name "eco_hexapod_03_gate_left_post"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.92 0.74 0.30
-        roughness 0.44
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0300
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0300
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation -0.3303 0.4091 0.0220
-  name "eco_c_elegans_03_taste_left"
+  translation -0.4424 -0.5680 0.5800
+  rotation 0.000000 0.000000 1.000000 -0.70661
+  name "eco_hexapod_03_gate_left_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.80 0.56 0.22
-        roughness 0.44
+        baseColor 0.92 0.76 0.34
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.11 0.09 0.04
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation 0.5304 0.3098 0.4300
+  name "eco_hexapod_03_gate_right_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0280
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0280
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation -0.4489 0.2737 0.0220
-  name "eco_c_elegans_03_taste_right"
+  translation 0.4915 0.5260 0.5800
+  rotation 0.000000 0.000000 1.000000 -0.70661
+  name "eco_hexapod_03_gate_right_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.48 0.20
-        roughness 0.44
+        baseColor 0.30 0.78 0.84
+        roughness 0.36
         metalness 0.00
         transparency 0.00
+        emissiveColor 0.04 0.09 0.10
       }
-      geometry Sphere {
-        radius 0.0280
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.0280
-  }
-}
-PointLight {
-  location -0.4847 0.1721 0.3100
-  color 1.00 0.62 0.28
-  intensity 0.55
-  attenuation 0 0 4.5000
-  radius 1.80
-  castShadows FALSE
-}
-PointLight {
-  location -0.4317 0.6575 0.2900
-  color 0.72 0.87 1.00
-  intensity 0.42
-  attenuation 0 0 5.2000
-  radius 1.65
-  castShadows FALSE
-}
-Solid {
-  translation -0.6302 0.7649 0.0460
-  linearVelocity 0.2236 -0.3821 0.0000
-  angularVelocity 0.0000 0.0000 2.2000
-  name "eco_c_elegans_03_vibration_pellet"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.91 0.83 0.32
-        roughness 0.34
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Sphere {
-        radius 0.0460
+      geometry Box {
+        size 0.0320 0.4000 0.7000
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0460
-  }
-  physics Physics {
-    density -1
-    mass 0.01800
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
   }
 }
 Solid {
-  translation -0.7001 0.2146 0.0280
-  rotation 0.000000 0.000000 1.000000 -0.29950
-  linearVelocity 0.0642 0.3160 0.0000
-  angularVelocity 0.0000 0.0000 2.6000
-  name "eco_c_elegans_03_flow_bar"
+  translation 0.1539 -0.1314 0.8300
+  rotation 0.000000 0.000000 1.000000 0.86418
+  name "eco_hexapod_03_gate_crossbar"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.86 0.44 0.18
-        roughness 0.38
+        baseColor 0.76 0.69 0.48
+        roughness 0.52
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.1800 0.0500 0.0440
+        size 1.2600 0.0800 0.0800
       }
     }
   ]
   boundingObject Box {
-    size 0.1800 0.0500 0.0440
-  }
-  physics Physics {
-    density -1
-    mass 0.02200
+    size 1.2600 0.0800 0.0800
   }
 }
 Transform {
-  translation 0.5250 0.4600 0.0040
-  rotation 0.000000 0.000000 1.000000 -2.42209
+  translation 1.0250 0.8750 0.0040
+  rotation 0.000000 0.000000 1.000000 -2.43498
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.81 0.78
-        roughness 0.90
-        metalness 0.00
-        transparency 0.34
-      }
-      geometry Box {
-        size 0.9200 0.6200 0.0040
-      }
-    }
-  ]
-}
-Solid {
-  translation 0.2625 0.4561 0.0460
-  rotation 0.000000 0.000000 1.000000 -2.42209
-  name "eco_c_elegans_04_maze_left"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.28 0.57 0.35
-        roughness 0.66
+        baseColor 0.37 0.40 0.36
+        roughness 0.84
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 2.3000 1.6400 0.0060
       }
     }
   ]
-  boundingObject Box {
-    size 0.4200 0.0400 0.0920
-  }
 }
-Solid {
-  translation 0.4866 0.2003 0.0460
-  rotation 0.000000 0.000000 1.000000 -2.42209
-  name "eco_c_elegans_04_maze_right"
+Transform {
+  translation 0.1884 0.1608 0.0060
+  rotation 0.000000 0.000000 1.000000 -2.43498
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.26 0.49 0.68
-        roughness 0.62
+        baseColor 0.92 0.76 0.34
+        roughness 0.52
+        metalness 0.00
+        transparency 0.12
+      }
+      geometry Box {
+        size 0.2200 1.0600 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation 0.3112 0.8179 0.1400
+  name "eco_hexapod_04_push_ball"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.43 0.22
+        roughness 0.28
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.1400
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.1400
+  }
+  physics Physics {
+    density -1
+    mass 0.24000
+  }
+}
+Solid {
+  translation 0.8740 0.2202 0.1300
+  name "eco_hexapod_04_push_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.32 0.62 0.78
+        roughness 0.40
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.4200 0.0400 0.0920
+        size 0.2600 0.2600 0.2600
       }
     }
   ]
   boundingObject Box {
-    size 0.4200 0.0400 0.0920
+    size 0.2600 0.2600 0.2600
+  }
+  physics Physics {
+    density -1
+    mass 0.38000
   }
 }
 Solid {
-  translation 0.6604 0.5786 0.0380
-  rotation 0.000000 0.000000 1.000000 -0.85129
-  name "eco_c_elegans_04_rear_barrier"
+  translation 0.3273 0.2137 0.1100
+  rotation 0.089829 0.033127 -0.995406 2.43796
+  name "eco_hexapod_04_balance_ramp"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.62 0.35 0.23
-        roughness 0.60
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Box {
-        size 0.2800 0.0380 0.0760
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.2800 0.0380 0.0760
-  }
-}
-Solid {
-  translation 0.7011 0.2287 0.0380
-  rotation 0.129480 0.048700 -0.990385 2.42843
-  name "eco_c_elegans_04_ridge_ramp"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.67 0.56 0.28
+        baseColor 0.67 0.56 0.34
         roughness 0.58
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.2400 0.1800 0.0550
+        size 0.8200 0.6200 0.1400
       }
     }
   ]
   boundingObject Box {
-    size 0.2400 0.1800 0.0550
+    size 0.8200 0.6200 0.1400
   }
 }
 Solid {
-  translation 0.3746 0.3282 0.0220
-  name "eco_c_elegans_04_taste_center"
+  translation -0.5304 0.3098 0.4300
+  name "eco_hexapod_04_gate_left_post"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.92 0.74 0.30
-        roughness 0.44
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0300
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0300
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation 0.4489 0.2737 0.0220
-  name "eco_c_elegans_04_taste_left"
+  translation -0.4915 0.5260 0.5800
+  rotation 0.000000 0.000000 1.000000 -2.43498
+  name "eco_hexapod_04_gate_left_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.80 0.56 0.22
-        roughness 0.44
+        baseColor 0.92 0.76 0.34
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.11 0.09 0.04
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation 0.2227 -0.5725 0.4300
+  name "eco_hexapod_04_gate_right_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
         metalness 0.00
         transparency 0.00
       }
-      geometry Sphere {
-        radius 0.0280
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0280
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
   }
 }
 Solid {
-  translation 0.3303 0.4091 0.0220
-  name "eco_c_elegans_04_taste_right"
+  translation 0.4424 -0.5680 0.5800
+  rotation 0.000000 0.000000 1.000000 -2.43498
+  name "eco_hexapod_04_gate_right_panel"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.76 0.48 0.20
-        roughness 0.44
+        baseColor 0.30 0.78 0.84
+        roughness 0.36
         metalness 0.00
         transparency 0.00
+        emissiveColor 0.04 0.09 0.10
       }
-      geometry Sphere {
-        radius 0.0280
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.0280
-  }
-}
-PointLight {
-  location 0.2343 0.4579 0.3100
-  color 1.00 0.62 0.28
-  intensity 0.55
-  attenuation 0 0 4.5000
-  radius 1.80
-  castShadows FALSE
-}
-PointLight {
-  location 0.7085 0.3416 0.2900
-  color 0.72 0.87 1.00
-  intensity 0.42
-  attenuation 0 0 5.2000
-  radius 1.65
-  castShadows FALSE
-}
-Solid {
-  translation 0.8410 0.5242 0.0460
-  linearVelocity -0.4082 -0.1715 0.0000
-  angularVelocity 0.0000 0.0000 2.2000
-  name "eco_c_elegans_04_vibration_pellet"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.91 0.83 0.32
-        roughness 0.34
-        metalness 0.00
-        transparency 0.00
-      }
-      geometry Sphere {
-        radius 0.0460
+      geometry Box {
+        size 0.0320 0.4000 0.7000
       }
     }
   ]
-  boundingObject Sphere {
-    radius 0.0460
-  }
-  physics Physics {
-    density -1
-    mass 0.01800
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
   }
 }
 Solid {
-  translation 0.3047 0.6659 0.0280
-  rotation 0.000000 0.000000 1.000000 -2.00209
-  linearVelocity 0.3049 -0.1052 0.0000
-  angularVelocity 0.0000 0.0000 2.6000
-  name "eco_c_elegans_04_flow_bar"
+  translation -0.1539 -0.1314 0.8300
+  rotation 0.000000 0.000000 1.000000 -0.86418
+  name "eco_hexapod_04_gate_crossbar"
   children [
     Shape {
       appearance PBRAppearance {
-        baseColor 0.86 0.44 0.18
-        roughness 0.38
+        baseColor 0.76 0.69 0.48
+        roughness 0.52
         metalness 0.00
         transparency 0.00
       }
       geometry Box {
-        size 0.1800 0.0500 0.0440
+        size 1.2600 0.0800 0.0800
       }
     }
   ]
   boundingObject Box {
-    size 0.1800 0.0500 0.0440
-  }
-  physics Physics {
-    density -1
-    mass 0.02200
+    size 1.2600 0.0800 0.0800
   }
 }
 
@@ -1312,48 +1256,48 @@ Robot {
   controller "nm_world_recorder"
 }
 
-CelegansRobot {
-  translation -0.5250 -0.4600 0.0320
-  rotation 0.882873 0.332066 0.332066 1.69505
-  name "C_ELEGANS_01"
+HexapodRobot {
+  translation -1.0250 -0.8750 0.1900
+  rotation 0.000000 0.000000 1.000000 0.70661
+  name "HEXAPOD_01"
   controller "nao_nn_controller_uds"
   controllerArgs [
-    "NM_BRAINS=celegans_01"
-    "NM_SENSORS_celegans_01=^celegans_s_[0-9]{2}_.*$"
-    "NM_ACTUATORS_celegans_01=^celegans_o_[0-9]{3}_.*$"
+    "NM_BRAINS=hexapod_01"
+    "NM_SENSORS_hexapod_01=^hex_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_hexapod_01=^hex_o_[0-9]{3}_.*$"
   ]
 }
-CelegansRobot {
-  translation 0.5250 -0.4600 0.0320
-  rotation 0.257022 0.683352 0.683352 2.63844
-  name "C_ELEGANS_02"
+HexapodRobot {
+  translation 1.0250 -0.8750 0.1900
+  rotation 0.000000 0.000000 1.000000 2.43498
+  name "HEXAPOD_02"
   controller "nao_nn_controller_uds"
   controllerArgs [
-    "NM_BRAINS=celegans_02"
-    "NM_SENSORS_celegans_02=^celegans_s_[0-9]{2}_.*$"
-    "NM_ACTUATORS_celegans_02=^celegans_o_[0-9]{3}_.*$"
+    "NM_BRAINS=hexapod_02"
+    "NM_SENSORS_hexapod_02=^hex_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_hexapod_02=^hex_o_[0-9]{3}_.*$"
   ]
 }
-CelegansRobot {
-  translation -0.5250 0.4600 0.0320
-  rotation 0.882873 -0.332066 -0.332066 1.69505
-  name "C_ELEGANS_03"
+HexapodRobot {
+  translation -1.0250 0.8750 0.1900
+  rotation 0.000000 0.000000 1.000000 -0.70661
+  name "HEXAPOD_03"
   controller "nao_nn_controller_uds"
   controllerArgs [
-    "NM_BRAINS=celegans_03"
-    "NM_SENSORS_celegans_03=^celegans_s_[0-9]{2}_.*$"
-    "NM_ACTUATORS_celegans_03=^celegans_o_[0-9]{3}_.*$"
+    "NM_BRAINS=hexapod_03"
+    "NM_SENSORS_hexapod_03=^hex_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_hexapod_03=^hex_o_[0-9]{3}_.*$"
   ]
 }
-CelegansRobot {
-  translation 0.5250 0.4600 0.0320
-  rotation 0.257022 -0.683352 -0.683352 2.63844
-  name "C_ELEGANS_04"
+HexapodRobot {
+  translation 1.0250 0.8750 0.1900
+  rotation 0.000000 0.000000 1.000000 -2.43498
+  name "HEXAPOD_04"
   controller "nao_nn_controller_uds"
   controllerArgs [
-    "NM_BRAINS=celegans_04"
-    "NM_SENSORS_celegans_04=^celegans_s_[0-9]{2}_.*$"
-    "NM_ACTUATORS_celegans_04=^celegans_o_[0-9]{3}_.*$"
+    "NM_BRAINS=hexapod_04"
+    "NM_SENSORS_hexapod_04=^hex_s_[0-9]{2}_.*$"
+    "NM_ACTUATORS_hexapod_04=^hex_o_[0-9]{3}_.*$"
   ]
 }
 
