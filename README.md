@@ -1,5 +1,13 @@
 # Neuromorphic Autonomous AI Platform
 
+## Sponsor NeuralMimicry
+
+This repository is the full neuromorphic autonomous AI platform — GPU-accelerated spiking neural networks, a Kubernetes operator, training pipelines, canary delivery, and embodied simulation environments. NeuralMimicry is an independent open-source initiative and we rely on community support to sustain this work.
+
+**[☕ Support us on Crowdfunder](https://www.crowdfunder.co.uk/p/qr/aWggxwPW?utm_campaign=sharemodal&utm_medium=referral&utm_source=shortlink)**
+
+---
+
 This repository integrates the existing neuromorphic build and container workflow with an operator-driven autonomous AI platform.
 
 ## Included capabilities
@@ -97,7 +105,18 @@ cargo run --bin aarnn_rust -- \
   --fpaa-transport usb \
   --fpaa-usb-hint okika \
   --fpaa-print-status
+
+# Debug: allow FPAA bridge cluster autodiscovery/use on non-System networks
+cargo run --bin aarnn_rust -- \
+  --brain-id debug-net-01 \
+  --fpaa-bridge-debug
 ```
+
+You can also enable bridge debug mode with `NM_FPAA_BRIDGE_DEBUG=1`.
+
+When FPAA bridge cluster integration is enabled, startup logs now include per-node bridge
+telemetry (queried over the bridge control plane): hardware detected vs software-only mode,
+runtime-state/config loaded status, and software fallback counters for each discovered FPAA node.
 
 In the egui application, the controls are under `AARNN -> Biological Realism -> FPAA Offload`.
 
