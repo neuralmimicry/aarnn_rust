@@ -1,0 +1,42 @@
+name: Initialise Wiki
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - .github/wiki/Home.md
+      - .github/workflows/init-wiki.yml
+
+permissions:
+  contents: write
+
+jobs:
+  init-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Push wiki Home page
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          WIKI_DIR=$(mktemp -d)
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" "${WIKI_DIR}" 2>/dev/null || true
+          cd "${WIKI_DIR}"
+          if [ ! -d .git ]; then
+            git init -b master
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git"
+          fi
+          cp "${GITHUB_WORKSPACE}/.github/wiki/Home.md" Home.md
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add Home.md
+          git diff --cached --quiet && echo "No changes to wiki" && exit 0
+          git commit -m "docs: update wiki Home page"
+          git push -u origin HEAD:master 2>&1 || git push -u origin HEAD:main 2>&1
+          echo "Wiki updated successfully"
