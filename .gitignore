@@ -19,8 +19,10 @@ htmlcov/
 *.swp
 *.swo
 
-# Logs and performance reports
+# Logs and performance reports — exclude entire logs/ dir and all rotated variants
+logs/
 *.log
+*.log.*
 buildlog*.txt
 high_load_perf*.txt
 perf_report.txt
