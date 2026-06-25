@@ -1,0 +1,15 @@
+[fpaa0]
+io5p = "GPIO_FPAA0_IO5P"
+io5n = "GPIO_FPAA0_IO5N"
+
+[fpaa1]
+io5p = "GPIO_FPAA1_IO5P"
+io5n = "GPIO_FPAA1_IO5N"
+
+[fpaa2]
+io5p = "GPIO_FPAA2_IO5P"
+io5n = "GPIO_FPAA2_IO5N"
+
+[fpaa3]
+io5p = "GPIO_FPAA3_IO5P"
+io5n = "GPIO_FPAA3_IO5N"

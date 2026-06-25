@@ -1,0 +1,9 @@
+system_network_only = true
+
+host_subscribers = [
+  "127.0.0.1:45882",
+]
+
+[[owned_synapse_ranges]]
+start = "0x5001000200000000"
+end = "0x50010002ffffffff"

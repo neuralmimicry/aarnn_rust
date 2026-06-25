@@ -1,0 +1,76 @@
+[[synapses]]
+synapse_id = "0x5001000200001234"
+description = "Neuron 17 bouton 3 feeds neuron 22 dendrite bouton 1 on same FPAA"
+weight = 0.72
+delay_ns = 5000
+mirror_to_host = false
+
+  [[synapses.producers]]
+  type = "axon_bouton"
+  node_slot = 0
+  fpaa_index = 0
+  neuron_id = 17
+  bouton_id = 3
+
+  [[synapses.consumers]]
+  type = "dendrite_bouton"
+  node_slot = 0
+  fpaa_index = 0
+  neuron_id = 22
+  bouton_id = 1
+  route = "local_same_fpaa"
+  pulse_width_ns = 5000
+  gpio_line = "FPAA0_IO5P"
+  kernel = "synaptic_filter"
+
+[[synapses]]
+synapse_id = "0x5001000200001235"
+description = "Sensory input feeds local dendrite and remote dendrite"
+weight = 0.50
+delay_ns = 10000
+mirror_to_host = true
+
+  [[synapses.producers]]
+  type = "sensory_input"
+  node_slot = 0
+  io_name = "camera_edge_12"
+
+  [[synapses.consumers]]
+  type = "dendrite_bouton"
+  node_slot = 0
+  fpaa_index = 2
+  neuron_id = 31
+  bouton_id = 4
+  route = "local_same_pika"
+  pulse_width_ns = 5000
+  gpio_line = "FPAA2_IO5N"
+  kernel = "active_dendrite"
+
+  [[synapses.consumers]]
+  type = "dendrite_bouton"
+  node_slot = 3
+  fpaa_index = 1
+  neuron_id = 8
+  bouton_id = 2
+  route = "remote_bridge"
+
+[[synapses]]
+synapse_id = "0x5001000200002001"
+description = "Motor output event"
+mirror_to_host = true
+weight = 1.0
+delay_ns = 0
+
+  [[synapses.producers]]
+  type = "axon_bouton"
+  node_slot = 1
+  fpaa_index = 3
+  neuron_id = 44
+  bouton_id = 2
+
+  [[synapses.consumers]]
+  type = "motor_output"
+  node_slot = 1
+  route = "local_same_bridge"
+  io_name = "hexapod_left_front_coxa"
+  kernel = "morphology_transmission"

@@ -1,0 +1,27 @@
+node_uuid = "c7a2c0ce-9eca-4c66-84e9-75e7b5719b91"
+node_name = "aer-pika-01"
+cluster_name = "aarnn-fpaa-cluster"
+
+[network]
+interface = "eth0"
+wifi_interface = "wlan0"
+bind_ip = "0.0.0.0"
+control_port = 45880
+event_port = 45881
+diagnostics_port = 45882
+multicast_addr = "239.192.44.44:45880"
+
+[hardware]
+hat_type = "okika-pika"
+chip_type = "AN231E04"
+fpaa_count = 4
+gpio_backend = "mock"
+spi_backend = "mock"
+gpio_chip = "gpiochip0"
+gpio_consumer = "aer-fabric-bridge"
+spi_device = "/dev/spidev0.0"
+spi_speed_hz = 2000000
+spi_bits_per_word = 8
+spi_mode = 0
+fpaa_probe_hex = "aa55"
+force_software_fallback = false

@@ -201,7 +201,7 @@ Useful CLI flags:
 --execution-max-concurrent-networks 8
 --execution-desired-shards 4
 --execution-autodetect=true
---infrastructure-root /home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible
+--infrastructure-root ${SWARMHPC_ROOT}/swarmhpc/ansible
 ```
 
 Scheduling behaviour:
@@ -238,7 +238,7 @@ backward-compatible behaviour and shards across worker nodes when orchestrated.
 Infrastructure autodetection:
 
 - `aarnn_rust` and `web_ui` will scan `NM_INFRASTRUCTURE_ROOT` or, by default,
-  `/home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible` when it exists.
+  `${SWARMHPC_ROOT}/swarmhpc/ansible` when it exists.
 - The detector looks for SwarmHPC/Continuum tenant signals such as Kubernetes,
   DaemonSet worker mode, Continuum autoscaling, orchestrator service naming, and
   runtime root hints.

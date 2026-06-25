@@ -3,8 +3,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_SWARMHPC_ANSIBLE_ROOT: &str =
-    "/home/pbisaacs/Developer/swarmhpc/swarmhpc/ansible";
+/// Returns the SwarmHPC Ansible root, resolved from environment variables with a
+/// deployment-neutral fallback. Set `NM_SWARMHPC_ANSIBLE_ROOT` or `SWARMHPC_ROOT`
+/// to override.
+pub fn default_swarmhpc_ansible_root() -> String {
+    std::env::var("NM_SWARMHPC_ANSIBLE_ROOT")
+        .or_else(|_| {
+            std::env::var("SWARMHPC_ROOT")
+                .map(|r| format!("{r}/swarmhpc/ansible"))
+        })
+        .unwrap_or_else(|_| "/opt/swarmhpc/ansible".to_string())
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -414,7 +423,7 @@ pub fn default_infrastructure_roots() -> Vec<PathBuf> {
         }
     }
     if roots.is_empty() {
-        let default_root = PathBuf::from(DEFAULT_SWARMHPC_ANSIBLE_ROOT);
+        let default_root = PathBuf::from(default_swarmhpc_ansible_root());
         if default_root.exists() {
             roots.push(default_root);
         }

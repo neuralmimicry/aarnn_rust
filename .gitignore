@@ -73,3 +73,7 @@ network_drosophila.json
 *.rar
 data/
 *.mp4
+log.txt
+check_errors.txt
+tracey.log*
+loader/tracey-loader.manifest.json
