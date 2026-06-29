@@ -2013,6 +2013,9 @@ impl App {
                     nao_output_gain: ipc_nao_output_gain,
                     nao_output_current_gain: ipc_nao_output_current_gain,
                     nao_output_current_mix: ipc_nao_output_current_mix,
+                    // Zebrafish output gains: use profile defaults (env overrides can be
+                    // added later via NM_ZEBRAFISH_OUTPUT_GAIN etc. if needed).
+                    ..ProfileOutputEncoding::default()
                 };
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_celegans_debug_counter: usize = 0;

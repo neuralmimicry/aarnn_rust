@@ -1,0 +1,13 @@
+{
+  "num_sensory_neurons": 32,
+  "num_output_neurons": 32,
+  "num_hidden_layers": 1,
+  "num_hidden_per_layer_initial": 2000,
+  "growth_enabled": true,
+  "use_morphology": true,
+  "aarnn_layer_depth": 4,
+  "clumping_design": "ZebraFish",
+  "spike_io": {
+    "profile": "zebrafish"
+  }
+}

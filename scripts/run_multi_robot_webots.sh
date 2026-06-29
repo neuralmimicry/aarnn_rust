@@ -29,6 +29,7 @@ COUNT_DROSOPHILA_BANC_OVERRIDE=""
 COUNT_DROSOPHILA_FAFB_OVERRIDE=""
 COUNT_HEXAPOD_OVERRIDE=""
 COUNT_NAO_OVERRIDE=""
+COUNT_ZEBRAFISH_OVERRIDE=""
 
 # Core asset paths
 CELEGANS_NETWORK_FILE="${CELEGANS_NETWORK_FILE:-$ROOT_DIR/network_celegans.json}"
@@ -146,6 +147,25 @@ CELEGANS_CONNECTOME_FILE="${CELEGANS_CONNECTOME_FILE:-$ROOT_DIR/celegans.py}"
 CELEGANS_REBUILD_NETWORK="${CELEGANS_REBUILD_NETWORK:-0}"
 CELEGANS_REBUILD_ASSETS="${CELEGANS_REBUILD_ASSETS:-0}"
 DROSOPHILA_REBUILD_ASSETS="${DROSOPHILA_REBUILD_ASSETS:-0}"
+
+# Zebrafish network build controls
+ZEBRAFISH_DATA_FILE="${ZEBRAFISH_DATA_FILE:-$ROOT_DIR/data/zebrafish/04152019.csv}"
+ZEBRAFISH_NETWORK_FILE="${ZEBRAFISH_NETWORK_FILE:-$ROOT_DIR/network_zebrafish.json}"
+ZEBRAFISH_CONFIG_FILE="${ZEBRAFISH_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_zebrafish_webots.json}"
+ZEBRAFISH_PROTO_FILE="${ZEBRAFISH_PROTO_FILE:-$ROOT_DIR/webots_world/protos/ZebrafishRobot.proto}"
+ZEBRAFISH_TEMPLATE_FILE="${ZEBRAFISH_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
+ZEBRAFISH_NETWORK_SCRIPT="${ZEBRAFISH_NETWORK_SCRIPT:-$ROOT_DIR/scripts/build_zebrafish_network_json.py}"
+ZEBRAFISH_ASSET_SCRIPT="${ZEBRAFISH_ASSET_SCRIPT:-$ROOT_DIR/scripts/build_webots_zebrafish_assets.py}"
+ZEBRAFISH_MAX_HIDDEN="${ZEBRAFISH_MAX_HIDDEN:-2000}"
+ZEBRAFISH_REBUILD_NETWORK="${ZEBRAFISH_REBUILD_NETWORK:-0}"
+ZEBRAFISH_REBUILD_ASSETS="${ZEBRAFISH_REBUILD_ASSETS:-0}"
+
+if ! [[ "$ZEBRAFISH_MAX_HIDDEN" =~ ^[0-9]+$ ]] || [ "$ZEBRAFISH_MAX_HIDDEN" -le 0 ]; then
+  echo "Invalid ZEBRAFISH_MAX_HIDDEN='${ZEBRAFISH_MAX_HIDDEN}' (must be positive integer)."
+  exit 1
+fi
+ZEBRAFISH_EXPECTED_SENSORY=32
+ZEBRAFISH_EXPECTED_OUTPUT=32
 
 NAO_TEMPLATE_FILE="${NAO_TEMPLATE_FILE:-$ROOT_DIR/network.json}"
 NAO_NETWORK_SCRIPT="${NAO_NETWORK_SCRIPT:-$ROOT_DIR/scripts/build_nao_network_json.py}"
@@ -298,6 +318,10 @@ while [ "$#" -gt 0 ]; do
       shift
       COUNT_NAO_OVERRIDE="${1:-}"
       ;;
+    --zebrafish)
+      shift
+      COUNT_ZEBRAFISH_OVERRIDE="${1:-}"
+      ;;
     --world)
       shift
       WORLD_FILE="${1:-$WORLD_FILE}"
@@ -343,7 +367,7 @@ import re
 import sys
 
 spec = sys.argv[1]
-counts = {"celegans": 0, "drosophila_banc": 0, "drosophila_fafb": 0, "hexapod": 0, "nao": 0}
+counts = {"celegans": 0, "drosophila_banc": 0, "drosophila_fafb": 0, "hexapod": 0, "nao": 0, "zebrafish": 0}
 aliases = {
     "celegans": "celegans",
     "worm": "celegans",
@@ -371,6 +395,13 @@ aliases = {
     "six_legged": "hexapod",
     "nao": "nao",
     "naos": "nao",
+    "zebrafish": "zebrafish",
+    "zebrafishes": "zebrafish",
+    "danio": "zebrafish",
+    "danio_rerio": "zebrafish",
+    "fish": "zebrafish",
+    "zfish": "zebrafish",
+    "zf": "zebrafish",
 }
 
 for token in re.split(r"[;,]", spec):
@@ -389,6 +420,8 @@ for token in re.split(r"[;,]", spec):
             canonical = "drosophila_banc"
         elif "hexapod" in key_norm or "freenove" in key_norm:
             canonical = "hexapod"
+        elif "zebra" in key_norm or "danio" in key_norm:
+            canonical = "zebrafish"
         else:
             raise SystemExit(f"Unknown robot key '{key_raw}'")
     try:
@@ -421,8 +454,9 @@ apply_override_count COUNT_DROSOPHILA_BANC "$COUNT_DROSOPHILA_BANC_OVERRIDE"
 apply_override_count COUNT_DROSOPHILA_FAFB "$COUNT_DROSOPHILA_FAFB_OVERRIDE"
 apply_override_count COUNT_HEXAPOD "$COUNT_HEXAPOD_OVERRIDE"
 apply_override_count COUNT_NAO "$COUNT_NAO_OVERRIDE"
+apply_override_count COUNT_ZEBRAFISH "$COUNT_ZEBRAFISH_OVERRIDE"
 
-TOTAL_ROBOTS=$((COUNT_CELEGANS + COUNT_DROSOPHILA_BANC + COUNT_DROSOPHILA_FAFB + COUNT_HEXAPOD + COUNT_NAO))
+TOTAL_ROBOTS=$((COUNT_CELEGANS + COUNT_DROSOPHILA_BANC + COUNT_DROSOPHILA_FAFB + COUNT_HEXAPOD + COUNT_NAO + COUNT_ZEBRAFISH))
 if [ "$TOTAL_ROBOTS" -le 0 ]; then
   echo "Robot counts resolve to zero. Use --robots or count overrides to add robots."
   exit 1
@@ -1295,6 +1329,149 @@ if [ "$COUNT_HEXAPOD" -gt 0 ]; then
   export NM_IPC_FORCE_AER NM_IPC_MAX_RAW_BYTES NM_IPC_AER_MAX_PACKET_BYTES NM_IPC_AER_THRESHOLD NM_IPC_UDS_RECV_BUF_BYTES
 fi
 
+if [ "$COUNT_ZEBRAFISH" -gt 0 ]; then
+  if [ ! -f "$ZEBRAFISH_DATA_FILE" ]; then
+    echo "Missing zebrafish connectome data: $ZEBRAFISH_DATA_FILE"
+    echo "  Download from https://seunglab.org/zebrafish/data/ and place at $ZEBRAFISH_DATA_FILE"
+    exit 1
+  fi
+  if [ ! -f "$ZEBRAFISH_NETWORK_SCRIPT" ]; then
+    echo "Missing zebrafish network builder: $ZEBRAFISH_NETWORK_SCRIPT"
+    exit 1
+  fi
+  if [ ! -f "$ZEBRAFISH_ASSET_SCRIPT" ]; then
+    echo "Missing zebrafish asset builder: $ZEBRAFISH_ASSET_SCRIPT"
+    exit 1
+  fi
+  if [ ! -f "$ZEBRAFISH_TEMPLATE_FILE" ]; then
+    echo "Missing network template: $ZEBRAFISH_TEMPLATE_FILE"
+    exit 1
+  fi
+
+  ZEBRAFISH_NETWORK_STALE=0
+  if [ ! -f "$ZEBRAFISH_NETWORK_FILE" ] || [ ! -f "$ZEBRAFISH_CONFIG_FILE" ]; then
+    ZEBRAFISH_NETWORK_STALE=1
+  fi
+  if [ -f "$ZEBRAFISH_NETWORK_SCRIPT" ] && [ "$ZEBRAFISH_NETWORK_SCRIPT" -nt "$ZEBRAFISH_NETWORK_FILE" ]; then
+    ZEBRAFISH_NETWORK_STALE=1
+  fi
+  if [ "$ZEBRAFISH_TEMPLATE_FILE" -nt "$ZEBRAFISH_NETWORK_FILE" ]; then
+    ZEBRAFISH_NETWORK_STALE=1
+  fi
+  # Validate existing network has correct channel counts
+  if [ -f "$ZEBRAFISH_NETWORK_FILE" ]; then
+    if ! python3 - "$ZEBRAFISH_NETWORK_FILE" "$ZEBRAFISH_EXPECTED_SENSORY" "$ZEBRAFISH_EXPECTED_OUTPUT" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+net = data.get("net") or {}
+labels = data.get("connectome_labels") or {}
+bio = labels.get("bio_profile") or {}
+if str(bio.get("species","")).strip() != "danio_rerio":
+    raise SystemExit(1)
+if str(net.get("clumping_design","")).strip() != "ZebraFish":
+    raise SystemExit(1)
+if int(net.get("num_sensory_neurons", -1)) != int(sys.argv[2]):
+    raise SystemExit(1)
+if int(net.get("num_output_neurons", -1)) != int(sys.argv[3]):
+    raise SystemExit(1)
+PY
+    then
+      ZEBRAFISH_NETWORK_STALE=1
+    fi
+  fi
+
+  if [ "$ZEBRAFISH_REBUILD_NETWORK" = "1" ] || [ "$ZEBRAFISH_NETWORK_STALE" = "1" ]; then
+    echo "Building zebrafish network (max_hidden=$ZEBRAFISH_MAX_HIDDEN) — this may take several minutes …"
+    python3 "$ZEBRAFISH_NETWORK_SCRIPT" \
+      --data      "$ZEBRAFISH_DATA_FILE" \
+      --template  "$ZEBRAFISH_TEMPLATE_FILE" \
+      --output    "$ZEBRAFISH_NETWORK_FILE" \
+      --max-hidden "$ZEBRAFISH_MAX_HIDDEN"
+  fi
+
+  if [ ! -f "$ZEBRAFISH_NETWORK_FILE" ]; then
+    echo "Missing zebrafish network snapshot: $ZEBRAFISH_NETWORK_FILE"
+    exit 1
+  fi
+
+  ZEBRAFISH_ASSET_STALE=0
+  if [ ! -f "$ZEBRAFISH_PROTO_FILE" ] || [ ! -f "$ZEBRAFISH_CONFIG_FILE" ]; then
+    ZEBRAFISH_ASSET_STALE=1
+  fi
+  if [ "$ZEBRAFISH_ASSET_SCRIPT" -nt "$ZEBRAFISH_PROTO_FILE" ]; then
+    ZEBRAFISH_ASSET_STALE=1
+  fi
+  if [ "$ZEBRAFISH_NETWORK_FILE" -nt "$ZEBRAFISH_CONFIG_FILE" ]; then
+    ZEBRAFISH_ASSET_STALE=1
+  fi
+
+  if [ "$ZEBRAFISH_REBUILD_ASSETS" = "1" ] || [ "$ZEBRAFISH_ASSET_STALE" = "1" ]; then
+    python3 "$ZEBRAFISH_ASSET_SCRIPT" \
+      --network          "$ZEBRAFISH_NETWORK_FILE" \
+      --proto-output     "$ZEBRAFISH_PROTO_FILE" \
+      --world-output     /tmp/aarnn_tmp_zebrafish_assets_ignore.wbt \
+      --config-output    "$ZEBRAFISH_CONFIG_FILE"
+  fi
+
+  if [ ! -f "$ZEBRAFISH_PROTO_FILE" ]; then
+    echo "Missing zebrafish proto file: $ZEBRAFISH_PROTO_FILE"
+    exit 1
+  fi
+  if [ ! -f "$ZEBRAFISH_CONFIG_FILE" ]; then
+    echo "Missing zebrafish config file: $ZEBRAFISH_CONFIG_FILE"
+    exit 1
+  fi
+
+  # Heal any stale JSON files that contain the wrong clumping_design casing
+  # (workspace manifests, snapshots, and the generated config file).
+  python3 - "$WEBOTS_RUNTIME_ROOT" "$ZEBRAFISH_CONFIG_FILE" <<'PY'
+import sys
+from pathlib import Path
+targets = []
+rt = Path(sys.argv[1])
+targets.extend(rt.rglob("workspaces/webots-zebrafish-*/*.json"))
+targets.append(Path(sys.argv[2]))
+for f in targets:
+    if not f.exists():
+        continue
+    text = f.read_text(encoding="utf-8")
+    changed = False
+    if '"clumping_design": "Zebrafish"' in text:
+        text = text.replace('"clumping_design": "Zebrafish"', '"clumping_design": "ZebraFish"')
+        changed = True
+    # Fix stale c_elegans profile left by early workspace creation (before the
+    # zebrafish spike_io profile existed).  "zebrafish" is now a valid variant.
+    if '"profile": "c_elegans"' in text and "zebrafish" in str(f):
+        text = text.replace('"profile": "c_elegans"', '"profile": "zebrafish"', 1)
+        changed = True
+    if changed:
+        f.write_text(text, encoding="utf-8")
+        print(f"Healed: {f}")
+PY
+
+  # Per-camera retina override: zebrafish eyes are 1×1-pixel cameras processed
+  # by the DeviceMapper camera event encoder (2 channels per camera = 4 total,
+  # mapping to sensory channels 16–17 (left eye ON/OFF) and 18–19 (right eye)).
+  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT:-1}"
+  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT:-1}"
+  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT:-1}"
+  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT:-1}"
+  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT
+  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT
+
+  # AER transport recommended for the larger zebrafish network
+  NM_IPC_FORCE_AER="${NM_IPC_FORCE_AER:-1}"
+  NM_IPC_MAX_RAW_BYTES="${NM_IPC_MAX_RAW_BYTES:-131072}"
+  NM_IPC_AER_MAX_PACKET_BYTES="${NM_IPC_AER_MAX_PACKET_BYTES:-131072}"
+  NM_IPC_AER_THRESHOLD="${NM_IPC_AER_THRESHOLD:-0.10}"
+  NM_IPC_UDS_RECV_BUF_BYTES="${NM_IPC_UDS_RECV_BUF_BYTES:-524288}"
+  export NM_IPC_FORCE_AER NM_IPC_MAX_RAW_BYTES NM_IPC_AER_MAX_PACKET_BYTES NM_IPC_AER_THRESHOLD NM_IPC_UDS_RECV_BUF_BYTES
+fi
+
 # Webots controller IPC pacing/logging defaults:
 # keep the UDS bridge non-blocking but less bursty so occasional reply jitter
 # does not show as repeated timeout chatter.
@@ -1327,6 +1504,7 @@ declare -a DROS_BANC_BRAINS=()
 declare -a DROS_FAFB_BRAINS=()
 declare -a HEXAPOD_BRAINS=()
 declare -a NAO_BRAINS=()
+declare -a ZEBRAFISH_BRAINS=()
 declare -a NETWORK_MAP_ENTRIES=()
 declare -a CONFIG_MAP_ENTRIES=()
 declare -A BRAIN_NETWORK_FILES=()
@@ -1541,6 +1719,12 @@ for i in $(seq 1 "$COUNT_NAO"); do
   add_brain_mapping "$brain_id" "$NAO_NETWORK_FILE" "$NAO_CONFIG_FILE"
 done
 
+for i in $(seq 1 "$COUNT_ZEBRAFISH"); do
+  brain_id="$(printf "zebrafish_%02d" "$i")"
+  ZEBRAFISH_BRAINS+=("$brain_id")
+  add_brain_mapping "$brain_id" "$ZEBRAFISH_NETWORK_FILE" "$ZEBRAFISH_CONFIG_FILE"
+done
+
 BRAINS_CSV="$(IFS=','; echo "${BRAINS[*]}")"
 NETWORK_MAP_CSV="$(IFS=','; echo "${NETWORK_MAP_ENTRIES[*]}")"
 CONFIG_MAP_CSV="$(IFS=','; echo "${CONFIG_MAP_ENTRIES[*]}")"
@@ -1549,6 +1733,7 @@ DROS_BANC_BRAINS_CSV="$(IFS=','; echo "${DROS_BANC_BRAINS[*]}")"
 DROS_FAFB_BRAINS_CSV="$(IFS=','; echo "${DROS_FAFB_BRAINS[*]}")"
 HEXAPOD_BRAINS_CSV="$(IFS=','; echo "${HEXAPOD_BRAINS[*]}")"
 NAO_BRAINS_CSV="$(IFS=','; echo "${NAO_BRAINS[*]}")"
+ZEBRAFISH_BRAINS_CSV="$(IFS=','; echo "${ZEBRAFISH_BRAINS[*]}")"
 
 prepare_runtime_workspaces
 
@@ -1558,11 +1743,13 @@ python3 "$ROOT_DIR/scripts/build_webots_multi_world.py" \
   --drosophila-banc-proto "$DROSOPHILA_BANC_PROTO_FILE" \
   --drosophila-fafb-proto "$DROSOPHILA_FAFB_PROTO_FILE" \
   --hexapod-proto "$HEXAPOD_PROTO_FILE" \
+  --zebrafish-proto "$ZEBRAFISH_PROTO_FILE" \
   --celegans-brains "$CELEGANS_BRAINS_CSV" \
   --drosophila-banc-brains "$DROS_BANC_BRAINS_CSV" \
   --drosophila-fafb-brains "$DROS_FAFB_BRAINS_CSV" \
   --hexapod-brains "$HEXAPOD_BRAINS_CSV" \
-  --nao-brains "$NAO_BRAINS_CSV"
+  --nao-brains "$NAO_BRAINS_CSV" \
+  --zebrafish-brains "$ZEBRAFISH_BRAINS_CSV"
 
 echo "Multi-robot launch composition:"
 echo "  celegans: $COUNT_CELEGANS"
@@ -1570,6 +1757,7 @@ echo "  drosophila_banc: $COUNT_DROSOPHILA_BANC"
 echo "  drosophila_fafb: $COUNT_DROSOPHILA_FAFB"
 echo "  hexapod: $COUNT_HEXAPOD"
 echo "  nao: $COUNT_NAO"
+echo "  zebrafish: $COUNT_ZEBRAFISH"
 echo "  total robots/brains: $TOTAL_ROBOTS"
 echo "  world: $WORLD_FILE"
 echo "  brains: $BRAINS_CSV"

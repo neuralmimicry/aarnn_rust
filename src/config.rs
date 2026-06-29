@@ -134,6 +134,7 @@ pub enum AarnnBiomimicryProfile {
     Celegans,
     Drosophila,
     Hexapod,
+    ZebraFish,
 }
 
 impl AarnnBiomimicryProfile {
@@ -175,6 +176,14 @@ impl AarnnBiomimicryProfile {
             || squashed.contains("6leg")
         {
             return Some(Self::Hexapod);
+        }
+
+        if squashed.contains("zebrafish")
+            || squashed.contains("danio")
+            || squashed.contains("daniorerio")
+            || squashed.contains("seunglab")
+        {
+            return Some(Self::ZebraFish);
         }
 
         if squashed.contains("human")
@@ -1441,6 +1450,7 @@ pub fn apply_aarnn_biomimicry_profile_defaults(
         AarnnBiomimicryProfile::Celegans => apply_aarnn_celegans_biomimicry_defaults(cfg),
         AarnnBiomimicryProfile::Drosophila => apply_aarnn_drosophila_biomimicry_defaults(cfg),
         AarnnBiomimicryProfile::Hexapod => apply_aarnn_hexapod_biomimicry_defaults(cfg),
+        AarnnBiomimicryProfile::ZebraFish => apply_aarnn_zebrafish_biomimicry_defaults(cfg),
     }
 }
 
@@ -1776,12 +1786,96 @@ pub fn apply_aarnn_hexapod_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_clumping_design(cfg, ClumpingDesign::Hexapod);
 }
 
+/// Apply a larval zebrafish (*Danio rerio*) profile: myelinated vertebrate axons,
+/// active theta oscillations, functional thalamic gating, and partial early-stage
+/// myelination.  The spike_io profile is set to `zebrafish` so the lateral-line
+/// spontaneous-discharge encoding and smooth CPG motor decoding are selected
+/// automatically by `encode_profile_inputs_with` / `decode_profile_outputs`.
+pub fn apply_aarnn_zebrafish_biomimicry_defaults(cfg: &mut NetworkConfig) {
+    apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.spike_io.profile = NetworkIoProfileSelector::ZebraFish;
+
+    cfg.growth_enabled = true;
+    cfg.use_morphology = true;
+    cfg.morpho_growth_enabled = true;
+    cfg.development_growth_interval_ms = 7.0;
+    cfg.development_pruning_interval_ms = 35.0;
+    cfg.development_io_formation_interval_ms = 380.0;
+    cfg.development_stage_mode = DevelopmentStageMode::Auto;
+    cfg.development_stage = DevelopmentStage::AxonPathfinding;
+    cfg.development_stage_dendrite_start_ms = 4_500.0;
+    cfg.development_stage_synaptogenesis_start_ms = 16_000.0;
+    cfg.development_stage_refinement_start_ms = 70_000.0;
+    cfg.development_stage_myelination_start_ms = 140_000.0;
+    cfg.max_layers = cfg.max_layers.max(6);
+    cfg.layer_split_threshold = 8192;
+    cfg.spawn_radius = 0.038;
+    cfg.new_edge_prob = 0.018;
+    cfg.proximity_degree_cap = 4;
+
+    // Myelinated vertebrate axons — faster than invertebrate, slower than mammal.
+    cfg.aarnn_layer_depth = 4;
+    cfg.use_aarnn_delays = true;
+    cfg.aarnn_velocity = 8.2;
+    cfg.axon_velocity = 12.5;
+    cfg.dend_velocity = 4.8;
+    cfg.p_release_default = 0.68;
+    cfg.bouton_latency_ms = 0.30;
+    cfg.bouton_jitter_ms = 0.04;
+
+    // Vertebrate excitation/inhibition balance (~30% inhibitory interneurons).
+    cfg.aarnn_dale_strictness = 0.88;
+    cfg.aarnn_inhibitory_fraction = 0.30;
+    cfg.aarnn_gap_junction_strength = 0.04;
+    cfg.aarnn_gap_junction_radius = 0.22;
+    cfg.aarnn_gap_junction_inhibitory_only = false;
+    cfg.aarnn_nmda_voltage_sensitivity = 0.025;
+    cfg.aarnn_distance_attenuation_per_unit = 0.20;
+    cfg.aarnn_release_prob_heterogeneity = 0.14;
+
+    cfg.volume_transmission_enabled = true;
+    cfg.volume_transmission_radius = 0.15;
+    cfg.volume_transmission_strength = 0.06;
+    cfg.aarnn_triplet_ltp_gain = 0.14;
+    cfg.aarnn_triplet_ltd_gain = 0.09;
+    cfg.aarnn_synaptic_scaling_strength = 0.04;
+    cfg.aarnn_synaptic_scaling_target = 0.80;
+
+    // Larval stage: partial myelination — actively developing, not yet adult.
+    cfg.aarnn_myelination_enabled = true;
+    cfg.aarnn_myelination_rate = 0.0004;
+    cfg.aarnn_demyelination_rate = 0.00005;
+    cfg.aarnn_myelination_activity_target = 0.08;
+    cfg.aarnn_myelin_min_conduction_gain = 1.0;
+    cfg.aarnn_myelin_max_conduction_gain = 3.5;
+    cfg.aarnn_myelin_initial = 0.40;
+
+    // Zebrafish brain oscillatory systems.
+    cfg.perceptual_loop_enabled = true;
+    cfg.world_model_enabled = true;
+    cfg.sleep_enabled = true;
+    cfg.sleep_cycle_ms = 120_000.0;  // ~2 min larval circadian cycle
+    cfg.sleep_duration_ms = 800.0;
+    cfg.theta_rhythm_enabled = true;
+    cfg.theta_rhythm_hz = 7.0;       // zebrafish hippocampal-homolog theta ~7 Hz
+    cfg.theta_rhythm_duty = 0.22;
+    cfg.theta_rhythm_phase_jitter = 0.04;
+    cfg.thalamic_gating_enabled = true;  // zebrafish has a functional thalamus equivalent
+
+    cfg.aarnn_import_topology_rewire_enabled = true;
+    cfg.aarnn_import_topology_rewire_keep_fraction = 0.78;
+    cfg.aarnn_import_topology_rewire_region_bias = 0.35;
+
+    apply_clumping_design(cfg, ClumpingDesign::ZebraFish);
+}
+
 /// Infer the closest biomimicry profile from a resolved network configuration.
 pub fn infer_biomimicry_profile(cfg: &NetworkConfig) -> AarnnBiomimicryProfile {
     match cfg.spike_io.profile {
         NetworkIoProfileSelector::Celegans => return AarnnBiomimicryProfile::Celegans,
         NetworkIoProfileSelector::Drosophila => return AarnnBiomimicryProfile::Drosophila,
         NetworkIoProfileSelector::Hexapod => return AarnnBiomimicryProfile::Hexapod,
+        NetworkIoProfileSelector::ZebraFish => return AarnnBiomimicryProfile::ZebraFish,
         _ => {}
     }
 
@@ -1791,6 +1885,7 @@ pub fn infer_biomimicry_profile(cfg: &NetworkConfig) -> AarnnBiomimicryProfile {
             AarnnBiomimicryProfile::Drosophila
         }
         ClumpingDesign::Hexapod => AarnnBiomimicryProfile::Hexapod,
+        ClumpingDesign::ZebraFish => AarnnBiomimicryProfile::ZebraFish,
         _ => AarnnBiomimicryProfile::Human,
     }
 }

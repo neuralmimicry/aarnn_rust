@@ -24,23 +24,27 @@ CELEGANS_SENSORS_REGEX = r"^celegans_s_[0-9]{2}_.*$"
 CELEGANS_ACTUATORS_REGEX = r"^celegans_o_[0-9]{3}_.*$"
 HEXAPOD_SENSORS_REGEX = r"^hex_s_[0-9]{2}_.*$"
 HEXAPOD_ACTUATORS_REGEX = r"^hex_o_[0-9]{3}_.*$"
+ZEBRAFISH_SENSORS_REGEX = r"^zebrafish_s_[0-9]{2}_.*$"
+ZEBRAFISH_ACTUATORS_REGEX = r"^zebrafish_o_[0-9]{2}_.*$"
 
 # Approximate per-robot scene footprint used for startup camera framing.
 # These values intentionally include the nearby stimulus props placed around
 # each robot, not only the body mesh.
 ROBOT_VIEW_RADIUS = {
-    "celegans": 0.55,
+    "celegans":  0.55,
     "drosophila": 0.80,
-    "hexapod": 1.25,
-    "nao": 2.80,
+    "hexapod":   1.25,
+    "nao":       2.80,
+    "zebrafish": 0.45,
 }
 
 # Clear region to preserve around each robot before adding room furniture.
 ROBOT_ZONE_CLEAR_RADIUS = {
-    "celegans": 0.78,
+    "celegans":  0.78,
     "drosophila": 0.92,
-    "hexapod": 1.45,
-    "nao": 1.95,
+    "hexapod":   1.45,
+    "nao":       1.95,
+    "zebrafish": 0.60,
 }
 
 
@@ -103,6 +107,8 @@ def kind_zone_offsets(kind: str, count: int) -> List[Tuple[float, float]]:
         return centered_grid_offsets(count, 1.28, 1.10, max_cols=3 if count >= 5 else 2)
     if kind == "hexapod":
         return centered_grid_offsets(count, 2.05, 1.75, max_cols=2)
+    if kind == "zebrafish":
+        return centered_grid_offsets(count, 0.30, 0.22, max_cols=4 if count >= 5 else 3)
     return centered_grid_offsets(count, 2.65, 2.35, max_cols=2)
 
 
@@ -139,7 +145,27 @@ def mixed_zone_centers(zone_extents: dict[str, Tuple[float, float]]) -> dict[str
     has_drosophila = "drosophila" in kinds
     has_nao = "nao" in kinds
     has_hexapod = "hexapod" in kinds
+    has_zebrafish = "zebrafish" in kinds
     centers: dict[str, Tuple[float, float]] = {}
+
+    # Zebrafish always go into an aquarium tank zone offset to one side so they
+    # sit visually apart from land robots.  Mixing zebrafish with only other
+    # small bio (celegans/drosophila) places the tank on the right flank.
+    if has_zebrafish and kinds == {"zebrafish"}:
+        centers["zebrafish"] = (0.0, 0.0)
+        return centers
+    if has_zebrafish:
+        zf_ext = zone_extents["zebrafish"]
+        land_kinds = kinds - {"zebrafish"}
+        land_half_x = max(
+            (zone_extents[k][0] for k in land_kinds), default=0.5
+        )
+        centers["zebrafish"] = (land_half_x + zf_ext[0] + 1.2, 0.0)
+        # Re-enter without zebrafish so the existing layout policy handles land robots
+        land_extents = {k: v for k, v in zone_extents.items() if k != "zebrafish"}
+        land_centers = mixed_zone_centers(land_extents)
+        centers.update(land_centers)
+        return centers
 
     if has_nao or has_hexapod:
         small_front_depth = max(
@@ -818,7 +844,10 @@ def startup_camera(
     has_large = bool(robot_kinds.intersection({"nao", "hexapod"}))
     only_small_bio = robot_kinds.issubset({"celegans", "drosophila"})
 
-    if len(entries) == 1 and robot_kinds == {"celegans"}:
+    if len(entries) == 1 and robot_kinds == {"zebrafish"}:
+        cam_height = max(0.35, scene_radius * 2.20)
+        fov = 0.68
+    elif len(entries) == 1 and robot_kinds == {"celegans"}:
         cam_height = max(1.20, scene_radius * 2.60)
         fov = 0.72
     elif only_small_bio and not has_large:
@@ -845,6 +874,8 @@ def scene_target_height(entries: List[tuple[str, str, str, float, str]]) -> floa
         return 0.14
     if robot_kinds == {"celegans"}:
         return 0.08
+    if robot_kinds == {"zebrafish"}:
+        return 0.02
     return 0.18
 
 
@@ -868,6 +899,10 @@ def robot_node(
             axis_angle_to_matrix(1.0, 0.0, 0.0, math.pi * 0.5),
         )
         rot_x, rot_y, rot_z, rot_angle = rotation_matrix_to_axis_angle(rotation_matrix)
+    elif robot_kind == "zebrafish":
+        # Zebrafish PROTO is already in Webots Z-up convention (X = forward).
+        # Apply only the planar heading around Z.
+        rot_x, rot_y, rot_z, rot_angle = 0.0, 0.0, 1.0, yaw
     else:
         rot_x, rot_y, rot_z, rot_angle = 0.0, 0.0, 1.0, yaw
     return f"""{proto_name} {{
@@ -1577,6 +1612,79 @@ def build_nao_interactive_ecology(
     return "\n".join(blocks)
 
 
+def build_zebrafish_interactive_ecology(
+    robot_name: str,
+    x: float,
+    z: float,
+    forward_x: float,
+    forward_z: float,
+    lateral_x: float,
+    lateral_z: float,
+    bound: float,
+) -> str:
+    """
+    Build a compact aquarium micro-ecology around one zebrafish spawn.
+
+    Provides stimuli for all 32 sensor channels: gravel patch for olfactory/
+    chemical cues, a pebble for lateral-line reflections, a coloured panel for
+    visual contrast, and a current-directing fin guide for flow sensors.
+    """
+    prefix = robot_name.lower()
+    yaw = math.atan2(forward_z, forward_x)
+    blocks: List[str] = [
+        # Gravel-bed floor patch (chemical / olfactory cue zone)
+        floor_patch_box(
+            x, z, 0.001,
+            size_x=0.28, size_y=0.22, size_z=0.003,
+            color=(0.42, 0.36, 0.26), roughness=0.94,
+            rotation=yaw_rotation(yaw),
+        )
+    ]
+
+    # Pebble cluster — lateral line reflection cue
+    for suffix, lf, ll, radius, color in (
+        ("pebble_a",  0.07,  0.03, 0.008, (0.55, 0.52, 0.48)),
+        ("pebble_b",  0.05, -0.04, 0.006, (0.62, 0.58, 0.54)),
+        ("pebble_c", -0.04,  0.05, 0.007, (0.48, 0.45, 0.42)),
+    ):
+        px, pz = oriented_floor_point(
+            x, z, forward_x, forward_z, lateral_x, lateral_z,
+            forward=lf, lateral=ll, bound=bound)
+        blocks.append(sphere_node(
+            f"eco_{prefix}_{suffix}", px, pz, 0.008,
+            radius=radius, color=color, roughness=0.62))
+
+    # Coloured visual-contrast panel (eye / light sensor target)
+    panel_x, panel_z = oriented_floor_point(
+        x, z, forward_x, forward_z, lateral_x, lateral_z,
+        forward=0.12, lateral=-0.08, bound=bound)
+    blocks.append(box_node(
+        f"eco_{prefix}_vis_panel", panel_x, panel_z, 0.022,
+        size_x=0.006, size_y=0.028, size_z=0.040,
+        color=(0.30, 0.68, 0.90), roughness=0.28,
+        emissive_color=(0.04, 0.10, 0.14),
+        rotation=yaw_rotation(yaw)))
+
+    # Aquatic point light (simulates bioluminescent/chemical source)
+    warm_x, warm_z = oriented_floor_point(
+        x, z, forward_x, forward_z, lateral_x, lateral_z,
+        forward=0.14, lateral=0.10, bound=bound)
+    blocks.append(point_light_node(
+        warm_x, warm_z, 0.06,
+        color=(0.60, 0.90, 1.00), intensity=0.28,
+        attenuation=12.0, radius=0.40))
+
+    # Flow obstacle (flow sensor wake cue — a thin vertical post)
+    post_x, post_z = oriented_floor_point(
+        x, z, forward_x, forward_z, lateral_x, lateral_z,
+        forward=0.09, lateral=0.00, bound=bound)
+    blocks.append(cylinder_node(
+        f"eco_{prefix}_flow_post", post_x, post_z, 0.018,
+        radius=0.004, height=0.036, color=(0.70, 0.65, 0.50), roughness=0.55))
+
+    return "\n".join(blocks)
+
+
 def build_robot_stimuli(
     entries: List[tuple[str, str, str, float, str]],
     positions: List[Tuple[float, float]],
@@ -1611,6 +1719,19 @@ def build_robot_stimuli(
         elif robot_kind == "drosophila":
             blocks.append(
                 build_drosophila_interactive_ecology(
+                    robot_name,
+                    x,
+                    z,
+                    forward_x,
+                    forward_z,
+                    lateral_x,
+                    lateral_z,
+                    bound,
+                )
+            )
+        elif robot_kind == "zebrafish":
+            blocks.append(
+                build_zebrafish_interactive_ecology(
                     robot_name,
                     x,
                     z,
@@ -1730,6 +1851,110 @@ Transform {{
   ]
 }}"""
             )
+        elif robot_kind == "zebrafish":
+            # Elevated aquarium tank so the fish share the arena with land animals.
+            # The tank sits on the arena floor; its internal floor is at Z=0.06 m
+            # and the water surface at Z=0.22 m.  The zebrafish spawns at Z=0.14 m
+            # (8 cm above the tank floor, inside the water volume).
+            # Other robots (celegans, drosophila, hexapod) continue to operate at
+            # ground level (Z~0) in the same world.
+            tank_cx, tank_cz = x, z
+            tw, td = 0.42, 0.32      # tank width (X), depth (Y in world / Z in code)
+            tf_thick = 0.06          # physical floor thickness (box from Z=0 to Z=0.06)
+            t_wall_h = 0.18          # glass wall height above floor (Z=0.06 to Z=0.24)
+            t_wall_t = 0.006         # glass wall thickness
+            water_z  = tf_thick + t_wall_h * 0.82  # water surface (visual only)
+
+            # --- physical tank floor (gravel-coloured, sits on arena ground) ---
+            blocks.append(f"""Solid {{
+  translation {tank_cx:.4f} {tank_cz:.4f} {tf_thick * 0.5:.4f}
+  name "zone_{robot_name.lower()}_tank_floor"
+  children [
+    Shape {{
+      appearance PBRAppearance {{
+        baseColor 0.44 0.38 0.28
+        roughness 0.92
+      }}
+      geometry Box {{
+        size {tw:.3f} {td:.3f} {tf_thick:.3f}
+      }}
+    }}
+  ]
+  boundingObject Box {{ size {tw:.3f} {td:.3f} {tf_thick:.3f} }}
+  physics Physics {{ density -1 mass 0.200 }}
+}}""")
+
+            # --- four glass walls (front, back, left, right) ---
+            wall_z_center = tf_thick + t_wall_h * 0.5
+            glass_appearance = """PBRAppearance {
+        baseColor 0.7 0.9 1.0
+        roughness 0.04
+        metalness 0
+        transparency 0.82
+      }"""
+            # front wall (+Y edge)
+            blocks.append(f"""Solid {{
+  translation {tank_cx:.4f} {tank_cz + td * 0.5:.4f} {wall_z_center:.4f}
+  name "zone_{robot_name.lower()}_wall_front"
+  children [
+    Shape {{
+      appearance {glass_appearance}
+      geometry Box {{ size {tw:.3f} {t_wall_t:.3f} {t_wall_h:.3f} }}
+    }}
+  ]
+  boundingObject Box {{ size {tw:.3f} {t_wall_t:.3f} {t_wall_h:.3f} }}
+}}""")
+            # back wall (-Y edge)
+            blocks.append(f"""Solid {{
+  translation {tank_cx:.4f} {tank_cz - td * 0.5:.4f} {wall_z_center:.4f}
+  name "zone_{robot_name.lower()}_wall_back"
+  children [
+    Shape {{
+      appearance {glass_appearance}
+      geometry Box {{ size {tw:.3f} {t_wall_t:.3f} {t_wall_h:.3f} }}
+    }}
+  ]
+  boundingObject Box {{ size {tw:.3f} {t_wall_t:.3f} {t_wall_h:.3f} }}
+}}""")
+            # left wall (-X edge)
+            blocks.append(f"""Solid {{
+  translation {tank_cx - tw * 0.5:.4f} {tank_cz:.4f} {wall_z_center:.4f}
+  name "zone_{robot_name.lower()}_wall_left"
+  children [
+    Shape {{
+      appearance {glass_appearance}
+      geometry Box {{ size {t_wall_t:.3f} {td:.3f} {t_wall_h:.3f} }}
+    }}
+  ]
+  boundingObject Box {{ size {t_wall_t:.3f} {td:.3f} {t_wall_h:.3f} }}
+}}""")
+            # right wall (+X edge)
+            blocks.append(f"""Solid {{
+  translation {tank_cx + tw * 0.5:.4f} {tank_cz:.4f} {wall_z_center:.4f}
+  name "zone_{robot_name.lower()}_wall_right"
+  children [
+    Shape {{
+      appearance {glass_appearance}
+      geometry Box {{ size {t_wall_t:.3f} {td:.3f} {t_wall_h:.3f} }}
+    }}
+  ]
+  boundingObject Box {{ size {t_wall_t:.3f} {td:.3f} {t_wall_h:.3f} }}
+}}""")
+            # water surface (visual plane, no bounding object)
+            blocks.append(f"""Transform {{
+  translation {tank_cx:.4f} {tank_cz:.4f} {water_z:.4f}
+  children [
+    Shape {{
+      appearance PBRAppearance {{
+        baseColor 0.35 0.62 0.90
+        roughness 0.04
+        metalness 0.10
+        transparency 0.68
+      }}
+      geometry Box {{ size {tw * 0.96:.3f} {td * 0.96:.3f} 0.001 }}
+    }}
+  ]
+}}""")
         elif robot_kind == "drosophila":
             perch_x, perch_z = clamp_room_point(
                 x + outward_x * (clearance + 0.82) - lateral_x * 0.22,
@@ -1944,6 +2169,8 @@ def build_environment_block(
     center_x, center_z, scene_radius, span_x, span_z = scene_metrics(entries, positions)
     robot_kinds = {robot_kind for (_, _, _, _, robot_kind) in entries}
     has_nao = bool(robot_kinds.intersection({"nao", "hexapod"}))
+    has_zebrafish = "zebrafish" in robot_kinds
+    only_zebrafish = robot_kinds == {"zebrafish"}
 
     floor_size = max(6.8, room_half_size * 2.0)
     arena_size = max(5.6, floor_size - 0.9)
@@ -1984,6 +2211,37 @@ def build_environment_block(
 """
 
     zone_props = build_demo_zone_furniture(entries, positions, room_half_size)
+
+    # Water surface overlay for zebrafish scenes (visual only — Webots has no
+    # fluid simulation, but the plane makes the aquarium legible in the viewer).
+    water_block = ""
+    if has_zebrafish:
+        zf_positions = [(x, z) for (_, _, _, _, k), (x, z) in zip(entries, positions)
+                        if k == "zebrafish"]
+        if zf_positions:
+            wc_x = sum(p[0] for p in zf_positions) / len(zf_positions)
+            wc_z = sum(p[1] for p in zf_positions) / len(zf_positions)
+            water_block = f"""Transform {{
+  translation {wc_x:.4f} {wc_z:.4f} 0.030
+  children [
+    Shape {{
+      appearance PBRAppearance {{
+        baseColor 0.35 0.62 0.90
+        roughness 0.04
+        metalness 0.10
+        transparency 0.68
+      }}
+      geometry Box {{
+        size {max(0.80, scene_radius * 1.6):.2f} {max(0.60, scene_radius * 1.4):.2f} 0.001
+      }}
+    }}
+  ]
+}}
+"""
+
+    # For zebrafish-only worlds use reduced gravity (buoyancy approximation).
+    gravity_line = "gravity 2.2" if only_zebrafish else "gravity 9.81"
+
     return f"""# Scene-aware demo hall with clear robot zones and low-profile staging.
 RectangleArena {{
   floorSize {arena_size:.2f} {arena_size:.2f}
@@ -2074,7 +2332,7 @@ PointLight {{
   radius {max(6.5, scene_radius * 2.5):.2f}
   castShadows FALSE
 }}
-{storage_block}{zone_props}"""
+{storage_block}{zone_props}{water_block}"""
 
 
 
@@ -2085,11 +2343,13 @@ def main() -> None:
     parser.add_argument("--drosophila-banc-proto", default="", help="Path to DrosophilaBancRobot.proto")
     parser.add_argument("--drosophila-fafb-proto", default="", help="Path to DrosophilaFafbRobot.proto")
     parser.add_argument("--hexapod-proto", default="", help="Path to HexapodRobot.proto")
+    parser.add_argument("--zebrafish-proto", default="", help="Path to ZebrafishRobot.proto")
     parser.add_argument("--celegans-brains", default="", help="CSV brain IDs for celegans instances")
     parser.add_argument("--drosophila-banc-brains", default="", help="CSV brain IDs for BANC drosophila instances")
     parser.add_argument("--drosophila-fafb-brains", default="", help="CSV brain IDs for FAFB drosophila instances")
     parser.add_argument("--hexapod-brains", default="", help="CSV brain IDs for hexapod instances")
     parser.add_argument("--nao-brains", default="", help="CSV brain IDs for NAO instances")
+    parser.add_argument("--zebrafish-brains", default="", help="CSV brain IDs for zebrafish instances")
     parser.add_argument(
         "--fridge",
         choices=["auto", "on", "off"],
@@ -2109,10 +2369,12 @@ def main() -> None:
     fafb_brains = parse_csv(args.drosophila_fafb_brains)
     hexapod_brains = parse_csv(args.hexapod_brains)
     nao_brains = parse_csv(args.nao_brains)
+    zebrafish_brains = parse_csv(args.zebrafish_brains)
     has_celegans = bool(celegans_brains)
     has_drosophila = bool(banc_brains or fafb_brains)
     has_hexapod = bool(hexapod_brains)
     has_nao = bool(nao_brains)
+    has_zebrafish = bool(zebrafish_brains)
     if args.fridge == "on":
         include_fridge = True
     elif args.fridge == "off":
@@ -2120,7 +2382,7 @@ def main() -> None:
     else:
         # Avoid articulated heavy fixtures in mixed/tiny-body scenes where they
         # can trigger large mass-ratio instability warnings.
-        include_fridge = has_nao and not (has_celegans or has_drosophila or has_hexapod)
+        include_fridge = has_nao and not (has_celegans or has_drosophila or has_hexapod or has_zebrafish)
 
     total = (
         len(celegans_brains)
@@ -2128,6 +2390,7 @@ def main() -> None:
         + len(fafb_brains)
         + len(hexapod_brains)
         + len(nao_brains)
+        + len(zebrafish_brains)
     )
     if total <= 0:
         raise SystemExit("At least one robot brain must be provided.")
@@ -2176,6 +2439,16 @@ def main() -> None:
     if nao_brains:
         extern_lines.append(f'EXTERNPROTO "{NAO_EXTERNPROTO}"')
 
+    for i, brain in enumerate(zebrafish_brains, 1):
+        # Spawn at Z=0.14 m — 8 cm inside the elevated aquarium tank
+        # (tank floor top is at Z=0.06; water surface at Z=0.22).
+        entries.append(("ZebrafishRobot", f"ZEBRAFISH_{i:02d}", brain, 0.14, "zebrafish"))
+    if zebrafish_brains:
+        if not args.zebrafish_proto:
+            raise SystemExit("zebrafish brains are set but --zebrafish-proto is missing.")
+        zebrafish_ref = rel_proto_ref(world_path, Path(args.zebrafish_proto))
+        extern_lines.append(f'EXTERNPROTO "{zebrafish_ref}"')
+
     positions, keepout_radius, arena_half_size = layout_positions(entries)
     center_x, center_z, _scene_radius, _span_x, _span_z = scene_metrics(entries, positions)
 
@@ -2192,6 +2465,9 @@ def main() -> None:
         elif robot_kind == "hexapod":
             controller_args.append(f"NM_SENSORS_{brain_id}={HEXAPOD_SENSORS_REGEX}")
             controller_args.append(f"NM_ACTUATORS_{brain_id}={HEXAPOD_ACTUATORS_REGEX}")
+        elif robot_kind == "zebrafish":
+            controller_args.append(f"NM_SENSORS_{brain_id}={ZEBRAFISH_SENSORS_REGEX}")
+            controller_args.append(f"NM_ACTUATORS_{brain_id}={ZEBRAFISH_ACTUATORS_REGEX}")
         robot_nodes.append(robot_node(proto_name, robot_name, brain_id, x, height, z, robot_kind, yaw, controller_args))
 
     cam_fov, cam_x, cam_y, cam_z = startup_camera(entries, positions)
@@ -2214,9 +2490,8 @@ WorldInfo {{
   # Slightly larger time step to keep Webots responsive with articulated
   # multi-robot scenes and clustered controller traffic.
   basicTimeStep 32
-  # Explicit gravity magnitude keeps Webots' standard -Z downward acceleration
-  # active for loose props, articulated robots, and contact responses.
-  gravity 9.81
+  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
+  gravity {2.2 if {k for (_, _, _, _, k) in entries} == {"zebrafish"} else 9.81:.1f}
 }}
 Viewpoint {{
   fieldOfView {cam_fov:.2f}
@@ -2251,7 +2526,8 @@ DirectionalLight {{
     print(
         f"Wrote {world_path} with {len(entries)} robots "
         f"(celegans={len(celegans_brains)}, banc={len(banc_brains)}, "
-        f"fafb={len(fafb_brains)}, hexapod={len(hexapod_brains)}, nao={len(nao_brains)})"
+        f"fafb={len(fafb_brains)}, hexapod={len(hexapod_brains)}, "
+        f"nao={len(nao_brains)}, zebrafish={len(zebrafish_brains)})"
     )
 
 

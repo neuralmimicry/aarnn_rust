@@ -842,6 +842,74 @@ fn stage_policy_for_profile(
                 myelination_enabled: false,
             }
         }
+        // Zebrafish (larval Danio rerio): vertebrate staging intermediate between
+        // Human and Drosophila.  Myelination is enabled in the final stage
+        // because larval axons begin myelinating by 3-4 dpf.
+        (AarnnBiomimicryProfile::ZebraFish, DevelopmentStage::AxonPathfinding) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.62,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.84,
+                stabilization_boost_scale: 0.90,
+                morpho_interval_scale: 0.80,
+                metabolic_interval_scale: 0.84,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::ZebraFish, DevelopmentStage::DendriticArborization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.78,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.90,
+                stabilization_boost_scale: 1.00,
+                morpho_interval_scale: 0.88,
+                metabolic_interval_scale: 0.90,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::ZebraFish, DevelopmentStage::Synaptogenesis) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 0.92,
+                pruning_interval_scale: 1.00,
+                io_formation_interval_scale: 0.96,
+                stabilization_boost_scale: 1.14,
+                morpho_interval_scale: 0.94,
+                metabolic_interval_scale: 0.98,
+                pruning_enabled: false,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::ZebraFish, DevelopmentStage::RefinementPruning) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.08,
+                pruning_interval_scale: 0.56,
+                io_formation_interval_scale: 1.06,
+                stabilization_boost_scale: 1.30,
+                morpho_interval_scale: 1.06,
+                metabolic_interval_scale: 1.06,
+                pruning_enabled: true,
+                myelination_enabled: false,
+            }
+        }
+        (AarnnBiomimicryProfile::ZebraFish, DevelopmentStage::MyelinationStabilization) => {
+            DevelopmentStagePolicy {
+                stage,
+                growth_interval_scale: 1.28,
+                pruning_interval_scale: 0.82,
+                io_formation_interval_scale: 1.14,
+                stabilization_boost_scale: 1.38,
+                morpho_interval_scale: 1.18,
+                metabolic_interval_scale: 1.14,
+                pruning_enabled: true,
+                myelination_enabled: true,  // larval zebrafish axons are myelinating
+            }
+        }
     }
 }
 
@@ -861,6 +929,8 @@ fn early_cell_guidance_policy(
         AarnnBiomimicryProfile::Drosophila => (0.19f32, 0.81f32, 1.10f32, 0.14f32),
         AarnnBiomimicryProfile::Celegans => (0.16f32, 0.78f32, 1.25f32, 0.12f32),
         AarnnBiomimicryProfile::Hexapod => (0.18f32, 0.80f32, 1.16f32, 0.13f32),
+        // Zebrafish: vertebrate dynamics, intermediate between Human and Drosophila.
+        AarnnBiomimicryProfile::ZebraFish => (0.20f32, 0.82f32, 1.05f32, 0.15f32),
     };
 
     let (spec_delta, mig_delta, speed_scale, repulsion_scale, settling_scale): (
@@ -1559,7 +1629,8 @@ impl Runner {
                 // Non-cortical profiles are kept as compact feed-through stacks.
                 AarnnBiomimicryProfile::Celegans
                 | AarnnBiomimicryProfile::Drosophila
-                | AarnnBiomimicryProfile::Hexapod => (0, num.saturating_sub(1)),
+                | AarnnBiomimicryProfile::Hexapod
+                | AarnnBiomimicryProfile::ZebraFish => (0, num.saturating_sub(1)),
             }
         } else {
             (0, num.saturating_sub(1))
@@ -11120,6 +11191,9 @@ impl Runner {
                     AarnnBiomimicryProfile::Drosophila | AarnnBiomimicryProfile::Hexapod => {
                         Some((6.0f64, 256.0f64))
                     }
+                    // Zebrafish CPG output: moderate boost to ensure tail motor
+                    // neurons produce visible drive despite partial myelination.
+                    AarnnBiomimicryProfile::ZebraFish => Some((7.0f64, 384.0f64)),
                 };
                 if let Some((target_peak, max_gain)) = gain_spec {
                     let peak = i_o.iter().fold(0.0f64, |mx, &v| mx.max(v.abs())).max(0.0);
@@ -15999,7 +16073,8 @@ impl Runner {
             AarnnBiomimicryProfile::Human => 1usize,
             AarnnBiomimicryProfile::Celegans
             | AarnnBiomimicryProfile::Drosophila
-            | AarnnBiomimicryProfile::Hexapod => (h_out / 12).clamp(8, 32),
+            | AarnnBiomimicryProfile::Hexapod
+            | AarnnBiomimicryProfile::ZebraFish => (h_out / 12).clamp(8, 32),
         }
         .min(h_out.max(1));
         let sensory_cap = if self.net.max_sensory_connections == 0 {
@@ -16267,6 +16342,8 @@ impl Runner {
             AarnnBiomimicryProfile::Drosophila => 0.75,
             AarnnBiomimicryProfile::Celegans => 0.50,
             AarnnBiomimicryProfile::Hexapod => 0.68,
+            // Vertebrate: faster myelination-driven stabilisation than invertebrates.
+            AarnnBiomimicryProfile::ZebraFish => 0.82,
         };
         let depth_scale = 1.0 + target_layer as f32 * 0.08;
         let migration_dist = Self::dist3(start, target).max(0.0);

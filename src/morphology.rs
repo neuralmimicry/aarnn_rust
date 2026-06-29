@@ -1315,7 +1315,8 @@ fn morphology_io_layers(
             ),
             crate::config::AarnnBiomimicryProfile::Celegans
             | crate::config::AarnnBiomimicryProfile::Drosophila
-            | crate::config::AarnnBiomimicryProfile::Hexapod => {
+            | crate::config::AarnnBiomimicryProfile::Hexapod
+            | crate::config::AarnnBiomimicryProfile::ZebraFish => {
                 (0, num_hidden_layers.saturating_sub(1))
             }
         }
@@ -1355,7 +1356,8 @@ fn morphology_output_connectivity_floor(
         crate::config::AarnnBiomimicryProfile::Human => 1usize,
         crate::config::AarnnBiomimicryProfile::Celegans
         | crate::config::AarnnBiomimicryProfile::Drosophila
-        | crate::config::AarnnBiomimicryProfile::Hexapod => (hidden_out_count / 12).clamp(8, 32),
+        | crate::config::AarnnBiomimicryProfile::Hexapod
+        | crate::config::AarnnBiomimicryProfile::ZebraFish => (hidden_out_count / 12).clamp(8, 32),
     };
     suggested.min(hidden_out_count.max(1))
 }

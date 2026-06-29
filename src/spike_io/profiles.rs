@@ -21,6 +21,12 @@ pub enum NetworkIoProfile {
     Drosophila,
     Hexapod,
     Nao,
+    /// Larval/adult zebrafish (*Danio rerio*).  Lateral-line channels (indices 0-15)
+    /// use spontaneous-discharge rate encoding; all other modalities use standard
+    /// vertebrate rate encoding.  Motor output uses smooth graded decoding tuned
+    /// for undulatory CPG-driven tail motion.
+    #[serde(rename = "zebrafish")]
+    ZebraFish,
     Generic,
 }
 
@@ -31,6 +37,7 @@ impl NetworkIoProfile {
             Self::Drosophila => "drosophila",
             Self::Hexapod => "hexapod",
             Self::Nao => "nao",
+            Self::ZebraFish => "zebrafish",
             Self::Generic => "generic",
         }
     }
@@ -46,6 +53,8 @@ pub enum NetworkIoProfileSelector {
     Drosophila,
     Hexapod,
     Nao,
+    #[serde(rename = "zebrafish")]
+    ZebraFish,
     Generic,
 }
 
@@ -63,6 +72,7 @@ impl NetworkIoProfileSelector {
             Self::Drosophila => "drosophila",
             Self::Hexapod => "hexapod",
             Self::Nao => "nao",
+            Self::ZebraFish => "zebrafish",
             Self::Generic => "generic",
         }
     }
@@ -239,6 +249,15 @@ pub struct ProfileInputEncoding {
     pub drosophila_rate: RateEncoding,
     pub hexapod_rate: RateEncoding,
     pub nao_rate: RateEncoding,
+    /// Zebrafish lateral-line channels (indices 0-15): neuromast hair cells have a
+    /// non-zero resting discharge even in still water.  `quiet_floor` encodes that
+    /// spontaneous rate (~6%), `silence_threshold = -1.0` ensures every channel is
+    /// evaluated rather than skipped at zero input.
+    pub zebrafish_lateral_line_rate: RateEncoding,
+    /// Zebrafish non-lateral-line modalities: visual (tectum), olfactory, flow,
+    /// and inertial channels (indices 16-31).  Lower spontaneous floor; moderate
+    /// gain reflecting vertebrate receptor range-to-spike transfer functions.
+    pub zebrafish_rate: RateEncoding,
 }
 
 impl Default for ProfileInputEncoding {
@@ -259,6 +278,34 @@ impl Default for ProfileInputEncoding {
                 low_gain: 0.18,
                 quiet_floor: 0.001,
                 ..RateEncoding::default()
+            },
+            // Lateral line: high quiet_floor models spontaneous hair-cell discharge;
+            // silence_threshold = -1 means even zero-input channels are sampled so
+            // background oscillations reach the network.
+            zebrafish_lateral_line_rate: RateEncoding {
+                quiet_floor: 0.062,
+                quiet_floor_boost: 1.0,  // don't double the floor — 6% IS the resting rate
+                low_gain: 0.32,
+                high_value_threshold: 0.5,
+                high_value_bias: 0.78,
+                high_value_scale: 0.22,
+                max_low_probability: 0.96,
+                max_probability: 1.0,
+                hard_fire_threshold: 0.999,
+                silence_threshold: -1.0,  // never skip — spontaneous discharge at rest
+            },
+            // Non-LL modalities: standard vertebrate rate, low resting floor.
+            zebrafish_rate: RateEncoding {
+                quiet_floor: 0.003,
+                quiet_floor_boost: 1.8,
+                low_gain: 0.28,
+                high_value_threshold: 0.5,
+                high_value_bias: 0.82,
+                high_value_scale: 0.18,
+                max_low_probability: 0.95,
+                max_probability: 1.0,
+                hard_fire_threshold: 0.999,
+                silence_threshold: 0.0,
             },
         }
     }
@@ -281,6 +328,13 @@ pub struct ProfileOutputEncoding {
     pub nao_output_gain: f32,
     pub nao_output_current_gain: f32,
     pub nao_output_current_mix: f32,
+    /// Zebrafish motor output.  Tuned for CPG-driven undulatory tail-beating:
+    /// - Moderate membrane gain (smooth sinusoidal curvature, not binary on/off).
+    /// - Moderate current contribution (captures sub-threshold premotor drive).
+    /// - Low mix ratio keeps membrane-potential grading dominant over current.
+    pub zebrafish_output_gain: f32,
+    pub zebrafish_output_current_gain: f32,
+    pub zebrafish_output_current_mix: f32,
 }
 
 impl Default for ProfileOutputEncoding {
@@ -300,6 +354,9 @@ impl Default for ProfileOutputEncoding {
             nao_output_gain: 0.92,
             nao_output_current_gain: 0.42,
             nao_output_current_mix: 0.38,
+            zebrafish_output_gain: 0.80,
+            zebrafish_output_current_gain: 0.28,
+            zebrafish_output_current_mix: 0.22,
         }
     }
 }
@@ -318,6 +375,11 @@ pub fn classify_network_io_profile(sensory_count: usize, output_count: usize) ->
     if output_count == 40 && sensory_count >= 1024 {
         return NetworkIoProfile::Nao;
     }
+    // Zebrafish: 32 sensory (lateral line + visual + olfactory + IMU) × 32 motor
+    // (8 tail segments × 2 sides + fins + jaw).
+    if output_count == 32 && sensory_count == 32 {
+        return NetworkIoProfile::ZebraFish;
+    }
     NetworkIoProfile::Generic
 }
 
@@ -334,6 +396,7 @@ pub fn resolve_network_io_profile(
         NetworkIoProfileSelector::Drosophila => NetworkIoProfile::Drosophila,
         NetworkIoProfileSelector::Hexapod => NetworkIoProfile::Hexapod,
         NetworkIoProfileSelector::Nao => NetworkIoProfile::Nao,
+        NetworkIoProfileSelector::ZebraFish => NetworkIoProfile::ZebraFish,
         NetworkIoProfileSelector::Generic => NetworkIoProfile::Generic,
     }
 }
@@ -423,6 +486,31 @@ pub fn encode_profile_inputs_with<F>(
         }
         NetworkIoProfile::Nao => {
             rate_encode_with(inputs, dst, &mut sample, cfg.nao_rate);
+        }
+        NetworkIoProfile::ZebraFish => {
+            // Zone 1 – lateral line (channels 0-15): neuromast hair cells fire
+            // spontaneously even in still water.  Use a rate config with a non-zero
+            // quiet_floor and silence_threshold = -1 so every channel is sampled.
+            let ll_end = 16.min(dst.len());
+            if ll_end > 0 {
+                rate_encode_with(
+                    &inputs[..ll_end.min(inputs.len())],
+                    &mut dst[..ll_end],
+                    &mut sample,
+                    cfg.zebrafish_lateral_line_rate,
+                );
+            }
+            // Zone 2 – visual, olfactory, flow, inertial (channels 16-31): standard
+            // vertebrate rate encoding with a low resting floor.
+            if ll_end < dst.len() {
+                let rest_start = ll_end.min(inputs.len());
+                rate_encode_with(
+                    &inputs[rest_start..],
+                    &mut dst[ll_end..],
+                    &mut sample,
+                    cfg.zebrafish_rate,
+                );
+            }
         }
         NetworkIoProfile::Generic => {
             for i in 0..dst.len().min(inputs.len()) {
@@ -711,6 +799,13 @@ pub fn decode_profile_outputs(
             cfg.nao_output_current_gain,
             cfg.nao_output_current_mix,
         ),
+        NetworkIoProfile::ZebraFish if cfg.non_celegans_graded_output => fill_graded_outputs(
+            runner,
+            dst,
+            cfg.zebrafish_output_gain,
+            cfg.zebrafish_output_current_gain,
+            cfg.zebrafish_output_current_mix,
+        ),
         _ => copy_spike_outputs_to_unit(runner, dst),
     }
 }
@@ -769,6 +864,13 @@ pub fn decode_network_outputs(io_cfg: &SpikeIoConfig, runner: &Runner, dst: &mut
                     cfg.nao_output_current_gain,
                     cfg.nao_output_current_mix,
                 ),
+                NetworkIoProfile::ZebraFish => fill_graded_outputs(
+                    runner,
+                    dst,
+                    cfg.zebrafish_output_gain,
+                    cfg.zebrafish_output_current_gain,
+                    cfg.zebrafish_output_current_mix,
+                ),
                 NetworkIoProfile::Generic => fill_graded_outputs(runner, dst, 1.0, 0.25, 0.0),
             }
         }
@@ -793,6 +895,10 @@ mod tests {
         assert_eq!(
             classify_network_io_profile(30, 18),
             NetworkIoProfile::Hexapod
+        );
+        assert_eq!(
+            classify_network_io_profile(32, 32),
+            NetworkIoProfile::ZebraFish
         );
         assert_eq!(
             classify_network_io_profile(16, 8),
@@ -869,6 +975,80 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&NetworkIoProfile::Hexapod).unwrap(),
             "\"hexapod\""
+        );
+    }
+
+    #[test]
+    fn zebrafish_profile_serialization_roundtrip() {
+        let selector: NetworkIoProfileSelector =
+            serde_json::from_str("\"zebrafish\"").unwrap();
+        let profile: NetworkIoProfile = serde_json::from_str("\"zebrafish\"").unwrap();
+        assert_eq!(selector, NetworkIoProfileSelector::ZebraFish);
+        assert_eq!(profile, NetworkIoProfile::ZebraFish);
+        assert_eq!(
+            serde_json::to_string(&NetworkIoProfileSelector::ZebraFish).unwrap(),
+            "\"zebrafish\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NetworkIoProfile::ZebraFish).unwrap(),
+            "\"zebrafish\""
+        );
+    }
+
+    #[test]
+    fn zebrafish_lateral_line_fires_spontaneously_at_rest() {
+        // All 16 lateral-line inputs at zero should still produce some spikes
+        // (resting discharge), because silence_threshold = -1.0 means the floor
+        // probability is always sampled.
+        let cfg = ProfileInputEncoding::default();
+        let inputs = vec![0.0f32; 32];
+        let mut spike_counts = vec![0u32; 100];
+        for count in spike_counts.iter_mut() {
+            let mut spikes = vec![0i8; 32];
+            // Use a deterministic "random" that always returns 0.05 (< quiet_floor=0.062)
+            // so lateral-line channels always fire and others mostly don't.
+            encode_profile_inputs_with(
+                NetworkIoProfile::ZebraFish,
+                &inputs,
+                &mut spikes,
+                || 0.05,
+                &cfg,
+            );
+            *count = spikes[..16].iter().map(|&s| s as u32).sum();
+        }
+        // Every lateral-line channel fires (sample 0.05 < quiet_floor 0.062),
+        // so sum per call should equal 16.
+        assert!(
+            spike_counts.iter().all(|&c| c == 16),
+            "lateral line channels should all fire when sample < quiet_floor"
+        );
+        // Non-LL channels should NOT fire (sample 0.05 > typical low probability
+        // at input=0.0 for standard zebrafish_rate with quiet_floor=0.003).
+        let mut non_ll = vec![0i8; 32];
+        encode_profile_inputs_with(
+            NetworkIoProfile::ZebraFish,
+            &inputs,
+            &mut non_ll,
+            || 0.05,
+            &cfg,
+        );
+        let non_ll_fire: u32 = non_ll[16..].iter().map(|&s| s as u32).sum();
+        assert_eq!(
+            non_ll_fire, 0,
+            "non-LL channels should not fire at rest when sample > quiet_floor*boost"
+        );
+    }
+
+    #[test]
+    fn zebrafish_explicit_selector_bypasses_dimension_heuristic() {
+        assert_eq!(
+            resolve_network_io_profile(NetworkIoProfileSelector::ZebraFish, 16, 8),
+            NetworkIoProfile::ZebraFish
+        );
+        // Dimensions that don't match any profile still map correctly via selector.
+        assert_eq!(
+            resolve_network_io_profile(NetworkIoProfileSelector::ZebraFish, 100, 50),
+            NetworkIoProfile::ZebraFish
         );
     }
 
