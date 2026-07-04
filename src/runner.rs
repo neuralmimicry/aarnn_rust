@@ -1439,6 +1439,8 @@ struct RealtimeIpcPolicy {
     disable_morpho: bool,
     disable_metabolic: bool,
     disable_pruning: bool,
+    disable_weight_maintenance: bool,
+    disable_connection_presence: bool,
     morpho_interval_override_ms: Option<f32>,
     metabolic_interval_override_ms: Option<f32>,
     morpho_safe_max_synapses: usize,
@@ -1491,6 +1493,14 @@ fn realtime_ipc_policy() -> &'static RealtimeIpcPolicy {
             disable_metabolic: parse_rt_env_bool("NM_REALTIME_DISABLE_METABOLIC")
                 .unwrap_or(enabled),
             disable_pruning: parse_rt_env_bool("NM_REALTIME_DISABLE_PRUNING").unwrap_or(enabled),
+            disable_weight_maintenance: parse_rt_env_bool(
+                "NM_REALTIME_DISABLE_WEIGHT_MAINTENANCE",
+            )
+            .unwrap_or(enabled),
+            disable_connection_presence: parse_rt_env_bool(
+                "NM_REALTIME_DISABLE_CONN_PRESENCE",
+            )
+            .unwrap_or(enabled),
             morpho_interval_override_ms: morpho_override,
             metabolic_interval_override_ms: metabolic_override,
             morpho_safe_max_synapses: parse_rt_env_usize("NM_REALTIME_MORPHO_MAX_SYNAPSES")
@@ -4409,7 +4419,23 @@ impl Runner {
         // Build initial morphology snapshot (no behavior dependency)
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
-            this.rebuild_morphology();
+            let rt_policy = realtime_ipc_policy();
+            let morpho_synapse_upper_bound = this.w_in.len()
+                + this.w_out.len()
+                + this.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
+                + this.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+            let rt_force_morpho_off = rt_policy.enabled
+                && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
+            if rt_policy.disable_morpho || rt_force_morpho_off {
+                nm_log!(
+                    "[info] Morphology rebuild skipped during runner init for realtime IPC \
+                     (upper_bound_synapses={} safe_max={})",
+                    morpho_synapse_upper_bound,
+                    rt_policy.morpho_safe_max_synapses
+                );
+            } else {
+                this.rebuild_morphology();
+            }
         }
 
         #[cfg(feature = "growth3d")]
@@ -5337,7 +5363,23 @@ impl Runner {
         }
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
-            self.rebuild_morphology();
+            let rt_policy = realtime_ipc_policy();
+            let morpho_synapse_upper_bound = self.w_in.len()
+                + self.w_out.len()
+                + self.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
+                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+            let rt_force_morpho_off = rt_policy.enabled
+                && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
+            if rt_policy.disable_morpho || rt_force_morpho_off {
+                nm_log!(
+                    "[info] Import morphology rebuild skipped for realtime IPC \
+                     (upper_bound_synapses={} safe_max={})",
+                    morpho_synapse_upper_bound,
+                    rt_policy.morpho_safe_max_synapses
+                );
+            } else {
+                self.rebuild_morphology();
+            }
         }
         // Sanitize feedback map to match outputs
         if self.feedback_map.len() != self.net.num_output_neurons {
@@ -5538,7 +5580,23 @@ impl Runner {
             self.morpho_accumulated_dt = 0.0;
             self.metabolic_accumulated_dt = 0.0;
             self.morpho_async_rx = None;
-            self.rebuild_morphology();
+            let rt_policy = realtime_ipc_policy();
+            let morpho_synapse_upper_bound = self.w_in.len()
+                + self.w_out.len()
+                + self.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
+                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+            let rt_force_morpho_off = rt_policy.enabled
+                && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
+            if rt_policy.disable_morpho || rt_force_morpho_off {
+                nm_log!(
+                    "[info] Reset morphology rebuild skipped for realtime IPC \
+                     (upper_bound_synapses={} safe_max={})",
+                    morpho_synapse_upper_bound,
+                    rt_policy.morpho_safe_max_synapses
+                );
+            } else {
+                self.rebuild_morphology();
+            }
             self.released_events.clear();
         }
         #[cfg(feature = "opencl")]
@@ -12200,8 +12258,16 @@ impl Runner {
             }
         }
         if is_aarnn {
-            self.apply_synaptic_scaling();
-            self.enforce_dale_constraints();
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            let skip_weight_maintenance = realtime_ipc_policy().disable_weight_maintenance;
+            #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+            let skip_weight_maintenance = false;
+
+            if !skip_weight_maintenance {
+                observe_time!("Runner::step/weight_maintenance");
+                self.apply_synaptic_scaling();
+                self.enforce_dale_constraints();
+            }
         }
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -12682,51 +12748,61 @@ impl Runner {
             }
         }
 
-        // --- 8. Update connection presence counters ---
-        for ((j, i), &w) in self.w_in.indexed_iter() {
-            if w.abs() > 1e-8 {
-                if let Some(cell) = self.conn_presence_in.get_mut((j, i)) {
-                    *cell += 1;
+        // Connection presence counters support structural maintenance; realtime
+        // IPC disables that maintenance path to avoid a dense full-network scan
+        // on every engine frame.
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let skip_connection_presence = realtime_ipc_policy().disable_connection_presence;
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let skip_connection_presence = false;
+
+        if !skip_connection_presence {
+            observe_time!("Runner::step/connection_presence");
+            for ((j, i), &w) in self.w_in.indexed_iter() {
+                if w.abs() > 1e-8 {
+                    if let Some(cell) = self.conn_presence_in.get_mut((j, i)) {
+                        *cell += 1;
+                    }
                 }
             }
-        }
-        for (l, m) in self.w_hh_fwd.iter().enumerate() {
-            for ((j, i), &w) in m.indexed_iter() {
-                if w.abs() > 1e-8 {
-                    if let Some(pres_l) = self.conn_presence_fwd.get_mut(l) {
-                        if let Some(cell) = pres_l.get_mut((j, i)) {
-                            *cell += 1;
+            for (l, m) in self.w_hh_fwd.iter().enumerate() {
+                for ((j, i), &w) in m.indexed_iter() {
+                    if w.abs() > 1e-8 {
+                        if let Some(pres_l) = self.conn_presence_fwd.get_mut(l) {
+                            if let Some(cell) = pres_l.get_mut((j, i)) {
+                                *cell += 1;
+                            }
                         }
                     }
                 }
             }
-        }
-        for (l, m) in self.w_hh_bwd.iter().enumerate() {
-            for ((j, i), &w) in m.indexed_iter() {
-                if w.abs() > 1e-8 {
-                    if let Some(pres_l) = self.conn_presence_bwd.get_mut(l) {
-                        if let Some(cell) = pres_l.get_mut((j, i)) {
-                            *cell += 1;
+            for (l, m) in self.w_hh_bwd.iter().enumerate() {
+                for ((j, i), &w) in m.indexed_iter() {
+                    if w.abs() > 1e-8 {
+                        if let Some(pres_l) = self.conn_presence_bwd.get_mut(l) {
+                            if let Some(cell) = pres_l.get_mut((j, i)) {
+                                *cell += 1;
+                            }
                         }
                     }
                 }
             }
-        }
-        for (l, m) in self.w_hh_rec.iter().enumerate() {
-            for ((j, i), &w) in m.indexed_iter() {
-                if w.abs() > 1e-8 {
-                    if let Some(pres_l) = self.conn_presence_rec.get_mut(l) {
-                        if let Some(cell) = pres_l.get_mut((j, i)) {
-                            *cell += 1;
+            for (l, m) in self.w_hh_rec.iter().enumerate() {
+                for ((j, i), &w) in m.indexed_iter() {
+                    if w.abs() > 1e-8 {
+                        if let Some(pres_l) = self.conn_presence_rec.get_mut(l) {
+                            if let Some(cell) = pres_l.get_mut((j, i)) {
+                                *cell += 1;
+                            }
                         }
                     }
                 }
             }
-        }
-        for ((k, j), &w) in self.w_out.indexed_iter() {
-            if w.abs() > 1e-8 {
-                if let Some(cell) = self.conn_presence_out.get_mut((k, j)) {
-                    *cell += 1;
+            for ((k, j), &w) in self.w_out.indexed_iter() {
+                if w.abs() > 1e-8 {
+                    if let Some(cell) = self.conn_presence_out.get_mut((k, j)) {
+                        *cell += 1;
+                    }
                 }
             }
         }

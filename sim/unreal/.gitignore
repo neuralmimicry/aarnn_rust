@@ -1,0 +1,10 @@
+# Unreal Engine generated artifacts — do not commit
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.VC.db
+*.opensdf
+*.sdf
+*.suo
+.vs/

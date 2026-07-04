@@ -11568,6 +11568,11 @@ impl eframe::App for App {
                                                 NetworkIoProfileSelector::Nao,
                                                 "nao",
                                             );
+                                            ui.selectable_value(
+                                                &mut spike_io.profile,
+                                                NetworkIoProfileSelector::ZebraFish,
+                                                "zebrafish",
+                                            );
                                         });
                                 });
                                 ui.horizontal(|ui| {

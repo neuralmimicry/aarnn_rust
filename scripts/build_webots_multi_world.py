@@ -2258,7 +2258,7 @@ RectangleArena {{
   }}
 }}
 Solid {{
-  translation {center_x:.4f} {center_z:.4f} 0.005
+  translation {center_x:.4f} {center_z:.4f} -0.0900
   name "ground_base"
   children [
     Shape {{
@@ -2267,12 +2267,12 @@ Solid {{
         roughness 0.94
       }}
       geometry Box {{
-        size {floor_size:.2f} {floor_size:.2f} 0.010
+        size {floor_size:.2f} {floor_size:.2f} 0.2000
       }}
     }}
   ]
   boundingObject Box {{
-    size {floor_size:.2f} {floor_size:.2f} 0.010
+    size {floor_size:.2f} {floor_size:.2f} 0.2000
   }}
 }}
 Transform {{
@@ -2492,6 +2492,17 @@ WorldInfo {{
   basicTimeStep 32
   # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
   gravity {2.2 if {k for (_, _, _, _, k) in entries} == {"zebrafish"} else 9.81:.1f}
+  contactProperties [
+    ContactProperties {{
+      material1 "default"
+      material2 "default"
+      coulombFriction 1.5
+      bounce 0.1
+      bounceVelocity 0.01
+      softCFM 1e-05
+      softERP 0.8
+    }}
+  ]
 }}
 Viewpoint {{
   fieldOfView {cam_fov:.2f}

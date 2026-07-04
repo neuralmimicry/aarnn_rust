@@ -7,5 +7,5 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: NAO_01:CameraBottom;1;1;0;0
-renderingDevicePerspectives: NAO_01:CameraTop;1;1;0;0
+renderingDevicePerspectives: ZEBRAFISH_01:zebrafish_eye_left;1;32;0;0
+renderingDevicePerspectives: ZEBRAFISH_01:zebrafish_eye_right;1;32;0;0

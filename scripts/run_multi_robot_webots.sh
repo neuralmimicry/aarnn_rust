@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+ROBOT_PROFILES_PY="$ROOT_DIR/scripts/robot_profiles.py"
+
+if [ ! -f "$ROBOT_PROFILES_PY" ]; then
+  echo "Missing shared robot profile helper: $ROBOT_PROFILES_PY"
+  exit 1
+fi
 
 UI_MODE="${UI_MODE:-rust}"  # rust|web|cli
 UI_MODE_SET_BY_USER=0
@@ -361,81 +367,11 @@ if [ -z "${NM_AUTO_AARNN_DEPTH+x}" ]; then
   export NM_AUTO_AARNN_DEPTH=0
 fi
 
-eval "$(
-python3 - <<'PY' "$ROBOT_SPEC"
-import re
-import sys
-
-spec = sys.argv[1]
-counts = {"celegans": 0, "drosophila_banc": 0, "drosophila_fafb": 0, "hexapod": 0, "nao": 0, "zebrafish": 0}
-aliases = {
-    "celegans": "celegans",
-    "worm": "celegans",
-    "worms": "celegans",
-    "c_elegans": "celegans",
-    "drosophila": "drosophila_banc",
-    "fly": "drosophila_banc",
-    "flies": "drosophila_banc",
-    "fruitfly": "drosophila_banc",
-    "fruitflies": "drosophila_banc",
-    "drosophila_banc": "drosophila_banc",
-    "banc_drosophila": "drosophila_banc",
-    "drosophila_banc_v626": "drosophila_banc",
-    "banc": "drosophila_banc",
-    "drosophila_fafb": "drosophila_fafb",
-    "fafb_drosophila": "drosophila_fafb",
-    "drosophila_fafb_v783": "drosophila_fafb",
-    "fafb": "drosophila_fafb",
-    "hexapod": "hexapod",
-    "hex": "hexapod",
-    "hexapods": "hexapod",
-    "freenove_hexapod": "hexapod",
-    "big_hexapod": "hexapod",
-    "freenove": "hexapod",
-    "six_legged": "hexapod",
-    "nao": "nao",
-    "naos": "nao",
-    "zebrafish": "zebrafish",
-    "zebrafishes": "zebrafish",
-    "danio": "zebrafish",
-    "danio_rerio": "zebrafish",
-    "fish": "zebrafish",
-    "zfish": "zebrafish",
-    "zf": "zebrafish",
-}
-
-for token in re.split(r"[;,]", spec):
-    token = token.strip()
-    if not token:
-        continue
-    if "=" not in token:
-        raise SystemExit(f"Invalid robot token '{token}' (expected key=value)")
-    key_raw, value_raw = token.split("=", 1)
-    key_norm = re.sub(r"[^a-z0-9]+", "_", key_raw.strip().lower()).strip("_")
-    canonical = aliases.get(key_norm)
-    if canonical is None:
-        if "fafb" in key_norm and ("drosophila" in key_norm or "fly" in key_norm):
-            canonical = "drosophila_fafb"
-        elif "banc" in key_norm and ("drosophila" in key_norm or "fly" in key_norm):
-            canonical = "drosophila_banc"
-        elif "hexapod" in key_norm or "freenove" in key_norm:
-            canonical = "hexapod"
-        elif "zebra" in key_norm or "danio" in key_norm:
-            canonical = "zebrafish"
-        else:
-            raise SystemExit(f"Unknown robot key '{key_raw}'")
-    try:
-        value = int(value_raw.strip())
-    except Exception:
-        raise SystemExit(f"Invalid count '{value_raw}' for key '{key_raw}'")
-    if value < 0:
-        raise SystemExit(f"Count must be >= 0 for key '{key_raw}'")
-    counts[canonical] = value
-
-for key, value in counts.items():
-    print(f"COUNT_{key.upper()}={value}")
-PY
-)"
+COUNTS_SH_ASSIGNMENTS=""
+if ! COUNTS_SH_ASSIGNMENTS="$(python3 "$ROBOT_PROFILES_PY" counts-sh "$ROBOT_SPEC")"; then
+  exit 1
+fi
+eval "$COUNTS_SH_ASSIGNMENTS"
 
 apply_override_count() {
   local var_name="$1"
