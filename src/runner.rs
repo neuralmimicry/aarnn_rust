@@ -907,7 +907,7 @@ fn stage_policy_for_profile(
                 morpho_interval_scale: 1.18,
                 metabolic_interval_scale: 1.14,
                 pruning_enabled: true,
-                myelination_enabled: true,  // larval zebrafish axons are myelinating
+                myelination_enabled: true, // larval zebrafish axons are myelinating
             }
         }
     }
@@ -1493,14 +1493,10 @@ fn realtime_ipc_policy() -> &'static RealtimeIpcPolicy {
             disable_metabolic: parse_rt_env_bool("NM_REALTIME_DISABLE_METABOLIC")
                 .unwrap_or(enabled),
             disable_pruning: parse_rt_env_bool("NM_REALTIME_DISABLE_PRUNING").unwrap_or(enabled),
-            disable_weight_maintenance: parse_rt_env_bool(
-                "NM_REALTIME_DISABLE_WEIGHT_MAINTENANCE",
-            )
-            .unwrap_or(enabled),
-            disable_connection_presence: parse_rt_env_bool(
-                "NM_REALTIME_DISABLE_CONN_PRESENCE",
-            )
-            .unwrap_or(enabled),
+            disable_weight_maintenance: parse_rt_env_bool("NM_REALTIME_DISABLE_WEIGHT_MAINTENANCE")
+                .unwrap_or(enabled),
+            disable_connection_presence: parse_rt_env_bool("NM_REALTIME_DISABLE_CONN_PRESENCE")
+                .unwrap_or(enabled),
             morpho_interval_override_ms: morpho_override,
             metabolic_interval_override_ms: metabolic_override,
             morpho_safe_max_synapses: parse_rt_env_usize("NM_REALTIME_MORPHO_MAX_SYNAPSES")

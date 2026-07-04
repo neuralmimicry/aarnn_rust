@@ -284,7 +284,7 @@ impl Default for ProfileInputEncoding {
             // background oscillations reach the network.
             zebrafish_lateral_line_rate: RateEncoding {
                 quiet_floor: 0.062,
-                quiet_floor_boost: 1.0,  // don't double the floor — 6% IS the resting rate
+                quiet_floor_boost: 1.0, // don't double the floor — 6% IS the resting rate
                 low_gain: 0.32,
                 high_value_threshold: 0.5,
                 high_value_bias: 0.78,
@@ -292,7 +292,7 @@ impl Default for ProfileInputEncoding {
                 max_low_probability: 0.96,
                 max_probability: 1.0,
                 hard_fire_threshold: 0.999,
-                silence_threshold: -1.0,  // never skip — spontaneous discharge at rest
+                silence_threshold: -1.0, // never skip — spontaneous discharge at rest
             },
             // Non-LL modalities: standard vertebrate rate, low resting floor.
             zebrafish_rate: RateEncoding {
@@ -980,8 +980,7 @@ mod tests {
 
     #[test]
     fn zebrafish_profile_serialization_roundtrip() {
-        let selector: NetworkIoProfileSelector =
-            serde_json::from_str("\"zebrafish\"").unwrap();
+        let selector: NetworkIoProfileSelector = serde_json::from_str("\"zebrafish\"").unwrap();
         let profile: NetworkIoProfile = serde_json::from_str("\"zebrafish\"").unwrap();
         assert_eq!(selector, NetworkIoProfileSelector::ZebraFish);
         assert_eq!(profile, NetworkIoProfile::ZebraFish);

@@ -544,8 +544,7 @@ fn handle_client(
 
                     let names_changed = (!requested_s_names.is_empty()
                         && requested_s_names != active_s_names)
-                        || (!requested_o_names.is_empty()
-                            && requested_o_names != active_o_names);
+                        || (!requested_o_names.is_empty() && requested_o_names != active_o_names);
                     let shape_changed = requested_s != io_mapping.sensory_size
                         || requested_o != io_mapping.output_size;
 
@@ -738,7 +737,6 @@ fn handle_client(
             eprintln!("[nn_tcp_server] float reply error to {}: {}", peer, err);
             break;
         }
-
     }
 
     eprintln!("[nn_tcp_server] client disconnected: {}", peer);
@@ -787,10 +785,9 @@ fn main() -> io::Result<()> {
     let listener = TcpListener::bind(&server_args.tcp_addr)?;
     eprintln!(
         "[nn_tcp_server] listening on {}",
-        listener.local_addr().unwrap_or_else(|_| server_args
-            .tcp_addr
-            .parse()
-            .expect("valid addr"))
+        listener
+            .local_addr()
+            .unwrap_or_else(|_| server_args.tcp_addr.parse().expect("valid addr"))
     );
 
     // Accept loop in a background thread so the main thread can run the UI (or park).
@@ -841,9 +838,7 @@ fn main() -> io::Result<()> {
         // digest to stdout so operators can confirm the server is alive and active.
         #[cfg(feature = "ui")]
         {
-            eprintln!(
-                "[nn_tcp_server] --ui active: printing status every 5 s (no eframe window)"
-            );
+            eprintln!("[nn_tcp_server] --ui active: printing status every 5 s (no eframe window)");
             loop {
                 std::thread::sleep(Duration::from_secs(5));
                 let inputs_snap = last_inputs.lock().map(|g| g.clone()).unwrap_or_default();

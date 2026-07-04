@@ -8,10 +8,7 @@ use std::path::{Path, PathBuf};
 /// to override.
 pub fn default_swarmhpc_ansible_root() -> String {
     std::env::var("NM_SWARMHPC_ANSIBLE_ROOT")
-        .or_else(|_| {
-            std::env::var("SWARMHPC_ROOT")
-                .map(|r| format!("{r}/swarmhpc/ansible"))
-        })
+        .or_else(|_| std::env::var("SWARMHPC_ROOT").map(|r| format!("{r}/swarmhpc/ansible")))
         .unwrap_or_else(|_| "/opt/swarmhpc/ansible".to_string())
 }
 

@@ -5779,7 +5779,11 @@ impl App {
 
         let display_t = {
             let atomic_t = self.sim_t_ms();
-            if atomic_t > 0.0 { atomic_t } else { sim_time_ms }
+            if atomic_t > 0.0 {
+                atomic_t
+            } else {
+                sim_time_ms
+            }
         };
         self.status = format!(
             "Watching {} ({}): t={} ms",
@@ -5898,7 +5902,11 @@ impl App {
         // even when the runner write-lock is held by the sim thread.
         let display_t = {
             let atomic_t = self.sim_t_ms();
-            if atomic_t > 0.0 { atomic_t } else { runner.t_ms }
+            if atomic_t > 0.0 {
+                atomic_t
+            } else {
+                runner.t_ms
+            }
         };
         self.status = format!(
             "Watching {}: t={} ms",
@@ -6007,7 +6015,11 @@ impl App {
         }
         let display_t = {
             let atomic_t = self.sim_t_ms();
-            if atomic_t > 0.0 { atomic_t } else { runner_t_ms }
+            if atomic_t > 0.0 {
+                atomic_t
+            } else {
+                runner_t_ms
+            }
         };
         self.status = format!("Watching Standalone: t={} ms", display_t as i64);
     }
@@ -8905,7 +8917,11 @@ impl eframe::App for App {
                 // Status line.
                 let display_t = {
                     let atomic_t = self.sim_t_ms();
-                    if atomic_t > 0.0 { atomic_t } else { snap.sim_time_ms }
+                    if atomic_t > 0.0 {
+                        atomic_t
+                    } else {
+                        snap.sim_time_ms
+                    }
                 };
                 self.status = format!("Watching Standalone: t={} ms", display_t as i64);
 

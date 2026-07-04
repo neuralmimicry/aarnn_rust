@@ -1854,13 +1854,13 @@ pub fn apply_aarnn_zebrafish_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.perceptual_loop_enabled = true;
     cfg.world_model_enabled = true;
     cfg.sleep_enabled = true;
-    cfg.sleep_cycle_ms = 120_000.0;  // ~2 min larval circadian cycle
+    cfg.sleep_cycle_ms = 120_000.0; // ~2 min larval circadian cycle
     cfg.sleep_duration_ms = 800.0;
     cfg.theta_rhythm_enabled = true;
-    cfg.theta_rhythm_hz = 7.0;       // zebrafish hippocampal-homolog theta ~7 Hz
+    cfg.theta_rhythm_hz = 7.0; // zebrafish hippocampal-homolog theta ~7 Hz
     cfg.theta_rhythm_duty = 0.22;
     cfg.theta_rhythm_phase_jitter = 0.04;
-    cfg.thalamic_gating_enabled = true;  // zebrafish has a functional thalamus equivalent
+    cfg.thalamic_gating_enabled = true; // zebrafish has a functional thalamus equivalent
 
     cfg.aarnn_import_topology_rewire_enabled = true;
     cfg.aarnn_import_topology_rewire_keep_fraction = 0.78;
