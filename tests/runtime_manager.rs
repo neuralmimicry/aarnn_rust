@@ -1,12 +1,39 @@
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
-use aarnn_rust::runtime_api::{WorkspaceControlAction, WorkspaceCreateRequest};
+use aarnn_rust::runtime_api::{
+    WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceDetailResponse,
+};
 use std::path::PathBuf;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 
 fn temp_runtime_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("aarnn-runtime-test-{:08x}", fastrand::u32(..)));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+async fn wait_for_workspace_step(
+    runtime: &RuntimeManager,
+    user_id: &str,
+    workspace_id: &str,
+    min_step: u64,
+) -> WorkspaceDetailResponse {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let detail = runtime
+            .workspace_detail(user_id, workspace_id)
+            .await
+            .unwrap();
+        if detail.status.step > min_step {
+            return detail;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "workspace '{workspace_id}' did not advance beyond step {min_step}; current step {}",
+                detail.status.step
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
@@ -43,10 +70,12 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
         .control_workspace("alice", "alpha", WorkspaceControlAction::Start)
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(30)).await;
-
-    let stepped = runtime.workspace_detail("alice", "alpha").await.unwrap();
+    let stepped = wait_for_workspace_step(&runtime, "alice", "alpha", 0).await;
     assert!(stepped.status.step > 0);
+    runtime
+        .control_workspace("alice", "alpha", WorkspaceControlAction::Save)
+        .await
+        .unwrap();
     runtime.shutdown().await;
     drop(runtime);
 
