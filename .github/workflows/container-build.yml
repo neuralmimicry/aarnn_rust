@@ -196,6 +196,7 @@ jobs:
           build_args=(
             --file ./Containerfile
             --platform "linux/${{ matrix.arch }}"
+            --network host
             --tag "${ARCH_TAG}"
             --build-arg "CONTAINER_WORKLOAD=standalone"
             --build-arg "CARGO_FEATURES=${{ github.event.inputs.cargo_features || 'all-features' }}"
