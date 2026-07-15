@@ -76,6 +76,8 @@ const exportPynnBtn = document.getElementById("export-pynn");
 const exportNirBtn = document.getElementById("export-nir");
 const exportOnnxBtn = document.getElementById("export-onnx");
 const exportTfliteBtn = document.getElementById("export-tflite");
+const exportBiox6Btn = document.getElementById("export-biox6");
+const previewBiox6Btn = document.getElementById("preview-biox6");
 const ioInputSource = document.getElementById("io-input-source");
 const ioInputUrl = document.getElementById("io-input-url");
 const ioAerBase = document.getElementById("io-aer-base");
@@ -4982,6 +4984,8 @@ if (exportPynnBtn) exportPynnBtn.addEventListener("click", () => exportModel("py
 if (exportNirBtn) exportNirBtn.addEventListener("click", () => exportModel("nir"));
 if (exportOnnxBtn) exportOnnxBtn.addEventListener("click", () => exportModel("onnx"));
 if (exportTfliteBtn) exportTfliteBtn.addEventListener("click", () => exportModel("tflite"));
+if (exportBiox6Btn) exportBiox6Btn.addEventListener("click", () => exportModel("biox6"));
+if (previewBiox6Btn) previewBiox6Btn.addEventListener("click", () => exportModel("biox6-preview"));
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (!pageIsVisible()) return;

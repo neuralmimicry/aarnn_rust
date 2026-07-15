@@ -1,0 +1,1 @@
+The JSON and YAML fixtures were parsed successfully. Cargo was not installed in the execution environment, so the Rust project could not be compiled here. Run `cargo test` locally before use.

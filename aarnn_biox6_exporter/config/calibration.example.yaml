@@ -1,0 +1,76 @@
+id: unverified-example-calibration
+measured_at_wavelength_nm: 532.0
+environment:
+  temperature_c: 22.0
+  hydration_medium: deionised_water
+
+materials:
+  optical_core:
+    role: core
+    refractive_index: 1.350
+    propagation_loss_db_per_cm: 0.25
+    minimum_feature_mm: 0.40
+    preferred_nozzle_mm: 0.41
+    pressure_kpa: 20.0
+    feed_mm_min: 300.0
+    cure:
+      wavelength_nm: 405
+      seconds_per_layer: 5.0
+      every_n_layers: 4
+
+  optical_cladding:
+    role: cladding
+    refractive_index: 1.335
+    propagation_loss_db_per_cm: 0.50
+    minimum_feature_mm: 0.80
+    preferred_nozzle_mm: 0.84
+    pressure_kpa: 18.0
+    feed_mm_min: 240.0
+    cure:
+      wavelength_nm: 405
+      seconds_per_layer: 5.0
+      every_n_layers: 4
+
+  fluorescent_node:
+    role: fluorescent_node
+    refractive_index: 1.345
+    propagation_loss_db_per_cm: 1.00
+    minimum_feature_mm: 0.50
+    preferred_nozzle_mm: 0.41
+    pressure_kpa: 15.0
+    feed_mm_min: 180.0
+    fluorescence_lifetime_us: 0.004
+    fluorescence_gain: 0.15
+    cure:
+      wavelength_nm: 405
+      seconds_per_layer: 5.0
+      every_n_layers: 4
+
+node_transfer_curves:
+  fluorescent_soft_threshold:
+    realisation: soft_threshold_fluorescent
+    material_id: fluorescent_node
+    input_mw: [0.0, 0.1, 0.2, 0.5, 1.0]
+    output_mw: [0.0, 0.005, 0.03, 0.15, 0.25]
+    effective_delay_us: 0.004
+
+splitter:
+  nominal_two_way_ratio: 0.5
+  excess_loss_db: 0.5
+
+detector:
+  minimum_detectable_mw: 0.001
+  saturation_mw: 2.0
+
+mapping:
+  core_material_id: optical_core
+  cladding_material_id: optical_cladding
+  fluorescent_node_material_id: fluorescent_node
+  inhibitory_encoding: dual_rail
+  node_realisation: soft_threshold_fluorescent
+  delay_strategy: hybrid_electronic
+  physical_seconds_per_aarnn_us: 0.000001
+  nominal_input_power_mw: 1.0
+  minimum_target_transmission: 0.05
+  default_core_diameter_mm: 0.60
+  default_node_radius_mm: 1.00

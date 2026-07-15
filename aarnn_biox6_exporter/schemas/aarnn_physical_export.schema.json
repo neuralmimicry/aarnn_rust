@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AARNN physical export snapshot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "network_id",
+    "captured_at_tick",
+    "time_unit_us",
+    "nodes",
+    "connections"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "network_id": {
+      "type": "string"
+    },
+    "captured_at_tick": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "time_unit_us": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "connections": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}

@@ -136,6 +136,7 @@ enum RuntimeAction {
     Delete,
     Load,
     Save,
+    Export,
     Snapshot,
     Start,
     Stop,
@@ -147,6 +148,11 @@ enum RuntimePayloadKindArg {
     Auto,
     Config,
     Snapshot,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum RuntimeExportFormatArg {
+    Biox6,
 }
 
 impl RuntimePayloadKindArg {
@@ -501,6 +507,14 @@ struct Cli {
     /// Payload interpretation for runtime load operations.
     #[arg(long, value_enum, default_value_t = RuntimePayloadKindArg::Auto)]
     runtime_payload_kind: RuntimePayloadKindArg,
+
+    /// Export format for runtime export actions.
+    #[arg(long, value_enum, default_value_t = RuntimeExportFormatArg::Biox6)]
+    runtime_export_format: RuntimeExportFormatArg,
+
+    /// Output directory for runtime export actions.
+    #[arg(long)]
+    runtime_export_output: Option<String>,
 
     /// Create the runtime workspace on demand if it does not already exist.
     #[arg(long, default_value_t = false)]
@@ -1225,6 +1239,38 @@ fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
             let workspace_id = runtime_workspace_required(args)?;
             let detail = client.control_workspace(&workspace_id, WorkspaceControlAction::Save)?;
             print_json_pretty(&detail)?;
+        }
+        RuntimeAction::Export => {
+            let workspace_id = runtime_workspace_required(args)?;
+            let snapshot = client.workspace_snapshot(&workspace_id)?;
+            match args.runtime_export_format {
+                RuntimeExportFormatArg::Biox6 => {
+                    let output_dir = args
+                        .runtime_export_output
+                        .clone()
+                        .unwrap_or_else(|| format!("build/{}", workspace_id));
+                    let bundle = aarnn_biox6_exporter::write_export_directory_with_defaults(
+                        &snapshot.snapshot_json,
+                        Some(&workspace_id),
+                        std::path::Path::new(&output_dir),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to export runtime workspace '{}' to BIO X6 bundle",
+                            workspace_id
+                        )
+                    })?;
+                    print_json_pretty(&serde_json::json!({
+                        "format": "biox6",
+                        "workspace_id": workspace_id,
+                        "output_dir": output_dir,
+                        "nodes": bundle.plan.nodes.len(),
+                        "connections": bundle.plan.connections.len(),
+                        "warnings": bundle.plan.warnings.len(),
+                        "printer_ready": false
+                    }))?;
+                }
+            }
         }
         RuntimeAction::Snapshot => {
             let workspace_id = runtime_workspace_required(args)?;

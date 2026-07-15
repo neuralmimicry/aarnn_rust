@@ -1,0 +1,50 @@
+id: bio-x6-lab-profile
+model: CELLINK BIO X6
+build_volume_mm:
+  x: 130.0
+  y: 90.0
+  z: 50.0
+maximum_tools: 6
+minimum_clearance_mm: 1.5
+minimum_bend_radius_mm: 3.0
+default_feed_mm_min: 300.0
+travel_feed_mm_min: 1200.0
+
+tools:
+  - tool: 1
+    material_id: optical_core
+    nozzle_diameter_mm: 0.41
+    pressure_kpa: 20.0
+    temperature_c: 25.0
+    coaxial_partner_tool: 2
+  - tool: 2
+    material_id: optical_cladding
+    nozzle_diameter_mm: 0.84
+    pressure_kpa: 18.0
+    temperature_c: 25.0
+    coaxial_partner_tool: 1
+  - tool: 3
+    material_id: fluorescent_node
+    nozzle_diameter_mm: 0.41
+    pressure_kpa: 15.0
+    temperature_c: 25.0
+
+gcode:
+  header:
+    - "; AARNN BIO X6 export"
+    - "G21 ; millimetres"
+    - "G90 ; absolute coordinates"
+  footer:
+    - "; end of generated job"
+  # These command templates are intentionally configurable.
+  # Replace them with commands verified for the exact BIO X6 firmware and
+  # DNA Studio machine profile. Do not assume this example is printer-ready.
+  select_tool: "; SELECT_TOOL T{tool} MATERIAL={material}"
+  set_pressure: "; SET_PRESSURE T{tool} P{pressure_kpa}"
+  set_temperature: "; SET_TEMPERATURE T{tool} C{temperature_c}"
+  move_linear: "G1 X{x} Y{y} Z{z} F{feed_mm_min}"
+  extrusion_start: "; EXTRUSION_START T{tool}"
+  extrusion_stop: "; EXTRUSION_STOP T{tool}"
+  dwell_ms: "G4 P{milliseconds}"
+  cure: "; CURE wavelength_nm={wavelength_nm} seconds={seconds}"
+  variables: {}

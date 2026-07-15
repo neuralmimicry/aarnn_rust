@@ -2723,7 +2723,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "security": [{ "cookieAuth": [] }],
             "parameters": [
               { "name": "network_id", "in": "query", "required": true, "schema": { "type": "string" } },
-              { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["neuroml", "pynn", "nir", "onnx", "tflite"] } },
+              { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["neuroml", "pynn", "nir", "onnx", "tflite", "biox6", "biox6-preview"] } },
               { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } }
             ],
             "responses": {
@@ -5098,6 +5098,10 @@ async fn export_snapshot_payload(
     snapshot_json: String,
     format: String,
 ) -> axum::response::Response {
+    if matches!(format.as_str(), "biox6" | "biox6-preview") {
+        return export_biox6_snapshot_payload(network_id, snapshot_json, format == "biox6-preview");
+    }
+
     let (script, arg_in, arg_out, ext) = match format.as_str() {
         "neuroml" => ("export_neuroml.py", "--in-network", "--out-neuroml", "nml"),
         "pynn" => ("export_pynn.py", "--in-network", "--out-pynn", "py"),
@@ -5176,6 +5180,116 @@ async fn export_snapshot_payload(
             Json(json!({ "error": format!("failed to run export tool: {}", e) })),
         )
             .into_response(),
+    }
+}
+
+fn export_biox6_snapshot_payload(
+    network_id: String,
+    snapshot_json: String,
+    preview_only: bool,
+) -> axum::response::Response {
+    let result = if preview_only {
+        aarnn_biox6_exporter::preview_html_with_defaults(&snapshot_json, Some(&network_id))
+            .map(|(html, _plan)| (true, html.into_bytes()))
+    } else {
+        aarnn_biox6_exporter::zip_export_with_defaults(&snapshot_json, Some(&network_id))
+            .map(|(zip, _bundle)| (false, zip))
+    };
+
+    match result {
+        Ok((true, content)) => {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            (StatusCode::OK, headers, content).into_response()
+        }
+        Ok((false, content)) => {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/zip"),
+            );
+            let filename = format!("{}_biox6.zip", safe_download_name(&network_id));
+            headers.insert(
+                axum::http::header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap(),
+            );
+            (StatusCode::OK, headers, content).into_response()
+        }
+        Err(err) if preview_only => {
+            let html = biox6_failure_html(&network_id, &err.to_string());
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            (StatusCode::OK, headers, html.into_bytes()).into_response()
+        }
+        Err(err) => {
+            let message = format!("BIO X6 export failed for {network_id}: {err}");
+            let artifact = aarnn_biox6_exporter::ExportArtifact {
+                relative_path: "README-ERROR.txt".to_string(),
+                content_type: "text/plain".to_string(),
+                bytes: format!("{message}\n\nNo printer-ready BIO X6 job was generated because the physical non-overlap validation gate failed.\n").into_bytes(),
+            };
+            match aarnn_biox6_exporter::zip_artifacts(&[artifact]) {
+                Ok(content) => {
+                    let mut headers = axum::http::HeaderMap::new();
+                    headers.insert(
+                        axum::http::header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/zip"),
+                    );
+                    let filename = format!("{}_biox6-error.zip", safe_download_name(&network_id));
+                    headers.insert(
+                        axum::http::header::CONTENT_DISPOSITION,
+                        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+                            .unwrap(),
+                    );
+                    (StatusCode::OK, headers, content).into_response()
+                }
+                Err(zip_err) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("BIO X6 export failed: {}; diagnostic ZIP failed: {}", err, zip_err) })),
+                )
+                    .into_response(),
+            }
+        }
+    }
+}
+
+fn biox6_failure_html(network_id: &str, error: &str) -> String {
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>BIO X6 Export Failed</title><style>body{{font-family:system-ui,sans-serif;margin:32px;line-height:1.5;color:#182017}}pre{{white-space:pre-wrap;background:#f6f8f3;border:1px solid #d8e0d1;border-radius:8px;padding:16px}}</style></head><body><h1>BIO X6 Export Failed</h1><p>No printer-ready BIO X6 preview was generated because the physical non-overlap validation gate failed.</p><pre>Network: {}\nError: {}</pre></body></html>",
+        html_escape(&safe_download_name(network_id)),
+        html_escape(error)
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn safe_download_name(raw: &str) -> String {
+    let name = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if name.is_empty() {
+        "network".to_string()
+    } else {
+        name
     }
 }
 

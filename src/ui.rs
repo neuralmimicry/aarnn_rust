@@ -1051,6 +1051,15 @@ enum ToolExportKind {
     Nir,
     NeuroML,
     Tflite,
+    Biox6,
+    Biox6Preview,
+}
+
+#[cfg(feature = "ui")]
+#[derive(Clone, Copy, Debug)]
+enum Biox6UiExportKind {
+    BundleZip,
+    PreviewHtml,
 }
 
 #[cfg(feature = "ui")]
@@ -1454,6 +1463,195 @@ impl App {
             ViewSource::LocalManaged(id) => format!("Local managed: {}", id),
             ViewSource::ClusterGlobal(id) => format!("Cluster: {}", id),
         }
+    }
+
+    fn biox6_network_id_hint(&self) -> String {
+        match &self.view_source {
+            ViewSource::Standalone => "standalone".to_string(),
+            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => id.clone(),
+        }
+    }
+
+    fn biox6_export_basename(&self) -> String {
+        let name = self
+            .biox6_network_id_hint()
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        if name.trim_matches('_').is_empty() {
+            "aarnn".to_string()
+        } else {
+            name
+        }
+    }
+
+    fn spawn_biox6_export(&mut self, path: std::path::PathBuf, export_kind: Biox6UiExportKind) {
+        let source = self.view_source.clone();
+        let runner = self.runner.clone();
+        let distributed_node = self.distributed_node.clone();
+        let cluster_snapshot_cache = self.cluster_snapshot_cache.clone();
+        let network_id_hint = self.biox6_network_id_hint();
+        let tx = self.tool_task_tx.clone();
+        let tool_kind = match export_kind {
+            Biox6UiExportKind::BundleZip => ToolExportKind::Biox6,
+            Biox6UiExportKind::PreviewHtml => ToolExportKind::Biox6Preview,
+        };
+
+        self.status = match export_kind {
+            Biox6UiExportKind::BundleZip => {
+                format!("Exporting BIO X6 ZIP to {}", path.display())
+            }
+            Biox6UiExportKind::PreviewHtml => {
+                format!("Writing BIO X6 preview to {}", path.display())
+            }
+        };
+
+        std::thread::spawn(move || {
+            let mut stdout = String::new();
+            let stderr = String::new();
+            let mut error = None;
+            let result = App::capture_biox6_snapshot_json_blocking(
+                source,
+                runner,
+                distributed_node,
+                cluster_snapshot_cache,
+            )
+            .and_then(|json| match export_kind {
+                Biox6UiExportKind::BundleZip => aarnn_biox6_exporter::zip_export_with_defaults(
+                    &json,
+                    Some(network_id_hint.as_str()),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|(zip, bundle)| {
+                    crate::shared_fs::atomic_write(&path, &zip).map_err(|e| e.to_string())?;
+                    Ok(format!(
+                        "{} nodes, {} connections, {} warnings, {} bytes",
+                        bundle.plan.nodes.len(),
+                        bundle.plan.connections.len(),
+                        bundle.plan.warnings.len(),
+                        zip.len()
+                    ))
+                }),
+                Biox6UiExportKind::PreviewHtml => aarnn_biox6_exporter::preview_html_with_defaults(
+                    &json,
+                    Some(network_id_hint.as_str()),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|(html, plan)| {
+                    crate::shared_fs::atomic_write(&path, html.as_bytes())
+                        .map_err(|e| e.to_string())?;
+                    Ok(format!(
+                        "{} nodes, {} connections, {} warnings, {} bytes",
+                        plan.nodes.len(),
+                        plan.connections.len(),
+                        plan.warnings.len(),
+                        html.len()
+                    ))
+                }),
+            });
+
+            match result {
+                Ok(summary) => {
+                    stdout = summary;
+                }
+                Err(e) => {
+                    let diagnostic = format!("BIO X6 export failed for {}: {}", network_id_hint, e);
+                    match App::write_biox6_failure_artifact(&path, export_kind, &diagnostic) {
+                        Ok(()) => {
+                            stdout = format!("diagnostic output written to {}", path.display());
+                            error = Some(e);
+                        }
+                        Err(write_err) => {
+                            error = Some(format!(
+                                "{}; also failed to write diagnostic output: {}",
+                                e, write_err
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let _ = tx.send(ToolTaskResult::ToolExport {
+                kind: tool_kind,
+                path,
+                stdout,
+                stderr,
+                error,
+            });
+        });
+    }
+
+    fn capture_biox6_snapshot_json_blocking(
+        source: ViewSource,
+        runner: Arc<RwLock<Runner>>,
+        distributed_node: Option<DistributedNode>,
+        cluster_snapshot_cache: Option<Box<crate::runner::Snapshot>>,
+    ) -> Result<String, String> {
+        match source {
+            ViewSource::Standalone => {
+                let runner = runner.blocking_read();
+                runner.export_network_json().map_err(|e| e.to_string())
+            }
+            ViewSource::LocalManaged(id) => {
+                let node = distributed_node
+                    .ok_or_else(|| "Local managed network unavailable".to_string())?;
+                let net_arc = {
+                    let state = node.state.blocking_read();
+                    state
+                        .networks
+                        .get(&id)
+                        .cloned()
+                        .ok_or_else(|| "Local managed network not found".to_string())?
+                };
+                let net = net_arc.blocking_read();
+                net.runner.export_network_json().map_err(|e| e.to_string())
+            }
+            ViewSource::ClusterGlobal(id) => {
+                let snap = cluster_snapshot_cache
+                    .ok_or_else(|| format!("Cluster snapshot for {id} is not available yet"))?;
+                serde_json::to_string_pretty(snap.as_ref()).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    fn write_biox6_failure_artifact(
+        path: &std::path::Path,
+        export_kind: Biox6UiExportKind,
+        message: &str,
+    ) -> Result<(), String> {
+        match export_kind {
+            Biox6UiExportKind::PreviewHtml => {
+                let html = format!(
+                    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>BIO X6 Export Failed</title></head><body><h1>BIO X6 Export Failed</h1><pre>{}</pre></body></html>",
+                    App::html_escape(message)
+                );
+                crate::shared_fs::atomic_write(path, html.as_bytes()).map_err(|e| e.to_string())
+            }
+            Biox6UiExportKind::BundleZip => {
+                let artifact = aarnn_biox6_exporter::ExportArtifact {
+                    relative_path: "README-ERROR.txt".to_string(),
+                    content_type: "text/plain".to_string(),
+                    bytes: format!("{message}\n").into_bytes(),
+                };
+                let zip =
+                    aarnn_biox6_exporter::zip_artifacts(&[artifact]).map_err(|e| e.to_string())?;
+                crate::shared_fs::atomic_write(path, &zip).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    fn html_escape(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
     }
 
     /// Read the latest NN simulation time from the lock-free atomic,
@@ -8174,6 +8372,8 @@ impl eframe::App for App {
                         ToolExportKind::Nir => "NIR",
                         ToolExportKind::NeuroML => "NeuroML",
                         ToolExportKind::Tflite => "TFLite",
+                        ToolExportKind::Biox6 => "BIO X6",
+                        ToolExportKind::Biox6Preview => "BIO X6 preview",
                     };
                     if let Some(e) = error {
                         let details = if stderr.trim().is_empty() {
@@ -8188,7 +8388,21 @@ impl eframe::App for App {
                                 format!("{} export failed: {} ({})", kind_str, e, details);
                         }
                     } else {
-                        self.status = format!("Exported {} to {}", kind_str, path.display());
+                        let details = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
+                        if details.is_empty() {
+                            self.status = format!("Exported {} to {}", kind_str, path.display());
+                        } else {
+                            self.status = format!(
+                                "Exported {} to {} ({})",
+                                kind_str,
+                                path.display(),
+                                details
+                            );
+                        }
                     }
                 }
                 ToolTaskResult::ToolImport {
@@ -12343,6 +12557,23 @@ impl eframe::App for App {
                                             error,
                                         });
                                     });
+                                }
+                            }
+                        });
+                    });
+                    ui.separator();
+                    ui.collapsing("BIO X6 Physical Export", |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.button("Export BIO X6…").on_hover_text("Export the current snapshot as a BIO X6 review bundle with physical plan, toolpaths, G-code, provenance, and previews").clicked() {
+                                let default_name = format!("{}_biox6.zip", self.biox6_export_basename());
+                                if let Some(path) = rfd::FileDialog::new().add_filter("ZIP", &["zip"]).set_file_name(&default_name).save_file() {
+                                    self.spawn_biox6_export(path, Biox6UiExportKind::BundleZip);
+                                }
+                            }
+                            if ui.button("Print Preview…").on_hover_text("Write a standalone HTML print preview for the BIO X6 physical plan").clicked() {
+                                let default_name = format!("{}_biox6-preview.html", self.biox6_export_basename());
+                                if let Some(path) = rfd::FileDialog::new().add_filter("HTML", &["html"]).set_file_name(&default_name).save_file() {
+                                    self.spawn_biox6_export(path, Biox6UiExportKind::PreviewHtml);
                                 }
                             }
                         });

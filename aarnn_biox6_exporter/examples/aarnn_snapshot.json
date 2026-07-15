@@ -1,0 +1,89 @@
+{
+  "schema_version": "0.1",
+  "network_id": "demo-aarnn",
+  "captured_at_tick": 123456,
+  "time_unit_us": 1.0,
+  "nodes": [
+    {
+      "id": "sensory-1",
+      "kind": "sensory",
+      "threshold": 0.2,
+      "bias": 0.0,
+      "refractory_us": 1000.0,
+      "preferred_position_mm": {
+        "x": 15.0,
+        "y": 30.0,
+        "z": 3.0
+      },
+      "source_component_ids": [
+        "soma:1",
+        "axonhillock:1"
+      ]
+    },
+    {
+      "id": "interneuron-1",
+      "kind": "interneuron",
+      "threshold": 0.45,
+      "bias": 0.0,
+      "refractory_us": 2000.0,
+      "preferred_position_mm": {
+        "x": 60.0,
+        "y": 45.0,
+        "z": 5.0
+      },
+      "source_component_ids": [
+        "soma:2",
+        "axonhillock:2"
+      ]
+    },
+    {
+      "id": "motor-1",
+      "kind": "motor",
+      "threshold": 0.6,
+      "bias": 0.0,
+      "refractory_us": 3000.0,
+      "preferred_position_mm": {
+        "x": 110.0,
+        "y": 30.0,
+        "z": 3.0
+      },
+      "source_component_ids": [
+        "soma:3",
+        "axonhillock:3"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "synapse-1",
+      "source_node": "sensory-1",
+      "target_node": "interneuron-1",
+      "weight": 0.8,
+      "delay_us": 500.0,
+      "enabled": true,
+      "source_component_ids": [
+        "axon:1",
+        "axonbouton:1",
+        "synapticgap:1",
+        "dendritebouton:2"
+      ]
+    },
+    {
+      "id": "synapse-2",
+      "source_node": "interneuron-1",
+      "target_node": "motor-1",
+      "weight": -0.4,
+      "delay_us": 1000.0,
+      "enabled": true,
+      "source_component_ids": [
+        "axon:2",
+        "axonbouton:2",
+        "synapticgap:2",
+        "dendritebouton:3"
+      ]
+    }
+  ],
+  "metadata": {
+    "description": "Small example only; replace with an adapter from the live AARNN Rust model."
+  }
+}
