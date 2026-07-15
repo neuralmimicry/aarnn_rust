@@ -60,6 +60,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Enforce Gail image tag policy
+        run: bash scripts/check_gail_image_tags.sh .
+
       - name: Check build
         run: cargo check --locked --all-features --all-targets
 

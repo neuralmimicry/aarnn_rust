@@ -53,6 +53,9 @@ jobs:
           clean: false
           path: repo-container-build
 
+      - name: Enforce Gail image tag policy
+        run: bash scripts/check_gail_image_tags.sh .
+
       - name: Verify Podman is available
         run: |
           command -v podman >/dev/null 2>&1 || {
