@@ -52,7 +52,7 @@ GitHub Actions binary release automation lives in `.github/workflows/build-and-r
 - manual `workflow_dispatch` runs can package artifacts from any ref.
 - publish steps only run from a `v*` tag ref, either automatically on tag push or manually from `workflow_dispatch`.
 
-The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. Linux CI now validates `.deb` artifacts on both `amd64` and `arm64` runners. The existing `.github/workflows/container-build.yml` pipeline remains the multi-arch container promotion path for richer runtime images.
+The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. Linux CI now validates `.deb` artifacts on both `amd64` and `arm64` runners. The unified `.github/workflows/build-and-release.yml` workflow also handles multi-arch container build, manifest publish, and promotion.
 
 ### Train a sample model artefact
 
