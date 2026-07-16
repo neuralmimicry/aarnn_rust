@@ -24,6 +24,52 @@ RUN set -eux; \
     case ",${CARGO_FEATURES},${CONTAINER_WORKLOAD}," in \
         *,all,*|*,all-features,*|*,ui,*|*,image_input,*|*,video_input,*|*,webcam_input,*|*,robot_io,*|*,desktop_ui_workload,*|*,container,*|*,desktop-ui,*) need_ui=1 ;; \
     esac; \
+    apt_update_retry() { \
+        attempts="${AARNN_APT_UPDATE_ATTEMPTS:-6}"; \
+        attempt=1; \
+        while [ "${attempt}" -le "${attempts}" ]; do \
+            if apt-get \
+                -o Acquire::ForceIPv4=true \
+                -o Acquire::Retries=5 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                update; then \
+                return 0; \
+            fi; \
+            if [ "${attempt}" -ge "${attempts}" ]; then \
+                return 1; \
+            fi; \
+            sleep_for=$((attempt * 5)); \
+            printf 'apt-get update failed (attempt %s/%s); retrying in %ss\n' "${attempt}" "${attempts}" "${sleep_for}" >&2; \
+            sleep "${sleep_for}"; \
+            attempt=$((attempt + 1)); \
+        done; \
+        return 1; \
+    }; \
+    apt_install_retry() { \
+        attempts="${AARNN_APT_INSTALL_ATTEMPTS:-4}"; \
+        attempt=1; \
+        while [ "${attempt}" -le "${attempts}" ]; do \
+            if apt_update_retry && apt-get \
+                -y \
+                --no-install-recommends \
+                -o Acquire::ForceIPv4=true \
+                -o Acquire::Retries=5 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                install "$@"; then \
+                return 0; \
+            fi; \
+            if [ "${attempt}" -ge "${attempts}" ]; then \
+                return 1; \
+            fi; \
+            sleep_for=$((attempt * 5)); \
+            printf 'apt-get install failed (attempt %s/%s); retrying in %ss\n' "${attempt}" "${attempts}" "${sleep_for}" >&2; \
+            sleep "${sleep_for}"; \
+            attempt=$((attempt + 1)); \
+        done; \
+        return 1; \
+    }; \
     resolve_package() { \
         for candidate in "$@"; do \
             if apt-cache show "$candidate" >/dev/null 2>&1; then \
@@ -35,16 +81,16 @@ RUN set -eux; \
         return 1; \
     }; \
     packages='ca-certificates python3 python3-venv python3-pip openmpi-bin ocl-icd-libopencl1'; \
-    apt-get update; \
+    apt_update_retry; \
     if [ "${need_ui}" = "1" ]; then \
         alsa_package="$(resolve_package libasound2t64 libasound2)"; \
         packages="$packages libgl1 libx11-6 libxext6 libxrender1 libice6 libsm6 libxcursor1 libxi6 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxkbcommon-x11-0 ${alsa_package} libgtk-3-0"; \
     fi; \
-    apt-get install -y --no-install-recommends $packages; \
+    apt_install_retry $packages; \
     arch="$(dpkg --print-architecture)"; \
     deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"; \
     test -n "$deb"; \
-    apt-get install -y --no-install-recommends "$deb"; \
+    apt_install_retry "$deb"; \
     python3 -c "import os,sys; min_version=os.environ.get('PYTHON_MIN_VERSION','3.12'); min_tuple=tuple(int(x) for x in min_version.split('.')); sys.exit(0) if sys.version_info>=min_tuple else (_ for _ in ()).throw(SystemExit(f'Python {min_version}+ required, got {sys.version}'))"; \
     python3 -m venv /opt/aarnn-venv; \
     /opt/aarnn-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel; \
