@@ -1,4 +1,4 @@
-name: Build and Release
+name: Unified CI/CD
 
 on:
   pull_request:
@@ -17,17 +17,54 @@ on:
     inputs:
       publish_release:
         description: "Publish a GitHub release from the selected v* tag ref"
-        required: true
+        required: false
         type: boolean
         default: false
       draft_release:
         description: "Mark a manually published release as draft"
-        required: true
+        required: false
         type: boolean
         default: false
       prerelease:
         description: "Mark a manually published release as prerelease"
-        required: true
+        required: false
+        type: boolean
+        default: false
+      build_id:
+        description: "Immutable container build ID to promote (defaults to current SHA)"
+        required: false
+      environment:
+        description: "Container promotion target environment"
+        required: false
+        type: choice
+        options: [developer, alpha, beta, canary, test, pre-prod, prod, release, ui]
+      track:
+        description: "Container promotion release track"
+        required: false
+        type: choice
+        options: [shadow, canary, blue, green]
+      cargo_features:
+        description: "Cargo features to build for container images"
+        required: false
+        default: "all-features"
+      run_version_bump:
+        description: "Run automated Cargo version bump and tagging"
+        required: false
+        type: boolean
+        default: false
+      bump_type:
+        description: "Version component to bump"
+        required: false
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      branch:
+        description: "Branch to bump and tag (defaults to triggering ref branch)"
+        required: false
+        default: ""
+      sync_wiki:
+        description: "Sync .github/wiki/Home.md to the GitHub wiki"
+        required: false
         type: boolean
         default: false
 
@@ -38,6 +75,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_FEATURES: all-features
   CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  REGISTRY: ghcr.io
+  IMAGE_NAME: neuralmimicry/aarnn_rust
   UBUNTU_NATIVE_BUILD_DEPS: >-
     ca-certificates curl xz-utils build-essential pkg-config libssl-dev protobuf-compiler
     dpkg-dev clang libclang-dev cmake git perl python3 libnl-3-dev
@@ -51,14 +90,21 @@ env:
     libfontconfig1-dev libfreetype6-dev
 
 concurrency:
-  group: build-and-release-${{ github.ref }}
+  group: unified-ci-cd-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   verify:
-    name: Verify
-    runs-on: [self-hosted, Linux, X64]
+    name: Verify (${{ matrix.runner_arch }})
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      (!inputs.run_version_bump && !inputs.sync_wiki && inputs.environment == '')
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        runner_arch: [X64, ARM64]
     defaults:
       run:
         working-directory: repo-build-release
@@ -75,10 +121,57 @@ jobs:
           components: rustfmt
 
       - name: Install native build dependencies
+        shell: bash
         run: |
-          sudo apt-get update
+          set -euo pipefail
+          apt_update_retry() {
+            local attempts="${1:-6}"
+            local attempt=1
+            while true; do
+              if sudo apt-get \
+                -o Acquire::ForceIPv4=true \
+                -o Acquire::Retries=5 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                update; then
+                return 0
+              fi
+              if (( attempt >= attempts )); then
+                return 1
+              fi
+              sleep_for=$((attempt * 5))
+              echo "apt-get update failed (attempt ${attempt}/${attempts}); retrying in ${sleep_for}s"
+              sleep "${sleep_for}"
+              attempt=$((attempt + 1))
+            done
+          }
+          apt_install_retry() {
+            local attempts="${1:-4}"
+            shift
+            local attempt=1
+            while true; do
+              if apt_update_retry 6 && sudo apt-get \
+                -y \
+                --no-install-recommends \
+                --allow-downgrades \
+                -o Acquire::ForceIPv4=true \
+                -o Acquire::Retries=5 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                install "$@"; then
+                return 0
+              fi
+              if (( attempt >= attempts )); then
+                return 1
+              fi
+              sleep_for=$((attempt * 5))
+              echo "apt-get install failed (attempt ${attempt}/${attempts}); retrying in ${sleep_for}s"
+              sleep "${sleep_for}"
+              attempt=$((attempt + 1))
+            done
+          }
           # shellcheck disable=SC2086
-          sudo apt-get install -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
+          apt_install_retry 4 $UBUNTU_NATIVE_BUILD_DEPS
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -95,6 +188,8 @@ jobs:
         run: cargo check --locked --all-features --all-targets
 
       - name: Run tests
+        env:
+          NM_DISABLE_OPENCL: "1"
         run: cargo test --locked --all-features --all-targets --lib
 
       - name: Build release binaries
@@ -112,6 +207,7 @@ jobs:
   release-meta:
     name: Release Metadata
     needs: verify
+    if: needs.verify.result == 'success'
     runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
@@ -170,6 +266,7 @@ jobs:
     needs:
       - verify
       - release-meta
+    if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
     runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     timeout-minutes: 120
     strategy:
@@ -289,6 +386,7 @@ jobs:
           set -euo pipefail
           podman run --rm -i --pull=missing \
             --platform "linux/${{ matrix.container_platform }}" \
+            --network host \
             -e DEBIAN_FRONTEND=noninteractive \
             -e CARGO_HOME=/cargo \
             -e RUSTUP_HOME=/rustup \
@@ -320,6 +418,12 @@ jobs:
           cargo_build_targets="$7"
 
           . /workspace/scripts/apt_retry.sh
+          export AARNN_APT_UPDATE_ATTEMPTS=8
+          export AARNN_APT_INSTALL_ATTEMPTS=5
+          export AARNN_APT_RETRY_DELAY_SEC=8
+          export AARNN_APT_FETCH_RETRIES=8
+          export AARNN_APT_HTTP_TIMEOUT_SEC=45
+          export AARNN_APT_REQUIRED_BINS="cc"
           # shellcheck disable=SC2086
           aarnn_apt_install_with_retry -y --no-install-recommends --allow-downgrades $UBUNTU_NATIVE_BUILD_DEPS
 
@@ -376,6 +480,7 @@ jobs:
           set -euo pipefail
           podman run --rm -i --pull=missing \
             --platform "linux/${{ matrix.container_platform }}" \
+            --network host \
             -e DEBIAN_FRONTEND=noninteractive \
             -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
             -e EXPECTED_ARCH="${{ matrix.deb_arch }}" \
@@ -386,6 +491,11 @@ jobs:
           set -euo pipefail
 
           . /tmp/scripts/apt_retry.sh
+          export AARNN_APT_UPDATE_ATTEMPTS=8
+          export AARNN_APT_INSTALL_ATTEMPTS=5
+          export AARNN_APT_RETRY_DELAY_SEC=8
+          export AARNN_APT_FETCH_RETRIES=8
+          export AARNN_APT_HTTP_TIMEOUT_SEC=45
           deb_path="$(find /packages -maxdepth 1 -type f -name "aarnn-rust_*_${EXPECTED_SUFFIX}_${EXPECTED_ARCH}.deb" | head -n 1)"
           deb_path="$(readlink -f "$deb_path")"
 
@@ -488,3 +598,536 @@ jobs:
           fi
 
           gh release create "${args[@]}"
+
+  container-build:
+    name: Container Build (${{ matrix.arch }}, ${{ matrix.runner_arch }})
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner_arch: X64
+          - arch: arm64
+            runner_arch: ARM64
+    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: repo-build-release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          path: repo-build-release
+
+      - name: Enforce Gail image tag policy
+        run: bash scripts/check_gail_image_tags.sh .
+
+      - name: Verify Podman is available
+        run: |
+          command -v podman >/dev/null 2>&1 || {
+            echo "podman is required on self-hosted runners."
+            exit 1
+          }
+          podman --version
+
+      - name: Configure rootless podman runtime environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
+          fi
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
+          fi
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
+      - name: Verify runner architecture matches matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          host_arch="$(uname -m)"
+          case "${host_arch}" in
+            x86_64) host_target_arch="amd64" ;;
+            aarch64|arm64) host_target_arch="arm64" ;;
+            *)
+              echo "Unsupported host architecture: ${host_arch}"
+              exit 1
+              ;;
+          esac
+          if [[ "${host_target_arch}" != "${{ matrix.arch }}" ]]; then
+            echo "Runner architecture mismatch: host=${host_target_arch}, matrix=${{ matrix.arch }}"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        run: |
+          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+            "${{ env.REGISTRY }}" \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Derive immutable build id
+        id: buildmeta
+        run: echo "build_id=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Debian package for container build
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/package-release.sh scripts/prepare_container_package.sh
+          ./scripts/prepare_container_package.sh \
+            --workload standalone \
+            --arch "${{ matrix.arch }}" \
+            --output-dir ./dist/container \
+            --cache-dir ./.container-cache/debs-ci \
+            --force \
+            --cargo-features "${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}" \
+            --cargo-build-targets "aarnn_rust"
+
+      - name: Smoke install container Debian package in Ubuntu 24.04
+        shell: bash
+        run: |
+          set -euo pipefail
+          podman run --rm --pull=missing \
+            --platform "linux/${{ matrix.arch }}" \
+            --network host \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "$PWD/dist/container:/tmp/aarnn:ro" \
+            -v "$PWD/scripts:/tmp/scripts:ro" \
+            ubuntu:24.04 \
+            bash -lc '
+              set -euo pipefail
+              . /tmp/scripts/apt_retry.sh
+              export AARNN_APT_UPDATE_ATTEMPTS=8
+              export AARNN_APT_INSTALL_ATTEMPTS=5
+              export AARNN_APT_RETRY_DELAY_SEC=8
+              arch="$(dpkg --print-architecture)"
+              deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"
+              test -n "$deb"
+              aarnn_apt_install_with_retry -y --no-install-recommends "$deb"
+              test -x /usr/bin/aarnn_rust
+            '
+
+      - name: Build and push architecture image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build_id="${{ steps.buildmeta.outputs.build_id }}"
+          arch_tag="${image}:${build_id}-${{ matrix.arch }}"
+
+          build_args=(
+            --file ./Containerfile
+            --platform "linux/${{ matrix.arch }}"
+            --network host
+            --tag "${arch_tag}"
+            --build-arg "CONTAINER_WORKLOAD=standalone"
+            --build-arg "CARGO_FEATURES=${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}"
+            --build-arg "PYTHON_MIN_VERSION=3.12"
+            --build-arg "PYTHON_FULL_VERSION=3.12.2"
+            .
+          )
+
+          set +e
+          podman build "${build_args[@]}"
+          build_rc=$?
+          set -e
+
+          if [[ "${build_rc}" -ne 0 ]]; then
+            echo "Initial podman build failed (exit=${build_rc})."
+            echo "Attempting one clean-cache rebuild (podman builder/image prune + --no-cache)."
+            podman builder prune -f || true
+            podman image prune -f || true
+            podman build --no-cache "${build_args[@]}"
+          fi
+
+          podman push "${arch_tag}"
+
+  container-manifest:
+    name: Container Manifest
+    if: github.event_name == 'push'
+    needs: container-build
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      packages: write
+    steps:
+      - name: Verify Podman is available
+        run: |
+          command -v podman >/dev/null 2>&1 || {
+            echo "podman is required on self-hosted runners."
+            exit 1
+          }
+          podman --version
+
+      - name: Configure rootless podman runtime environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
+          fi
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
+          fi
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
+      - name: Log in to GHCR
+        run: |
+          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+            "${{ env.REGISTRY }}" \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Assemble multi-arch manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${GITHUB_SHA}"
+          podman manifest rm "${image}:${build}" >/dev/null 2>&1 || true
+          podman image rm -f "${image}:${build}" >/dev/null 2>&1 || true
+          podman manifest create "${image}:${build}"
+          podman manifest add "${image}:${build}" "docker://${image}:${build}-amd64"
+          podman manifest add "${image}:${build}" "docker://${image}:${build}-arm64"
+          podman manifest push --all "${image}:${build}" "docker://${image}:${build}"
+
+      - name: Publish branch alias for developer flow
+        if: startsWith(github.ref, 'refs/heads/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${GITHUB_SHA}"
+          branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
+          podman manifest rm "${image}:${branch_tag}" >/dev/null 2>&1 || true
+          podman image rm -f "${image}:${branch_tag}" >/dev/null 2>&1 || true
+          podman manifest create "${image}:${branch_tag}"
+          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-amd64"
+          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-arm64"
+          podman manifest push --all "${image}:${branch_tag}" "docker://${image}:${branch_tag}"
+
+      - name: Publish version and latest tags on release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${GITHUB_SHA}"
+          version_tag="${GITHUB_REF_NAME}"
+          podman manifest rm "${image}:${version_tag}" >/dev/null 2>&1 || true
+          podman image rm -f "${image}:${version_tag}" >/dev/null 2>&1 || true
+          podman manifest create "${image}:${version_tag}"
+          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-amd64"
+          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-arm64"
+          podman manifest push --all "${image}:${version_tag}" "docker://${image}:${version_tag}"
+
+          podman manifest rm "${image}:latest" >/dev/null 2>&1 || true
+          podman image rm -f "${image}:latest" >/dev/null 2>&1 || true
+          podman manifest create "${image}:latest"
+          podman manifest add "${image}:latest" "docker://${image}:${build}-amd64"
+          podman manifest add "${image}:latest" "docker://${image}:${build}-arm64"
+          podman manifest push --all "${image}:latest" "docker://${image}:latest"
+          echo "Published ${image}:${version_tag} and ${image}:latest"
+
+      - name: Verify published manifests include amd64 and arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${GITHUB_SHA}"
+
+          verify_ref() {
+            local ref="$1"
+            local platform="$2"
+            echo "Verifying ${ref} for ${platform}"
+            podman pull --quiet --platform "${platform}" "docker://${ref}" >/dev/null
+          }
+
+          verify_ref "${image}:${build}" "linux/amd64"
+          verify_ref "${image}:${build}" "linux/arm64"
+
+          if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
+            branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
+            verify_ref "${image}:${branch_tag}" "linux/amd64"
+            verify_ref "${image}:${branch_tag}" "linux/arm64"
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            verify_ref "${image}:${GITHUB_REF_NAME}" "linux/amd64"
+            verify_ref "${image}:${GITHUB_REF_NAME}" "linux/arm64"
+            verify_ref "${image}:latest" "linux/amd64"
+            verify_ref "${image}:latest" "linux/arm64"
+          fi
+
+  container-promote:
+    name: Container Promote
+    if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      packages: write
+    steps:
+      - name: Verify Podman is available
+        run: |
+          command -v podman >/dev/null 2>&1 || {
+            echo "podman is required on self-hosted runners."
+            exit 1
+          }
+          podman --version
+
+      - name: Configure rootless podman runtime environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          conf_dir="${HOME}/.config/containers"
+          mkdir -p "${conf_dir}"
+          runtime_dir="/run/user/${uid}"
+          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
+            runtime_dir="/tmp/podman-run-${uid}"
+            mkdir -p "${runtime_dir}/containers"
+            chmod 0700 "${runtime_dir}"
+            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
+            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
+          fi
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
+            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+          if command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
+          elif command -v runc >/dev/null 2>&1; then
+            oci_runtime="runc"
+          else
+            echo "Neither crun nor runc found on PATH." >&2
+            exit 1
+          fi
+          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
+          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
+
+          export XDG_RUNTIME_DIR="${runtime_dir}"
+          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
+          export CONTAINERS_CONF="${conf_dir}/containers.conf"
+
+          if ! podman info >/dev/null 2>&1; then
+            echo "Detected stale Podman state; running podman system migrate."
+            podman system migrate
+          fi
+          podman info >/dev/null
+
+      - name: Log in to GHCR
+        run: |
+          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+            "${{ env.REGISTRY }}" \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
+      - name: Promote immutable build
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${{ inputs.build_id || github.sha }}"
+          env_name="${{ inputs.environment }}"
+          track="${{ inputs.track || 'blue' }}"
+          target="${image}:${env_name}-${track}"
+          podman manifest rm "${target}" >/dev/null 2>&1 || true
+          podman image rm -f "${target}" >/dev/null 2>&1 || true
+          podman manifest create "${target}"
+          podman manifest add --all "${target}" "docker://${image}:${build}"
+          podman manifest push --all "${target}" "docker://${target}"
+          echo "Promoted ${image}:${build} -> ${target}"
+
+  version-bump:
+    name: Version Bump and Tag
+    if: github.event_name == 'workflow_dispatch' && inputs.run_version_bump
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: repo-build-release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.X_GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref }}
+          path: repo-build-release
+
+      - name: Compute next version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          bump="${{ inputs.bump_type || 'patch' }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="${major}.${minor}.${patch}"
+          {
+            echo "current=$current"
+            echo "next=$next"
+            echo "tag=v${next}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Bumping $current -> $next ($bump)"
+
+      - name: Check tag does not already exist
+        shell: bash
+        run: |
+          if git ls-remote --tags origin "${{ steps.ver.outputs.tag }}" | grep -q .; then
+            echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists — skipping bump."
+            exit 1
+          fi
+
+      - name: Update Cargo.toml version
+        shell: bash
+        run: |
+          sed -i \
+            's/^version = "${{ steps.ver.outputs.current }}"$/version = "${{ steps.ver.outputs.next }}"/' \
+            Cargo.toml
+
+      - name: Update Cargo.lock version entry
+        shell: bash
+        run: |
+          sed -i \
+            '/^name = "aarnn_rust"$/{n;s/^version = "${{ steps.ver.outputs.current }}"$/version = "${{ steps.ver.outputs.next }}"/}' \
+            Cargo.lock
+
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          toml_ver="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          lock_ver="$(awk '/^name = "aarnn_rust"$/{getline; sub(/^version = "/, ""); sub(/"$/, ""); print; exit}' Cargo.lock)"
+          if [[ "$toml_ver" != "${{ steps.ver.outputs.next }}" ]]; then
+            echo "::error::Cargo.toml version is '$toml_ver', expected '${{ steps.ver.outputs.next }}'"
+            exit 1
+          fi
+          if [[ "$lock_ver" != "${{ steps.ver.outputs.next }}" ]]; then
+            echo "::error::Cargo.lock version is '$lock_ver', expected '${{ steps.ver.outputs.next }}'"
+            exit 1
+          fi
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version ${{ steps.ver.outputs.current }} -> ${{ steps.ver.outputs.next }}"
+
+      - name: Create and push tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.ver.outputs.tag }}"
+          git tag -f latest
+          git push origin HEAD:"${GITHUB_REF_NAME}" "${{ steps.ver.outputs.tag }}"
+          git push origin -f refs/tags/latest
+
+  sync-wiki:
+    name: Sync Wiki
+    if: >-
+      (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.sync_wiki)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Push wiki Home page
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          if [ ! -f "${GITHUB_WORKSPACE}/.github/wiki/Home.md" ]; then
+            echo "No .github/wiki/Home.md found; skipping wiki sync."
+            exit 0
+          fi
+          wiki_dir=$(mktemp -d)
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" "${wiki_dir}" 2>/dev/null || true
+          cd "${wiki_dir}"
+          if [ ! -d .git ]; then
+            git init -b master
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git"
+          fi
+          cp "${GITHUB_WORKSPACE}/.github/wiki/Home.md" Home.md
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add Home.md
+          git diff --cached --quiet && echo "No changes to wiki" && exit 0
+          git commit -m "docs: update wiki Home page"
+          git push -u origin HEAD:master 2>&1 || git push -u origin HEAD:main 2>&1
+          echo "Wiki updated successfully"
