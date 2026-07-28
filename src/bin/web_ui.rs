@@ -625,6 +625,10 @@ fn apply_cors_headers(headers: &mut HeaderMap, origin: &str) {
 }
 
 fn apply_env_overrides(args: &mut Args) {
+    if args.orchestrator.is_none() {
+        args.orchestrator =
+            env_opt("AARNN_ORCHESTRATOR_ADDR").or_else(|| env_opt("NM_ORCHESTRATOR_ADDR"));
+    }
     if args.runtime_root.trim() == "data/runtime" {
         if let Some(runtime_root) =
             env_opt("NM_WEB_UI_RUNTIME_ROOT").or_else(|| env_opt("NM_RUNTIME_ROOT"))
@@ -722,15 +726,13 @@ fn apply_env_overrides(args: &mut Args) {
 
     if args.orchestrator.is_none() || args.runtime_root.trim() == "data/runtime" {
         let roots = default_infrastructure_roots();
-        if !roots.is_empty() {
-            if let Ok(infra) = detect_infrastructure(&roots) {
-                if args.orchestrator.is_none() {
-                    args.orchestrator = infra.recommended_orchestrator_addr();
-                }
-                if args.runtime_root.trim() == "data/runtime" {
-                    if let Some(runtime_root) = infra.runtime_root {
-                        args.runtime_root = runtime_root;
-                    }
+        if let Ok(infra) = detect_infrastructure(&roots) {
+            if args.orchestrator.is_none() {
+                args.orchestrator = infra.recommended_orchestrator_addr();
+            }
+            if args.runtime_root.trim() == "data/runtime" {
+                if let Some(runtime_root) = infra.runtime_root {
+                    args.runtime_root = runtime_root;
                 }
             }
         }

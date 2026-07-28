@@ -409,6 +409,85 @@ fn format_host_port(host: &str, port: u16) -> String {
     }
 }
 
+/// Normalize and de-duplicate a sequence of orchestrator endpoints while
+/// preserving preference order. Values may be comma, semicolon, or
+/// whitespace separated so they can be supplied conveniently through env.
+pub fn merge_orchestrator_endpoints<I, S>(values: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut endpoints = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        for raw in value.as_ref().split([',', ';', ' ', '\t', '\n']) {
+            let raw = raw.trim().trim_end_matches('/');
+            if raw.is_empty() {
+                continue;
+            }
+            let endpoint = if raw.starts_with("http://") || raw.starts_with("https://") {
+                raw.to_string()
+            } else {
+                format!("http://{raw}")
+            };
+            if seen.insert(endpoint.clone()) {
+                endpoints.push(endpoint);
+            }
+        }
+    }
+    endpoints
+}
+
+fn discovery_target_tokens(configured: Option<&str>) -> Vec<String> {
+    let configured = configured.unwrap_or_default();
+    let mut targets = vec![
+        "255.255.255.255:50050".to_string(),
+        "127.0.0.1:50050".to_string(),
+    ];
+    let mut seen = targets.iter().cloned().collect::<HashSet<_>>();
+    for raw in configured.split([',', ';', ' ', '\t', '\n']) {
+        let raw = raw
+            .trim()
+            .trim_start_matches("udp://")
+            .trim_end_matches('/');
+        if raw.is_empty() {
+            continue;
+        }
+        let target = if split_host_port(raw).is_some() {
+            raw.to_string()
+        } else {
+            format!("{raw}:50050")
+        };
+        if seen.insert(target.clone()) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+async fn resolve_discovery_targets() -> Vec<SocketAddr> {
+    let configured = std::env::var("NM_DISCOVERY_TARGETS").ok();
+    let mut resolved = Vec::new();
+    let mut seen = HashSet::new();
+    for target in discovery_target_tokens(configured.as_deref()) {
+        match tokio::net::lookup_host(target.as_str()).await {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if seen.insert(addr) {
+                        resolved.push(addr);
+                    }
+                }
+            }
+            Err(err) => nm_err!(
+                "[warn] Ignoring invalid discovery target '{}': {}",
+                target,
+                err
+            ),
+        }
+    }
+    resolved
+}
+
 fn peer_id_from_remote_addr(state: &NodeState, remote_addr: Option<SocketAddr>) -> Option<String> {
     let remote = remote_addr?;
     for (node_id, addr) in &state.peers {
@@ -2381,18 +2460,24 @@ impl DistributedNode {
 
     pub async fn start_discovery_beacon(
         grpc_addr: String,
+        advertise_addr: Option<String>,
         mut shutdown: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         socket.set_broadcast(true)?;
 
-        let msg = format!("NEUROMORPHIC_ORCHESTRATOR:{}", grpc_addr);
-        let targets = vec![
-            "255.255.255.255:50050".parse::<SocketAddr>()?,
-            "127.0.0.1:50050".parse::<SocketAddr>()?,
-        ];
+        let advertised = advertise_addr
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(grpc_addr);
+        let msg = format!("NEUROMORPHIC_ORCHESTRATOR:{}", advertised.trim());
+        let targets = resolve_discovery_targets().await;
+        anyhow::ensure!(!targets.is_empty(), "no valid UDP discovery targets");
 
-        nm_log!("[info] Discovery beacon started (port 50050)");
+        nm_log!(
+            "[info] Discovery beacon advertising {} to {} target(s)",
+            advertised,
+            targets.len()
+        );
 
         tokio::spawn(async move {
             loop {
@@ -4866,6 +4951,39 @@ impl DistributedNeuromorphic for DistributedNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orchestrator_endpoints_are_normalized_and_deduplicated_in_order() {
+        let endpoints = merge_orchestrator_endpoints([
+            "qc01:50051, http://spirit:32051",
+            "http://qc01:50051;https://edge.example:443/",
+        ]);
+
+        assert_eq!(
+            endpoints,
+            vec![
+                "http://qc01:50051",
+                "http://spirit:32051",
+                "https://edge.example:443",
+            ]
+        );
+    }
+
+    #[test]
+    fn discovery_targets_keep_broadcast_and_add_unicast_hosts() {
+        let targets =
+            discovery_target_tokens(Some("192.168.1.60,udp://192.168.1.62:51000 192.168.1.60"));
+
+        assert_eq!(
+            targets,
+            vec![
+                "255.255.255.255:50050",
+                "127.0.0.1:50050",
+                "192.168.1.60:50050",
+                "192.168.1.62:51000",
+            ]
+        );
+    }
 
     #[test]
     fn combined_networks_prefer_related_primary_node() {

@@ -41,6 +41,56 @@ scripts/deploy.sh canary
 scripts/deploy.sh prod
 ```
 
+## Hybrid k3s and native AARNN nodes
+
+Cluster membership is held by the orchestrator process. Run exactly one
+orchestrator replica and make its gRPC address routable from native workers. For
+k3s, Kubernetes service-link variables are detected automatically inside pods;
+outside Kubernetes, configure workers explicitly:
+
+```bash
+NM_ORCHESTRATOR_ADDRS=http://192.168.1.61:50051
+NM_ADVERTISE_ADDR=192.168.1.60:50051
+NM_NODE_ID=native-qc00
+NM_PRELOAD_NODE_NETWORK=0
+```
+
+`NM_ORCHESTRATOR_ADDRS` accepts comma-, semicolon-, or whitespace-separated
+endpoints in preference order. Singular `NM_ORCHESTRATOR_ADDR` and the equivalent
+`AARNN_*` names remain supported. Connection and RPC bounds can be adjusted with
+`NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS` and `NM_ORCHESTRATOR_RPC_TIMEOUT_MS`.
+Set `NM_NODE_ID` (or `--node-id`) to a stable, host-unique value so reconnects
+replace the same membership entry and UI node labels remain recognisable.
+
+If every endpoint is unavailable, a worker listens for the orchestrator UDP
+beacon on port 50050 and keeps retrying rather than exiting. Broadcast and
+loopback discovery remain enabled; set `NM_DISCOVERY_TARGETS` on the orchestrator
+to add unicast targets across k3s/LAN boundaries. Set `NM_ADVERTISE_ADDR` whenever
+the gRPC bind address is wildcarded or NAT could otherwise make the registered
+worker address ambiguous.
+
+Distributed spike streams are peer-to-peer. Kubernetes engine pods must
+therefore advertise addresses that native workers can route to as well; merely
+making the orchestrator reachable is insufficient. The SwarmHPC deployment runs
+engine pods on their node networks at TCP 50052, separate from the orchestrator
+on TCP 50051.
+
+Useful checks:
+
+```bash
+kubectl -n aarnn get deployment aarnn-orchestrator \
+  -o jsonpath='{.spec.replicas}{"\n"}'
+kubectl -n aarnn logs deployment/aarnn-orchestrator --tail=200
+
+systemctl status aarnn-node
+journalctl -u aarnn-node -n 100 --no-pager
+ss -lntup | grep -E ':50050|:50051|:50052'
+```
+
+The web UI and Rust UI connect to the orchestrator, not independently to every
+worker. Their status/node selectors therefore include native nodes as soon as
+those nodes join and disappear after stale membership is pruned.
+
 ## Continuum Autoscaler + Tracey Recruit
 
 When runtime autoscaling is enabled, AARNN sends a Tracey recruit block with every

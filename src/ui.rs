@@ -781,6 +781,7 @@ pub fn launch_ui(
     startup_snapshot_json: Option<String>,
     remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     aer_cfg: Option<AerIoConfig>,
+    startup_remote_orchestrators: Vec<String>,
     runtime_handle: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
     let ui_hidden = std::env::var("NM_UI_HIDDEN")
@@ -824,6 +825,7 @@ pub fn launch_ui(
                 startup_snapshot_json,
                 remote_workspace_binding,
                 aer_cfg,
+                startup_remote_orchestrators,
                 runtime_handle,
             )))
         }),
@@ -1888,6 +1890,7 @@ impl App {
         startup_snapshot_json: Option<String>,
         remote_workspace_binding: Option<RemoteWorkspaceBinding>,
         aer_cfg: Option<AerIoConfig>,
+        startup_remote_orchestrators: Vec<String>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
         let lif = LIFParams::default();
@@ -3675,10 +3678,12 @@ impl App {
         if app.remote_workspace_binding.is_some() {
             app.queue_remote_token_refresh(true);
         }
-        let auto_remote_count = app.add_remote_orchestrators_from_env();
+        let auto_remote_count = app.add_remote_orchestrators(startup_remote_orchestrators)
+            + app.add_remote_orchestrators_from_env();
         if auto_remote_count > 0 {
             app.status = format!(
-                "Remote-only UI (auto-connected {} orchestrator{})",
+                "{} (auto-connected {} orchestrator{})",
+                if remote_only { "Remote-only UI" } else { "UI" },
                 auto_remote_count,
                 if auto_remote_count == 1 { "" } else { "s" }
             );
@@ -3918,17 +3923,18 @@ impl App {
             return 0;
         }
 
-        let mut added = 0usize;
-        for token in raw.split([',', ';', ' ']) {
-            let trimmed = token.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if self.add_remote_orchestrator_connection(trimmed) {
-                added += 1;
-            }
-        }
-        added
+        self.add_remote_orchestrators([raw])
+    }
+
+    fn add_remote_orchestrators<I, S>(&mut self, values: I) -> usize
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        crate::distributed::merge_orchestrator_endpoints(values)
+            .into_iter()
+            .filter(|endpoint| self.add_remote_orchestrator_connection(endpoint))
+            .count()
     }
 
     fn apply_aarnn_bio_defaults(&mut self) {

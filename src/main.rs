@@ -325,6 +325,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     node: bool,
 
+    /// Stable distributed node identifier. Defaults to a generated identifier.
+    #[arg(long)]
+    node_id: Option<String>,
+
     /// Address of the orchestrator (if running as a node or sending cluster control).
     /// For cluster control this is auto-detected from infrastructure metadata when available.
     #[arg(long)]
@@ -423,6 +427,11 @@ struct Cli {
     /// Listen address for gRPC
     #[arg(long, default_value = "0.0.0.0:50051")]
     grpc_addr: String,
+
+    /// Reachable gRPC address advertised to orchestrators and discovery clients.
+    /// Use this when --grpc-addr binds a wildcard or traffic crosses NAT/k3s.
+    #[arg(long)]
+    advertise_addr: Option<String>,
 
     /// Unique brain identifier for IPC and UI tagging
     #[arg(long, default_value = "default")]
@@ -1091,6 +1100,36 @@ fn normalize_runtime_url(raw: &str) -> String {
     }
 }
 
+fn resolved_advertise_addr(args: &Cli) -> Option<String> {
+    args.advertise_addr
+        .clone()
+        .or_else(|| std::env::var("NM_ADVERTISE_ADDR").ok())
+        .or_else(|| std::env::var("AARNN_ADVERTISE_ADDR").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn configured_orchestrator_endpoints(args: &Cli) -> Vec<String> {
+    let mut values = Vec::new();
+    if let Some(value) = args.orchestrator_addr.as_deref() {
+        values.push(value.to_string());
+    }
+    for key in [
+        "NM_ORCHESTRATOR_ADDRS",
+        "AARNN_ORCHESTRATOR_ADDRS",
+        "NM_ORCHESTRATOR_ADDR",
+        "AARNN_ORCHESTRATOR_ADDR",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            values.push(value);
+        }
+    }
+    if let Some(value) = autodetected_orchestrator_addr(args) {
+        values.push(value);
+    }
+    crate::distributed::merge_orchestrator_endpoints(values)
+}
+
 fn autodetected_orchestrator_addr(args: &Cli) -> Option<String> {
     let roots = if let Some(root) = args.infrastructure_root.as_deref() {
         let trimmed = root.trim();
@@ -1102,9 +1141,6 @@ fn autodetected_orchestrator_addr(args: &Cli) -> Option<String> {
     } else {
         default_infrastructure_roots()
     };
-    if roots.is_empty() {
-        return None;
-    }
     detect_infrastructure(&roots)
         .ok()
         .and_then(|infra| infra.recommended_orchestrator_addr())
@@ -1739,13 +1775,14 @@ fn main() -> anyhow::Result<()> {
         }
         return ui::launch_ui(
             net_cfg,
-            args.brain_id,
+            args.brain_id.clone(),
             args.ipc,
             distributed_node,
             args.ui_remote_only,
             startup_snapshot_json,
             remote_workspace_binding,
             aer_cfg.clone(),
+            configured_orchestrator_endpoints(&args),
             rt.handle().clone(),
         );
     }
@@ -2248,9 +2285,33 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         DistributedNode, ManagedNetwork,
         proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
     };
-    use tonic::transport::{Channel, Server};
+    use tonic::transport::{Channel, Endpoint, Server};
 
-    let node_id = {
+    let explicit_node_id = args
+        .node_id
+        .clone()
+        .or_else(|| std::env::var("NM_NODE_ID").ok())
+        .or_else(|| std::env::var("AARNN_NODE_ID").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let node_id = if let Some(node_id) = explicit_node_id {
+        #[cfg(feature = "openmpi")]
+        {
+            if let Ok(rank_s) = std::env::var("OMPI_COMM_WORLD_RANK") {
+                if let Ok(rank) = rank_s.parse::<u32>() {
+                    format!("{}_mpi{}", node_id, rank)
+                } else {
+                    node_id
+                }
+            } else {
+                node_id
+            }
+        }
+        #[cfg(not(feature = "openmpi"))]
+        {
+            node_id
+        }
+    } else {
         #[cfg(feature = "openmpi")]
         {
             if let Ok(rank_s) = std::env::var("OMPI_COMM_WORLD_RANK") {
@@ -2435,13 +2496,29 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     async fn connect_and_join(
         orchestrator_addr: &str,
         node_id: &str,
-        grpc_addr: &str,
+        advertise_addr: &str,
         node: &DistributedNode,
     ) -> Result<DistributedNeuromorphicClient<Channel>, String> {
         let grpc_max_msg_bytes = grpc_max_message_bytes();
-        let mut client = DistributedNeuromorphicClient::connect(orchestrator_addr.to_string())
+        let connect_timeout = std::env::var("NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+            .unwrap_or_else(|| std::time::Duration::from_secs(4));
+        let rpc_timeout = std::env::var("NM_ORCHESTRATOR_RPC_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+            .unwrap_or_else(|| std::time::Duration::from_secs(8));
+        let endpoint = Endpoint::from_shared(orchestrator_addr.to_string())
+            .map_err(|e| format!("invalid endpoint: {e}"))?
+            .connect_timeout(connect_timeout)
+            .timeout(rpc_timeout);
+        let channel = endpoint
+            .connect()
             .await
             .map_err(|e| format!("connect: {e}"))?;
+        let mut client = DistributedNeuromorphicClient::new(channel);
         client = client
             .max_decoding_message_size(grpc_max_msg_bytes)
             .max_encoding_message_size(grpc_max_msg_bytes);
@@ -2449,7 +2526,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         let network_resources = node.get_network_resources().await;
         let join_req = JoinRequest {
             node_id: node_id.to_string(),
-            address: grpc_addr.to_string(),
+            address: advertise_addr.to_string(),
             resources: Some(resources),
             network_resources,
         };
@@ -2462,8 +2539,12 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     if args.orchestrator {
-        DistributedNode::start_discovery_beacon(args.grpc_addr.clone(), shutdown_rx.clone())
-            .await?;
+        DistributedNode::start_discovery_beacon(
+            args.grpc_addr.clone(),
+            resolved_advertise_addr(args),
+            shutdown_rx.clone(),
+        )
+        .await?;
 
         // Register the brain network if we are an orchestrator
         let default_playing = distributed_autostart_enabled();
@@ -2537,135 +2618,149 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     if args.node {
         let node_id_inner = node_id.clone();
         let node_inner = node.clone();
-        let grpc_addr = args.grpc_addr.clone();
-        let orchestrator_addr_arg = args.orchestrator_addr.clone();
-        let orchestrator_addr_detected = autodetected_orchestrator_addr(args);
-        let shutdown_tx_node = shutdown_tx.clone();
+        let advertise_addr =
+            resolved_advertise_addr(args).unwrap_or_else(|| args.grpc_addr.clone());
+        let mut orchestrator_endpoints = configured_orchestrator_endpoints(args);
+        let mut shutdown_rx_node = shutdown_rx.clone();
 
         tokio::spawn(async move {
-            let reconnect_timeout = std::time::Duration::from_secs(5 * 60);
             let reconnect_interval = std::time::Duration::from_secs(2);
             let heartbeat_interval = std::time::Duration::from_secs(5);
-            let orchestrator_addr = if let Some(addr) = orchestrator_addr_arg {
-                normalize_runtime_url(&addr)
-            } else if let Some(addr) = orchestrator_addr_detected {
-                addr
-            } else {
-                match DistributedNode::discover_orchestrator().await {
-                    Ok(addr) => addr,
-                    Err(e) => {
-                        nm_err!("[error] Discovery failed: {}", e);
-                        return;
+            let discovery_window = std::time::Duration::from_secs(2);
+            let rpc_timeout = std::env::var("NM_ORCHESTRATOR_RPC_TIMEOUT_MS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .map(std::time::Duration::from_millis)
+                .unwrap_or_else(|| std::time::Duration::from_secs(8));
+
+            'connection_manager: loop {
+                if *shutdown_rx_node.borrow() {
+                    return;
+                }
+
+                let mut connected = None;
+                for endpoint in orchestrator_endpoints.clone() {
+                    match connect_and_join(&endpoint, &node_id_inner, &advertise_addr, &node_inner)
+                        .await
+                    {
+                        Ok(client) => {
+                            connected = Some((endpoint, client));
+                            break;
+                        }
+                        Err(err) => {
+                            nm_err!("[info] Waiting for orchestrator at {}: {}", endpoint, err)
+                        }
                     }
                 }
-            };
-            {
-                let mut state = node_inner.state.write().await;
-                state._orchestrator_addr = Some(orchestrator_addr.clone());
-            }
 
-            let mut client = loop {
-                match connect_and_join(&orchestrator_addr, &node_id_inner, &grpc_addr, &node_inner)
+                if connected.is_none() {
+                    match tokio::time::timeout(
+                        discovery_window,
+                        DistributedNode::discover_orchestrator(),
+                    )
                     .await
-                {
-                    Ok(c) => {
-                        nm_log!("[info] Successfully joined orchestrator");
-                        break c;
+                    {
+                        Ok(Ok(discovered)) => {
+                            let discovered = normalize_runtime_url(&discovered);
+                            if !orchestrator_endpoints.contains(&discovered) {
+                                nm_log!(
+                                    "[info] Added discovered orchestrator candidate {}",
+                                    discovered
+                                );
+                                orchestrator_endpoints.insert(0, discovered);
+                            }
+                            continue;
+                        }
+                        Ok(Err(err)) => nm_err!("[warn] Discovery failed: {}", err),
+                        Err(_) => {}
                     }
-                    Err(e) => {
-                        nm_err!(
-                            "[info] Waiting for orchestrator at {}: {}",
-                            orchestrator_addr,
-                            e
-                        );
-                        tokio::time::sleep(reconnect_interval).await;
+                    tokio::select! {
+                        _ = shutdown_rx_node.changed() => continue 'connection_manager,
+                        _ = tokio::time::sleep(reconnect_interval) => {}
                     }
+                    continue;
                 }
-            };
 
-            let mut reconnect_started: Option<std::time::Instant> = None;
-            loop {
-                tokio::time::sleep(heartbeat_interval).await;
+                let (orchestrator_addr, mut client) = connected.expect("connected checked above");
+                orchestrator_endpoints.retain(|endpoint| endpoint != &orchestrator_addr);
+                orchestrator_endpoints.insert(0, orchestrator_addr.clone());
                 {
                     let mut state = node_inner.state.write().await;
-                    state.prune_peer_maps(
-                        std::time::Instant::now(),
-                        crate::distributed::PEER_STALE_AFTER,
-                    );
+                    state._orchestrator_addr = Some(orchestrator_addr.clone());
                 }
-                let resources = node_inner.get_resources().await;
-                let network_resources = node_inner.get_network_resources().await;
-                let hb_req = HeartbeatRequest {
-                    node_id: node_id_inner.clone(),
-                    resources: Some(resources),
-                    network_resources,
-                };
-                match client.heartbeat(hb_req).await {
-                    Ok(resp) => {
-                        let mut resp = resp.into_inner();
-                        if !resp.peers.is_empty() || !resp.network_peers.is_empty() {
-                            let mut state = node_inner.state.write().await;
-                            if !resp.peers.is_empty() {
-                                state.peers = resp.peers.drain().collect();
-                                let now = std::time::Instant::now();
-                                state.peer_last_seen.clear();
-                                let peer_ids: Vec<String> = state.peers.keys().cloned().collect();
-                                for node_id in peer_ids {
-                                    state.peer_last_seen.insert(node_id, now);
-                                }
-                            }
-                            if !resp.network_peers.is_empty() {
-                                state.network_peers = resp
-                                    .network_peers
-                                    .drain()
-                                    .map(|(k, v)| (k, v.node_ids))
-                                    .collect();
-                            }
-                            state.prune_peer_maps(
-                                std::time::Instant::now(),
-                                crate::distributed::PEER_STALE_AFTER,
-                            );
-                        }
-                        let commands = resp.commands;
-                        for cmd in commands {
-                            node_inner.handle_command(cmd).await;
-                        }
-                        reconnect_started = None;
+                nm_log!(
+                    "[info] Successfully joined orchestrator at {} (advertising {})",
+                    orchestrator_addr,
+                    advertise_addr
+                );
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown_rx_node.changed() => continue 'connection_manager,
+                        _ = tokio::time::sleep(heartbeat_interval) => {}
                     }
-                    Err(e) => {
-                        nm_err!("[error] Heartbeat failed: {}", e);
-                        let reconnect_start =
-                            reconnect_started.get_or_insert_with(std::time::Instant::now);
-                        let deadline = *reconnect_start + reconnect_timeout;
-                        loop {
-                            if std::time::Instant::now() >= deadline {
-                                nm_err!(
-                                    "[error] Orchestrator unreachable for 5 minutes; shutting down node"
+                    if *shutdown_rx_node.borrow() {
+                        return;
+                    }
+                    {
+                        let mut state = node_inner.state.write().await;
+                        state.prune_peer_maps(
+                            std::time::Instant::now(),
+                            crate::distributed::PEER_STALE_AFTER,
+                        );
+                    }
+                    let resources = node_inner.get_resources().await;
+                    let network_resources = node_inner.get_network_resources().await;
+                    let hb_req = HeartbeatRequest {
+                        node_id: node_id_inner.clone(),
+                        resources: Some(resources),
+                        network_resources,
+                    };
+                    match tokio::time::timeout(rpc_timeout, client.heartbeat(hb_req)).await {
+                        Ok(Ok(resp)) => {
+                            let mut resp = resp.into_inner();
+                            if !resp.peers.is_empty() || !resp.network_peers.is_empty() {
+                                let mut state = node_inner.state.write().await;
+                                if !resp.peers.is_empty() {
+                                    state.peers = resp.peers.drain().collect();
+                                    let now = std::time::Instant::now();
+                                    state.peer_last_seen.clear();
+                                    let peer_ids: Vec<String> =
+                                        state.peers.keys().cloned().collect();
+                                    for node_id in peer_ids {
+                                        state.peer_last_seen.insert(node_id, now);
+                                    }
+                                }
+                                if !resp.network_peers.is_empty() {
+                                    state.network_peers = resp
+                                        .network_peers
+                                        .drain()
+                                        .map(|(k, v)| (k, v.node_ids))
+                                        .collect();
+                                }
+                                state.prune_peer_maps(
+                                    std::time::Instant::now(),
+                                    crate::distributed::PEER_STALE_AFTER,
                                 );
-                                let _ = shutdown_tx_node.send(true);
-                                return;
                             }
-                            match connect_and_join(
-                                &orchestrator_addr,
-                                &node_id_inner,
-                                &grpc_addr,
-                                &node_inner,
-                            )
-                            .await
-                            {
-                                Ok(c) => {
-                                    nm_log!("[info] Reconnected to orchestrator");
-                                    client = c;
-                                    reconnect_started = None;
-                                    break;
-                                }
-                                Err(err) => {
-                                    nm_err!("[warn] Reconnect attempt failed: {}", err);
-                                    tokio::time::sleep(reconnect_interval).await;
-                                }
+                            let commands = resp.commands;
+                            for cmd in commands {
+                                node_inner.handle_command(cmd).await;
                             }
+                            continue;
                         }
+                        Ok(Err(err)) => nm_err!(
+                            "[warn] Heartbeat to {} failed; rediscovering: {}",
+                            orchestrator_addr,
+                            err
+                        ),
+                        Err(_) => nm_err!(
+                            "[warn] Heartbeat to {} timed out after {:?}; rediscovering",
+                            orchestrator_addr,
+                            rpc_timeout
+                        ),
                     }
+                    break;
                 }
             }
         });

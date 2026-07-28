@@ -344,6 +344,7 @@ pub struct InfrastructureFingerprint {
     pub control_plane_pinned: bool,
     pub engine_mode: Option<String>,
     pub orchestrator_service_name: Option<String>,
+    pub orchestrator_service_port: Option<u16>,
     pub runtime_root: Option<String>,
     pub startup_network_ids: Vec<String>,
 }
@@ -366,7 +367,18 @@ impl InfrastructureFingerprint {
         self.orchestrator_service_name
             .as_deref()
             .and_then(clean_id)
-            .map(|name| format!("http://{}:50051", name))
+            .map(|name| {
+                let host = if name.contains(':') && !name.starts_with('[') {
+                    format!("[{name}]")
+                } else {
+                    name
+                };
+                format!(
+                    "http://{}:{}",
+                    host,
+                    self.orchestrator_service_port.unwrap_or(50051)
+                )
+            })
     }
 
     fn add_source(&mut self, source: &Path) {
@@ -449,6 +461,31 @@ fn detect_live_environment() -> InfrastructureFingerprint {
     if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() {
         fingerprint.kubernetes = true;
         fingerprint.containerized = true;
+
+        // Kubernetes publishes service links to pods unless they are explicitly
+        // disabled.  Use those live values before falling back to a scanned
+        // Ansible checkout, which normally is not mounted inside workload pods.
+        for prefix in ["AARNN_ORCHESTRATOR", "ORCHESTRATOR"] {
+            let host_key = format!("{prefix}_SERVICE_HOST");
+            let Some(host) = std::env::var(&host_key)
+                .ok()
+                .and_then(|value| clean_id(&value))
+            else {
+                continue;
+            };
+            fingerprint.orchestrator_service_name = Some(host);
+            fingerprint.orchestrator_service_port = [
+                format!("{prefix}_SERVICE_PORT_GRPC"),
+                format!("{prefix}_SERVICE_PORT"),
+            ]
+            .into_iter()
+            .find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u16>().ok())
+            });
+            break;
+        }
     }
     if std::env::var_os("SLURM_JOB_ID").is_some() {
         fingerprint.slurm = true;
@@ -691,6 +728,20 @@ continuum_tenant_aarnn_continuum_url: "https://continuum.example"
         );
         assert!(fingerprint.host_names.contains(&"qc01".to_string()));
         assert!(fingerprint.host_names.contains(&"rk1".to_string()));
+    }
+
+    #[test]
+    fn recommended_orchestrator_uses_discovered_service_port_and_ipv6_brackets() {
+        let fingerprint = InfrastructureFingerprint {
+            orchestrator_service_name: Some("fd00::51".to_string()),
+            orchestrator_service_port: Some(32051),
+            ..InfrastructureFingerprint::default()
+        };
+
+        assert_eq!(
+            fingerprint.recommended_orchestrator_addr().as_deref(),
+            Some("http://[fd00::51]:32051")
+        );
     }
 
     #[test]

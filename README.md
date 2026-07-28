@@ -54,6 +54,27 @@ GitHub Actions binary release automation lives in `.github/workflows/build-and-r
 
 The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. Linux CI now validates `.deb` artifacts on both `amd64` and `arm64` runners. The unified `.github/workflows/build-and-release.yml` workflow also handles multi-arch container build, manifest publish, and promotion.
 
+## Hybrid Kubernetes and native workers
+
+A Kubernetes orchestrator can manage workers running directly on LAN hosts. Keep
+the orchestrator at one replica, expose its gRPC listener on an address reachable
+from the native hosts, and give workers one or more preferred endpoints:
+
+```bash
+NM_ORCHESTRATOR_ADDRS=http://192.168.1.61:50051 \
+NM_ADVERTISE_ADDR=192.168.1.60:50051 \
+NM_NODE_ID=native-qc00 \
+NM_PRELOAD_NODE_NETWORK=0 \
+aarnn_rust --node --grpc-addr 0.0.0.0:50051
+```
+
+Workers try configured endpoints in order, use UDP discovery as a fallback, and
+continue reconnecting after startup or heartbeat failures. An orchestrator can
+send discovery beacons to routed LAN hosts with
+`NM_DISCOVERY_TARGETS=192.168.1.60,192.168.1.62`. Both web and desktop UIs obtain
+the combined Kubernetes/native membership view from the singleton orchestrator.
+See [docs/operations.md](docs/operations.md) for deployment checks.
+
 ### Train a sample model artefact
 
 ```bash
