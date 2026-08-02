@@ -1759,6 +1759,123 @@ def build_robot_stimuli(
     return "\n".join(blocks) + ("\n" if blocks else "")
 
 
+def build_interaction_sticks(
+    entries: List[tuple[str, str, str, float, str]],
+    positions: List[Tuple[float, float]],
+    arena_half_size: float,
+) -> str:
+    """Place one mouse-movable interaction stick beside every robot instance."""
+    profiles = {
+        # length, thickness, mass, local forward/lateral offset, center height
+        "celegans": (0.28, 0.040, 0.040, -0.43, -0.31, 0.024),
+        "drosophila": (0.34, 0.045, 0.035, -0.42, -0.38, 0.027),
+        "hexapod": (0.58, 0.045, 0.075, -0.62, -0.72, 0.030),
+        "nao": (0.86, 0.060, 0.160, -0.72, -0.92, 0.040),
+        # The zebrafish stick starts inside its aquarium rather than outside a wall.
+        "zebrafish": (0.16, 0.030, 0.015, -0.08, -0.08, 0.145),
+    }
+    center_x, center_z, _scene_radius, _span_x, _span_z = scene_metrics(entries, positions)
+    bound = max(0.8, arena_half_size - 0.65)
+    blocks: List[str] = []
+
+    for (_, robot_name, _, _, robot_kind), (x, z) in zip(entries, positions):
+        length, thickness, mass, local_forward, local_lateral, height = profiles.get(
+            robot_kind,
+            profiles["hexapod"],
+        )
+        forward_x, forward_z, lateral_x, lateral_z = ecology_basis(
+            x,
+            z,
+            center_x,
+            center_z,
+        )
+        stick_x, stick_z = oriented_floor_point(
+            x,
+            z,
+            forward_x,
+            forward_z,
+            lateral_x,
+            lateral_z,
+            forward=local_forward,
+            lateral=local_lateral,
+            bound=bound,
+        )
+        # Angle the shaft across the local forward axis so it is easy to see and
+        # grab without initially pointing into the robot.
+        yaw = math.atan2(forward_z, forward_x) + 0.55
+        def_name = "INTERACTION_STICK_" + "".join(
+            ch.upper() if ch.isalnum() else "_" for ch in robot_name
+        )
+        grip_length = length * 0.28
+        grip_offset = -(length - grip_length) * 0.5
+        tip_offset = length * 0.42
+        tip_size = thickness * 0.68
+        blocks.append(
+            f"""# User interaction stick for {robot_name}: select this Solid in the
+# 3D view and use Webots' translation/rotation handles to touch or push the robot.
+DEF {def_name} Solid {{
+  translation {stick_x:.4f} {stick_z:.4f} {height:.4f}
+  rotation 0 0 1 {yaw:.5f}
+  name "interaction_stick_{robot_name.lower()}"
+  locked FALSE
+  children [
+    Shape {{
+      appearance PBRAppearance {{
+        baseColor 0.94 0.47 0.08
+        roughness 0.48
+        metalness 0.04
+      }}
+      geometry Box {{
+        size {length:.4f} {thickness:.4f} {thickness:.4f}
+      }}
+    }}
+    Transform {{
+      translation {grip_offset:.4f} 0 0
+      children [
+        Shape {{
+          appearance PBRAppearance {{
+            baseColor 0.12 0.16 0.20
+            roughness 0.82
+          }}
+          geometry Box {{
+            size {grip_length:.4f} {thickness * 1.16:.4f} {thickness * 1.16:.4f}
+          }}
+        }}
+      ]
+    }}
+    Transform {{
+      translation {tip_offset:.4f} 0 0
+      children [
+        Shape {{
+          appearance PBRAppearance {{
+            baseColor 1.00 0.80 0.16
+            roughness 0.36
+            emissiveColor 0.08 0.025 0
+          }}
+          geometry Sphere {{
+            radius {tip_size:.4f}
+          }}
+        }}
+      ]
+    }}
+  ]
+  boundingObject Box {{
+    size {length:.4f} {thickness:.4f} {thickness:.4f}
+  }}
+  physics Physics {{
+    density -1
+    mass {mass:.5f}
+    damping Damping {{
+      linear 0.18
+      angular 0.28
+    }}
+  }}
+}}"""
+        )
+
+    return "\n".join(blocks) + ("\n" if blocks else "")
+
+
 def build_demo_zone_furniture(
     entries: List[tuple[str, str, str, float, str]],
     positions: List[Tuple[float, float]],
@@ -2481,6 +2598,7 @@ def main() -> None:
         target_height,
     )
     stimuli_nodes = build_robot_stimuli(entries, positions, arena_half_size)
+    interaction_stick_nodes = build_interaction_sticks(entries, positions, arena_half_size)
 
     world = f"""#VRML_SIM R2025a utf8
 
@@ -2527,6 +2645,7 @@ DirectionalLight {{
 }}
 {build_environment_block(entries, positions, arena_half_size, include_fridge)}
 {stimuli_nodes}
+{interaction_stick_nodes}
 {recorder_supervisor_node()}
 {''.join(robot_nodes)}
 """

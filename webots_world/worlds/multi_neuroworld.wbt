@@ -431,6 +431,67 @@ Solid {
   }
 }
 
+# User interaction stick for C_ELEGANS_01: select this Solid in the
+# 3D view and use Webots' translation/rotation handles to touch or push the robot.
+DEF INTERACTION_STICK_C_ELEGANS_01 Solid {
+  translation -0.4300 -0.3100 0.0240
+  rotation 0 0 1 0.55000
+  name "interaction_stick_c_elegans_01"
+  locked FALSE
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.94 0.47 0.08
+        roughness 0.48
+        metalness 0.04
+      }
+      geometry Box {
+        size 0.2800 0.0400 0.0400
+      }
+    }
+    Transform {
+      translation -0.1008 0 0
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.16 0.20
+            roughness 0.82
+          }
+          geometry Box {
+            size 0.0784 0.0464 0.0464
+          }
+        }
+      ]
+    }
+    Transform {
+      translation 0.1176 0 0
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 1.00 0.80 0.16
+            roughness 0.36
+            emissiveColor 0.08 0.025 0
+          }
+          geometry Sphere {
+            radius 0.0272
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 0.2800 0.0400 0.0400
+  }
+  physics Physics {
+    density -1
+    mass 0.04000
+    damping Damping {
+      linear 0.18
+      angular 0.28
+    }
+  }
+}
+
 Robot {
   name "NM_WORLD_RECORDER"
   supervisor TRUE

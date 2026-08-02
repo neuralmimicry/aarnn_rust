@@ -52,6 +52,9 @@ CELEGANS_SENSORY_CHANNELS = [
 SPINE_SEGMENTS = 24
 SPINE_LENGTH = 0.34
 SPINE_RADIUS = 0.021
+SPINE_JOINT_LIMIT = 0.38
+SPINE_JOINT_MAX_VELOCITY = 1.2
+SPINE_JOINT_MAX_TORQUE = 0.006
 
 
 def sanitize_def(name: str) -> str:
@@ -158,6 +161,11 @@ def _spine_segment_solid(
 ) -> str:
     r = _spine_radius(seg_idx)
     mass = max(0.0035, 0.0068 * (r / SPINE_RADIUS))
+    # The rendered capsules overlap to form a continuous skin.  Do not reuse
+    # them as collision geometry: their diameter is larger than the segment
+    # pitch, so ODE starts with every neighbouring body deeply intersecting.
+    collision_len = seg_len * 0.88
+    collision_radius = r * 0.82
     ridge_offset = r * 0.80
     ridge_h = max(0.0018, r * 0.16)
     ridge_w = max(0.0022, r * 0.24)
@@ -216,18 +224,18 @@ def _spine_segment_solid(
 {indent}    }}
 {child_joint_block}
 {indent}  ]
-{indent}  boundingObject Transform {{
-{indent}    rotation 0 0 1 1.5708
-{indent}    children [
-{indent}      Capsule {{
-{indent}        radius {r:.5f}
-{indent}        height {seg_len * 0.94:.5f}
-{indent}      }}
-{indent}    ]
+{indent}  # A short hull keeps adjacent articulated bodies disjoint while the
+{indent}  # overlapping visual capsules provide a coherent outer surface.
+{indent}  boundingObject Box {{
+{indent}    size {collision_len:.5f} {collision_radius * 2.0:.5f} {collision_radius * 2.0:.5f}
 {indent}  }}
 {indent}  physics Physics {{
 {indent}    density -1
 {indent}    mass {mass:.5f}
+{indent}    damping Damping {{
+{indent}      linear 0.18
+{indent}      angular 0.42
+{indent}    }}
 {indent}  }}
 {indent}}}"""
 
@@ -250,14 +258,16 @@ def build_spine_block() -> str:
           jointParameters HingeJointParameters {{
             anchor {seg_len * 0.5:.5f} 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }}
           device [
             RotationalMotor {{
               name "celegans_spine_{joint_index:02d}"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition {-SPINE_JOINT_LIMIT:.2f}
+              maxPosition {SPINE_JOINT_LIMIT:.2f}
+              maxVelocity {SPINE_JOINT_MAX_VELOCITY:.1f}
+              maxTorque {SPINE_JOINT_MAX_TORQUE:.3f}
             }}
           ]
           endPoint
@@ -278,14 +288,16 @@ def build_spine_block() -> str:
         jointParameters HingeJointParameters {{
           anchor 0.0 0.0 0.0
           axis 0 1 0
+          dampingConstant 0.004
+          staticFriction 0.0005
         }}
         device [
           RotationalMotor {{
             name "celegans_spine_root_lock"
             minPosition 0
             maxPosition 0
-            maxVelocity 2.0
-            maxTorque 3.5
+            maxVelocity 1.2
+            maxTorque 0.02
           }}
         ]
         endPoint

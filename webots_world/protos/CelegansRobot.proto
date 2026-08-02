@@ -26,14 +26,16 @@ PROTO CelegansRobot [
         jointParameters HingeJointParameters {
           anchor 0.0 0.0 0.0
           axis 0 1 0
+          dampingConstant 0.004
+          staticFriction 0.0005
         }
         device [
           RotationalMotor {
             name "celegans_spine_root_lock"
             minPosition 0
             maxPosition 0
-            maxVelocity 2.0
-            maxTorque 3.5
+            maxVelocity 1.2
+            maxTorque 0.02
           }
         ]
         endPoint
@@ -94,14 +96,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_01"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -162,14 +166,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_02"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -230,14 +236,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_03"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -298,14 +306,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_04"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -366,14 +376,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_05"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -434,14 +446,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_06"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -502,14 +516,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_07"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -570,14 +586,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_08"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -638,14 +656,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_09"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -706,14 +726,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_10"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -774,14 +796,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_11"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -842,14 +866,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_12"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -910,14 +936,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_13"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -978,14 +1006,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_14"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1046,14 +1076,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_15"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1114,14 +1146,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_16"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1182,14 +1216,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_17"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1250,14 +1286,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_18"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1318,14 +1356,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_19"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1386,14 +1426,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_20"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1454,14 +1496,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_21"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1522,14 +1566,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_22"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1590,14 +1636,16 @@ PROTO CelegansRobot [
           jointParameters HingeJointParameters {
             anchor 0.00708 0.0 0.0
             axis 0 1 0
+            dampingConstant 0.0015
+            staticFriction 0.0002
           }
           device [
             RotationalMotor {
               name "celegans_spine_23"
-              minPosition -0.85
-              maxPosition 0.85
-              maxVelocity 5.2
-              maxTorque 0.24
+              minPosition -0.38
+              maxPosition 0.38
+              maxVelocity 1.2
+              maxTorque 0.006
             }
           ]
           endPoint
@@ -1655,386 +1703,386 @@ PROTO CelegansRobot [
             }
 
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01386
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02273 0.02273
           }
           physics Physics {
             density -1
             mass 0.00449
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01448
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02375 0.02375
           }
           physics Physics {
             density -1
             mass 0.00469
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01510
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02477 0.02477
           }
           physics Physics {
             density -1
             mass 0.00489
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01572
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02579 0.02579
           }
           physics Physics {
             density -1
             mass 0.00509
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01634
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02680 0.02680
           }
           physics Physics {
             density -1
             mass 0.00529
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01696
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02782 0.02782
           }
           physics Physics {
             density -1
             mass 0.00549
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01759
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02884 0.02884
           }
           physics Physics {
             density -1
             mass 0.00569
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01821
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02986 0.02986
           }
           physics Physics {
             density -1
             mass 0.00590
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01883
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03088 0.03088
           }
           physics Physics {
             density -1
             mass 0.00610
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01945
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03189 0.03189
           }
           physics Physics {
             density -1
             mass 0.00630
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.02007
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03291 0.03291
           }
           physics Physics {
             density -1
             mass 0.00650
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.02069
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03393 0.03393
           }
           physics Physics {
             density -1
             mass 0.00670
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.02069
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03393 0.03393
           }
           physics Physics {
             density -1
             mass 0.00670
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.02007
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03291 0.03291
           }
           physics Physics {
             density -1
             mass 0.00650
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01945
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03189 0.03189
           }
           physics Physics {
             density -1
             mass 0.00630
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01883
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.03088 0.03088
           }
           physics Physics {
             density -1
             mass 0.00610
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01821
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02986 0.02986
           }
           physics Physics {
             density -1
             mass 0.00590
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01759
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02884 0.02884
           }
           physics Physics {
             density -1
             mass 0.00569
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01696
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02782 0.02782
           }
           physics Physics {
             density -1
             mass 0.00549
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01634
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02680 0.02680
           }
           physics Physics {
             density -1
             mass 0.00529
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01572
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02579 0.02579
           }
           physics Physics {
             density -1
             mass 0.00509
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01510
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02477 0.02477
           }
           physics Physics {
             density -1
             mass 0.00489
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
           ]
-          boundingObject Transform {
-            rotation 0 0 1 1.5708
-            children [
-              Capsule {
-                radius 0.01448
-                height 0.01332
-              }
-            ]
+          # A short hull keeps adjacent articulated bodies disjoint while the
+          # overlapping visual capsules provide a coherent outer surface.
+          boundingObject Box {
+            size 0.01247 0.02375 0.02375
           }
           physics Physics {
             density -1
             mass 0.00469
+            damping Damping {
+              linear 0.18
+              angular 0.42
+            }
           }
         }
         }
         ]
-        boundingObject Transform {
-          rotation 0 0 1 1.5708
-          children [
-            Capsule {
-              radius 0.01386
-              height 0.01332
-            }
-          ]
+        # A short hull keeps adjacent articulated bodies disjoint while the
+        # overlapping visual capsules provide a coherent outer surface.
+        boundingObject Box {
+          size 0.01247 0.02273 0.02273
         }
         physics Physics {
           density -1
           mass 0.00449
+          damping Damping {
+            linear 0.18
+            angular 0.42
+          }
         }
       }
       }

@@ -768,14 +768,14 @@ struct CelegansMuscleBridge {
     bool active = false;
     bool twitch_fallback = true;
     int flat_steps = 0;
-    int flat_steps_trigger = 4;
+    int flat_steps_trigger = 20;
     int twitch_hold_steps = 24;
     int twitch_hold_remaining = 0;
     float flat_drive_eps = 0.08f;
-    float twitch_amp = 0.42f;
+    float twitch_amp = 0.32f;
     float twitch_phase = 0.0f;
-    float twitch_phase_step = 0.56f;
-    float twitch_segment_lag = 0.42f;
+    float twitch_phase_step = 0.16f;
+    float twitch_segment_lag = 0.38f;
     size_t apply_counter = 0;
     size_t debug_interval = 0;
 
@@ -791,12 +791,14 @@ struct CelegansMuscleBridge {
         mvr_trace.assign(24, 0.0f);
         smoothed_targets.assign(24, 0.5f);
         twitch_fallback = env_bool("NM_CELEGANS_TWITCH_FALLBACK", true);
-        flat_steps_trigger = env_int_range("NM_CELEGANS_TWITCH_FLAT_STEPS", 4, 1, 100000);
+        // Let the articulated body settle before injecting a locomotion wave.
+        // At a 32 ms step, 20 frames is about 0.64 seconds.
+        flat_steps_trigger = env_int_range("NM_CELEGANS_TWITCH_FLAT_STEPS", 20, 1, 100000);
         twitch_hold_steps = env_int_range("NM_CELEGANS_TWITCH_HOLD_STEPS", 24, 1, 100000);
         flat_drive_eps = env_float_range("NM_CELEGANS_TWITCH_DRIVE_EPS", 0.08f, 0.0001f, 0.5f);
-        twitch_amp = env_float_range("NM_CELEGANS_TWITCH_AMP", 0.42f, 0.01f, 1.5f);
-        twitch_phase_step = env_float_range("NM_CELEGANS_TWITCH_PHASE_STEP", 0.56f, 0.01f, 6.0f);
-        twitch_segment_lag = env_float_range("NM_CELEGANS_TWITCH_SEG_LAG", 0.42f, 0.0f, 6.0f);
+        twitch_amp = env_float_range("NM_CELEGANS_TWITCH_AMP", 0.32f, 0.01f, 1.5f);
+        twitch_phase_step = env_float_range("NM_CELEGANS_TWITCH_PHASE_STEP", 0.16f, 0.01f, 6.0f);
+        twitch_segment_lag = env_float_range("NM_CELEGANS_TWITCH_SEG_LAG", 0.38f, 0.0f, 6.0f);
         debug_interval =
           static_cast<size_t>(env_int_range("NM_CELEGANS_BRIDGE_DEBUG_INTERVAL", 0, 0, 100000));
     }

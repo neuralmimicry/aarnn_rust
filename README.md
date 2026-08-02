@@ -343,6 +343,11 @@ scripts/run_celegans_rust_ui_webots.sh
 scripts/run_celegans_web_ui_webots.sh
 ```
 
+Each robot instance in a generated multi-robot world has an orange-and-black
+`interaction_stick_<robot-name>` dynamic object. Select the stick in the 3D view
+or scene tree and use Webots' translation/rotation handles to touch, nudge, or
+push the corresponding robot while the simulation is running.
+
 Useful env overrides:
 - `NETWORK_FILE=/abs/path/network_celegans.json`
 - `CONFIG_FILE=/abs/path/config_celegans_webots.json`
