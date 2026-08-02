@@ -14966,7 +14966,7 @@ impl eframe::App for App {
                     };
                     let r_early = radius_h * 0.78;
                     painter.circle_filled(p, r_early, fill.gamma_multiply(0.92));
-                    painter.circle_stroke(p, r_early, egui::Stroke::new(1.2, stroke));
+                    painter.circle_stroke(p, r_early, egui::Stroke::new(1.2_f32, stroke));
                     let hit_rect =
                         egui::Rect::from_center_size(p, egui::vec2(r_early * 2.4, r_early * 2.4));
                     if response.hovered()

@@ -15,6 +15,7 @@ Additional hardware-offload documentation:
 - `../fpaa/README.md`: generated FPAA artifact pack for AARNN kernels
 - `../fpaa/okika/README.md`: Pi.Ka deployment flow and runtime-state verification notes
 - `../docs/aarnn_fpaa_partitioning.md`: design rationale for which AARNN kernels are realistic FPAA targets
+- `../docs/llm_mirror.md`: sparse LLM stimulation, real neural-output decoding, and memory controls
 
 Runtime FPAA support in the Rust application includes:
 

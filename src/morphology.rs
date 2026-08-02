@@ -7440,7 +7440,15 @@ impl Morphology {
                         {
                             axon_cands_by_layer[pre_l][pre_id]
                         } else {
-                            self.somas[pre_l][pre_id].pos
+                            // Growth/pruning can invalidate a legacy synapse's
+                            // hidden-neuron index before the maintenance pass
+                            // migrates it. Preserve its last known endpoint
+                            // instead of crashing the distributed worker.
+                            self.somas
+                                .get(pre_l)
+                                .and_then(|layer| layer.get(pre_id))
+                                .map(|soma| soma.pos)
+                                .unwrap_or(s.pre_site)
                         };
 
                         let cur_d2 = post_p.dist_sq(cur_pre_p);

@@ -160,6 +160,10 @@ struct Args {
     #[arg(long, default_value_t = 86400)]
     session_ttl_secs: u64,
 
+    /// Mark browser session cookies Secure (required behind HTTPS ingress).
+    #[arg(long, default_value_t = false)]
+    session_cookie_secure: bool,
+
     /// Bootstrap local user (auth_mode=local).
     #[arg(long)]
     local_user: Option<String>,
@@ -269,6 +273,7 @@ struct AppState {
     chain: Option<Arc<NmChainClient>>,
     token_pricing: TokenPricing,
     commerce: CommerceConfig,
+    llm_output_vocab: Arc<HashMap<u32, String>>,
 }
 
 #[derive(Clone, Default)]
@@ -282,6 +287,7 @@ struct AuthConfig {
     users_file: String,
     allow_signup: bool,
     session_ttl_secs: u64,
+    session_cookie_secure: bool,
     oidc: Option<OidcConfig>,
     central: Option<Arc<CentralAuthClient>>,
     billing: Option<Arc<CentralTokenClient>>,
@@ -636,6 +642,15 @@ fn apply_env_overrides(args: &mut Args) {
             args.runtime_root = runtime_root;
         }
     }
+    apply_local_auth_overrides(
+        args,
+        env_opt("AARNN_LOCAL_USER"),
+        env_opt("AARNN_LOCAL_PASS"),
+    );
+    if !args.session_cookie_secure {
+        args.session_cookie_secure =
+            env_bool(&["AARNN_SESSION_COOKIE_SECURE", "NM_SESSION_COOKIE_SECURE"]).unwrap_or(false);
+    }
     if args.oidc_issuer.is_none() {
         args.oidc_issuer = env_opt("NM_OIDC_ISSUER");
     }
@@ -736,6 +751,19 @@ fn apply_env_overrides(args: &mut Args) {
                 }
             }
         }
+    }
+}
+
+fn apply_local_auth_overrides(
+    args: &mut Args,
+    local_user: Option<String>,
+    local_pass: Option<String>,
+) {
+    if args.local_user.is_none() {
+        args.local_user = local_user;
+    }
+    if args.local_pass.is_none() {
+        args.local_pass = local_pass;
     }
 }
 
@@ -1041,9 +1069,10 @@ fn new_session_id() -> String {
     hex::encode(buf)
 }
 
-fn session_cookie(session_id: &str, ttl_secs: u64) -> Cookie<'static> {
+fn session_cookie(session_id: &str, ttl_secs: u64, secure: bool) -> Cookie<'static> {
     let mut cookie = Cookie::new("nm_session", session_id.to_string());
     cookie.set_http_only(true);
+    cookie.set_secure(secure);
     cookie.set_same_site(axum_extra::extract::cookie::SameSite::Lax);
     cookie.set_path("/");
     cookie.set_max_age(time::Duration::seconds(ttl_secs as i64));
@@ -1240,7 +1269,11 @@ async fn store_browser_session(
             },
         )
         .await?;
-    let cookie = session_cookie(&session_id, state.auth.session_ttl_secs);
+    let cookie = session_cookie(
+        &session_id,
+        state.auth.session_ttl_secs,
+        state.auth.session_cookie_secure,
+    );
     Ok((jar.add(cookie), session_id))
 }
 
@@ -1394,6 +1427,9 @@ struct LlmMirrorStimulusResponse {
     target: Option<String>,
     network_id: Option<String>,
     error: Option<String>,
+    output_step_index: Option<u64>,
+    output_spike_indices: Vec<u32>,
+    output_aer_payload_hex: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1589,6 +1625,7 @@ async fn main() -> anyhow::Result<()> {
         users_file: args.users_file.clone(),
         allow_signup: args.allow_signup && !central_auth_enabled,
         session_ttl_secs: args.session_ttl_secs,
+        session_cookie_secure: args.session_cookie_secure,
         oidc,
         central: central_auth,
         billing,
@@ -1631,6 +1668,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             args.runtime_workers.max(1)
         },
+        max_loaded_workspaces: aarnn_rust::runtime::max_loaded_workspaces_from_env(),
         resume_existing_workspaces: env_bool(&[
             "NM_RUNTIME_RESUME_EXISTING_WORKSPACES",
             "NM_WEB_UI_RESUME_EXISTING_WORKSPACES",
@@ -1660,6 +1698,7 @@ async fn main() -> anyhow::Result<()> {
         chain,
         token_pricing,
         commerce,
+        llm_output_vocab: Arc::new(load_llm_output_vocab()),
     });
 
     let api = Router::new()
@@ -2300,9 +2339,15 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "accepted_batches": { "type": "integer", "format": "uint64" },
               "target": { "type": "string", "nullable": true },
               "network_id": { "type": "string", "nullable": true },
-              "error": { "type": "string", "nullable": true }
+              "error": { "type": "string", "nullable": true },
+              "output_step_index": { "type": "integer", "format": "uint64", "nullable": true },
+              "output_spike_indices": {
+                "type": "array",
+                "items": { "type": "integer", "format": "uint32" }
+              },
+              "output_aer_payload_hex": { "type": "string", "nullable": true }
             },
-            "required": ["attempted", "accepted_batches"]
+            "required": ["attempted", "accepted_batches", "output_spike_indices"]
           },
           "LlmMirrorResponse": {
             "type": "object",
@@ -3131,8 +3176,7 @@ async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
         let session_id = cookie.value().to_string();
         let _ = state.session_store.delete(&session_id).await;
     }
-    let mut expired = Cookie::new("nm_session", "");
-    expired.set_path("/");
+    let expired = session_cookie("", 0, state.auth.session_cookie_secure);
     let jar = jar.remove(expired);
     (jar, Json(json!({ "ok": true })))
 }
@@ -5790,6 +5834,86 @@ async fn send_aer_batches(
     Ok(accepted)
 }
 
+#[derive(Default)]
+struct MirrorInferenceOutput {
+    accepted_batches: usize,
+    output_step_index: Option<u64>,
+    output_spike_indices: Vec<u32>,
+    output_aer_payload_hex: Option<String>,
+}
+
+/// Inject one sensory frame and wait asynchronously for a later simulator
+/// step. `GetNetworkActivity` is the authoritative output surface; the gRPC
+/// spike stream itself is transport-only and must not be mistaken for neural
+/// inference output.
+async fn send_aer_inference(
+    target_addr: String,
+    batch: SpikeBatch,
+) -> Result<MirrorInferenceOutput, ApiError> {
+    let network_id = batch.network_id.clone();
+    let mut activity_client =
+        connect_cluster_client(target_addr.clone())
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": format!("connect failed: {error}") })),
+                )
+            })?;
+    let accepted_batches = send_aer_batches(target_addr, vec![batch]).await?;
+    // Capture the simulator position only after the transport handler accepted
+    // the sensory frame. Returning a later step avoids mislabelling unrelated
+    // output that happened while the frame was still in transit.
+    let injected_at_step = activity_client
+        .get_network_activity(Request::new(NetworkActivityRequest {
+            network_id: network_id.clone(),
+        }))
+        .await
+        .ok()
+        .map(|response| response.into_inner().sim_step);
+    let Some(injected_at_step) = injected_at_step else {
+        return Ok(MirrorInferenceOutput {
+            accepted_batches,
+            ..MirrorInferenceOutput::default()
+        });
+    };
+
+    let timeout_ms = env_opt("AARNN_LLM_INFERENCE_TIMEOUT_MS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5_000)
+        .clamp(50, 60_000);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(MirrorInferenceOutput {
+                accepted_batches,
+                ..MirrorInferenceOutput::default()
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let activity = match activity_client
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: network_id.clone(),
+            }))
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(_) => continue,
+        };
+        if activity.sim_step <= injected_at_step {
+            continue;
+        }
+        let output = activity.output.unwrap_or_default();
+        return Ok(MirrorInferenceOutput {
+            accepted_batches,
+            output_step_index: Some(activity.sim_step),
+            output_spike_indices: output.indices,
+            output_aer_payload_hex: (!output.aer_payload.is_empty())
+                .then(|| hex::encode(output.aer_payload)),
+        });
+    }
+}
+
 const LLM_MIRROR_MAX_TEXT_CHARS: usize = 8192;
 const LLM_MIRROR_MAX_SPIKES: usize = 4096;
 const LLM_MIRROR_DEFAULT_SPIKES: usize = 128;
@@ -5882,10 +6006,8 @@ async fn llm_mirror(
     let candidate = build_llm_mirror_candidate(
         &payload.direction,
         payload.request_candidate_reply,
-        text.as_str(),
-        &exchange,
-        sensory_spikes.len(),
-        stimulation.accepted_batches,
+        &stimulation,
+        state.llm_output_vocab.as_ref(),
     );
     let record = LlmMirrorRecord {
         recorded_at: mirror_now_ms(),
@@ -5914,6 +6036,9 @@ async fn llm_mirror(
             target: stimulation.target.clone(),
             network_id: stimulation.network_id.clone(),
             error: stimulation.error.clone(),
+            output_step_index: stimulation.output_step_index,
+            output_spike_indices: stimulation.output_spike_indices.clone(),
+            output_aer_payload_hex: stimulation.output_aer_payload_hex.clone(),
         },
         candidate: candidate.as_ref().map(clone_llm_mirror_candidate),
     };
@@ -5964,6 +6089,35 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn load_llm_output_vocab() -> HashMap<u32, String> {
+    let raw = env_opt("AARNN_LLM_OUTPUT_VOCAB_JSON").or_else(|| {
+        let path = env_opt("AARNN_LLM_OUTPUT_VOCAB_PATH")?;
+        std::fs::read_to_string(&path)
+            .map_err(|error| {
+                eprintln!("[warn] failed to read AARNN LLM output vocabulary {path}: {error}");
+                error
+            })
+            .ok()
+    });
+    let Some(raw) = raw else {
+        return HashMap::new();
+    };
+    let parsed = serde_json::from_str::<HashMap<String, String>>(&raw).unwrap_or_else(|error| {
+        eprintln!("[warn] invalid AARNN LLM output vocabulary JSON: {error}");
+        HashMap::new()
+    });
+    parsed
+        .into_iter()
+        .filter_map(|(index, token)| {
+            let token = token.trim().to_string();
+            if token.is_empty() {
+                return None;
+            }
+            Some((index.parse::<u32>().ok()?, token))
+        })
+        .collect()
+}
+
 fn normalise_mirror_spikes(
     spikes: Vec<u8>,
     aer_base: u32,
@@ -6000,15 +6154,31 @@ fn text_to_mirror_spikes(text: &str, sensory_size: usize) -> Vec<u8> {
     let mut spikes = vec![0u8; sensory_size];
     let compact = compact_mirror_text(text).to_ascii_lowercase();
     let bytes = compact.as_bytes();
-    let len = bytes.len().max(1);
-    for (index, byte) in bytes.iter().enumerate() {
-        let primary = ((*byte as usize) + index * 17 + len * 29) % sensory_size;
-        spikes[primary] = 1;
-        if index > 0 {
-            let previous = bytes[index - 1] as usize;
-            let secondary =
-                ((*byte as usize) * 31 + previous + index * 11 + len * 7) % sensory_size;
-            spikes[secondary] = 1;
+    if bytes.is_empty() {
+        return spikes;
+    }
+    let target = (sensory_size / 4).clamp(2, 64).min(sensory_size);
+    let mut ranked = (0..bytes.len())
+        .map(|index| {
+            let end = (index + 5).min(bytes.len());
+            let mut hash = 0xcbf29ce484222325u64;
+            for byte in &bytes[index..end] {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash ^= (index as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            (hash, (hash as usize) % sensory_size)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_unstable();
+    let mut active = 0usize;
+    for (_, neuron) in ranked {
+        if spikes[neuron] == 0 {
+            spikes[neuron] = 1;
+            active += 1;
+        }
+        if active >= target {
+            break;
         }
     }
     spikes
@@ -6017,32 +6187,52 @@ fn text_to_mirror_spikes(text: &str, sensory_size: usize) -> Vec<u8> {
 fn build_llm_mirror_candidate(
     direction: &LlmMirrorDirection,
     request_candidate_reply: bool,
-    text: &str,
-    exchange: &aarnn_rust::spike_io::transport::SpikeExchange,
-    sensory_size: usize,
-    accepted_batches: usize,
+    stimulation: &LlmMirrorStimulusResponse,
+    output_vocab: &HashMap<u32, String>,
 ) -> Option<LlmMirrorCandidateResponse> {
     if !request_candidate_reply || !matches!(direction, LlmMirrorDirection::Output) {
         return None;
     }
-    let density = exchange.spike_indices.len() as f64 / sensory_size.max(1) as f64;
-    let confidence =
-        (0.16 + density * 0.24 + if accepted_batches > 0 { 0.1 } else { 0.0 }).clamp(0.16, 0.55);
+    let reply_text = decode_llm_output_tokens(&stimulation.output_spike_indices, output_vocab);
+    let mapped = stimulation
+        .output_spike_indices
+        .iter()
+        .filter(|index| output_vocab.contains_key(index))
+        .count();
+    let coverage = mapped as f64 / stimulation.output_spike_indices.len().max(1) as f64;
+    let confidence = reply_text
+        .as_ref()
+        .map(|_| (0.5 + coverage * 0.49).clamp(0.5, 0.99));
+    let source = if reply_text.is_some() {
+        "network_output_decoder"
+    } else if stimulation.output_step_index.is_some() {
+        "network_output_unmapped"
+    } else {
+        "network_output_unavailable"
+    };
     Some(LlmMirrorCandidateResponse {
-        reply_text: Some(text.to_string()),
-        confidence: Some((confidence * 1000.0).round() / 1000.0),
-        usable: true,
-        source: Some(
-            if accepted_batches > 0 {
-                "stimulated_transport_echo"
-            } else {
-                "transport_mirror_echo"
-            }
-            .to_string(),
-        ),
-        output_spike_indices: exchange.spike_indices.clone(),
-        output_aer_payload_hex: Some(hex::encode(&exchange.aer_payload)),
+        usable: reply_text.is_some(),
+        reply_text,
+        confidence: confidence.map(|value| (value * 1000.0).round() / 1000.0),
+        source: Some(source.to_string()),
+        output_spike_indices: stimulation.output_spike_indices.clone(),
+        output_aer_payload_hex: stimulation.output_aer_payload_hex.clone(),
     })
+}
+
+fn decode_llm_output_tokens(
+    spike_indices: &[u32],
+    output_vocab: &HashMap<u32, String>,
+) -> Option<String> {
+    let mut tokens = spike_indices
+        .iter()
+        .filter_map(|index| output_vocab.get(index))
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.dedup();
+    let decoded = tokens.join(" ");
+    (!decoded.is_empty()).then_some(decoded)
 }
 
 fn clone_llm_mirror_candidate(
@@ -6076,6 +6266,9 @@ async fn stimulate_llm_mirror(
             target: None,
             network_id: None,
             error: None,
+            output_step_index: None,
+            output_spike_indices: Vec::new(),
+            output_aer_payload_hex: None,
         };
     };
 
@@ -6085,6 +6278,9 @@ async fn stimulate_llm_mirror(
         target: None,
         network_id: Some(network_id.clone()),
         error: None,
+        output_step_index: None,
+        output_spike_indices: Vec::new(),
+        output_aer_payload_hex: None,
     };
 
     let orchestrator_addr = match resolve_addr_or_default(None, state.default_orchestrator.clone())
@@ -6137,9 +6333,12 @@ async fn stimulate_llm_mirror(
         }
     };
 
-    match send_aer_batches(target_addr, vec![batch]).await {
-        Ok(accepted) => {
-            response.accepted_batches = accepted;
+    match send_aer_inference(target_addr, batch).await {
+        Ok(inference) => {
+            response.accepted_batches = inference.accepted_batches;
+            response.output_step_index = inference.output_step_index;
+            response.output_spike_indices = inference.output_spike_indices;
+            response.output_aer_payload_hex = inference.output_aer_payload_hex;
             response
         }
         Err(err) => {
@@ -6677,6 +6876,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_cookie_security_is_explicitly_configurable() {
+        let secure = session_cookie("session-id", 60, true);
+        assert_eq!(secure.http_only(), Some(true));
+        assert_eq!(secure.secure(), Some(true));
+        assert_eq!(
+            secure.same_site(),
+            Some(axum_extra::extract::cookie::SameSite::Lax)
+        );
+
+        let local_http = session_cookie("session-id", 60, false);
+        assert_eq!(local_http.secure(), Some(false));
+    }
+
+    #[test]
+    fn local_auth_environment_fills_missing_cli_credentials_only() {
+        let mut args = Args::parse_from(["web_ui"]);
+        apply_local_auth_overrides(
+            &mut args,
+            Some("env-user".to_string()),
+            Some("env-pass".to_string()),
+        );
+        assert_eq!(args.local_user.as_deref(), Some("env-user"));
+        assert_eq!(args.local_pass.as_deref(), Some("env-pass"));
+
+        let mut args = Args::parse_from([
+            "web_ui",
+            "--local-user",
+            "cli-user",
+            "--local-pass",
+            "cli-pass",
+        ]);
+        apply_local_auth_overrides(
+            &mut args,
+            Some("env-user".to_string()),
+            Some("env-pass".to_string()),
+        );
+        assert_eq!(args.local_user.as_deref(), Some("cli-user"));
+        assert_eq!(args.local_pass.as_deref(), Some("cli-pass"));
+    }
+
+    #[test]
     fn api_access_requirement_maps_runtime_routes() {
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/tokens"),
@@ -6891,22 +7131,34 @@ mod tests {
     }
 
     #[test]
-    fn llm_mirror_candidate_remains_low_confidence_echo() {
-        let exchange = encode_exchange(1000, 4096, &[0, 1, 1, 0, 1, 0]);
-        let candidate = build_llm_mirror_candidate(
-            &LlmMirrorDirection::Output,
-            true,
-            "AARNN mirrored reply",
-            &exchange,
-            6,
-            1,
-        )
-        .expect("candidate");
+    fn llm_mirror_candidate_decodes_actual_network_output() {
+        let stimulation = LlmMirrorStimulusResponse {
+            attempted: true,
+            accepted_batches: 1,
+            target: Some("node".to_string()),
+            network_id: Some("network".to_string()),
+            error: None,
+            output_step_index: Some(42),
+            output_spike_indices: vec![1, 4],
+            output_aer_payload_hex: Some("41455231".to_string()),
+        };
+        let vocab = HashMap::from([(1, "risk".to_string()), (4, "hold".to_string())]);
+        let candidate =
+            build_llm_mirror_candidate(&LlmMirrorDirection::Output, true, &stimulation, &vocab)
+                .expect("candidate");
         assert!(candidate.usable);
-        assert_eq!(
-            candidate.reply_text.as_deref(),
-            Some("AARNN mirrored reply")
-        );
-        assert!(candidate.confidence.unwrap_or_default() < 0.6);
+        assert_eq!(candidate.reply_text.as_deref(), Some("risk hold"));
+        assert_eq!(candidate.source.as_deref(), Some("network_output_decoder"));
+        assert_eq!(candidate.output_spike_indices, vec![1, 4]);
+        assert!(candidate.confidence.unwrap_or_default() >= 0.98);
+    }
+
+    #[test]
+    fn long_mirror_text_keeps_fixed_sparse_density() {
+        let first = text_to_mirror_spikes(&"alpha beta gamma ".repeat(100), 32);
+        let second = text_to_mirror_spikes(&"delta epsilon zeta ".repeat(100), 32);
+        assert_eq!(first.iter().filter(|value| **value > 0).count(), 8);
+        assert_eq!(second.iter().filter(|value| **value > 0).count(), 8);
+        assert_ne!(first, second);
     }
 }

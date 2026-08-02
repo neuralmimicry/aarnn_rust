@@ -40,6 +40,15 @@ fn default_worker_limit() -> usize {
         .max(1)
 }
 
+/// Resolve the resident-engine cap once during runtime construction.
+pub fn max_loaded_workspaces_from_env() -> usize {
+    std::env::var("NM_RUNTIME_MAX_LOADED_WORKSPACES")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(usize::MAX)
+        .max(1)
+}
+
 fn default_resume_existing_workspaces() -> bool {
     true
 }
@@ -846,6 +855,8 @@ pub struct RuntimeConfig {
     pub root_dir: PathBuf,
     pub tick_interval_ms: u64,
     pub local_worker_limit: usize,
+    /// Hard cap on memory-resident neural workspace engines.
+    pub max_loaded_workspaces: usize,
     pub resume_existing_workspaces: bool,
     pub autosave_steps: u64,
     pub continuum: Option<ContinuumAutoscalerConfig>,
@@ -860,6 +871,7 @@ impl Default for RuntimeConfig {
             root_dir: default_root_dir(),
             tick_interval_ms: 25,
             local_worker_limit: default_worker_limit(),
+            max_loaded_workspaces: max_loaded_workspaces_from_env(),
             resume_existing_workspaces: default_resume_existing_workspaces(),
             autosave_steps: 50,
             continuum: ContinuumAutoscalerConfig::from_env(),
@@ -1059,6 +1071,10 @@ impl RuntimeManager {
         &self.config.root_dir
     }
 
+    fn max_loaded_workspaces(&self) -> usize {
+        self.config.max_loaded_workspaces.max(1)
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.stop_tx.send(true);
         let scheduler_task = self
@@ -1210,6 +1226,12 @@ impl RuntimeManager {
             let guard = self.workspaces.read().await;
             if guard.contains_key(&key) {
                 return Err(anyhow!("workspace '{}' already exists", requested_id));
+            }
+            if guard.len() >= self.max_loaded_workspaces() {
+                return Err(anyhow!(
+                    "runtime workspace memory limit reached ({} loaded)",
+                    guard.len()
+                ));
             }
         }
 
@@ -2048,6 +2070,11 @@ impl RuntimeManager {
             return Ok(());
         }
 
+        // Listing/status endpoints call this reconciler frequently. Reusing
+        // existing handles avoids rebuilding and importing every large neural
+        // snapshot into a temporary second Runner on every poll.
+        let existing = self.workspaces.read().await.clone();
+        let max_loaded = self.max_loaded_workspaces();
         let mut loaded = HashMap::new();
         for user_dir in read_dir_paths(&users_root, "runtime user")? {
             let workspaces_root = user_dir.join("workspaces");
@@ -2097,6 +2124,18 @@ impl RuntimeManager {
                     user_id: manifest.user_id.clone(),
                     workspace_id: manifest.workspace_id.clone(),
                 };
+                if let Some(handle) = existing.get(&key) {
+                    loaded.insert(key, handle.clone());
+                    continue;
+                }
+                if loaded.len() >= max_loaded {
+                    nm_err!(
+                        "[warn] runtime workspace '{}' not loaded: NM_RUNTIME_MAX_LOADED_WORKSPACES={} reached",
+                        manifest.workspace_id,
+                        max_loaded
+                    );
+                    continue;
+                }
                 let mut engine = match RunnerEngine::new(manifest.engine.clone()) {
                     Ok(engine) => engine,
                     Err(err) => {

@@ -743,6 +743,19 @@ fn network_config_shape_compatible(
         && current_cfg.num_output_neurons == requested_cfg.num_output_neurons
 }
 
+fn total_neurons_from_distribution(distribution: &HashMap<String, LayerRange>) -> u64 {
+    let mut total = 0u64;
+    let mut seen_layers = HashSet::new();
+    for range in distribution.values() {
+        for (&layer, &count) in &range.layer_neuron_counts {
+            if seen_layers.insert(layer) {
+                total = total.saturating_add(count);
+            }
+        }
+    }
+    total
+}
+
 fn snapshot_with_network_config(snapshot_payload: &str, net_cfg: &NetworkConfig) -> Option<String> {
     let mut snapshot =
         crate::runner::decode_snapshot_with_profile_backfill(snapshot_payload).ok()?;
@@ -3418,14 +3431,6 @@ impl DistributedNode {
             .map(|(node_id, status)| (node_id.clone(), status.active_networks.len()))
             .collect();
 
-        // Calculate network neurons first to avoid double borrow
-        let mut network_neurons = 0u64;
-        for status in state.nodes.values() {
-            if let Some(res) = &status.resources {
-                network_neurons += res.num_neurons;
-            }
-        }
-
         let existing_primary_nodes: HashMap<String, String> = state
             .network_registry
             .iter()
@@ -3518,7 +3523,7 @@ impl DistributedNode {
                 .unwrap_or_default();
             let shard_across_nodes = should_shard_across_nodes(&deployment);
             let config_json = config_payload.unwrap_or_else(|| net_status.config_json.clone());
-            let mut target_node_capacities: Vec<(String, f32)> = network_affinity
+            let affinity_node_capacities: Vec<(String, f32)> = network_affinity
                 .get(net_id)
                 .into_iter()
                 .flatten()
@@ -3529,6 +3534,14 @@ impl DistributedNode {
                         .map(|cap| (node_id.clone(), cap))
                 })
                 .collect();
+            // Affinity preserves placement for single-target networks, but it
+            // must not prevent a sharded network from expanding onto workers
+            // that joined or restarted after the initial assignment.
+            let mut target_node_capacities = if shard_across_nodes {
+                node_capacities.clone()
+            } else {
+                affinity_node_capacities
+            };
             if target_node_capacities.is_empty() {
                 if config_json.len() >= LARGE_NETWORK_CONFIG_BYTES {
                     nm_log!(
@@ -3674,23 +3687,9 @@ impl DistributedNode {
                 all_pending.push((removed_node.clone(), unload_cmd));
             }
 
-            // Update total neurons from distribution reports if available
-            let mut calculated_total = 0u64;
-            let mut seen_layers = std::collections::HashSet::new();
-            for range in net_status.distribution.values() {
-                for (&l, &count) in &range.layer_neuron_counts {
-                    if !seen_layers.contains(&l) {
-                        calculated_total += count;
-                        seen_layers.insert(l);
-                    }
-                }
-            }
-            if calculated_total > 0 {
-                net_status.total_neurons = calculated_total;
-            } else if net_status.total_neurons == 0 {
-                // Fallback to cluster-wide neuron count if no per-network data yet
-                net_status.total_neurons = network_neurons;
-            }
+            // A network total must only contain that network's reports. Layers can be
+            // repeated on redundant shards, so count each global layer once.
+            net_status.total_neurons = total_neurons_from_distribution(&net_status.distribution);
         }
 
         for (node_id, cmd) in all_pending {
@@ -4169,6 +4168,12 @@ impl DistributedNeuromorphic for DistributedNode {
 
         state.nodes.insert(node_id.clone(), node_status);
         state.peers.insert(node_id.clone(), connect_addr.clone());
+        // A process may rejoin with the same stable node id after a restart.
+        // Refresh its heartbeat here so another node's concurrent heartbeat
+        // cannot evict the new session using the previous process timestamp.
+        state
+            .last_heartbeat
+            .insert(node_id.clone(), std::time::Instant::now());
         for (net_id, net_res) in req.network_resources {
             // Auto-register networks reported by the joining worker that the
             // orchestrator does not already know about (e.g. the worker was
@@ -4232,6 +4237,17 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut state = self.state.write().await;
         let req = request.into_inner();
         let now = std::time::Instant::now();
+
+        // A worker can outlive its orchestrator membership record when a slow
+        // startup heartbeat is pruned.  Do not acknowledge that worker forever:
+        // returning an error makes its connection manager perform Join again,
+        // which restores the advertised peer address and resource record.
+        if state.is_orchestrator && !state.nodes.contains_key(&req.node_id) {
+            return Err(Status::not_found(format!(
+                "Node {} is not registered; rejoin required",
+                req.node_id
+            )));
+        }
 
         state.last_heartbeat.insert(req.node_id.clone(), now);
 
@@ -4392,9 +4408,15 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut stream = request.into_inner();
         let node = self.clone();
 
-        let (_tx, rx) = mpsc::channel(128);
+        let (response_keepalive, rx) = mpsc::channel(128);
 
         tokio::spawn(async move {
+            // Keep the response side open for as long as the request stream is
+            // alive. Dropping this sender when the RPC handler returned made
+            // every nominally persistent stream observe EOF immediately, so
+            // peers fell back to short-lived burst streams and eventually hit
+            // HTTP/2 ENHANCE_YOUR_CALM/too_many_resets failures.
+            let response_keepalive = response_keepalive;
             while let Some(batch) = stream.message().await.unwrap_or(None) {
                 let exclude_node = {
                     let state_lock = node.state.read().await;
@@ -4406,6 +4428,7 @@ impl DistributedNeuromorphic for DistributedNode {
                 };
                 node.handle_incoming_spike_batch(batch, exclude_node).await;
             }
+            drop(response_keepalive);
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
@@ -4952,6 +4975,87 @@ impl DistributedNeuromorphic for DistributedNode {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn rejoin_refreshes_a_stale_heartbeat_before_rebalancing() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        let stale = std::time::Instant::now()
+            .checked_sub(PEER_STALE_AFTER + Duration::from_secs(1))
+            .expect("stale timestamp");
+        node.state
+            .write()
+            .await
+            .last_heartbeat
+            .insert("native-qc04".to_string(), stale);
+
+        node.join(Request::new(JoinRequest {
+            node_id: "native-qc04".to_string(),
+            address: "127.0.0.1:65534".to_string(),
+            resources: None,
+            network_resources: HashMap::new(),
+        }))
+        .await
+        .expect("rejoin succeeds");
+
+        let state = node.state.read().await;
+        assert!(state.nodes.contains_key("native-qc04"));
+        assert!(
+            state
+                .last_heartbeat
+                .get("native-qc04")
+                .is_some_and(|seen| seen.elapsed() < PEER_STALE_AFTER)
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_worker_heartbeat_requires_rejoin() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        let err = node
+            .heartbeat(Request::new(HeartbeatRequest {
+                node_id: "pruned-worker".to_string(),
+                resources: None,
+                network_resources: HashMap::new(),
+            }))
+            .await
+            .expect_err("an unknown worker must rejoin");
+
+        assert_eq!(err.code(), tonic::Code::NotFound);
+        assert!(
+            !node
+                .state
+                .read()
+                .await
+                .last_heartbeat
+                .contains_key("pruned-worker")
+        );
+    }
+
+    #[test]
+    fn network_total_only_counts_its_own_unique_layers() {
+        let distribution = HashMap::from([
+            (
+                "node-a".to_string(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    layer_neuron_counts: HashMap::from([(0, 32), (1, 64)]),
+                },
+            ),
+            (
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![1, 2],
+                    layer_neuron_counts: HashMap::from([(1, 64), (2, 16)]),
+                },
+            ),
+        ]);
+
+        assert_eq!(total_neurons_from_distribution(&distribution), 112);
+        assert_eq!(total_neurons_from_distribution(&HashMap::new()), 0);
+    }
+
     #[test]
     fn orchestrator_endpoints_are_normalized_and_deduplicated_in_order() {
         let endpoints = merge_orchestrator_endpoints([
@@ -5087,6 +5191,55 @@ mod tests {
             selected,
             vec![("node-c".to_string(), 3.0), ("node-b".to_string(), 2.0),]
         );
+    }
+
+    #[tokio::test]
+    async fn sharded_rebalance_expands_beyond_existing_affinity() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        {
+            let mut state = node.state.write().await;
+            for node_id in ["node-a", "node-b", "node-c"] {
+                state.nodes.insert(
+                    node_id.to_string(),
+                    NodeStatus {
+                        node_id: node_id.to_string(),
+                        address: format!("{node_id}:50051"),
+                        resources: Some(Resources::default()),
+                        active_networks: (node_id == "node-a")
+                            .then(|| vec!["shared".to_string()])
+                            .unwrap_or_default(),
+                    },
+                );
+            }
+            state.network_registry.insert(
+                "shared".to_string(),
+                proto::NetworkStatus {
+                    network_id: "shared".to_string(),
+                    num_layers: 3,
+                    distribution: HashMap::from([(
+                        "node-a".to_string(),
+                        LayerRange {
+                            layers: vec![0, 1, 2],
+                            layer_neuron_counts: HashMap::new(),
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+
+        node.rebalance_networks().await;
+
+        let state = node.state.read().await;
+        let distribution = &state
+            .network_registry
+            .get("shared")
+            .expect("network retained")
+            .distribution;
+        assert_eq!(distribution.len(), 3);
+        assert!(distribution.contains_key("node-a"));
+        assert!(distribution.contains_key("node-b"));
+        assert!(distribution.contains_key("node-c"));
     }
 
     #[test]

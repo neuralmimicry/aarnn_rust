@@ -513,6 +513,9 @@ fn infer_snapshot_biomimicry_profile(raw: &serde_json::Value) -> Option<AarnnBio
 
 pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot> {
     let raw: serde_json::Value = serde_json::from_str(s)?;
+    if !raw.get("net").is_some_and(serde_json::Value::is_object) {
+        anyhow::bail!("snapshot payload must contain a top-level object field named `net`");
+    }
     let present_net_fields = snapshot_net_field_names(&raw);
     let profile_hint = infer_snapshot_biomimicry_profile(&raw);
     let mut snap: Snapshot = serde_json::from_value(raw)?;
@@ -524,6 +527,29 @@ pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot
         );
     }
     Ok(snap)
+}
+
+#[cfg(test)]
+mod snapshot_payload_tests {
+    use super::*;
+
+    #[test]
+    fn plain_network_config_is_not_accepted_as_a_snapshot() {
+        let payload = serde_json::to_string(&NetworkConfig::default()).expect("serialize config");
+        assert!(decode_snapshot_with_profile_backfill(&payload).is_err());
+    }
+
+    #[test]
+    fn snapshot_payload_with_top_level_net_is_accepted() {
+        let payload = serde_json::to_string(&Snapshot::default()).expect("serialize snapshot");
+        let decoded = decode_snapshot_with_profile_backfill(&payload).expect("decode snapshot");
+        assert_eq!(decoded.net, NetworkConfig::default());
+    }
+
+    #[test]
+    fn invalid_json_is_not_accepted_as_a_snapshot() {
+        assert!(decode_snapshot_with_profile_backfill("{not-json").is_err());
+    }
 }
 
 #[cfg(feature = "growth3d")]

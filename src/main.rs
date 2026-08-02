@@ -844,12 +844,10 @@ fn load_io_contract_from_path(path: &str) -> Option<NetworkConfig> {
         return None;
     }
     let payload = std::fs::read_to_string(trimmed).ok()?;
-    if let Ok(cfg) = serde_json::from_str::<NetworkConfig>(&payload) {
-        return Some(cfg);
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
+        return Some(snapshot.net);
     }
-    crate::runner::decode_snapshot_with_profile_backfill(&payload)
-        .ok()
-        .map(|snap| snap.net)
+    serde_json::from_str::<NetworkConfig>(&payload).ok()
 }
 
 fn apply_io_contract(target: &mut NetworkConfig, contract: &NetworkConfig) -> bool {
@@ -2573,23 +2571,40 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let mut shutdown_rx_server = shutdown_rx.clone();
     tokio::spawn(async move {
         let grpc_max_msg_bytes = grpc_max_message_bytes();
-        let shutdown = async move {
-            while !*shutdown_rx_server.borrow() {
-                if shutdown_rx_server.changed().await.is_err() {
-                    break;
+        loop {
+            if *shutdown_rx_server.borrow() {
+                break;
+            }
+            let mut shutdown_rx_attempt = shutdown_rx_server.clone();
+            let shutdown = async move {
+                while !*shutdown_rx_attempt.borrow() {
+                    if shutdown_rx_attempt.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            let result = Server::builder()
+                .add_service(
+                    DistributedNeuromorphicServer::new(node_clone.clone())
+                        .max_decoding_message_size(grpc_max_msg_bytes)
+                        .max_encoding_message_size(grpc_max_msg_bytes),
+                )
+                .serve_with_shutdown(addr, shutdown)
+                .await;
+            match result {
+                Ok(()) => break,
+                Err(e) => {
+                    nm_err!("[warn] gRPC server failed; retrying in 1s: {}", e);
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        changed = shutdown_rx_server.changed() => {
+                            if changed.is_err() || *shutdown_rx_server.borrow() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
-        };
-        if let Err(e) = Server::builder()
-            .add_service(
-                DistributedNeuromorphicServer::new(node_clone)
-                    .max_decoding_message_size(grpc_max_msg_bytes)
-                    .max_encoding_message_size(grpc_max_msg_bytes),
-            )
-            .serve_with_shutdown(addr, shutdown)
-            .await
-        {
-            nm_err!("[error] gRPC server failed: {}", e);
         }
     });
 

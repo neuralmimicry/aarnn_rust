@@ -43,6 +43,7 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
         root_dir: root.clone(),
         tick_interval_ms: 5,
         local_worker_limit: 1,
+        max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
         autosave_steps: 1,
         continuum: None,
@@ -83,6 +84,7 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
         root_dir: root.clone(),
         tick_interval_ms: 5,
         local_worker_limit: 1,
+        max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
         autosave_steps: 1,
         continuum: None,
@@ -105,6 +107,7 @@ async fn runtime_manager_isolates_users_by_workspace_root() {
         root_dir: root.clone(),
         tick_interval_ms: 10,
         local_worker_limit: 1,
+        max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
         autosave_steps: 10,
         continuum: None,
@@ -164,6 +167,7 @@ async fn runtime_manager_lists_requested_workspace_owners_in_order() {
         root_dir: root.clone(),
         tick_interval_ms: 10,
         local_worker_limit: 1,
+        max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
         autosave_steps: 10,
         continuum: None,
@@ -208,5 +212,55 @@ async fn runtime_manager_lists_requested_workspace_owners_in_order() {
     assert_eq!(combined[1].workspace_id, "alpha");
 
     runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn runtime_manager_enforces_loaded_workspace_cap_on_create_and_restart() {
+    let root = temp_runtime_dir();
+    let initial = RuntimeManager::new(RuntimeConfig {
+        root_dir: root.clone(),
+        max_loaded_workspaces: 2,
+        continuum: None,
+        ..RuntimeConfig::default()
+    })
+    .await
+    .unwrap();
+    for workspace_id in ["alpha", "beta"] {
+        initial
+            .create_workspace(
+                "alice",
+                WorkspaceCreateRequest {
+                    workspace_id: Some(workspace_id.to_string()),
+                    ..WorkspaceCreateRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let error = initial
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("gamma".to_string()),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .expect_err("workspace creation must stop at the resident-engine cap");
+    assert!(error.to_string().contains("memory limit reached"));
+    initial.shutdown().await;
+    drop(initial);
+
+    let restarted = RuntimeManager::new(RuntimeConfig {
+        root_dir: root.clone(),
+        max_loaded_workspaces: 1,
+        continuum: None,
+        ..RuntimeConfig::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(restarted.list_workspaces("alice").await.unwrap().len(), 1);
+    restarted.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
