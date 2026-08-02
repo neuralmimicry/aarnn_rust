@@ -190,7 +190,18 @@ jobs:
       - name: Run tests
         env:
           NM_DISABLE_OPENCL: "1"
-        run: cargo test --locked --all-features --all-targets --lib
+        # `--all-targets` takes precedence over `--lib` and makes Cargo build
+        # test harnesses for every example and benchmark. Those targets are
+        # already compiled by the preceding `cargo check`; linking all of them
+        # kept the ARM64 linker silent for over 30 minutes before cancellation.
+        # The CLI binary re-declares the library modules, so its test harness
+        # only duplicates the library suite. Keep library, web UI and
+        # integration tests; every target remains compile-checked above.
+        run: >-
+          cargo test --locked --all-features
+          --lib
+          --bin web_ui
+          --test '*'
 
       - name: Build release binaries
         run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
