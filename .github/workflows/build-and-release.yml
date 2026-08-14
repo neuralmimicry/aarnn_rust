@@ -394,7 +394,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          authfile="$RUNNER_TEMP/podman-anonymous-auth.json"
+          printf '{}\n' > "$authfile"
           podman run --rm -i --pull=missing \
+            --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
             --network host \
             -e DEBIAN_FRONTEND=noninteractive \
@@ -454,7 +457,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          authfile="$RUNNER_TEMP/podman-anonymous-auth.json"
+          printf '{}\n' > "$authfile"
           podman run --rm -i --pull=missing \
+            --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
             -e EXPECTED_VERSION="${{ needs.release-meta.outputs.artifact_version }}" \
             -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
@@ -488,7 +494,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          authfile="$RUNNER_TEMP/podman-anonymous-auth.json"
+          printf '{}\n' > "$authfile"
           podman run --rm -i --pull=missing \
+            --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
             --network host \
             -e DEBIAN_FRONTEND=noninteractive \
