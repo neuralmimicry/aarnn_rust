@@ -2,6 +2,10 @@
 
 # Shared helpers for local Podman workload test scripts.
 
+# shellcheck source=ensure_64k_hwe_nvidia.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure_64k_hwe_nvidia.sh"
+aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
+
 aarnn_require_cmd() {
     local cmd="$1"
     command -v "$cmd" >/dev/null 2>&1 || {
@@ -21,12 +25,24 @@ aarnn_detect_container_arch() {
     esac
 }
 
+aarnn_detect_container_variant() {
+    local arch
+    arch="$(aarnn_detect_container_arch)"
+    if [[ "${arch}" == "amd64" ]]; then
+        printf '%s' 'amd64'
+    elif [[ "$(getconf PAGESIZE 2>/dev/null || printf 0)" == "65536" ]]; then
+        printf '%s' 'arm64-64k-hwe'
+    else
+        printf '%s' 'arm64-4k'
+    fi
+}
+
 aarnn_default_workload_image() {
     local workload="$1"
     local image_repo="${2:-ghcr.io/neuralmimicry/aarnn_rust}"
-    local arch
-    arch="$(aarnn_detect_container_arch)"
-    printf '%s:%s-%s-%s' "$image_repo" 'engine' "$workload" "$arch"
+    local variant
+    variant="$(aarnn_detect_container_variant)"
+    printf '%s:%s-%s-%s' "$image_repo" 'engine' "$workload" "$variant"
 }
 
 aarnn_append_optional_file_mount() {

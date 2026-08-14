@@ -112,8 +112,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
             .with_context(|| format!("failed to create parent dir '{}'", parent.display()))?;
     }
     let tmp_path = path.with_extension(format!("tmp-{}", fastrand::u32(..)));
-    std::fs::write(&tmp_path, bytes)
+    let mut file = std::fs::File::create(&tmp_path)
+        .with_context(|| format!("failed to create temp file '{}'", tmp_path.display()))?;
+    std::io::Write::write_all(&mut file, bytes)
         .with_context(|| format!("failed to write temp file '{}'", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush temp file '{}'", tmp_path.display()))?;
     std::fs::rename(&tmp_path, path).with_context(|| {
         format!(
             "failed to rename temp file '{}' to '{}'",
@@ -121,6 +125,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
             path.display()
         )
     })?;
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)
+            .with_context(|| format!("failed to open parent '{}'", parent.display()))?
+            .sync_all()
+            .with_context(|| format!("failed to flush parent '{}'", parent.display()))?;
+    }
     Ok(())
 }
 

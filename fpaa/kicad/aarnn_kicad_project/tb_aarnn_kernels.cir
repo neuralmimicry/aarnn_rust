@@ -1,0 +1,43 @@
+* Minimal transient smoke test for the AARNN SPICE macrocells.
+* Run with: ngspice -b -o tb_aarnn_kernels.log tb_aarnn_kernels.cir
+.title AARNN FPAA kernel macromodel smoke test
+.include aarnn_kernels.lib
+
+VRAW raw 0 PULSE(0 1 10m 1u 1u 5m 40m)
+VVM vm 0 PULSE(-65m -20m 0 1u 1u 20m 100m)
+XFILTER raw vm ampa nmda gaba synout 0 AARNN_SYNAPTIC_FILTER
+
+VSPK spk 0 PULSE(0 1 20m 1u 1u 10u 100m)
+XSTP spk util res release 0 AARNN_STP
+XHOME spk thresh rate thresh_limited 0 AARNN_ADAPTIVE_HOMEOSTASIS
+
+VLOCAL local 0 PULSE(0 0.8 40m 1u 1u 20m 140m)
+VBRANCH branch 0 1.8
+XDEND synout local branch ca plateau dendout 0 AARNN_ACTIVE_DENDRITE
+
+VGAP1 gap1 0 SIN(0 0.5 20)
+VGAP2 gap2 0 SIN(0 0.2 20 0 0 90)
+XGAP gap1 gap2 0 AARNN_GAP_PAIR GAP_G=1m
+XGAPOBS gap1 gap2 gap_delta1 gap_delta2 0 AARNN_GAP_OBSERVER
+
+VFIELD_SOURCE field_source 0 1
+XFIELD field_source field 0 AARNN_VOLUME_FIELD DISTANCE=0.04
+
+VMORPH morph_in 0 PULSE(0 1 30m 1u 1u 5m 100m)
+XMORPH morph_in morph_out 0 AARNN_MORPH_TRANSMISSION DELAY_S=12m ATTENUATION=0.7 MYELIN_GAIN=1.3 FATIGUE_GAIN=0.9
+
+VPRE pre 0 PULSE(0 1 60m 1u 1u 5m 80m)
+VPOST post 0 PULSE(0 1 70m 1u 1u 5m 80m)
+VRATE rate_in 0 PULSE(0 0.3 0 1u 1u 30m 100m)
+XTRIP pre post rate_in pre_trace post_trace rate_trace eta 0 AARNN_TRIPLET
+
+.ic V(ampa)=0 V(nmda)=0 V(gaba)=0 V(util)=0.2 V(res)=1 V(thresh)=0 V(rate)=0
+.options reltol=1e-4 abstol=1e-12 vntol=1e-6 maxord=2
+.tran 10u 250m 0 100u
+.control
+run
+write tb_aarnn_kernels.raw
+wrdata tb_aarnn_kernels.dat time v(raw) v(ampa) v(nmda) v(gaba) v(synout) v(util) v(res) v(release) v(thresh) v(thresh_limited) v(rate) v(ca) v(plateau) v(dendout) v(gap_delta1) v(field) v(morph_out) v(eta)
+quit
+.endc
+.end

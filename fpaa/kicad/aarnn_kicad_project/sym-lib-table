@@ -1,0 +1,8 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "tb_aarnn_kernels-cache") (type "Legacy") (uri "${KIPRJMOD}/tb_aarnn_kernels-cache.lib") (options "") (descr "Self-contained AARNN schematic symbols"))
+	(lib (name "tb_aarnn_kernels-rescue") (type "Legacy") (uri "${KIPRJMOD}/tb_aarnn_kernels-rescue.lib") (options "") (descr ""))
+	(lib (name "aarnn_active_dendrite-rescue") (type "Legacy") (uri "${KIPRJMOD}/aarnn_active_dendrite-rescue.lib") (options "") (descr ""))
+	(lib (name "aarnn_adaptive_homeostasis-rescue") (type "Legacy") (uri "${KIPRJMOD}/aarnn_adaptive_homeostasis-rescue.lib") (options "") (descr ""))
+	(lib (name "aarnn_gap_observer-rescue") (type "Legacy") (uri "${KIPRJMOD}/aarnn_gap_observer-rescue.lib") (options "") (descr ""))
+)

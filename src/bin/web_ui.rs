@@ -273,7 +273,34 @@ struct AppState {
     chain: Option<Arc<NmChainClient>>,
     token_pricing: TokenPricing,
     commerce: CommerceConfig,
-    llm_output_vocab: Arc<HashMap<u32, String>>,
+    llm_output_vocab: Arc<RwLock<DynamicOutputDecoder>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct DecoderEntry {
+    text: String,
+    observations: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct DynamicOutputDecoder {
+    version: u64,
+    network_neurons: u64,
+    mappings: HashMap<u32, DecoderEntry>,
+    updated_at: u64,
+}
+
+impl Default for DynamicOutputDecoder {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            network_neurons: 0,
+            mappings: HashMap::new(),
+            updated_at: 0,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1418,6 +1445,9 @@ struct LlmMirrorCandidateResponse {
     source: Option<String>,
     output_spike_indices: Vec<u32>,
     output_aer_payload_hex: Option<String>,
+    decoder_version: u64,
+    decoder_mapped_neurons: usize,
+    network_neurons: u64,
 }
 
 #[derive(Serialize)]
@@ -1698,7 +1728,7 @@ async fn main() -> anyhow::Result<()> {
         chain,
         token_pricing,
         commerce,
-        llm_output_vocab: Arc::new(load_llm_output_vocab()),
+        llm_output_vocab: Arc::new(RwLock::new(load_dynamic_output_decoder())),
     });
 
     let api = Router::new()
@@ -2328,9 +2358,12 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                 "type": "array",
                 "items": { "type": "integer", "format": "uint32" }
               },
-              "output_aer_payload_hex": { "type": "string", "nullable": true }
+              "output_aer_payload_hex": { "type": "string", "nullable": true },
+              "decoder_version": { "type": "integer", "format": "uint64" },
+              "decoder_mapped_neurons": { "type": "integer", "format": "uint64" },
+              "network_neurons": { "type": "integer", "format": "uint64" }
             },
-            "required": ["usable", "output_spike_indices"]
+            "required": ["usable", "output_spike_indices", "decoder_version", "decoder_mapped_neurons", "network_neurons"]
           },
           "LlmMirrorStimulus": {
             "type": "object",
@@ -6003,12 +6036,15 @@ async fn llm_mirror(
     let spike_count = exchange.spike_indices.len();
     let stimulation =
         stimulate_llm_mirror(state.as_ref(), &payload, aer_payload_hex.as_str()).await;
+    let mut decoder = state.llm_output_vocab.write().await;
+    learn_dynamic_output_decoder(&mut decoder, &text, &stimulation.output_spike_indices);
     let candidate = build_llm_mirror_candidate(
         &payload.direction,
         payload.request_candidate_reply,
         &stimulation,
-        state.llm_output_vocab.as_ref(),
+        &decoder,
     );
+    drop(decoder);
     let record = LlmMirrorRecord {
         recorded_at: mirror_now_ms(),
         actor: user.username.clone(),
@@ -6089,33 +6125,92 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn load_llm_output_vocab() -> HashMap<u32, String> {
-    let raw = env_opt("AARNN_LLM_OUTPUT_VOCAB_JSON").or_else(|| {
-        let path = env_opt("AARNN_LLM_OUTPUT_VOCAB_PATH")?;
-        std::fs::read_to_string(&path)
-            .map_err(|error| {
-                eprintln!("[warn] failed to read AARNN LLM output vocabulary {path}: {error}");
-                error
-            })
-            .ok()
-    });
-    let Some(raw) = raw else {
-        return HashMap::new();
-    };
-    let parsed = serde_json::from_str::<HashMap<String, String>>(&raw).unwrap_or_else(|error| {
-        eprintln!("[warn] invalid AARNN LLM output vocabulary JSON: {error}");
-        HashMap::new()
-    });
-    parsed
-        .into_iter()
-        .filter_map(|(index, token)| {
-            let token = token.trim().to_string();
-            if token.is_empty() {
-                return None;
-            }
-            Some((index.parse::<u32>().ok()?, token))
+fn dynamic_decoder_path() -> PathBuf {
+    env_opt("AARNN_LLM_OUTPUT_DECODER_PATH")
+        .or_else(|| env_opt("AARNN_LLM_OUTPUT_VOCAB_PATH"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            env_opt("NM_WEB_UI_RUNTIME_ROOT")
+                .map(|root| PathBuf::from(root).join("llm_output_decoder.json"))
         })
-        .collect()
+        .unwrap_or_else(|| PathBuf::from("data/runtime/llm_output_decoder.json"))
+}
+
+fn load_dynamic_output_decoder() -> DynamicOutputDecoder {
+    let path = dynamic_decoder_path();
+    let raw =
+        env_opt("AARNN_LLM_OUTPUT_DECODER_JSON").or_else(|| std::fs::read_to_string(&path).ok());
+    let Some(raw) = raw else {
+        return DynamicOutputDecoder::default();
+    };
+    if let Ok(decoder) = serde_json::from_str::<DynamicOutputDecoder>(&raw) {
+        return decoder;
+    }
+    // Preserve compatibility with the original static {\"neuron\":\"token\"}
+    // vocabulary while upgrading it to learned/versioned state.
+    serde_json::from_str::<HashMap<String, String>>(&raw)
+        .map(|legacy| DynamicOutputDecoder {
+            mappings: legacy
+                .into_iter()
+                .filter_map(|(index, text)| {
+                    Some((
+                        index.parse().ok()?,
+                        DecoderEntry {
+                            text,
+                            observations: 1,
+                        },
+                    ))
+                })
+                .collect(),
+            ..DynamicOutputDecoder::default()
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("[warn] invalid AARNN output decoder state: {error}");
+            DynamicOutputDecoder::default()
+        })
+}
+
+fn learn_dynamic_output_decoder(
+    decoder: &mut DynamicOutputDecoder,
+    teacher_text: &str,
+    output_spikes: &[u32],
+) {
+    if output_spikes.is_empty() || teacher_text.trim().is_empty() {
+        return;
+    }
+    let words = teacher_text.split_whitespace().collect::<Vec<_>>();
+    let chunks = if output_spikes.len() == 1 {
+        vec![teacher_text.trim().to_string()]
+    } else {
+        output_spikes
+            .iter()
+            .enumerate()
+            .map(|(position, _)| {
+                let start = position * words.len() / output_spikes.len();
+                let end = ((position + 1) * words.len() / output_spikes.len())
+                    .max(start + 1)
+                    .min(words.len());
+                words[start..end].join(" ")
+            })
+            .collect()
+    };
+    for (index, text) in output_spikes.iter().copied().zip(chunks) {
+        if text.is_empty() {
+            continue;
+        }
+        let entry = decoder.mappings.entry(index).or_default();
+        if entry.text != text {
+            entry.text = text;
+            entry.observations = 0;
+        }
+        entry.observations = entry.observations.saturating_add(1);
+        decoder.network_neurons = decoder.network_neurons.max(u64::from(index) + 1);
+    }
+    decoder.version = decoder.version.saturating_add(1);
+    decoder.updated_at = mirror_now_ms();
+    if let Err(error) = write_json_pretty(&dynamic_decoder_path(), decoder) {
+        eprintln!("[warn] failed to persist dynamic AARNN output decoder: {error}");
+    }
 }
 
 fn normalise_mirror_spikes(
@@ -6188,7 +6283,7 @@ fn build_llm_mirror_candidate(
     direction: &LlmMirrorDirection,
     request_candidate_reply: bool,
     stimulation: &LlmMirrorStimulusResponse,
-    output_vocab: &HashMap<u32, String>,
+    output_vocab: &DynamicOutputDecoder,
 ) -> Option<LlmMirrorCandidateResponse> {
     if !request_candidate_reply || !matches!(direction, LlmMirrorDirection::Output) {
         return None;
@@ -6197,12 +6292,20 @@ fn build_llm_mirror_candidate(
     let mapped = stimulation
         .output_spike_indices
         .iter()
-        .filter(|index| output_vocab.contains_key(index))
+        .filter(|index| output_vocab.mappings.contains_key(index))
         .count();
     let coverage = mapped as f64 / stimulation.output_spike_indices.len().max(1) as f64;
-    let confidence = reply_text
-        .as_ref()
-        .map(|_| (0.5 + coverage * 0.49).clamp(0.5, 0.99));
+    let confidence = reply_text.as_ref().map(|_| {
+        let observations = stimulation
+            .output_spike_indices
+            .iter()
+            .filter_map(|index| output_vocab.mappings.get(index))
+            .map(|entry| entry.observations)
+            .min()
+            .unwrap_or(0) as f64;
+        let maturity = (observations / 20.0).clamp(0.0, 1.0);
+        (0.5 + coverage * 0.25 + maturity * 0.24).clamp(0.5, 0.99)
+    });
     let source = if reply_text.is_some() {
         "network_output_decoder"
     } else if stimulation.output_step_index.is_some() {
@@ -6217,17 +6320,20 @@ fn build_llm_mirror_candidate(
         source: Some(source.to_string()),
         output_spike_indices: stimulation.output_spike_indices.clone(),
         output_aer_payload_hex: stimulation.output_aer_payload_hex.clone(),
+        decoder_version: output_vocab.version,
+        decoder_mapped_neurons: output_vocab.mappings.len(),
+        network_neurons: output_vocab.network_neurons,
     })
 }
 
 fn decode_llm_output_tokens(
     spike_indices: &[u32],
-    output_vocab: &HashMap<u32, String>,
+    output_vocab: &DynamicOutputDecoder,
 ) -> Option<String> {
     let mut tokens = spike_indices
         .iter()
-        .filter_map(|index| output_vocab.get(index))
-        .map(|token| token.trim())
+        .filter_map(|index| output_vocab.mappings.get(index))
+        .map(|entry| entry.text.trim())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
     tokens.dedup();
@@ -6245,6 +6351,9 @@ fn clone_llm_mirror_candidate(
         source: candidate.source.clone(),
         output_spike_indices: candidate.output_spike_indices.clone(),
         output_aer_payload_hex: candidate.output_aer_payload_hex.clone(),
+        decoder_version: candidate.decoder_version,
+        decoder_mapped_neurons: candidate.decoder_mapped_neurons,
+        network_neurons: candidate.network_neurons,
     }
 }
 
@@ -7142,7 +7251,25 @@ mod tests {
             output_spike_indices: vec![1, 4],
             output_aer_payload_hex: Some("41455231".to_string()),
         };
-        let vocab = HashMap::from([(1, "risk".to_string()), (4, "hold".to_string())]);
+        let vocab = DynamicOutputDecoder {
+            mappings: HashMap::from([
+                (
+                    1,
+                    DecoderEntry {
+                        text: "risk".to_string(),
+                        observations: 20,
+                    },
+                ),
+                (
+                    4,
+                    DecoderEntry {
+                        text: "hold".to_string(),
+                        observations: 20,
+                    },
+                ),
+            ]),
+            ..DynamicOutputDecoder::default()
+        };
         let candidate =
             build_llm_mirror_candidate(&LlmMirrorDirection::Output, true, &stimulation, &vocab)
                 .expect("candidate");

@@ -1,0 +1,60 @@
+AARNN KiCad project validation report
+======================================
+
+Revision: 1.3
+Legacy schematic files checked: 10
+Root-sheet component records: 42
+Expanded-sheet component records: 56
+Total component records: 98
+Cache-library symbols checked: 14
+
+Per-sheet legacy grammar scan
+-----------------------------
+- tb_aarnn_kernels.sch: 42 components, 74 text records, 0 hierarchical labels, 21 wire records — PASS
+- aarnn_synaptic_filter.sch: 11 components, 56 text records, 7 hierarchical labels, 0 wire records — PASS
+- aarnn_stp.sch: 7 components, 42 text records, 5 hierarchical labels, 0 wire records — PASS
+- aarnn_adaptive_homeostasis.sch: 7 components, 40 text records, 5 hierarchical labels, 0 wire records — PASS
+- aarnn_active_dendrite.sch: 8 components, 47 text records, 7 hierarchical labels, 0 wire records — PASS
+- aarnn_gap_pair.sch: 1 components, 17 text records, 3 hierarchical labels, 0 wire records — PASS
+- aarnn_gap_observer.sch: 4 components, 28 text records, 5 hierarchical labels, 0 wire records — PASS
+- aarnn_volume_field.sch: 2 components, 19 text records, 3 hierarchical labels, 0 wire records — PASS
+- aarnn_morph_transmission.sch: 8 components, 38 text records, 3 hierarchical labels, 0 wire records — PASS
+- aarnn_triplet.sch: 8 components, 49 text records, 8 hierarchical labels, 0 wire records — PASS
+
+Every $Comp record was parsed and verified to contain:
+- L, U and P component headers;
+- ordered F0, F1, F2 and F3 standard fields;
+- a unit/position line matching the P coordinate;
+- a four-value orthogonal transform matrix;
+- matching $Comp and $EndComp delimiters.
+
+Additional checks:
+- every top-level legacy schematic record is recognised;
+- every text record has a valid header and following content line;
+- hierarchical-label shapes are restricted to legacy KiCad values;
+- every wire record contains exactly two integer coordinate pairs;
+- component references and timestamps are unique within each sheet;
+- every referenced symbol is defined by the project cache library;
+- every cache-library DRAW primitive has a valid argument count;
+- cache-library polyline point counts match their coordinate lists;
+- 9 .subckt definitions matched to 9 top-level X instances;
+- 56 internal SPICE elements expanded across 9 reference sheets;
+- all VSS pins occupy the final subcircuit position;
+- source .cir and .lib files copied without modification;
+- project JSON parsed successfully;
+- project-local symbol-table parentheses and path checked;
+- ZIP CRC test passed after generation.
+
+Corrected defects
+-----------------
+Revision 1.1 omitted the legacy KiCad unit/position line before each
+component orientation matrix. KiCad consequently interpreted the matrix
+as the position line and reported an invalid symbol transform. Revision
+1.2 generates both required lines for every component.
+
+Revision 1.2 used `Power_In` as a hierarchical-label shape on every
+expanded reference sheet. That name is a modern electrical pin type,
+not a legal legacy `.sch` label shape, so KiCad reported "invalid label
+type". Revision 1.3 uses the supported `BiDi` shape for each VSS analogue
+reference and verifies every label header. It also corrects the cache
+library resistor polyline from a declared 12 points to its actual 11.

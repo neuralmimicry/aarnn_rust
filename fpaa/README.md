@@ -6,6 +6,7 @@ Two artifact sets are provided:
 
 - `xcos/`: Scilab/Xcos-oriented reference simulations for each FPAA-realizable kernel. Each script emits `struct("time", ..., "values", ...)` workspace variables so the signals can be wired into Xcos `From Workspace` and `To Workspace` blocks.
 - `okika/`: Okika Pi.Ka deployment manifests and Raspberry Pi programming helpers for the same kernels. These are the files you can act on here without fabricating opaque vendor project binaries.
+- `spice/`: portable SPICE macromodels and a transient smoke test for PCB prototyping or translation into Anadigm CAM stages.
 
 Supported kernel groups in this pack:
 

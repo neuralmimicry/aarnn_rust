@@ -17,6 +17,8 @@
 
 set -Eeuo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure_64k_hwe_nvidia.sh"
+
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly LOG_PREFIX="[deploy-mixed-cluster]"
@@ -57,6 +59,7 @@ GHCR_PULL_SECRET_NAME="${GHCR_PULL_SECRET_NAME:-ghcr-pull-secret}"
 ROLLOUT_TIMEOUT_SECONDS="${ROLLOUT_TIMEOUT_SECONDS:-600}"
 K3S_KUBELET_CPU_FLAGS="${K3S_KUBELET_CPU_FLAGS:---kubelet-arg=cpu-cfs-quota=false --kubelet-arg=cpu-manager-policy=none}"
 ENABLE_GPU_PASSTHROUGH="${ENABLE_GPU_PASSTHROUGH:-true}"
+aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-${ENABLE_GPU_PASSTHROUGH}}"
 
 # When ACTION=deploy the script installs/updates the cluster.
 # When ACTION=delete the script tears down workloads and k3s components.
@@ -676,8 +679,21 @@ export K3S_URL=$(printf '%q' "https://${control_plane_ip}:6443")
 export K3S_TOKEN=$(printf '%q' "${node_token}")
 export STOP_REMOTE_SYSTEM_KUBELET=$(printf '%q' "${STOP_REMOTE_SYSTEM_KUBELET}")
 export K3S_KUBELET_CPU_FLAGS=$(printf '%q' "${K3S_KUBELET_CPU_FLAGS}")
+export ENABLE_GPU_PASSTHROUGH=$(printf '%q' "${ENABLE_GPU_PASSTHROUGH}")
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required on worker host." >&2; exit 1; }
+
+if [[ "\$(getconf PAGESIZE 2>/dev/null || printf 0)" == "65536" &&
+      "\${ENABLE_GPU_PASSTHROUGH}" == "true" && -r /etc/os-release ]]; then
+  . /etc/os-release
+  if [[ "\${ID:-}" == "ubuntu" && "\${VERSION_ID:-}" == "24.04" ]]; then
+    dpkg-query -W -f='\${Status}' linux-nvidia-64k-hwe-24.04 2>/dev/null |
+      grep -q 'install ok installed' || {
+        apt-get update
+        apt-get install -y linux-nvidia-64k-hwe-24.04
+      }
+  fi
+fi
 
 if systemctl is-active --quiet kubelet; then
   if [[ "\${STOP_REMOTE_SYSTEM_KUBELET}" == "true" ]]; then

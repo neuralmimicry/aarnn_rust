@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/ensure_64k_hwe_nvidia.sh"
+aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
+
 # Run a distributed cluster (orchestrator + nodes) in containers with Rust UI on orchestrator.
 
 if ! command -v podman >/dev/null 2>&1; then
@@ -24,7 +27,9 @@ fi
 ARCH_RAW="$(uname -m)"
 case "${ARCH_RAW}" in
   x86_64|amd64) IMAGE_ARCH="amd64" ;;
-  aarch64|arm64) IMAGE_ARCH="arm64" ;;
+  aarch64|arm64)
+    [[ "$(getconf PAGESIZE 2>/dev/null || printf 0)" == "65536" ]] && IMAGE_ARCH="arm64-64k-hwe" || IMAGE_ARCH="arm64-4k"
+    ;;
   *) IMAGE_ARCH="${ARCH_RAW}" ;;
 esac
 

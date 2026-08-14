@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/ensure_64k_hwe_nvidia.sh"
+aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
+
 IMAGE_NAME=${1:-""}
 BRAIN_ID=${2:-"motor"}
 
 if [ -z "$IMAGE_NAME" ]; then
   case "$(uname -m)" in
     x86_64|amd64) IMAGE_ARCH="amd64" ;;
-    aarch64|arm64) IMAGE_ARCH="arm64" ;;
+    aarch64|arm64)
+      [[ "$(getconf PAGESIZE 2>/dev/null || printf 0)" == "65536" ]] && IMAGE_ARCH="arm64-64k-hwe" || IMAGE_ARCH="arm64-4k"
+      ;;
     *) IMAGE_ARCH="$(uname -m)" ;;
   esac
   IMAGE_NAME="ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}"

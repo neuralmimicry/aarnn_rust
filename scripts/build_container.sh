@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=ensure_64k_hwe_nvidia.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure_64k_hwe_nvidia.sh"
+aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
+
 # Role-specific multi-arch container build script for AARNN.
 # Requires: podman or docker buildx.
 
@@ -19,6 +23,7 @@ NO_CACHE=${NO_CACHE:-${7:-"false"}}
 SKIP_REMOTE_MANIFEST=${SKIP_REMOTE_MANIFEST:-${8:-"false"}}
 PULL=${PULL:-${9:-"false"}}
 BUILD_TOOL=${CONTAINER_BUILD_TOOL:-${BUILD_TOOL:-""}}
+TARGET_PAGE_SIZE=${CONTAINER_TARGET_PAGE_SIZE:-${TARGET_PAGE_SIZE:-4k}}
 FORCE_DEB_REBUILD=${CONTAINER_DEB_FORCE_REBUILD:-${FORCE_DEB_REBUILD:-${NO_CACHE}}}
 PREBUILT=${CONTAINER_DEB_PREBUILT:-"false"}
 REGISTRY_USERNAME=${REGISTRY_USERNAME:-${GHCR_USERNAME:-${GITHUB_USER:-""}}}
@@ -26,7 +31,7 @@ REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${GITHUB_TOKEN:-""}}}
 CONTAINER_DEB_STAGE_DIR=${CONTAINER_DEB_STAGE_DIR:-"${ROOT_DIR}/dist/container"}
 CONTAINER_DEB_CACHE_DIR=${CONTAINER_DEB_CACHE_DIR:-"${ROOT_DIR}/.container-cache/debs"}
 
-KNOWN_ARCHES=("amd64" "arm64")
+KNOWN_ARCHES=("amd64" "arm64-4k")
 WORKLOADS=()
 
 normalize_bool() {
@@ -90,6 +95,16 @@ detect_host_arch() {
     HOST_PLATFORM="linux/${HOST_ARCH}"
 }
 
+container_variant() {
+    if [[ "${HOST_ARCH}" == "amd64" ]]; then
+        printf '%s' 'amd64'
+    elif [[ "${TARGET_PAGE_SIZE}" == "64k-hwe" || "${TARGET_PAGE_SIZE}" == "64k" ]]; then
+        printf '%s' 'arm64-64k-hwe'
+    else
+        printf '%s' 'arm64-4k'
+    fi
+}
+
 role_tag_for() {
     local workload="$1"
     aarnn_container_workload_tag "$IMAGE_TAG" "$workload"
@@ -97,7 +112,7 @@ role_tag_for() {
 
 arch_tag_for() {
     local workload="$1"
-    printf '%s-%s' "$(role_tag_for "$workload")" "$HOST_ARCH"
+    printf '%s-%s' "$(role_tag_for "$workload")" "$(container_variant)"
 }
 
 prepare_workload_package() {
@@ -258,16 +273,21 @@ assemble_podman_manifest() {
     local role_tag="$(role_tag_for "$workload")"
     local arch_tag="$(arch_tag_for "$workload")"
     local manifest_ref="${IMAGE_NAME}:${role_tag}"
+    if [[ "$(container_variant)" == "arm64-64k-hwe" ]]; then
+        manifest_ref="${IMAGE_NAME}:${role_tag}-arm64-64k-hwe"
+    fi
     local native_ref="${IMAGE_NAME}:${arch_tag}"
     local -A added_arches=()
 
     podman manifest rm "${manifest_ref}" >/dev/null 2>&1 || true
     podman manifest create "${manifest_ref}" >/dev/null
     podman manifest add "${manifest_ref}" "${native_ref}" >/dev/null
-    added_arches["${HOST_ARCH}"]=1
+    added_arches["$(container_variant)"]=1
 
-    maybe_add_remote_manifest_entries_podman "${manifest_ref}" added_arches
-    maybe_add_remote_arch_tags_podman "${manifest_ref}" "${role_tag}" added_arches
+    if [[ "$(container_variant)" != "arm64-64k-hwe" ]]; then
+        maybe_add_remote_manifest_entries_podman "${manifest_ref}" added_arches
+        maybe_add_remote_arch_tags_podman "${manifest_ref}" "${role_tag}" added_arches
+    fi
 
     echo "Assembled manifest ${manifest_ref}."
 }
@@ -293,6 +313,7 @@ build_workload_with_podman() {
         --build-arg CARGO_FEATURES="${features}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
+        --build-arg TARGET_PAGE_SIZE="${TARGET_PAGE_SIZE}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}"
 }
 
@@ -331,6 +352,7 @@ build_workload_with_buildx() {
         --build-arg CARGO_FEATURES="${features}" \
         --build-arg PYTHON_MIN_VERSION="${PYTHON_MIN_VERSION}" \
         --build-arg PYTHON_FULL_VERSION="${PYTHON_FULL_VERSION}" \
+        --build-arg TARGET_PAGE_SIZE="${TARGET_PAGE_SIZE}" \
         -f "${ROOT_DIR}/Containerfile" "${ROOT_DIR}" ${output_flag}
 }
 
@@ -350,7 +372,7 @@ print_summary() {
     echo "Container package cache dir: ${CONTAINER_DEB_CACHE_DIR}"
     for workload in "${WORKLOADS[@]}"; do
         role_tag="$(role_tag_for "$workload")"
-        echo "  - ${workload}: ${IMAGE_NAME}:${role_tag}-${HOST_ARCH} (manifest ${IMAGE_NAME}:${role_tag})"
+        echo "  - ${workload}: ${IMAGE_NAME}:${role_tag}-$(container_variant) (manifest ${IMAGE_NAME}:${role_tag})"
     done
 }
 

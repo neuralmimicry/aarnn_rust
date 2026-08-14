@@ -1,0 +1,133 @@
+* AARNN FPAA/PCB reference macrocells
+*
+* Electrical contract
+* ------------------
+*   - All signal pins are volts. 1 V represents one normalized AARNN unit.
+*   - VM is supplied in volts corresponding to millivolts: -65 mV is -65 mV.
+*   - State pins are intentionally exposed so they can be probed or wired onward.
+*   - VSS is the local analog reference and must be connected to circuit ground (0).
+*   - Time parameters use SPICE seconds (5m = 5 ms, 800m = 800 ms).
+*
+* These are equation-level macromodels, not transistor models. They use capacitors
+* and behavioral OTA-like current sources, which gives a portable golden reference
+* for ngspice/LTspice and a direct stage list for a PCB or Anadigm Designer build.
+
+* 01: AMPA/NMDA/GABA front-end. RAW is signed; positive drive is excitatory and
+* negative drive is inhibitory. AMPA/NMDA/GABA are state voltages and OUT is the
+* summed current-domain equivalent expressed as a voltage.
+.subckt AARNN_SYNAPTIC_FILTER RAW VM AMPA NMDA GABA OUT VSS params:
++ TAU_AMPA=5m TAU_NMDA=100m TAU_GABA=10m NMDA_RATIO=0.25
++ SYN_GAIN=1 NMDA_SENS=0.04 ACH_GAIN=1 CSTATE=1u
+BEXC EXC VSS V={max(V(RAW,VSS),0)}
+BINH INH VSS V={max(-V(RAW,VSS),0)}
+* The membrane input is scaled from volts to mV before applying the software slope.
+BNMDAG NMDA_GATE VSS V={1/(1+exp(-NMDA_SENS*(V(VM,VSS)/1m+40)))}
+BAMPA_DRV AMPA VSS I={CSTATE*((1-NMDA_RATIO)*V(EXC,VSS)-V(AMPA,VSS))/TAU_AMPA}
+BNMDA_DRV NMDA VSS I={CSTATE*(NMDA_RATIO*V(EXC,VSS)*V(NMDA_GATE,VSS)-V(NMDA,VSS))/TAU_NMDA}
+BGABA_DRV GABA VSS I={CSTATE*(V(INH,VSS)-V(GABA,VSS))/TAU_GABA}
+BOUT OUT VSS V={SYN_GAIN*ACH_GAIN*(V(AMPA,VSS)+V(NMDA,VSS)-V(GABA,VSS))}
+RSTATE_A AMPA VSS 1G
+RSTATE_N NMDA VSS 1G
+RSTATE_G GABA VSS 1G
+ROUT OUT VSS 1G
+.ends AARNN_SYNAPTIC_FILTER
+
+* 02: Tsodyks-Markram-like short-term plasticity. SPIKE is a pulse (0/1 V).
+* SPIKE_RATE converts pulse width into the spike-synchronous state impulse; for a
+* 10 us pulse, 100k gives approximately one update. RELEASE is asserted only while
+* the input pulse is high, as in the software event path.
+.subckt AARNN_STP SPIKE UTIL RES RELEASE VSS params:
++ BASE_U=0.2 TAU_REC=800m TAU_FACIL=200m SPIKE_RATE=100k
++ SPIKE_THRESHOLD=0.5 SPIKE_SMOOTH=0.01 CSTATE=1u
+BSPK_GATE SPK_GATE VSS V={0.5*(1+tanh((V(SPIKE,VSS)-SPIKE_THRESHOLD)/SPIKE_SMOOTH))}
+BUTIL UTIL VSS I={CSTATE*((BASE_U-V(UTIL,VSS))/TAU_FACIL+V(SPK_GATE,VSS)*SPIKE_RATE*BASE_U*(1-V(UTIL,VSS)))}
+BRES RES VSS I={CSTATE*((1-V(RES,VSS))/TAU_REC-V(SPK_GATE,VSS)*SPIKE_RATE*min(max(V(UTIL,VSS)*V(RES,VSS),0),1))}
+BRELEASE RELEASE VSS V={V(SPK_GATE,VSS)*min(max(V(UTIL,VSS)*V(RES,VSS),0),1)}
+RUTIL UTIL VSS 1G
+RRES RES VSS 1G
+RRELEASE RELEASE VSS 1G
+.ic V(UTIL)={BASE_U} V(RES)=1
+.ends AARNN_STP
+
+* 03: adaptive threshold plus slow firing-rate homeostasis. RATE is a normalized
+* trace; RATE_TARGET is expressed in the same normalized voltage units.
+.subckt AARNN_ADAPTIVE_HOMEOSTASIS SPIKE THRESH RATE THRESH_LIMITED VSS params:
++ TAU_THRESH=200m THR_INC=0.5 THR_MIN=-2 THR_MAX=5
++ TAU_RATE=2 RATE_TARGET=0.003 HOMEOSTASIS_GAIN=0.25
++ SPIKE_RATE=100k SPIKE_SMOOTH=0.01 RATE_IMPULSE=0.0005 CSTATE=1u
+BSPK_GATE SPK_GATE VSS V={0.5*(1+tanh((V(SPIKE,VSS)-0.5)/SPIKE_SMOOTH))}
+BRATE RATE VSS I={CSTATE*((0-V(RATE,VSS))/TAU_RATE+V(SPK_GATE,VSS)*SPIKE_RATE*RATE_IMPULSE)}
+BTHRESH THRESH VSS I={CSTATE*((0-V(THRESH,VSS))/TAU_THRESH+V(SPK_GATE,VSS)*SPIKE_RATE*THR_INC+HOMEOSTASIS_GAIN*(V(RATE,VSS)-RATE_TARGET)/TAU_THRESH)}
+* Rail clamps are the hardware counterpart of the software min/max envelope.
+BTHRESH_CLAMP THRESH_LIMITED VSS V={min(max(V(THRESH,VSS),THR_MIN),THR_MAX)}
+RTHRESH THRESH VSS 1G
+RRATE RATE VSS 1G
+RCLAMP THRESH_LIMITED VSS 1G
+.ends AARNN_ADAPTIVE_HOMEOSTASIS
+
+* 04: active dendritic calcium/plateau macrocell. BRANCH is a structural gain
+* bias, normally in the range 1..3 V. LOCAL is a slow local stimulus.
+.subckt AARNN_ACTIVE_DENDRITE CURR LOCAL BRANCH CA PLATEAU OUT VSS params:
++ TAU_CA=120m TAU_PLATEAU=350m CA_GAIN=0.10 PLATEAU_THRESHOLD=1
++ PLATEAU_GAIN=0.40 SIGN_SMOOTH=0.001 CSTATE=1u
+BCA CA VSS I={CSTATE*((CA_GAIN*(0.75*max(V(CURR,VSS),0)+0.25*max(V(LOCAL,VSS),0)*min(max(V(BRANCH,VSS),1),3))-V(CA,VSS))/TAU_CA)}
+BTRIGGER TRIGGER VSS V={min(max(max(V(CA,VSS)-PLATEAU_THRESHOLD,0)/(1+max(V(CA,VSS)-PLATEAU_THRESHOLD,0)),0),1)}
+BPLATEAU PLATEAU VSS I={CSTATE*(V(TRIGGER,VSS)-V(PLATEAU,VSS))/TAU_PLATEAU}
+BOUT OUT VSS V={V(CURR,VSS)*(1+PLATEAU_GAIN*V(PLATEAU,VSS)*min(max(V(BRANCH,VSS),1),3)*(0.625+0.375*tanh(V(CURR,VSS)/SIGN_SMOOTH)))}
+RCA CA VSS 1G
+RPLATEAU PLATEAU VSS 1G
+RTRIGGER TRIGGER VSS 1G
+ROUT OUT VSS 1G
+.ends AARNN_ACTIVE_DENDRITE
+
+* 05a: a physical local gap junction. Connect V1/V2 to membrane nodes. GAP_G is
+* the conductance of the programmable transconductance/resistive link.
+.subckt AARNN_GAP_PAIR V1 V2 VSS params: GAP_G=1m
+GAP V1 V2 V1 V2 {GAP_G}
+.ends AARNN_GAP_PAIR
+
+* 05b: observer form for a mean-field or geometry-reduced implementation.
+.subckt AARNN_GAP_OBSERVER V1 V2 DELTA1 DELTA2 VSS params: GAP_STRENGTH=0.03
+BDELTA1 DELTA1 VSS V={GAP_STRENGTH*(V(V2,VSS)-V(V1,VSS))}
+BDELTA2 DELTA2 VSS V={GAP_STRENGTH*(V(V1,VSS)-V(V2,VSS))}
+RDELTA1 DELTA1 VSS 1G
+RDELTA2 DELTA2 VSS 1G
+.ends AARNN_GAP_OBSERVER
+
+* 05c: local analog approximation to the volume-transmission field. DISTANCE is
+* a floorplan/routing parameter; exact 3-D positions remain host-side metadata.
+.subckt AARNN_VOLUME_FIELD SOURCE FIELD VSS params: RADIUS=0.12 STRENGTH=0.10 TONE=1.5 DISTANCE=0
+BFIELD FIELD VSS V={min(max(1+STRENGTH*max(V(SOURCE,VSS),0)*min(max(TONE,0),3)*exp(-(DISTANCE*DISTANCE)/(2*RADIUS*RADIUS)),0.5),2.5)}
+RFIELD FIELD VSS 1G
+.ends AARNN_VOLUME_FIELD
+
+* 06: coarse morphology-aware delay/attenuation. Three OTA-C low-pass sections
+* approximate a cable/delay line. DELAY_S, attenuation, myelin and fatigue are
+* externally programmed per route. Use a switched-capacitor delay CAM or explicit
+* cable sections when a target FPAA provides those primitives.
+.subckt AARNN_MORPH_TRANSMISSION IN OUT VSS params:
++ DELAY_S=10m ATTENUATION=1 MYELIN_GAIN=1 FATIGUE_GAIN=1 CSTATE=1u
+.param TAU_SECTION={max(DELAY_S/3,1u)}
+BD1 D1 VSS I={CSTATE*(V(IN,VSS)-V(D1,VSS))/TAU_SECTION}
+BD2 D2 VSS I={CSTATE*(V(D1,VSS)-V(D2,VSS))/TAU_SECTION}
+BD3 D3 VSS I={CSTATE*(V(D2,VSS)-V(D3,VSS))/TAU_SECTION}
+BOUT OUT VSS V={min(max(ATTENUATION*MYELIN_GAIN*FATIGUE_GAIN,0),1.5)*V(D3,VSS)}
+RD1 D1 VSS 1G
+RD2 D2 VSS 1G
+RD3 D3 VSS 1G
+ROUT OUT VSS 1G
+.ends AARNN_MORPH_TRANSMISSION
+
+* 07: fast analog part of the triplet/metaplasticity hybrid. Scaling rows, Dale
+* sign enforcement and deterministic release heterogeneity remain host-supervised.
+.subckt AARNN_TRIPLET PRE POST RATE PRE_TRACE POST_TRACE RATE_TRACE ETA VSS params:
++ TAU_PRE=50m TAU_POST=50m TAU_RATE=2 LTP_GAIN=0.25 LTD_GAIN=0.15 CSTATE=1u
+BP PRE_TRACE VSS I={CSTATE*(max(V(PRE,VSS),0)-V(PRE_TRACE,VSS))/TAU_PRE}
+BPOST POST_TRACE VSS I={CSTATE*(max(V(POST,VSS),0)-V(POST_TRACE,VSS))/TAU_POST}
+BR RATE_TRACE VSS I={CSTATE*(max(V(RATE,VSS),0)-V(RATE_TRACE,VSS))/TAU_RATE}
+BETA ETA VSS V={min(max(1+LTP_GAIN*V(PRE_TRACE,VSS)*V(POST_TRACE,VSS)-LTD_GAIN*V(RATE_TRACE,VSS),0.05),5)}
+RPT PRE_TRACE VSS 1G
+RQT POST_TRACE VSS 1G
+RRT RATE_TRACE VSS 1G
+RETA ETA VSS 1G
+.ends AARNN_TRIPLET

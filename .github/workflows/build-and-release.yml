@@ -618,8 +618,16 @@ jobs:
         include:
           - arch: amd64
             runner_arch: X64
+            variant: amd64
+            page_size: 4k
           - arch: arm64
             runner_arch: ARM64
+            variant: arm64-4k
+            page_size: 4k
+          - arch: arm64
+            runner_arch: ARM64
+            variant: arm64-64k-hwe
+            page_size: 64k-hwe
     runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}"]
     permissions:
       contents: read
@@ -633,6 +641,15 @@ jobs:
         with:
           clean: false
           path: repo-build-release
+
+      - name: Ensure 64K HWE NVIDIA host package when required
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.page_size }}" == "64k-hwe" ]]; then
+            source scripts/ensure_64k_hwe_nvidia.sh
+            aarnn_ensure_64k_hwe_nvidia true
+          fi
 
       - name: Enforce Gail image tag policy
         run: bash scripts/check_gail_image_tags.sh .
@@ -759,7 +776,7 @@ jobs:
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build_id="${{ steps.buildmeta.outputs.build_id }}"
-          arch_tag="${image}:${build_id}-${{ matrix.arch }}"
+          arch_tag="${image}:${build_id}-${{ matrix.variant }}"
 
           build_args=(
             --file ./Containerfile
@@ -770,6 +787,7 @@ jobs:
             --build-arg "CARGO_FEATURES=${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}"
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
+            --build-arg "TARGET_PAGE_SIZE=${{ matrix.page_size }}"
             .
           )
 
@@ -861,7 +879,7 @@ jobs:
           podman image rm -f "${image}:${build}" >/dev/null 2>&1 || true
           podman manifest create "${image}:${build}"
           podman manifest add "${image}:${build}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${build}" "docker://${image}:${build}-arm64"
+          podman manifest add "${image}:${build}" "docker://${image}:${build}-arm64-4k"
           podman manifest push --all "${image}:${build}" "docker://${image}:${build}"
 
       - name: Publish branch alias for developer flow
@@ -876,7 +894,7 @@ jobs:
           podman image rm -f "${image}:${branch_tag}" >/dev/null 2>&1 || true
           podman manifest create "${image}:${branch_tag}"
           podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-arm64"
+          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-arm64-4k"
           podman manifest push --all "${image}:${branch_tag}" "docker://${image}:${branch_tag}"
 
       - name: Publish version and latest tags on release
@@ -891,14 +909,14 @@ jobs:
           podman image rm -f "${image}:${version_tag}" >/dev/null 2>&1 || true
           podman manifest create "${image}:${version_tag}"
           podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-arm64"
+          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-arm64-4k"
           podman manifest push --all "${image}:${version_tag}" "docker://${image}:${version_tag}"
 
           podman manifest rm "${image}:latest" >/dev/null 2>&1 || true
           podman image rm -f "${image}:latest" >/dev/null 2>&1 || true
           podman manifest create "${image}:latest"
           podman manifest add "${image}:latest" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:latest" "docker://${image}:${build}-arm64"
+          podman manifest add "${image}:latest" "docker://${image}:${build}-arm64-4k"
           podman manifest push --all "${image}:latest" "docker://${image}:latest"
           echo "Published ${image}:${version_tag} and ${image}:latest"
 

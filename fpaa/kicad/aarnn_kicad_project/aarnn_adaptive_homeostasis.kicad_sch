@@ -1,0 +1,1198 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4")
+	(paper "A3")
+	(title_block
+		(title "AARNN_ADAPTIVE_HOMEOSTASIS implementation reference")
+		(date "2026-08-12")
+		(rev "1.3")
+		(company "NeuralMimicry Ltd")
+		(comment 1 "Expanded from aarnn_kernels.lib")
+		(comment 2 "Equation-level SPICE; not a transistor-level or PCB implementation")
+		(comment 3 "Standalone reference sheet; main testbench uses the external .lib model")
+		(comment 4 "1 V = 1 normalised AARNN unit")
+	)
+	(lib_symbols)
+	(text "B:"
+		(exclude_from_sim no)
+		(at 313.69 118.11 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "044c4172-1c3c-47d4-9eb8-f3b993043eca")
+	)
+	(text "B:"
+		(exclude_from_sim no)
+		(at 186.69 118.11 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "0bf27f5c-0b16-43a5-b90a-372d2ad6f235")
+	)
+	(text "I={CSTATE*((0-V(RATE,VSS))/TAU_RATE+V(SPK_GATE,VSS)*SPIKE_RATE*RATE_IMPULSE)}"
+		(exclude_from_sim no)
+		(at 186.69 121.92 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "0c6ca4b2-b39c-4043-b67b-993fef1a4a00")
+	)
+	(text "pin 1 / input"
+		(exclude_from_sim no)
+		(at 34.29 60.071 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "1d31bad7-abd2-455f-b0b0-62fde2ba76f7")
+	)
+	(text "I={CSTATE*((0-V(THRESH,VSS))/TAU_THRESH+V(SPK_GATE,VSS)*SPIKE_RATE*THR_INC+HOMEOSTASIS_GAIN*(V(RATE,VSS)-RATE_TARGET)/TAU_THRESH)}"
+		(exclude_from_sim no)
+		(at 313.69 121.92 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "1ed6fb38-80f0-42dc-9381-f410720bbd67")
+	)
+	(text "SPIKE_SMOOTH=0.01 RATE_IMPULSE=0.0005 CSTATE=1u"
+		(exclude_from_sim no)
+		(at 17.78 38.862 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "224cff13-e9a8-4213-8cbb-3bc38431a273")
+	)
+	(text "R: 1G"
+		(exclude_from_sim no)
+		(at 59.69 204.47 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "259138f5-0feb-44b3-9a31-2605bf4e1c58")
+	)
+	(text "R: 1G"
+		(exclude_from_sim no)
+		(at 313.69 161.29 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "2bc988c2-a8ce-4d5f-864c-ca2c88853810")
+	)
+	(text "TAU_THRESH=200m THR_INC=0.5 THR_MIN=-2 THR_MAX=5 TAU_RATE=2 RATE_TARGET=0.003 HOMEOSTASIS_GAIN=0.25 SPIKE_RATE=100k"
+		(exclude_from_sim no)
+		(at 17.78 34.29 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "47f42ee9-63f7-4af3-b43f-f485f8862ae9")
+	)
+	(text "DEFAULT PARAMETERS"
+		(exclude_from_sim no)
+		(at 17.78 27.94 0)
+		(effects
+			(font
+				(size 1.524 1.524)
+				(thickness 0.3048)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "7cc78ebc-7753-494e-aaf8-22f69d09bb32")
+	)
+	(text "EXPOSED SUBCIRCUIT PINS"
+		(exclude_from_sim no)
+		(at 17.78 52.07 0)
+		(effects
+			(font
+				(size 1.524 1.524)
+				(thickness 0.3048)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "aa4047ae-c5ee-4abd-a322-4f3123c9c5d2")
+	)
+	(text "Source: aarnn_kernels.lib | 7 elements | pin order preserved exactly"
+		(exclude_from_sim no)
+		(at 17.78 21.59 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "ac20b659-50be-4d46-a945-8c96b66ef5da")
+	)
+	(text "pin 4 / output"
+		(exclude_from_sim no)
+		(at 360.68 72.771 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "bb6850d6-a631-4780-9eac-56adcdc9af7b")
+	)
+	(text "pin 2 / output"
+		(exclude_from_sim no)
+		(at 360.68 60.071 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "ca050516-9583-4c8f-86d1-6b19295a98cc")
+	)
+	(text "Behavioural expressions are kept as SPICE symbol values; named labels reproduce every source-library node."
+		(exclude_from_sim no)
+		(at 17.78 281.94 0)
+		(effects
+			(font
+				(size 0.9652 0.9652)
+			)
+			(justify left bottom)
+		)
+		(uuid "d18d4ce7-6c5d-416f-9943-6e6e073a0d56")
+	)
+	(text "pin 3 / output"
+		(exclude_from_sim no)
+		(at 360.68 66.421 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "d2348e0d-7680-4415-9227-b6fcc25ee20f")
+	)
+	(text "B: V={0.5*(1+tanh((V(SPIKE,VSS)-0.5)/SPIKE_SMOOTH))}"
+		(exclude_from_sim no)
+		(at 59.69 118.11 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "d5d77ece-3741-43e7-a545-6ca33f359076")
+	)
+	(text "pin 5 / analogue reference"
+		(exclude_from_sim no)
+		(at 207.01 64.008 0)
+		(effects
+			(font
+				(size 1.016 1.016)
+			)
+			(justify left bottom)
+		)
+		(uuid "e0162f26-f360-42d6-8a42-9ba661c06b24")
+	)
+	(text "AARNN_ADAPTIVE_HOMEOSTASIS"
+		(exclude_from_sim no)
+		(at 17.78 15.24 0)
+		(effects
+			(font
+				(size 2.54 2.54)
+				(thickness 0.508)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "e2f4037b-9576-419c-8be4-ab42219d3474")
+	)
+	(text "R: 1G"
+		(exclude_from_sim no)
+		(at 186.69 161.29 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "f42144c6-e0d2-4efc-959d-9af02221a9f6")
+	)
+	(text "B: V={min(max(V(THRESH,VSS),THR_MIN),THR_MAX)}"
+		(exclude_from_sim no)
+		(at 59.69 161.29 0)
+		(effects
+			(font
+				(size 0.889 0.889)
+			)
+			(justify left bottom)
+		)
+		(uuid "f7e03c9e-d9db-491a-9bea-a53c47f682c2")
+	)
+	(label "SPK_GATE"
+		(at 64.77 106.68 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "22f75253-d214-4a9c-afe0-67b728396339")
+	)
+	(label "THRESH"
+		(at 318.77 106.68 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "35a91659-3881-443d-8531-ea15dcd0285f")
+	)
+	(label "THRESH_LIMITED"
+		(at 64.77 193.04 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "42d05fac-06b8-4277-b43f-f2abe63afd05")
+	)
+	(label "VSS"
+		(at 214.63 149.86 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "59a246bb-d5f9-4c31-93db-037a702b897c")
+	)
+	(label "VSS"
+		(at 341.63 106.68 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "a34e408f-5b94-4772-8cce-a1ea6bad8f04")
+	)
+	(label "VSS"
+		(at 341.63 149.86 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "a5fc77f9-27e6-4ccc-9895-7378aa69d9c3")
+	)
+	(label "VSS"
+		(at 214.63 106.68 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "cc1a1b8b-8ea5-4bb3-85f2-8a2a5d734143")
+	)
+	(label "THRESH"
+		(at 191.77 149.86 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "cd7e0ad6-1220-40a7-a963-62775d5c4ead")
+	)
+	(label "VSS"
+		(at 87.63 149.86 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "d43a3f89-55a6-4ae3-997b-ad6fa11798eb")
+	)
+	(label "VSS"
+		(at 87.63 106.68 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "d7d7ea27-ccbc-402e-a7ec-c1c542128df0")
+	)
+	(label "RATE"
+		(at 318.77 149.86 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "e5e22d10-b318-4eef-98f3-0df45cbec04a")
+	)
+	(label "THRESH_LIMITED"
+		(at 64.77 149.86 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "f2ddb8c5-7a6e-4df3-8308-56144f9e33a7")
+	)
+	(label "RATE"
+		(at 191.77 106.68 180)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify right bottom)
+		)
+		(uuid "fcdfa1fc-cc62-4efb-84db-4cd1a8f801dd")
+	)
+	(label "VSS"
+		(at 87.63 193.04 0)
+		(effects
+			(font
+				(size 1.143 1.143)
+			)
+			(justify left bottom)
+		)
+		(uuid "fedd708f-fe3a-442f-bf33-72fea3e16217")
+	)
+	(hierarchical_label "SPIKE"
+		(shape input)
+		(at 25.4 59.69 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "5805502f-c3bd-4724-a626-8f1717c77b84")
+	)
+	(hierarchical_label "THRESH_LIMITED"
+		(shape output)
+		(at 393.7 72.39 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "a0f7f45d-2ffd-44e4-a912-dca08a646ae8")
+	)
+	(hierarchical_label "RATE"
+		(shape output)
+		(at 393.7 66.04 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "bac1971b-133b-4e8d-a1bf-5b5a5056b2e4")
+	)
+	(hierarchical_label "VSS"
+		(shape bidirectional)
+		(at 203.2 63.5 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "e582b291-8c5a-4005-ab9c-5c26081ab6e4")
+	)
+	(hierarchical_label "THRESH"
+		(shape output)
+		(at 393.7 59.69 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "efc5ee60-1373-4bd3-883e-a089acdd4897")
+	)
+	(symbol
+		(lib_id "AARNN_BSOURCE")
+		(at 76.2 106.68 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb00")
+		(property "Reference" "BSPK_GATE"
+			(at 76.2 114.3 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "V={0.5*(1+tanh((V(SPIKE,VSS)-0.5)/SPIKE_SMOOTH))}"
+			(at 76.2 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 76.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 76.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 76.2 106.68 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "B"
+			(at 76.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 76.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 76.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "BSPK_GATE")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_BSOURCE")
+		(at 203.2 106.68 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb01")
+		(property "Reference" "BRATE"
+			(at 203.2 114.3 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "I={CSTATE*((0-V(RATE,VSS))/TAU_RATE+V(SPK_GATE,VSS)*SPIKE_RATE*RATE_IMPULSE)}"
+			(at 203.2 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 203.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 203.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 203.2 106.68 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "B"
+			(at 203.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 203.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 203.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "BRATE")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_BSOURCE")
+		(at 330.2 106.68 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb02")
+		(property "Reference" "BTHRESH"
+			(at 330.2 114.3 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "I={CSTATE*((0-V(THRESH,VSS))/TAU_THRESH+V(SPK_GATE,VSS)*SPIKE_RATE*THR_INC+HOMEOSTASIS_GAIN*(V(RATE,VSS)-RATE_TARGET)/TAU_THRESH)}"
+			(at 330.2 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 330.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 330.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 330.2 106.68 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "B"
+			(at 330.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 330.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 330.2 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "BTHRESH")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_BSOURCE")
+		(at 76.2 149.86 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb03")
+		(property "Reference" "BTHRESH_CLAMP"
+			(at 76.2 157.48 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "V={min(max(V(THRESH,VSS),THR_MIN),THR_MAX)}"
+			(at 76.2 142.24 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 76.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 76.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 76.2 149.86 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "B"
+			(at 76.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 76.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 76.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "BTHRESH_CLAMP")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_RESISTOR")
+		(at 203.2 149.86 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb04")
+		(property "Reference" "RTHRESH"
+			(at 203.2 157.48 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1G"
+			(at 203.2 142.24 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 203.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 203.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 203.2 149.86 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "R"
+			(at 203.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 203.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 203.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "RTHRESH")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_RESISTOR")
+		(at 330.2 149.86 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb05")
+		(property "Reference" "RRATE"
+			(at 330.2 157.48 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1G"
+			(at 330.2 142.24 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 330.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 330.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 330.2 149.86 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "R"
+			(at 330.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 330.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 330.2 149.86 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "RRATE")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "AARNN_RESISTOR")
+		(at 76.2 193.04 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-00006607cb06")
+		(property "Reference" "RCLAMP"
+			(at 76.2 200.66 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1G"
+			(at 76.2 185.42 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 76.2 193.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 76.2 193.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 76.2 193.04 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Primitive" "R"
+			(at 76.2 193.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Node_Sequence" "1 2"
+			(at 76.2 193.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Spice_Netlist_Enabled" "Y"
+			(at 76.2 193.04 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "aarnn_adaptive_homeostasis"
+				(path "/d5fbb8b1-97a7-48ec-a1ba-ee36d49b48c4"
+					(reference "RCLAMP")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+	(embedded_fonts no)
+)

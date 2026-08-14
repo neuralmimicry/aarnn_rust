@@ -1,0 +1,795 @@
+EESchema Schematic File Version 4
+LIBS:tb_aarnn_kernels-cache
+EELAYER 29 0
+EELAYER END
+$Descr A3 16535 11693
+encoding utf-8
+Sheet 1 1
+Title "AARNN FPAA kernel macromodel smoke test"
+Date "2026-08-12"
+Rev "1.3"
+Comp "NeuralMimicry Ltd"
+Comment1 "Converted from tb_aarnn_kernels.cir"
+Comment2 "Top-level connectivity with supplied aarnn_kernels.lib"
+Comment3 "1 V = 1 normalised AARNN unit; VM is physical SPICE voltage"
+Comment4 "Open and save in KiCad 6-9 to migrate to .kicad_sch"
+$EndDescr
+Text Notes 700 700 0    100  ~ 20
+AARNN SPICE KERNEL TESTBENCH
+Text Notes 700 950 0    55   ~ 0
+Named-net labels reproduce the SPICE node names. Each X-device is a subcircuit block with pin order matching the original invocation.
+$Comp
+L AARNN_SOURCE VRAW
+U 1 1 65000001
+P 1100 1700
+F 0 "VRAW" H 1250 1625 50  0000 C CNN
+F 1 "PULSE(0 1 10m 1u 1u 5m 40m)" H 1250 1750 50  0001 C CNN
+F 2 "" H 1100 1700 50  0001 C CNN
+F 3 "" H 1100 1700 50  0001 C CNN
+F 4 "V" H 1100 1700 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 1100 1700 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 1100 1700 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    1100 1700
+	1    0    0    -1
+$EndComp
+Text Notes 1250 1800 0    40   ~ 0
+PULSE
+Text Label 1100 1450 1    50   ~ 0
+raw
+Wire Wire Line
+	1100 1950 1100 2100
+$Comp
+L AARNN_GND #PWR8193
+U 1 1 65002001
+P 1100 2100
+F 0 "#PWR8193" H 1100 1850 50  0001 C CNN
+F 1 "GND" H 1105 1927 50  0000 C CNN
+F 2 "" H 1100 2100 50  0001 C CNN
+F 3 "" H 1100 2100 50  0001 C CNN
+	1    1100 2100
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VVM
+U 1 1 65000002
+P 2400 1700
+F 0 "VVM" H 2550 1625 50  0000 C CNN
+F 1 "PULSE(-65m -20m 0 1u 1u 20m 100m)" H 2550 1750 50  0001 C CNN
+F 2 "" H 2400 1700 50  0001 C CNN
+F 3 "" H 2400 1700 50  0001 C CNN
+F 4 "V" H 2400 1700 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 2400 1700 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 2400 1700 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    2400 1700
+	1    0    0    -1
+$EndComp
+Text Notes 2550 1800 0    40   ~ 0
+PULSE
+Text Label 2400 1450 1    50   ~ 0
+vm
+Wire Wire Line
+	2400 1950 2400 2100
+$Comp
+L AARNN_GND #PWR8194
+U 1 1 65002002
+P 2400 2100
+F 0 "#PWR8194" H 2400 1850 50  0001 C CNN
+F 1 "GND" H 2405 1927 50  0000 C CNN
+F 2 "" H 2400 2100 50  0001 C CNN
+F 3 "" H 2400 2100 50  0001 C CNN
+	1    2400 2100
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VSPK
+U 1 1 65000003
+P 1100 3600
+F 0 "VSPK" H 1250 3525 50  0000 C CNN
+F 1 "PULSE(0 1 20m 1u 1u 10u 100m)" H 1250 3650 50  0001 C CNN
+F 2 "" H 1100 3600 50  0001 C CNN
+F 3 "" H 1100 3600 50  0001 C CNN
+F 4 "V" H 1100 3600 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 1100 3600 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 1100 3600 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    1100 3600
+	1    0    0    -1
+$EndComp
+Text Notes 1250 3700 0    40   ~ 0
+PULSE
+Text Label 1100 3350 1    50   ~ 0
+spk
+Wire Wire Line
+	1100 3850 1100 4000
+$Comp
+L AARNN_GND #PWR8195
+U 1 1 65002003
+P 1100 4000
+F 0 "#PWR8195" H 1100 3750 50  0001 C CNN
+F 1 "GND" H 1105 3827 50  0000 C CNN
+F 2 "" H 1100 4000 50  0001 C CNN
+F 3 "" H 1100 4000 50  0001 C CNN
+	1    1100 4000
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VLOCAL
+U 1 1 65000004
+P 1100 5350
+F 0 "VLOCAL" H 1250 5275 50  0000 C CNN
+F 1 "PULSE(0 0.8 40m 1u 1u 20m 140m)" H 1250 5400 50  0001 C CNN
+F 2 "" H 1100 5350 50  0001 C CNN
+F 3 "" H 1100 5350 50  0001 C CNN
+F 4 "V" H 1100 5350 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 1100 5350 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 1100 5350 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    1100 5350
+	1    0    0    -1
+$EndComp
+Text Notes 1250 5450 0    40   ~ 0
+PULSE
+Text Label 1100 5100 1    50   ~ 0
+local
+Wire Wire Line
+	1100 5600 1100 5750
+$Comp
+L AARNN_GND #PWR8196
+U 1 1 65002004
+P 1100 5750
+F 0 "#PWR8196" H 1100 5500 50  0001 C CNN
+F 1 "GND" H 1105 5577 50  0000 C CNN
+F 2 "" H 1100 5750 50  0001 C CNN
+F 3 "" H 1100 5750 50  0001 C CNN
+	1    1100 5750
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VBRANCH
+U 1 1 65000005
+P 2450 5350
+F 0 "VBRANCH" H 2600 5275 50  0000 C CNN
+F 1 "DC 1.8" H 2600 5400 50  0001 C CNN
+F 2 "" H 2450 5350 50  0001 C CNN
+F 3 "" H 2450 5350 50  0001 C CNN
+F 4 "V" H 2450 5350 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 2450 5350 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 2450 5350 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    2450 5350
+	1    0    0    -1
+$EndComp
+Text Notes 2600 5450 0    40   ~ 0
+DC
+Text Label 2450 5100 1    50   ~ 0
+branch
+Wire Wire Line
+	2450 5600 2450 5750
+$Comp
+L AARNN_GND #PWR8197
+U 1 1 65002005
+P 2450 5750
+F 0 "#PWR8197" H 2450 5500 50  0001 C CNN
+F 1 "GND" H 2455 5577 50  0000 C CNN
+F 2 "" H 2450 5750 50  0001 C CNN
+F 3 "" H 2450 5750 50  0001 C CNN
+	1    2450 5750
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VGAP1
+U 1 1 65000006
+P 1100 7200
+F 0 "VGAP1" H 1250 7125 50  0000 C CNN
+F 1 "SIN(0 0.5 20)" H 1250 7250 50  0001 C CNN
+F 2 "" H 1100 7200 50  0001 C CNN
+F 3 "" H 1100 7200 50  0001 C CNN
+F 4 "V" H 1100 7200 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 1100 7200 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 1100 7200 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    1100 7200
+	1    0    0    -1
+$EndComp
+Text Notes 1250 7300 0    40   ~ 0
+SIN
+Text Label 1100 6950 1    50   ~ 0
+gap1
+Wire Wire Line
+	1100 7450 1100 7600
+$Comp
+L AARNN_GND #PWR8198
+U 1 1 65002006
+P 1100 7600
+F 0 "#PWR8198" H 1100 7350 50  0001 C CNN
+F 1 "GND" H 1105 7427 50  0000 C CNN
+F 2 "" H 1100 7600 50  0001 C CNN
+F 3 "" H 1100 7600 50  0001 C CNN
+	1    1100 7600
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VGAP2
+U 1 1 65000007
+P 2450 7200
+F 0 "VGAP2" H 2600 7125 50  0000 C CNN
+F 1 "SIN(0 0.2 20 0 0 90)" H 2600 7250 50  0001 C CNN
+F 2 "" H 2450 7200 50  0001 C CNN
+F 3 "" H 2450 7200 50  0001 C CNN
+F 4 "V" H 2450 7200 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 2450 7200 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 2450 7200 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    2450 7200
+	1    0    0    -1
+$EndComp
+Text Notes 2600 7300 0    40   ~ 0
+SIN
+Text Label 2450 6950 1    50   ~ 0
+gap2
+Wire Wire Line
+	2450 7450 2450 7600
+$Comp
+L AARNN_GND #PWR8199
+U 1 1 65002007
+P 2450 7600
+F 0 "#PWR8199" H 2450 7350 50  0001 C CNN
+F 1 "GND" H 2455 7427 50  0000 C CNN
+F 2 "" H 2450 7600 50  0001 C CNN
+F 3 "" H 2450 7600 50  0001 C CNN
+	1    2450 7600
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VFIELD_SOURCE
+U 1 1 65000008
+P 1100 9000
+F 0 "VFIELD_SOURCE" H 1250 8925 50  0000 C CNN
+F 1 "DC 1" H 1250 9050 50  0001 C CNN
+F 2 "" H 1100 9000 50  0001 C CNN
+F 3 "" H 1100 9000 50  0001 C CNN
+F 4 "V" H 1100 9000 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 1100 9000 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 1100 9000 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    1100 9000
+	1    0    0    -1
+$EndComp
+Text Notes 1250 9100 0    40   ~ 0
+DC
+Text Label 1100 8750 1    50   ~ 0
+field_source
+Wire Wire Line
+	1100 9250 1100 9400
+$Comp
+L AARNN_GND #PWR8200
+U 1 1 65002008
+P 1100 9400
+F 0 "#PWR8200" H 1100 9150 50  0001 C CNN
+F 1 "GND" H 1105 9227 50  0000 C CNN
+F 2 "" H 1100 9400 50  0001 C CNN
+F 3 "" H 1100 9400 50  0001 C CNN
+	1    1100 9400
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VMORPH
+U 1 1 65000009
+P 6350 9000
+F 0 "VMORPH" H 6500 8925 50  0000 C CNN
+F 1 "PULSE(0 1 30m 1u 1u 5m 100m)" H 6500 9050 50  0001 C CNN
+F 2 "" H 6350 9000 50  0001 C CNN
+F 3 "" H 6350 9000 50  0001 C CNN
+F 4 "V" H 6350 9000 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 6350 9000 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 6350 9000 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    6350 9000
+	1    0    0    -1
+$EndComp
+Text Notes 6500 9100 0    40   ~ 0
+PULSE
+Text Label 6350 8750 1    50   ~ 0
+morph_in
+Wire Wire Line
+	6350 9250 6350 9400
+$Comp
+L AARNN_GND #PWR8201
+U 1 1 65002009
+P 6350 9400
+F 0 "#PWR8201" H 6350 9150 50  0001 C CNN
+F 1 "GND" H 6355 9227 50  0000 C CNN
+F 2 "" H 6350 9400 50  0001 C CNN
+F 3 "" H 6350 9400 50  0001 C CNN
+	1    6350 9400
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VPRE
+U 1 1 6500000A
+P 10750 1800
+F 0 "VPRE" H 10900 1725 50  0000 C CNN
+F 1 "PULSE(0 1 60m 1u 1u 5m 80m)" H 10900 1850 50  0001 C CNN
+F 2 "" H 10750 1800 50  0001 C CNN
+F 3 "" H 10750 1800 50  0001 C CNN
+F 4 "V" H 10750 1800 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 10750 1800 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 10750 1800 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    10750 1800
+	1    0    0    -1
+$EndComp
+Text Notes 10900 1900 0    40   ~ 0
+PULSE
+Text Label 10750 1550 1    50   ~ 0
+pre
+Wire Wire Line
+	10750 2050 10750 2200
+$Comp
+L AARNN_GND #PWR8202
+U 1 1 6500200A
+P 10750 2200
+F 0 "#PWR8202" H 10750 1950 50  0001 C CNN
+F 1 "GND" H 10755 2027 50  0000 C CNN
+F 2 "" H 10750 2200 50  0001 C CNN
+F 3 "" H 10750 2200 50  0001 C CNN
+	1    10750 2200
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VPOST
+U 1 1 6500000B
+P 12150 1800
+F 0 "VPOST" H 12300 1725 50  0000 C CNN
+F 1 "PULSE(0 1 70m 1u 1u 5m 80m)" H 12300 1850 50  0001 C CNN
+F 2 "" H 12150 1800 50  0001 C CNN
+F 3 "" H 12150 1800 50  0001 C CNN
+F 4 "V" H 12150 1800 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 12150 1800 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 12150 1800 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    12150 1800
+	1    0    0    -1
+$EndComp
+Text Notes 12300 1900 0    40   ~ 0
+PULSE
+Text Label 12150 1550 1    50   ~ 0
+post
+Wire Wire Line
+	12150 2050 12150 2200
+$Comp
+L AARNN_GND #PWR8203
+U 1 1 6500200B
+P 12150 2200
+F 0 "#PWR8203" H 12150 1950 50  0001 C CNN
+F 1 "GND" H 12155 2027 50  0000 C CNN
+F 2 "" H 12150 2200 50  0001 C CNN
+F 3 "" H 12150 2200 50  0001 C CNN
+	1    12150 2200
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SOURCE VRATE
+U 1 1 6500000C
+P 13550 1800
+F 0 "VRATE" H 13700 1725 50  0000 C CNN
+F 1 "PULSE(0 0.3 0 1u 1u 30m 100m)" H 13700 1850 50  0001 C CNN
+F 2 "" H 13550 1800 50  0001 C CNN
+F 3 "" H 13550 1800 50  0001 C CNN
+F 4 "V" H 13550 1800 50  0001 C CNN "Spice_Primitive"
+F 5 "1 2" H 13550 1800 50  0001 C CNN "Spice_Node_Sequence"
+F 6 "Y" H 13550 1800 50  0001 C CNN "Spice_Netlist_Enabled"
+	1    13550 1800
+	1    0    0    -1
+$EndComp
+Text Notes 13700 1900 0    40   ~ 0
+PULSE
+Text Label 13550 1550 1    50   ~ 0
+rate_in
+Wire Wire Line
+	13550 2050 13550 2200
+$Comp
+L AARNN_GND #PWR8204
+U 1 1 6500200C
+P 13550 2200
+F 0 "#PWR8204" H 13550 1950 50  0001 C CNN
+F 1 "GND" H 13555 2027 50  0000 C CNN
+F 2 "" H 13550 2200 50  0001 C CNN
+F 3 "" H 13550 2200 50  0001 C CNN
+	1    13550 2200
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_SYNAPTIC_FILTER XFILTER
+U 1 1 6500000D
+P 5200 1750
+F 0 "XFILTER" H 5200 1250 50  0000 C CNN
+F 1 "AARNN_SYNAPTIC_FILTER" H 5200 2250 50  0000 C CNN
+F 2 "" H 5200 1750 50  0001 C CNN
+F 3 "" H 5200 1750 50  0001 C CNN
+F 4 "X" H 5200 1750 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_SYNAPTIC_FILTER" H 5200 1750 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 5200 1750 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 5200 1750 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5 6 7" H 5200 1750 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 5200 1750 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 5200 1750 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 5200 1750 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_SYNAPTIC_FILTER" H 5200 1750 50  0001 C CNN "Sim.Name"
+F 13 "" H 5200 1750 50  0001 C CNN "Sim.Params"
+	1    5200 1750
+	1    0    0    -1
+$EndComp
+Text Label 4600 1450 2    50   ~ 0
+raw
+Text Label 4600 1650 2    50   ~ 0
+vm
+Text Label 5800 1450 0    50   ~ 0
+ampa
+Text Label 5800 1650 0    50   ~ 0
+nmda
+Text Label 5800 1850 0    50   ~ 0
+gaba
+Text Label 5800 2050 0    50   ~ 0
+synout
+Wire Wire Line
+	5200 2400 5200 2550
+$Comp
+L AARNN_GND #PWR4109
+U 1 1 6500100D
+P 5200 2550
+F 0 "#PWR4109" H 5200 2300 50  0001 C CNN
+F 1 "GND" H 5205 2377 50  0000 C CNN
+F 2 "" H 5200 2550 50  0001 C CNN
+F 3 "" H 5200 2550 50  0001 C CNN
+	1    5200 2550
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_STP XSTP
+U 1 1 6500000E
+P 4600 3500
+F 0 "XSTP" H 4600 3000 50  0000 C CNN
+F 1 "AARNN_STP" H 4600 4000 50  0000 C CNN
+F 2 "" H 4600 3500 50  0001 C CNN
+F 3 "" H 4600 3500 50  0001 C CNN
+F 4 "X" H 4600 3500 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_STP" H 4600 3500 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 4600 3500 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 4600 3500 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5" H 4600 3500 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 4600 3500 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 4600 3500 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 4600 3500 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_STP" H 4600 3500 50  0001 C CNN "Sim.Name"
+F 13 "" H 4600 3500 50  0001 C CNN "Sim.Params"
+	1    4600 3500
+	1    0    0    -1
+$EndComp
+Text Label 4000 3300 2    50   ~ 0
+spk
+Text Label 5200 3300 0    50   ~ 0
+util
+Text Label 5200 3500 0    50   ~ 0
+res
+Text Label 5200 3700 0    50   ~ 0
+release
+Wire Wire Line
+	4600 4050 4600 4200
+$Comp
+L AARNN_GND #PWR4110
+U 1 1 6500100E
+P 4600 4200
+F 0 "#PWR4110" H 4600 3950 50  0001 C CNN
+F 1 "GND" H 4605 4027 50  0000 C CNN
+F 2 "" H 4600 4200 50  0001 C CNN
+F 3 "" H 4600 4200 50  0001 C CNN
+	1    4600 4200
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_ADAPTIVE_HOMEOSTASIS XHOME
+U 1 1 6500000F
+P 7900 3500
+F 0 "XHOME" H 7900 3000 50  0000 C CNN
+F 1 "AARNN_ADAPTIVE_HOMEOSTASIS" H 7900 4000 50  0000 C CNN
+F 2 "" H 7900 3500 50  0001 C CNN
+F 3 "" H 7900 3500 50  0001 C CNN
+F 4 "X" H 7900 3500 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_ADAPTIVE_HOMEOSTASIS" H 7900 3500 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 7900 3500 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 7900 3500 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5" H 7900 3500 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 7900 3500 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 7900 3500 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 7900 3500 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_ADAPTIVE_HOMEOSTASIS" H 7900 3500 50  0001 C CNN "Sim.Name"
+F 13 "" H 7900 3500 50  0001 C CNN "Sim.Params"
+	1    7900 3500
+	1    0    0    -1
+$EndComp
+Text Label 7300 3300 2    50   ~ 0
+spk
+Text Label 8500 3300 0    50   ~ 0
+thresh
+Text Label 8500 3500 0    50   ~ 0
+rate
+Text Label 8500 3700 0    50   ~ 0
+thresh_limited
+Wire Wire Line
+	7900 4050 7900 4200
+$Comp
+L AARNN_GND #PWR4111
+U 1 1 6500100F
+P 7900 4200
+F 0 "#PWR4111" H 7900 3950 50  0001 C CNN
+F 1 "GND" H 7905 4027 50  0000 C CNN
+F 2 "" H 7900 4200 50  0001 C CNN
+F 3 "" H 7900 4200 50  0001 C CNN
+	1    7900 4200
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_ACTIVE_DENDRITE XDEND
+U 1 1 65000010
+P 5200 5300
+F 0 "XDEND" H 5200 4800 50  0000 C CNN
+F 1 "AARNN_ACTIVE_DENDRITE" H 5200 5800 50  0000 C CNN
+F 2 "" H 5200 5300 50  0001 C CNN
+F 3 "" H 5200 5300 50  0001 C CNN
+F 4 "X" H 5200 5300 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_ACTIVE_DENDRITE" H 5200 5300 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 5200 5300 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 5200 5300 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5 6 7" H 5200 5300 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 5200 5300 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 5200 5300 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 5200 5300 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_ACTIVE_DENDRITE" H 5200 5300 50  0001 C CNN "Sim.Name"
+F 13 "" H 5200 5300 50  0001 C CNN "Sim.Params"
+	1    5200 5300
+	1    0    0    -1
+$EndComp
+Text Label 4600 5100 2    50   ~ 0
+synout
+Text Label 4600 5300 2    50   ~ 0
+local
+Text Label 4600 5500 2    50   ~ 0
+branch
+Text Label 5800 5100 0    50   ~ 0
+ca
+Text Label 5800 5300 0    50   ~ 0
+plateau
+Text Label 5800 5500 0    50   ~ 0
+dendout
+Wire Wire Line
+	5200 5850 5200 6000
+$Comp
+L AARNN_GND #PWR4112
+U 1 1 65001010
+P 5200 6000
+F 0 "#PWR4112" H 5200 5750 50  0001 C CNN
+F 1 "GND" H 5205 5827 50  0000 C CNN
+F 2 "" H 5200 6000 50  0001 C CNN
+F 3 "" H 5200 6000 50  0001 C CNN
+	1    5200 6000
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_GAP_PAIR XGAP
+U 1 1 65000011
+P 4600 7000
+F 0 "XGAP" H 4600 6500 50  0000 C CNN
+F 1 "AARNN_GAP_PAIR" H 4600 7500 50  0000 C CNN
+F 2 "" H 4600 7000 50  0001 C CNN
+F 3 "" H 4600 7000 50  0001 C CNN
+F 4 "X" H 4600 7000 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_GAP_PAIR" H 4600 7000 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 4600 7000 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 4600 7000 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3" H 4600 7000 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "GAP_G=1m" H 4600 7000 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 4600 7000 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 4600 7000 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_GAP_PAIR" H 4600 7000 50  0001 C CNN "Sim.Name"
+F 13 "GAP_G=1m" H 4600 7000 50  0001 C CNN "Sim.Params"
+	1    4600 7000
+	1    0    0    -1
+$EndComp
+Text Label 4000 6900 2    50   ~ 0
+gap1
+Text Label 4000 7100 2    50   ~ 0
+gap2
+Text Notes 4200 7650 0    35   ~ 0
+GAP_G=1m
+Wire Wire Line
+	4600 7500 4600 7650
+$Comp
+L AARNN_GND #PWR4113
+U 1 1 65001011
+P 4600 7650
+F 0 "#PWR4113" H 4600 7400 50  0001 C CNN
+F 1 "GND" H 4605 7477 50  0000 C CNN
+F 2 "" H 4600 7650 50  0001 C CNN
+F 3 "" H 4600 7650 50  0001 C CNN
+	1    4600 7650
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_GAP_OBSERVER XGAPOBS
+U 1 1 65000012
+P 7600 7000
+F 0 "XGAPOBS" H 7600 6500 50  0000 C CNN
+F 1 "AARNN_GAP_OBSERVER" H 7600 7500 50  0000 C CNN
+F 2 "" H 7600 7000 50  0001 C CNN
+F 3 "" H 7600 7000 50  0001 C CNN
+F 4 "X" H 7600 7000 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_GAP_OBSERVER" H 7600 7000 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 7600 7000 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 7600 7000 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5" H 7600 7000 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 7600 7000 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 7600 7000 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 7600 7000 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_GAP_OBSERVER" H 7600 7000 50  0001 C CNN "Sim.Name"
+F 13 "" H 7600 7000 50  0001 C CNN "Sim.Params"
+	1    7600 7000
+	1    0    0    -1
+$EndComp
+Text Label 7000 6900 2    50   ~ 0
+gap1
+Text Label 7000 7100 2    50   ~ 0
+gap2
+Text Label 8200 6900 0    50   ~ 0
+gap_delta1
+Text Label 8200 7100 0    50   ~ 0
+gap_delta2
+Wire Wire Line
+	7600 7500 7600 7650
+$Comp
+L AARNN_GND #PWR4114
+U 1 1 65001012
+P 7600 7650
+F 0 "#PWR4114" H 7600 7400 50  0001 C CNN
+F 1 "GND" H 7605 7477 50  0000 C CNN
+F 2 "" H 7600 7650 50  0001 C CNN
+F 3 "" H 7600 7650 50  0001 C CNN
+	1    7600 7650
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_VOLUME_FIELD XFIELD
+U 1 1 65000013
+P 3850 8750
+F 0 "XFIELD" H 3850 8250 50  0000 C CNN
+F 1 "AARNN_VOLUME_FIELD" H 3850 9250 50  0000 C CNN
+F 2 "" H 3850 8750 50  0001 C CNN
+F 3 "" H 3850 8750 50  0001 C CNN
+F 4 "X" H 3850 8750 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_VOLUME_FIELD" H 3850 8750 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 3850 8750 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 3850 8750 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3" H 3850 8750 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "DISTANCE=0.04" H 3850 8750 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 3850 8750 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 3850 8750 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_VOLUME_FIELD" H 3850 8750 50  0001 C CNN "Sim.Name"
+F 13 "DISTANCE=0.04" H 3850 8750 50  0001 C CNN "Sim.Params"
+	1    3850 8750
+	1    0    0    -1
+$EndComp
+Text Label 3250 8750 2    50   ~ 0
+field_source
+Text Label 4450 8750 0    50   ~ 0
+field
+Text Notes 3450 9400 0    35   ~ 0
+DISTANCE=0.04
+Wire Wire Line
+	3850 9250 3850 9400
+$Comp
+L AARNN_GND #PWR4115
+U 1 1 65001013
+P 3850 9400
+F 0 "#PWR4115" H 3850 9150 50  0001 C CNN
+F 1 "GND" H 3855 9227 50  0000 C CNN
+F 2 "" H 3850 9400 50  0001 C CNN
+F 3 "" H 3850 9400 50  0001 C CNN
+	1    3850 9400
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_MORPH_TRANSMISSION XMORPH
+U 1 1 65000014
+P 9200 8750
+F 0 "XMORPH" H 9200 8250 50  0000 C CNN
+F 1 "AARNN_MORPH_TRANSMISSION" H 9200 9250 50  0000 C CNN
+F 2 "" H 9200 8750 50  0001 C CNN
+F 3 "" H 9200 8750 50  0001 C CNN
+F 4 "X" H 9200 8750 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_MORPH_TRANSMISSION" H 9200 8750 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 9200 8750 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 9200 8750 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3" H 9200 8750 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "DELAY_S=12m ATTENUATION=0.7 MYELIN_GAIN=1.3 FATIGUE_GAIN=0.9" H 9200 8750 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 9200 8750 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 9200 8750 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_MORPH_TRANSMISSION" H 9200 8750 50  0001 C CNN "Sim.Name"
+F 13 "DELAY_S=12m ATTENUATION=0.7 MYELIN_GAIN=1.3 FATIGUE_GAIN=0.9" H 9200 8750 50  0001 C CNN "Sim.Params"
+	1    9200 8750
+	1    0    0    -1
+$EndComp
+Text Label 8600 8750 2    50   ~ 0
+morph_in
+Text Label 9800 8750 0    50   ~ 0
+morph_out
+Text Notes 8800 9400 0    35   ~ 0
+DELAY_S=12m ATTENUATION=0.7
+Text Notes 8800 9570 0    35   ~ 0
+MYELIN_GAIN=1.3 FATIGUE_GAIN=0.9
+Wire Wire Line
+	9200 9250 9200 9400
+$Comp
+L AARNN_GND #PWR4116
+U 1 1 65001014
+P 9200 9400
+F 0 "#PWR4116" H 9200 9150 50  0001 C CNN
+F 1 "GND" H 9205 9227 50  0000 C CNN
+F 2 "" H 9200 9400 50  0001 C CNN
+F 3 "" H 9200 9400 50  0001 C CNN
+	1    9200 9400
+	1    0    0    -1
+$EndComp
+$Comp
+L AARNN_TRIPLET XTRIP
+U 1 1 65000015
+P 12400 4150
+F 0 "XTRIP" H 12400 3650 50  0000 C CNN
+F 1 "AARNN_TRIPLET" H 12400 4650 50  0000 C CNN
+F 2 "" H 12400 4150 50  0001 C CNN
+F 3 "" H 12400 4150 50  0001 C CNN
+F 4 "X" H 12400 4150 50  0001 C CNN "Spice_Primitive"
+F 5 "AARNN_TRIPLET" H 12400 4150 50  0001 C CNN "Spice_Model"
+F 6 "aarnn_kernels.lib" H 12400 4150 50  0001 C CNN "Spice_Lib_File"
+F 7 "Y" H 12400 4150 50  0001 C CNN "Spice_Netlist_Enabled"
+F 8 "1 2 3 4 5 6 7 8" H 12400 4150 50  0001 C CNN "Spice_Node_Sequence"
+F 9 "" H 12400 4150 50  0001 C CNN "AARNN_Parameter_Overrides"
+F 10 "X" H 12400 4150 50  0001 C CNN "Sim.Device"
+F 11 "aarnn_kernels.lib" H 12400 4150 50  0001 C CNN "Sim.Library"
+F 12 "AARNN_TRIPLET" H 12400 4150 50  0001 C CNN "Sim.Name"
+F 13 "" H 12400 4150 50  0001 C CNN "Sim.Params"
+	1    12400 4150
+	1    0    0    -1
+$EndComp
+Text Label 11800 3850 2    50   ~ 0
+pre
+Text Label 11800 4050 2    50   ~ 0
+post
+Text Label 11800 4250 2    50   ~ 0
+rate_in
+Text Label 13000 3850 0    50   ~ 0
+pre_trace
+Text Label 13000 4050 0    50   ~ 0
+post_trace
+Text Label 13000 4250 0    50   ~ 0
+rate_trace
+Text Label 13000 4450 0    50   ~ 0
+eta
+Wire Wire Line
+	12400 4800 12400 4950
+$Comp
+L AARNN_GND #PWR4117
+U 1 1 65001015
+P 12400 4950
+F 0 "#PWR4117" H 12400 4700 50  0001 C CNN
+F 1 "GND" H 12405 4777 50  0000 C CNN
+F 2 "" H 12400 4950 50  0001 C CNN
+F 3 "" H 12400 4950 50  0001 C CNN
+	1    12400 4950
+	1    0    0    -1
+$EndComp
+Text Notes 10800 6400 0    75   ~ 15
+SPICE DIRECTIVES
+Text Notes 10800 6750 0    50   ~ 0
+Library: aarnn_kernels.lib (set on each X-device)
+Text Notes 10800 7100 0    50   ~ 0
+.ic V(ampa)=0 V(nmda)=0 V(gaba)=0 V(util)=0.2 V(res)=1 V(thresh)=0 V(rate)=0
+Text Notes 10800 7450 0    50   ~ 0
+.options reltol=1e-4 abstol=1e-12 vntol=1e-6 maxord=2
+Text Notes 10800 7800 0    50   ~ 0
+.tran 10u 250m 0 100u
+Text Notes 10800 8350 0    50   ~ 0
+Original .control output commands retained in README_KICAD.md.
+Text Notes 10800 8650 0    50   ~ 0
+aarnn_kernels.lib is included beside this schematic; X-device pin order has been validated.
+$EndSCHEMATC
