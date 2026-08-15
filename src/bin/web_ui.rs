@@ -6036,14 +6036,17 @@ async fn llm_mirror(
     let spike_count = exchange.spike_indices.len();
     let stimulation =
         stimulate_llm_mirror(state.as_ref(), &payload, aer_payload_hex.as_str()).await;
+    // Decode before teaching.  Learning from `text` before decoding this same
+    // exchange leaks the LLM target into the SNN candidate and inflates the
+    // paired score.  The current observation may only affect later samples.
     let mut decoder = state.llm_output_vocab.write().await;
-    learn_dynamic_output_decoder(&mut decoder, &text, &stimulation.output_spike_indices);
     let candidate = build_llm_mirror_candidate(
         &payload.direction,
         payload.request_candidate_reply,
         &stimulation,
         &decoder,
     );
+    learn_dynamic_output_decoder(&mut decoder, &text, &stimulation.output_spike_indices);
     drop(decoder);
     let record = LlmMirrorRecord {
         recorded_at: mirror_now_ms(),
