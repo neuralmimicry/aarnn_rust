@@ -2455,6 +2455,13 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         runner.net.output_source_layer
                     );
                 }
+                let repaired_outputs = runner.ensure_output_connectivity();
+                if repaired_outputs > 0 {
+                    nm_log!(
+                        "[topology-repair] restored {} output-neuron hidden-layer connections during node startup",
+                        repaired_outputs
+                    );
+                }
 
                 let total_layers = (runner.net.num_hidden_layers + 1) as u32;
                 let assigned_layers: Vec<u32> = (0..total_layers).collect();
