@@ -281,6 +281,10 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      # qc01 provides the ARM64 runner. Serialize packaging jobs so two
+      # ARM64 rootless Podman containers cannot contend for the same host
+      # keyring quota; each job still receives isolated storage below.
+      max-parallel: 1
       matrix:
         include:
           - runner_arch: X64
@@ -353,8 +357,18 @@ jobs:
             echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
           fi
 
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
-            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          # A self-hosted ARM64 runner may receive multiple packaging matrix
+          # jobs over its lifetime. Keep each job's rootless Podman storage
+          # and runtime namespace isolated so stale layers/keyrings from one
+          # job cannot exhaust the next job's per-user quotas.
+          storage_suffix="$(basename "${PACKAGE_OUTPUT_DIR}")"
+          job_storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${storage_suffix}"
+          job_run_root="${runtime_dir}/containers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${storage_suffix}"
+          mkdir -p "${job_storage_root}" "${job_run_root}"
+          chmod 0700 "${job_storage_root}" "${job_run_root}"
+
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s"\ngraphroot = "%s"\n' \
+            "${job_run_root}" "${job_storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
           if command -v crun >/dev/null 2>&1; then
