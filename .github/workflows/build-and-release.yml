@@ -33,6 +33,12 @@ on:
       build_id:
         description: "Immutable container build ID to promote (defaults to current SHA)"
         required: false
+      container_workload:
+        description: "Container workload to promote"
+        required: false
+        type: choice
+        options: [orchestrator, node, web-ui]
+        default: node
       environment:
         description: "Container promotion target environment"
         required: false
@@ -662,7 +668,9 @@ jobs:
     if: github.event_name == 'push'
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
+        workload: [orchestrator, node, web-ui]
         include:
           - arch: amd64
             runner_arch: X64
@@ -786,13 +794,13 @@ jobs:
           set -euo pipefail
           chmod +x scripts/package-release.sh scripts/prepare_container_package.sh
           ./scripts/prepare_container_package.sh \
-            --workload standalone \
+            --workload "${{ matrix.workload }}" \
             --arch "${{ matrix.arch }}" \
             --output-dir ./dist/container \
             --cache-dir ./.container-cache/debs-ci \
             --force \
             --cargo-features "${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}" \
-            --cargo-build-targets "aarnn_rust"
+            --cargo-build-targets "aarnn_rust web_ui"
 
       - name: Smoke install container Debian package in Ubuntu 24.04
         shell: bash
@@ -824,14 +832,14 @@ jobs:
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build_id="${{ steps.buildmeta.outputs.build_id }}"
-          arch_tag="${image}:${build_id}-${{ matrix.variant }}"
+          arch_tag="${image}:${build_id}-${{ matrix.workload }}-${{ matrix.variant }}"
 
           build_args=(
             --file ./Containerfile
             --platform "linux/${{ matrix.arch }}"
             --network host
             --tag "${arch_tag}"
-            --build-arg "CONTAINER_WORKLOAD=standalone"
+            --build-arg "CONTAINER_WORKLOAD=${{ matrix.workload }}"
             --build-arg "CARGO_FEATURES=${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}"
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
@@ -855,9 +863,12 @@ jobs:
           podman push "${arch_tag}"
 
   container-manifest:
-    name: Container Manifest
+    name: Container Manifest (${{ matrix.workload }})
     if: github.event_name == 'push'
     needs: container-build
+    strategy:
+      matrix:
+        workload: [orchestrator, node, web-ui]
     runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
@@ -923,12 +934,13 @@ jobs:
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${GITHUB_SHA}"
-          podman manifest rm "${image}:${build}" >/dev/null 2>&1 || true
-          podman image rm -f "${image}:${build}" >/dev/null 2>&1 || true
-          podman manifest create "${image}:${build}"
-          podman manifest add "${image}:${build}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${build}" "docker://${image}:${build}-arm64-4k"
-          podman manifest push --all "${image}:${build}" "docker://${image}:${build}"
+          manifest="${image}:${build}-${{ matrix.workload }}"
+          podman manifest rm "${manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${manifest}"
+          podman manifest add "${manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+          podman manifest push --all "${manifest}" "docker://${manifest}"
 
       - name: Publish branch alias for developer flow
         if: startsWith(github.ref, 'refs/heads/')
@@ -938,22 +950,24 @@ jobs:
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${GITHUB_SHA}"
           branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
-          podman manifest rm "${image}:${branch_tag}" >/dev/null 2>&1 || true
-          podman image rm -f "${image}:${branch_tag}" >/dev/null 2>&1 || true
-          podman manifest create "${image}:${branch_tag}"
-          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${branch_tag}" "docker://${image}:${build}-arm64-4k"
-          podman manifest push --all "${image}:${branch_tag}" "docker://${image}:${branch_tag}"
+          branch_manifest="${image}:${branch_tag}-${{ matrix.workload }}"
+          podman manifest rm "${branch_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${branch_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${branch_manifest}"
+          podman manifest add "${branch_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${branch_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+          podman manifest push --all "${branch_manifest}" "docker://${branch_manifest}"
 
           # Keep the deployment-facing alias aligned with the newest fully
           # successful push.  The manifest job runs only after every
           # architecture image build has succeeded.
-          podman manifest rm "${image}:latest" >/dev/null 2>&1 || true
-          podman image rm -f "${image}:latest" >/dev/null 2>&1 || true
-          podman manifest create "${image}:latest"
-          podman manifest add "${image}:latest" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:latest" "docker://${image}:${build}-arm64-4k"
-          podman manifest push --all "${image}:latest" "docker://${image}:latest"
+          latest_manifest="${image}:latest-${{ matrix.workload }}"
+          podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${latest_manifest}"
+          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+          podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
 
       - name: Publish version and latest tags on release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -963,19 +977,21 @@ jobs:
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${GITHUB_SHA}"
           version_tag="${GITHUB_REF_NAME}"
-          podman manifest rm "${image}:${version_tag}" >/dev/null 2>&1 || true
-          podman image rm -f "${image}:${version_tag}" >/dev/null 2>&1 || true
-          podman manifest create "${image}:${version_tag}"
-          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:${version_tag}" "docker://${image}:${build}-arm64-4k"
-          podman manifest push --all "${image}:${version_tag}" "docker://${image}:${version_tag}"
+          version_manifest="${image}:${version_tag}-${{ matrix.workload }}"
+          podman manifest rm "${version_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${version_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${version_manifest}"
+          podman manifest add "${version_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${version_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+          podman manifest push --all "${version_manifest}" "docker://${version_manifest}"
 
-          podman manifest rm "${image}:latest" >/dev/null 2>&1 || true
-          podman image rm -f "${image}:latest" >/dev/null 2>&1 || true
-          podman manifest create "${image}:latest"
-          podman manifest add "${image}:latest" "docker://${image}:${build}-amd64"
-          podman manifest add "${image}:latest" "docker://${image}:${build}-arm64-4k"
-          podman manifest push --all "${image}:latest" "docker://${image}:latest"
+          latest_manifest="${image}:latest-${{ matrix.workload }}"
+          podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${latest_manifest}"
+          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+          podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
           echo "Published ${image}:${version_tag} and ${image}:latest"
 
       - name: Verify published manifests include amd64 and arm64
@@ -992,22 +1008,23 @@ jobs:
             podman pull --quiet --platform "${platform}" "docker://${ref}" >/dev/null
           }
 
-          verify_ref "${image}:${build}" "linux/amd64"
-          verify_ref "${image}:${build}" "linux/arm64"
+          manifest="${image}:${build}-${{ matrix.workload }}"
+          verify_ref "${manifest}" "linux/amd64"
+          verify_ref "${manifest}" "linux/arm64"
 
           if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
             branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
-            verify_ref "${image}:${branch_tag}" "linux/amd64"
-            verify_ref "${image}:${branch_tag}" "linux/arm64"
-            verify_ref "${image}:latest" "linux/amd64"
-            verify_ref "${image}:latest" "linux/arm64"
+            verify_ref "${image}:${branch_tag}-${{ matrix.workload }}" "linux/amd64"
+            verify_ref "${image}:${branch_tag}-${{ matrix.workload }}" "linux/arm64"
+            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
+            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
           fi
 
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            verify_ref "${image}:${GITHUB_REF_NAME}" "linux/amd64"
-            verify_ref "${image}:${GITHUB_REF_NAME}" "linux/arm64"
-            verify_ref "${image}:latest" "linux/amd64"
-            verify_ref "${image}:latest" "linux/arm64"
+            verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/amd64"
+            verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/arm64"
+            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
+            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
           fi
 
   container-promote:
@@ -1078,15 +1095,16 @@ jobs:
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${{ inputs.build_id || github.sha }}"
+          workload="${{ inputs.container_workload || 'node' }}"
           env_name="${{ inputs.environment }}"
           track="${{ inputs.track || 'blue' }}"
           target="${image}:${env_name}-${track}"
           podman manifest rm "${target}" >/dev/null 2>&1 || true
           podman image rm -f "${target}" >/dev/null 2>&1 || true
           podman manifest create "${target}"
-          podman manifest add --all "${target}" "docker://${image}:${build}"
+          podman manifest add --all "${target}" "docker://${image}:${build}-${workload}"
           podman manifest push --all "${target}" "docker://${target}"
-          echo "Promoted ${image}:${build} -> ${target}"
+          echo "Promoted ${image}:${build}-${workload} -> ${target}"
 
   version-bump:
     name: Version Bump and Tag
