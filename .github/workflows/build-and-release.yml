@@ -267,7 +267,10 @@ jobs:
             artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
           fi
 
-          if [[ -n "$release_tag" && "$artifact_version" != "$cargo_version" ]]; then
+          # Only immutable v* releases must match Cargo.toml exactly. The
+          # rolling latest release intentionally carries a run/commit-qualified
+          # development package version.
+          if [[ "$release_tag" == v* && "$artifact_version" != "$cargo_version" ]]; then
             echo "::error::Tag ${release_tag} does not match Cargo.toml"
             echo "::error::version ${cargo_version}"
             exit 1
