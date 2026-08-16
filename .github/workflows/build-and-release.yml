@@ -867,6 +867,7 @@ jobs:
     if: github.event_name == 'push'
     needs: container-build
     strategy:
+      max-parallel: 1
       matrix:
         workload: [orchestrator, node, web-ui]
     runs-on: [self-hosted, Linux, X64]
