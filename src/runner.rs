@@ -5237,6 +5237,17 @@ impl Runner {
         if let Some(p) = snap.p_out {
             self.conn_presence_out = nd_from_mat_u32(&p);
         }
+        // A persisted developmental snapshot can legitimately contain an
+        // output layer whose rows were all pruned during early morphology.
+        // Keep the I/O contract usable: repair only zero-in-degree outputs,
+        // preserve every existing edge, and make the operation idempotent.
+        let repaired_outputs = self.ensure_output_connectivity();
+        if repaired_outputs > 0 {
+            nm_log!(
+                "[topology-repair] restored {} output-neuron hidden-layer connections after snapshot import",
+                repaired_outputs
+            );
+        }
         // Sync top-level sizes from matrix shapes
         self.net.num_sensory_neurons = self.w_in.ncols();
         self.net.num_output_neurons = self.w_out.nrows();
@@ -5425,6 +5436,34 @@ impl Runner {
         }
 
         Ok(())
+    }
+
+    /// Ensure every output neuron has at least one incoming hidden-layer edge.
+    /// This is deliberately deterministic so repeated startup/imports do not
+    /// keep changing the topology.
+    pub fn ensure_output_connectivity(&mut self) -> usize {
+        let hidden = self.w_out.ncols();
+        if hidden == 0 {
+            return 0;
+        }
+        let mut repaired = 0;
+        for output in 0..self.w_out.nrows() {
+            if self.w_out.row(output).iter().any(|weight| *weight > 0.0) {
+                continue;
+            }
+            let hidden_index = output % hidden;
+            self.w_out[(output, hidden_index)] = 0.1;
+            if self.conn_presence_out.shape() == self.w_out.shape() {
+                self.conn_presence_out[(output, hidden_index)] = 1;
+            }
+            repaired += 1;
+        }
+        if repaired > 0 {
+            self.sync_presence_sizes();
+            #[cfg(feature = "opencl")]
+            self.mark_all_weights_dirty();
+        }
+        repaired
     }
 
     /// Safely apply a new network configuration, ensuring that structural parameters
