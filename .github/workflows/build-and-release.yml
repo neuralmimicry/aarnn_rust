@@ -664,23 +664,55 @@ jobs:
           gh release create "${args[@]}"
 
   container-build:
-    name: Container Build (${{ matrix.arch }}, ${{ matrix.runner_arch }})
+    name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
     if: github.event_name == 'push'
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        workload: [orchestrator, node, web-ui]
         include:
-          - arch: amd64
+          - workload: orchestrator
+            arch: amd64
             runner_arch: X64
             variant: amd64
             page_size: 4k
-          - arch: arm64
+          - workload: orchestrator
+            arch: arm64
             runner_arch: ARM64
             variant: arm64-4k
             page_size: 4k
-          - arch: arm64
+          - workload: orchestrator
+            arch: arm64
+            runner_arch: ARM64
+            variant: arm64-64k-hwe
+            page_size: 64k-hwe
+          - workload: node
+            arch: amd64
+            runner_arch: X64
+            variant: amd64
+            page_size: 4k
+          - workload: node
+            arch: arm64
+            runner_arch: ARM64
+            variant: arm64-4k
+            page_size: 4k
+          - workload: node
+            arch: arm64
+            runner_arch: ARM64
+            variant: arm64-64k-hwe
+            page_size: 64k-hwe
+          - workload: web-ui
+            arch: amd64
+            runner_arch: X64
+            variant: amd64
+            page_size: 4k
+          - workload: web-ui
+            arch: arm64
+            runner_arch: ARM64
+            variant: arm64-4k
+            page_size: 4k
+          - workload: web-ui
+            arch: arm64
             runner_arch: ARM64
             variant: arm64-64k-hwe
             page_size: 64k-hwe
