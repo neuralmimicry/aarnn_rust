@@ -4,6 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Cargo.toml uses Rust Edition 2024; keep local deployment runs on a
+# toolchain that supports it whenever rustup is available.
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+RUST_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+if [[ -x "$RUST_BIN_DIR/rustup" ]]; then
+  export PATH="$RUST_BIN_DIR:$PATH"
+fi
+
 UI_MODE="${UI_MODE:-rust}"  # rust|web|cli
 ROBOT_SPEC="${ROBOT_SPEC:-celegans=1}"
 REMOTE_COMPUTE="${REMOTE_COMPUTE:-0}"

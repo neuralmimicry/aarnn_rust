@@ -5128,7 +5128,11 @@ impl Runner {
             let (in_l, out_l) = self.get_io_layers();
             (
                 self.aarnn_io_port_x(in_l, true),
-                self.aarnn_io_port_x(out_l, false),
+                // Keep output somas in the same local spatial column as the
+                // hidden layer that drives them. AARNN distance-dependent
+                // formation otherwise leaves outputs at a remote port, where
+                // they are unlikely to acquire H_last -> O synapses.
+                (self.aarnn_hidden_layer_x(out_l) + 0.04).clamp(-1.0, 1.0),
             )
         } else if self.net.growth_enabled {
             (-0.1, 0.1)

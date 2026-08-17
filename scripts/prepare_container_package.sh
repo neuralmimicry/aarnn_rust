@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+
 usage() {
   cat <<'USAGE'
 Usage: prepare_container_package.sh [options]
@@ -202,11 +204,13 @@ apt-get install -y --no-install-recommends \
   libfreetype6-dev
 
 if [[ ! -x /cargo/bin/rustup ]]; then
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
 fi
 
 # shellcheck disable=SC1091
 . /cargo/env
+rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+rustup default "$RUST_TOOLCHAIN"
 rustup target add "$RUST_TARGET"
 
 /workspace/scripts/package-release.sh \

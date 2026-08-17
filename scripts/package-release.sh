@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+RUST_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+if [[ -x "$RUST_BIN_DIR/rustup" ]]; then
+  export PATH="$RUST_BIN_DIR:$PATH"
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: package-release.sh [options]
