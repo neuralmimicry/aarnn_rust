@@ -10,6 +10,15 @@ if [ ! -f "$ROBOT_PROFILES_PY" ]; then
   exit 1
 fi
 
+# Cargo.toml uses Rust Edition 2024; keep local deployment runs on a
+# toolchain that supports it whenever rustup is available.
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+RUST_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+if [[ -x "$RUST_BIN_DIR/rustup" ]]; then
+  export PATH="$RUST_BIN_DIR:$PATH"
+fi
+
 UI_MODE="${UI_MODE:-rust}"  # rust|web|cli
 UI_MODE_SET_BY_USER=0
 ROBOT_SPEC="${ROBOT_SPEC:-celegans=1}"

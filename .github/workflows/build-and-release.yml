@@ -121,7 +121,7 @@ jobs:
           path: repo-build-release
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt
 

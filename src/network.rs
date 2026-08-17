@@ -131,6 +131,15 @@ pub fn build_network<R: Rng>(cfg: &NetworkConfig, rng: &mut R) -> BuiltNetwork {
                 w_out[(k, j)] = rng.random::<f64>() * 0.3 + 0.1;
             }
         }
+        // Never leave an output neuron without an incoming hidden synapse.
+        // Sparse distance-aware growth can otherwise strand an output before
+        // it has any activity with which to form additional connections.
+        if num_hidden_per_layer > 0
+            && w_out.row(k).iter().all(|&weight| weight == 0.0)
+        {
+            let j = rng.random_range(0..num_hidden_per_layer);
+            w_out[(k, j)] = rng.random::<f64>() * 0.3 + 0.1;
+        }
     }
 
     let n_in = w_in.iter().filter(|&&w| w > 0.0).count();

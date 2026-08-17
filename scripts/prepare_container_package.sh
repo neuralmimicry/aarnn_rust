@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+
 usage() {
   cat <<'USAGE'
 Usage: prepare_container_package.sh [options]
