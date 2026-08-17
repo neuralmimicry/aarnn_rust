@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+RUST_TOOLCHAIN="-e"
+export RUSTUP_TOOLCHAIN=""
 set -euo pipefail
 
 TARGET_TRIPLE="${1:-}"
@@ -21,7 +23,7 @@ reset_rustup_state() {
 
 install_rustup() {
   reset_rustup_state
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+  curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain ""
 }
 
 if [[ ! -x /cargo/bin/rustup ]]; then
