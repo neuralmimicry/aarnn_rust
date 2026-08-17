@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.85.0}"
+RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.92.0}"
 export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
 RUST_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 if [[ -x "$RUST_BIN_DIR/rustup" ]]; then
