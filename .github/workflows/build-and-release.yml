@@ -3,12 +3,12 @@ name: Unified CI/CD
 on:
   pull_request:
     branches:
-      - engine
+      - main
       - main
       - master
   push:
     branches:
-      - engine
+      - main
       - main
       - master
     tags:

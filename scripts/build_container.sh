@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/container_workloads.sh"
 
 IMAGE_NAME=${1:-"ghcr.io/neuralmimicry/aarnn_rust"}
-IMAGE_TAG=${2:-"engine"}
+IMAGE_TAG=${2:-"main"}
 PUSH=${PUSH:-${3:-"true"}}
 WORKLOADS_CSV=${WORKLOADS:-${4:-"standalone,orchestrator,node,web-ui,desktop-ui"}}
 PYTHON_MIN_VERSION=${PYTHON_MIN_VERSION:-${5:-"3.12"}}

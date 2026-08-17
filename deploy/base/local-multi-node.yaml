@@ -19,13 +19,13 @@ spec:
     spec:
       containers:
         - name: orchestrator
-          image: ghcr.io/neuralmimicry/aarnn_rust:engine-orchestrator
+          image: ghcr.io/neuralmimicry/aarnn_rust:main-orchestrator
           args: ["--orchestrator", "--grpc-addr", "0.0.0.0:50051"]
           ports:
             - containerPort: 50051
         - name: node-1
-          image: ghcr.io/neuralmimicry/aarnn_rust:engine-node
+          image: ghcr.io/neuralmimicry/aarnn_rust:main-node
           args: ["--node", "--orchestrator-addr", "http://localhost:50051", "--brain-id", "node-1"]
         - name: node-2
-          image: ghcr.io/neuralmimicry/aarnn_rust:engine-node
+          image: ghcr.io/neuralmimicry/aarnn_rust:main-node
           args: ["--node", "--orchestrator-addr", "http://localhost:50051", "--brain-id", "node-2"]

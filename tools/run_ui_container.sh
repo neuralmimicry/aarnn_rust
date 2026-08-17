@@ -15,7 +15,7 @@ if [ -z "$IMAGE_NAME" ]; then
       ;;
     *) IMAGE_ARCH="$(uname -m)" ;;
   esac
-  IMAGE_NAME="ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}"
+  IMAGE_NAME="ghcr.io/neuralmimicry/aarnn_rust:main-desktop-ui-${IMAGE_ARCH}"
 fi
 
 UI_RENDERER="${NM_UI_RENDERER:-glow}"

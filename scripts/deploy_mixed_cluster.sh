@@ -36,7 +36,7 @@ SSH_USER="${SSH_USER:-${USER}}"
 SSH_PORT="${SSH_PORT:-22}"
 INSTALL_K3S_CHANNEL="${INSTALL_K3S_CHANNEL:-stable}"
 AARNN_IMAGE_REPO="${AARNN_IMAGE_REPO:-ghcr.io/neuralmimicry/aarnn_rust}"
-AARNN_IMAGE_TAG="${AARNN_IMAGE_TAG:-engine}"
+AARNN_IMAGE_TAG="${AARNN_IMAGE_TAG:-main}"
 AARNN_IMAGE_BASE="${AARNN_IMAGE_BASE:-${AARNN_IMAGE:-}}"
 AARNN_ORCHESTRATOR_IMAGE="${AARNN_ORCHESTRATOR_IMAGE:-${ORCHESTRATOR_IMAGE:-}}"
 AARNN_WEB_UI_IMAGE="${AARNN_WEB_UI_IMAGE:-${WEB_UI_IMAGE:-}}"
@@ -126,7 +126,7 @@ Options:
   --ssh-port <port>           SSH port for worker hosts (default: 22).
   --image <repo:tag>          Base AARNN image ref used to derive workload tags.
   --image-repo <repo>         Workload image repository (default: ghcr.io/neuralmimicry/aarnn_rust).
-  --image-tag <tag>           Shared workload image base tag (default: engine).
+  --image-tag <tag>           Shared workload image base tag (default: main).
   --orchestrator-image <ref>  Override the orchestrator image ref.
   --web-ui-image <ref>        Override the web-ui image ref.
   --node-image <ref>          Override the engine node image ref.

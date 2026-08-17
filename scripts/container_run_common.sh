@@ -42,7 +42,7 @@ aarnn_default_workload_image() {
     local image_repo="${2:-ghcr.io/neuralmimicry/aarnn_rust}"
     local variant
     variant="$(aarnn_detect_container_variant)"
-    printf '%s:%s-%s-%s' "$image_repo" 'engine' "$workload" "$variant"
+    printf '%s:%s-%s-%s' "$image_repo" 'main' "$workload" "$variant"
 }
 
 aarnn_append_optional_file_mount() {

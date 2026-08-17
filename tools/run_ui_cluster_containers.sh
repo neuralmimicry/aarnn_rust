@@ -33,8 +33,8 @@ case "${ARCH_RAW}" in
   *) IMAGE_ARCH="${ARCH_RAW}" ;;
 esac
 
-ORCH_IMAGE_NAME="${ORCH_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-desktop-ui-${IMAGE_ARCH}}"
-NODE_IMAGE_NAME="${NODE_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:engine-node-${IMAGE_ARCH}}"
+ORCH_IMAGE_NAME="${ORCH_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:main-desktop-ui-${IMAGE_ARCH}}"
+NODE_IMAGE_NAME="${NODE_IMAGE_NAME:-ghcr.io/neuralmimicry/aarnn_rust:main-node-${IMAGE_ARCH}}"
 BRAIN_ID_ORCH="${BRAIN_ID_ORCH:-cluster_master}"
 NODE_COUNT="${NODE_COUNT:-2}"
 
