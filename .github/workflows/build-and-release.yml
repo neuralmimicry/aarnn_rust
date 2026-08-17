@@ -77,6 +77,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep every JavaScript action on the Node 24 runtime, including actions
+  # whose metadata still declares an older runtime during the transition.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_FEATURES: all-features
   CARGO_BUILD_TARGETS: aarnn_rust web_ui
   REGISTRY: ghcr.io
@@ -113,7 +116,7 @@ jobs:
         working-directory: repo-build-release
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           clean: false
           path: repo-build-release
@@ -232,7 +235,7 @@ jobs:
       publish_release: ${{ steps.meta.outputs.publish_release }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           clean: false
           path: repo-build-release
@@ -341,7 +344,7 @@ jobs:
       UBUNTU_CONTAINER_IMAGE: ubuntu:${{ matrix.ubuntu_series }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           clean: false
           path: repo-build-release
@@ -558,7 +561,7 @@ jobs:
           SCRIPT
 
       - name: Upload packaged artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ matrix.platform }}-${{ matrix.ubuntu_label }}
           path: ${{ env.PACKAGE_OUTPUT_DIR }}/*
@@ -597,7 +600,7 @@ jobs:
           fi
 
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./dist
 
@@ -723,7 +726,7 @@ jobs:
         working-directory: repo-build-release
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           clean: false
           path: repo-build-release
@@ -1148,7 +1151,7 @@ jobs:
         working-directory: repo-build-release
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.X_GITHUB_TOKEN }}
           fetch-depth: 0
@@ -1240,7 +1243,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Push wiki Home page
         continue-on-error: true
