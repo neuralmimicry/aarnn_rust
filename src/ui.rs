@@ -4528,6 +4528,18 @@ impl App {
         };
 
         let (in_l, out_l) = runner.get_io_layers();
+        // Put H->O edges first.  The interactive renderer has a highlight
+        // budget and must never spend the entire budget on recurrent/hidden
+        // edges before showing the network's actual readout path.
+        if out_l < runner.net.num_hidden_layers {
+            edges.extend(push_topk(
+                out_l as i32,
+                -2,
+                &runner.w_out,
+                "overlay",
+                Box::new(|r, i| runner.is_longterm_out(r, i)),
+            ));
+        }
         // S -> H(in_l)
         if runner.net.num_sensory_neurons > 0 && in_l < runner.net.num_hidden_layers {
             edges.extend(push_topk(
@@ -4573,16 +4585,6 @@ impl App {
                     Box::new(move |r, i| runner.is_longterm_rec(l, r, i)),
                 ));
             }
-        }
-        // H(out_l) -> O
-        if out_l < runner.net.num_hidden_layers {
-            edges.extend(push_topk(
-                out_l as i32,
-                -2,
-                &runner.w_out,
-                "overlay",
-                Box::new(|r, i| runner.is_longterm_out(r, i)),
-            ));
         }
         edges
     }
@@ -14523,6 +14525,41 @@ impl eframe::App for App {
             let previous_hidden_spikes = &self.previous_hidden_spikes;
             let last_sensory_spikes = &self.last_sensory_spikes;
 
+            if let Some(active_runner) = active_runner_opt {
+                let connected_outputs = (0..active_runner.w_out.nrows())
+                    .filter(|&output| {
+                        active_runner
+                            .w_out
+                            .row(output)
+                            .iter()
+                            .any(|weight| weight.abs() > 1.0e-8)
+                    })
+                    .count();
+                let output_spikes = output_activity
+                    .iter()
+                    .filter(|activity| **activity > 0.0)
+                    .count();
+                let diagnostic_colour = if connected_outputs == active_runner.w_out.nrows()
+                    && output_spikes > 0
+                {
+                    egui::Color32::from_rgb(160, 240, 120)
+                } else if connected_outputs == active_runner.w_out.nrows() {
+                    egui::Color32::YELLOW
+                } else {
+                    egui::Color32::LIGHT_RED
+                };
+                painter.text(
+                    egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 25.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "Output path: {connected_outputs}/{} connected, {output_spikes} active",
+                        active_runner.w_out.nrows()
+                    ),
+                    egui::FontId::proportional(11.0),
+                    diagnostic_colour,
+                );
+            }
+
             // Draw skull membrane (semi-transparent bounding environment)
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             let _hidden_layers_len = hidden_positions.len();
@@ -15045,7 +15082,13 @@ impl eframe::App for App {
                 };
                 let l_count_vis = hidden_positions.len();
                 let (in_l, out_l) = active_runner.get_io_layers();
+                // Output synapses are the readout contract.  Draw them in a
+                // reserved first pass so a dense hidden topology cannot hide
+                // every H->O edge behind the morphology display cap.
+                for output_pass in 0..2 {
                 for syn in &active_runner.morph.synapses {
+                    let is_output = matches!(syn.kind, SynKind::Out);
+                    if (output_pass == 0) != is_output { continue; }
                     if drawn_count >= draw_cap { break; }
                     match syn.kind {
                         SynKind::In => {
@@ -15168,6 +15211,7 @@ impl eframe::App for App {
                             }
                         }
                     }
+                }
                 }
                 if drawn_count >= draw_cap {
                     painter.text(
@@ -15303,7 +15347,13 @@ impl eframe::App for App {
                     };
                     let mut drawn = 0usize;
                     let draw_cap = max_highlight_lines.max(64) * 24;
+                    // Reserve the front of the cap for H->O readout edges.
+                    // Cached edges are ordered this way as well, but retain
+                    // the explicit filter so old/remote caches remain safe.
+                    for output_pass in 0..2 {
                     for edge in &self.cached_edges {
+                        let is_output = edge.to_layer == -2;
+                        if (output_pass == 0) != is_output { continue; }
                         if edge.kind == "bwd" && !show_backward_highlights {
                             continue;
                         }
@@ -15346,6 +15396,7 @@ impl eframe::App for App {
                         if drawn >= draw_cap {
                             break;
                         }
+                    }
                     }
                 } else if let Some(active_runner) = active_runner_opt {
                     // helper: draw up to K strongest incoming links from active senders to an active receiver set
