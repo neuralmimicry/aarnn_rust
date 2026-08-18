@@ -428,6 +428,9 @@ jobs:
           set -euo pipefail
           authfile="$RUNNER_TEMP/podman-anonymous-auth.json"
           printf '{}\n' > "$authfile"
+          # qc00 also hosts Gail training/inference workloads. Keep the
+          # containerized release build bounded so concurrent workloads
+          # cannot OOM-kill rustc (exit 137).
           podman run --rm -i --pull=missing \
             --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
@@ -436,6 +439,8 @@ jobs:
             -e CARGO_HOME=/cargo \
             -e RUSTUP_HOME=/rustup \
             -e CARGO_TARGET_DIR=/target \
+            -e CARGO_BUILD_JOBS=1 \
+            -e CARGO_INCREMENTAL=0 \
             -e UBUNTU_NATIVE_BUILD_DEPS="$UBUNTU_NATIVE_BUILD_DEPS" \
             -v "$PWD:/workspace:ro" \
             -v "$PACKAGE_OUTPUT_DIR:/out" \
