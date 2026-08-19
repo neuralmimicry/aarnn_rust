@@ -914,8 +914,18 @@ jobs:
             podman build --no-cache "${build_args[@]}"
           fi
 
+          # GHCR can return 403 for cross-tag blob-reuse checks even after a
+          # successful login.  A stable, distinct gzip profile avoids that
+          # registry probe while remaining compatible with standard runtimes.
+          push_args=(
+            --force-compression
+            --compression-format gzip
+            --compression-level 1
+            --retry 3
+            --retry-delay 10s
+          )
           push_attempt=1
-          while ! podman push "${arch_tag}"; do
+          while ! podman push "${push_args[@]}" "${arch_tag}"; do
             if [[ "${push_attempt}" -ge 4 ]]; then
               echo "::error::GHCR push failed after ${push_attempt} attempts"
               exit 1
