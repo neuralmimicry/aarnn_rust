@@ -12,9 +12,10 @@ use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure};
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
-    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkSnapshotRequest,
-    NetworkUpdateRequest, SpikeBatch, StatusRequest, control_update,
-    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkActivityResponse,
+    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, SpikeIndices, StatusRequest,
+    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    network_update_request,
 };
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
@@ -5933,18 +5934,52 @@ async fn send_aer_inference(
             Ok(response) => response.into_inner(),
             Err(_) => continue,
         };
-        if activity.sim_step <= injected_at_step {
-            continue;
+        if let Some((output_step_index, output)) =
+            recent_output_after_step(&activity, injected_at_step)
+        {
+            return Ok(MirrorInferenceOutput {
+                accepted_batches,
+                output_step_index: Some(output_step_index),
+                output_spike_indices: output.indices,
+                output_aer_payload_hex: (!output.aer_payload.is_empty())
+                    .then(|| hex::encode(output.aer_payload)),
+            });
         }
-        let output = activity.output.unwrap_or_default();
-        return Ok(MirrorInferenceOutput {
-            accepted_batches,
-            output_step_index: Some(activity.sim_step),
-            output_spike_indices: output.indices,
-            output_aer_payload_hex: (!output.aer_payload.is_empty())
-                .then(|| hex::encode(output.aer_payload)),
-        });
     }
+}
+
+/// Select a non-empty output frame produced after the injected input.
+///
+/// A network can advance several simulation steps without firing its output
+/// layer.  Returning the first empty frame made the bridge report
+/// `network_output_unavailable` even though a later frame in the activity
+/// history contained usable spikes.  The distributed activity API exposes
+/// newest-first history, so select the newest non-empty frame whose inferred
+/// step is after the injection point and keep polling when none is available.
+fn recent_output_after_step(
+    activity: &NetworkActivityResponse,
+    injected_at_step: u64,
+) -> Option<(u64, SpikeIndices)> {
+    if activity.sim_step <= injected_at_step {
+        return None;
+    }
+
+    activity
+        .output_history
+        .iter()
+        .enumerate()
+        .find_map(|(offset, frame)| {
+            let frame_step = activity.sim_step.saturating_sub(offset as u64);
+            (!frame.indices.is_empty() && frame_step > injected_at_step)
+                .then(|| (frame_step, frame.clone()))
+        })
+        .or_else(|| {
+            activity
+                .output
+                .as_ref()
+                .filter(|frame| !frame.indices.is_empty())
+                .map(|frame| (activity.sim_step, frame.clone()))
+        })
 }
 
 const LLM_MIRROR_MAX_TEXT_CHARS: usize = 8192;
@@ -7281,6 +7316,48 @@ mod tests {
         assert_eq!(candidate.source.as_deref(), Some("network_output_decoder"));
         assert_eq!(candidate.output_spike_indices, vec![1, 4]);
         assert!(candidate.confidence.unwrap_or_default() >= 0.98);
+    }
+
+    #[test]
+    fn recent_output_uses_non_empty_history_after_injection() {
+        let activity = NetworkActivityResponse {
+            network_id: "network".to_string(),
+            output: Some(SpikeIndices::default()),
+            sim_step: 12,
+            output_history: vec![
+                SpikeIndices::default(),
+                SpikeIndices {
+                    indices: vec![2, 7],
+                    aer_payload: vec![0x01, 0x02],
+                    ..SpikeIndices::default()
+                },
+            ],
+            ..NetworkActivityResponse::default()
+        };
+
+        let (step, output) = recent_output_after_step(&activity, 10).expect("recent output");
+        assert_eq!(step, 11);
+        assert_eq!(output.indices, vec![2, 7]);
+        assert_eq!(output.aer_payload, vec![0x01, 0x02]);
+    }
+
+    #[test]
+    fn recent_output_ignores_history_before_injection() {
+        let activity = NetworkActivityResponse {
+            network_id: "network".to_string(),
+            output: Some(SpikeIndices::default()),
+            sim_step: 12,
+            output_history: vec![
+                SpikeIndices::default(),
+                SpikeIndices {
+                    indices: vec![2],
+                    ..SpikeIndices::default()
+                },
+            ],
+            ..NetworkActivityResponse::default()
+        };
+
+        assert!(recent_output_after_step(&activity, 11).is_none());
     }
 
     #[test]
