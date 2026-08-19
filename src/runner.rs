@@ -3943,8 +3943,9 @@ impl Runner {
     }
     /// Construct a Runner for interactive use.
     ///
-    /// - If `growth_enabled` is true (and `growth3d` is compiled), the network
-    ///   bootstraps with a minimal 1×1 hidden topology and grows over time.
+    /// - If `growth_enabled` is true (and `growth3d` is compiled), sensory and
+    ///   output neurons are formed dynamically, while the explicitly configured
+    ///   hidden topology is preserved as the starting point for growth.
     /// - Morphology is (re)built automatically when available and needed.
     pub fn new(
         lif: LIFParams,
@@ -3966,12 +3967,15 @@ impl Runner {
             crate::config::apply_clumping_design(&mut net_actual, design);
         }
         if matches!(neuron_model, NeuronModel::Aarnn) && net_actual.growth_enabled {
-            // AARNN growth bootstrap: start minimal only when growth is enabled.
-            // For fixed imported networks (growth disabled), preserve configured IO sizes.
+            // AARNN growth forms the I/O populations dynamically, but an explicit
+            // hidden topology is still authoritative. Previously this unconditionally
+            // replaced the configured hidden topology with 1x1, which made every
+            // deployment start with one hidden neuron regardless of its config.
             net_actual.num_sensory_neurons = 0;
             net_actual.num_output_neurons = 0;
-            net_actual.num_hidden_layers = 1;
-            net_actual.num_hidden_per_layer_initial = 1;
+            net_actual.num_hidden_layers = net_actual.num_hidden_layers.max(1);
+            net_actual.num_hidden_per_layer_initial =
+                net_actual.num_hidden_per_layer_initial.max(1);
         }
         // Build initial weights
         let mut built: BuiltNetwork = build_network(&net_actual, &mut rand::rng());
@@ -18812,6 +18816,35 @@ mod tests {
         net.growth_cooldown_ms = 0.0;
         net.global_growth_cooldown_ms = 0.0;
         Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn)
+    }
+
+    #[test]
+    fn aarnn_growth_preserves_explicit_hidden_topology() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.growth_enabled = true;
+        net.num_hidden_layers = 3;
+        net.num_hidden_per_layer_initial = 7;
+        net.num_sensory_neurons = 12;
+        net.num_output_neurons = 4;
+
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        assert_eq!(runner.net.num_hidden_layers, 3);
+        assert_eq!(runner.net.num_hidden_per_layer_initial, 7);
+        assert_eq!(runner.layer_size(0), 7);
+        assert_eq!(runner.layer_size(1), 7);
+        assert_eq!(runner.layer_size(2), 7);
+        // AARNN growth still forms I/O populations dynamically.
+        assert_eq!(runner.net.num_sensory_neurons, 0);
+        assert_eq!(runner.net.num_output_neurons, 0);
     }
 
     #[test]
