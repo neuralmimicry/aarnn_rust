@@ -928,8 +928,6 @@ jobs:
             --force-compression
             --compression-format gzip
             --compression-level 1
-            --retry 3
-            --retry-delay 10s
           )
           push_attempt=1
           while ! podman push "${push_args[@]}" "${arch_tag}"; do
@@ -938,7 +936,7 @@ jobs:
               exit 1
             fi
             push_attempt=$((push_attempt + 1))
-            echo "GHCR push failed; refreshing GitHub CLI credentials before retry ${push_attempt}/4"
+            echo "GHCR push failed; refreshing package publisher credentials before retry ${push_attempt}/4"
             printf '%s' "${GH_TOKEN}" |
               podman login "${{ env.REGISTRY }}" \
                 --username "${GHCR_USERNAME}" \
