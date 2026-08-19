@@ -641,9 +641,23 @@ jobs:
                 --target "${GITHUB_SHA}" \
                 --title "${title}" \
                 --prerelease=false
-              while IFS= read -r asset; do
-                [[ -z "${asset}" ]] || gh release delete-asset "${RELEASE_TAG}" "${asset}" --yes
-              done < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name')
+              # Deleting a large accumulated rolling release serially can make
+              # the runner appear frozen for tens of minutes.  Keep the
+              # cleanup bounded and fail the job if any deletion fails.
+              asset_delete_parallelism="${RELEASE_ASSET_DELETE_PARALLELISM:-8}"
+              if [[ ! "${asset_delete_parallelism}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::error::RELEASE_ASSET_DELETE_PARALLELISM must be a positive integer"
+                exit 1
+              fi
+              mapfile -t old_assets < <(
+                gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name'
+              )
+              if [[ ${#old_assets[@]} -gt 0 ]]; then
+                printf '%s\0' "${old_assets[@]}" |
+                  xargs -0 -r -n1 -P "${asset_delete_parallelism}" \
+                    bash -c 'set -euo pipefail; gh release delete-asset "$1" "$2" --yes' \
+                    _ "${RELEASE_TAG}"
+              fi
             fi
             gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
             exit 0
