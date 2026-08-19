@@ -837,7 +837,7 @@ jobs:
           GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
           GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
-          gh auth token --hostname github.com | podman login \
+          printf '%s' "${GH_TOKEN}" | podman login \
             "${{ env.REGISTRY }}" \
             --username "${GHCR_USERNAME}" \
             --password-stdin
@@ -885,6 +885,9 @@ jobs:
             '
 
       - name: Build and push architecture image
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         shell: bash
         run: |
           set -euo pipefail
@@ -936,9 +939,9 @@ jobs:
             fi
             push_attempt=$((push_attempt + 1))
             echo "GHCR push failed; refreshing GitHub CLI credentials before retry ${push_attempt}/4"
-            GH_TOKEN="${{ secrets.X_GITHUB_TOKEN }}" gh auth token --hostname github.com |
+            printf '%s' "${GH_TOKEN}" |
               podman login "${{ env.REGISTRY }}" \
-                --username "${{ secrets.X_GITHUB_USERNAME }}" \
+                --username "${GHCR_USERNAME}" \
                 --password-stdin
             sleep $((push_attempt * 5))
           done
@@ -1008,7 +1011,7 @@ jobs:
           GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
           GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
-          gh auth token --hostname github.com | podman login \
+          printf '%s' "${GH_TOKEN}" | podman login \
             "${{ env.REGISTRY }}" \
             --username "${GHCR_USERNAME}" \
             --password-stdin
@@ -1172,7 +1175,7 @@ jobs:
           GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
           GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
-          gh auth token --hostname github.com | podman login \
+          printf '%s' "${GH_TOKEN}" | podman login \
             "${{ env.REGISTRY }}" \
             --username "${GHCR_USERNAME}" \
             --password-stdin
