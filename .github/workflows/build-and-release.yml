@@ -831,11 +831,15 @@ jobs:
 
       - name: Log in to GHCR
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The package predates repository linkage and is private, so the
+          # repository-scoped GITHUB_TOKEN cannot publish to it. Use the
+          # dedicated package publisher token until the package is linked.
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
           gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
-            --username "${{ github.actor }}" \
+            --username "${GHCR_USERNAME}" \
             --password-stdin
 
       - name: Derive immutable build id
@@ -932,9 +936,9 @@ jobs:
             fi
             push_attempt=$((push_attempt + 1))
             echo "GHCR push failed; refreshing GitHub CLI credentials before retry ${push_attempt}/4"
-            GH_TOKEN="${{ github.token }}" gh auth token --hostname github.com |
+            GH_TOKEN="${{ secrets.X_GITHUB_TOKEN }}" gh auth token --hostname github.com |
               podman login "${{ env.REGISTRY }}" \
-                --username "${{ github.actor }}" \
+                --username "${{ secrets.X_GITHUB_USERNAME }}" \
                 --password-stdin
             sleep $((push_attempt * 5))
           done
@@ -1001,11 +1005,12 @@ jobs:
 
       - name: Log in to GHCR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
           gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
-            --username "${{ github.actor }}" \
+            --username "${GHCR_USERNAME}" \
             --password-stdin
 
       - name: Assemble multi-arch manifest
@@ -1164,11 +1169,12 @@ jobs:
 
       - name: Log in to GHCR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
         run: |
           gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
-            --username "${{ github.actor }}" \
+            --username "${GHCR_USERNAME}" \
             --password-stdin
 
       - name: Promote immutable build
