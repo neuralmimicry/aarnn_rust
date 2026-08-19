@@ -830,8 +830,10 @@ jobs:
           fi
 
       - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+          gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
             --username "${{ github.actor }}" \
             --password-stdin
@@ -912,7 +914,20 @@ jobs:
             podman build --no-cache "${build_args[@]}"
           fi
 
-          podman push "${arch_tag}"
+          push_attempt=1
+          while ! podman push "${arch_tag}"; do
+            if [[ "${push_attempt}" -ge 4 ]]; then
+              echo "::error::GHCR push failed after ${push_attempt} attempts"
+              exit 1
+            fi
+            push_attempt=$((push_attempt + 1))
+            echo "GHCR push failed; refreshing GitHub CLI credentials before retry ${push_attempt}/4"
+            GH_TOKEN="${{ github.token }}" gh auth token --hostname github.com |
+              podman login "${{ env.REGISTRY }}" \
+                --username "${{ github.actor }}" \
+                --password-stdin
+            sleep $((push_attempt * 5))
+          done
 
   container-manifest:
     name: Container Manifest (${{ matrix.workload }})
@@ -975,8 +990,10 @@ jobs:
           podman info >/dev/null
 
       - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+          gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
             --username "${{ github.actor }}" \
             --password-stdin
@@ -1136,8 +1153,10 @@ jobs:
           podman info >/dev/null
 
       - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s' "${{ secrets.X_GITHUB_TOKEN }}" | podman login \
+          gh auth token --hostname github.com | podman login \
             "${{ env.REGISTRY }}" \
             --username "${{ github.actor }}" \
             --password-stdin
