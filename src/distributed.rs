@@ -4121,9 +4121,20 @@ impl DistributedNode {
                     .ok()
                     .and_then(|v| v.trim().parse::<usize>().ok())
                     .unwrap_or(250);
+                // A depth-zero network can remain transport-ready while
+                // producing no meaningful network output. Keep a configurable
+                // floor for output-producing workloads; operators can still
+                // set it to zero for intentionally shallow simulations.
+                let minimum_depth = std::env::var("NM_AARNN_MIN_DEPTH")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0)
+                    .min(net.desired_aarnn_depth as usize);
 
                 if auto_adjust_depth && net.runner.t >= warmup_steps {
-                    if net.avg_step_time_ms > target_ms && net.runner.net.aarnn_layer_depth > 0 {
+                    if net.avg_step_time_ms > target_ms
+                        && net.runner.net.aarnn_layer_depth > minimum_depth
+                    {
                         net.runner.net.aarnn_layer_depth -= 1;
                         nm_log!(
                             "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
