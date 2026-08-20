@@ -3957,6 +3957,7 @@ impl Runner {
         let mut net_actual = net.clone();
         if net_actual.clumping_design != crate::config::ClumpingDesign::None
             && net_actual.num_hidden_layers <= 1
+            && !(matches!(neuron_model, NeuronModel::Aarnn) && net_actual.growth_enabled)
         {
             apply_clumping_layer_defaults(&mut net_actual);
         }
