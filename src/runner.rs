@@ -20151,6 +20151,10 @@ mod tests {
         let stdp = STDPParams::default();
         let mut net = NetworkConfig::default();
         net.growth_enabled = true;
+        // This test exercises growth resizing, not the HumanBrain clumping
+        // preset. Keep its intentionally minimal one-layer starting shape
+        // explicit so the AARNN topology-preservation rule is testable.
+        net.clumping_design = crate::config::ClumpingDesign::None;
         net.num_sensory_neurons = 10;
         net.num_output_neurons = 5;
 
