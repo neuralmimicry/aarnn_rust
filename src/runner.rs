@@ -20150,7 +20150,9 @@ mod tests {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
         let mut net = NetworkConfig::default();
-        net.growth_enabled = true;
+        // Keep the preliminary LIF run from autonomously growing the
+        // topology; growth is exercised explicitly after switching models.
+        net.growth_enabled = false;
         // This test exercises growth resizing, not the HumanBrain clumping
         // preset. Keep its intentionally minimal one-layer starting shape
         // explicit so the AARNN topology-preservation rule is testable.
@@ -20168,7 +20170,10 @@ mod tests {
 
         // 3. Switch to AARNN (Simulation of UI switch)
         // We recreate the runner as the fix suggested
-        let net_for_aarnn = r.net;
+        let mut net_for_aarnn = r.net;
+        net_for_aarnn.growth_enabled = true;
+        net_for_aarnn.num_hidden_layers = 1;
+        net_for_aarnn.num_hidden_per_layer_initial = 1;
         let mut r = Runner::new(
             lif,
             stdp,
