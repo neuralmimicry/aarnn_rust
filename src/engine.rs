@@ -161,8 +161,34 @@ impl RunnerEngine {
     }
 
     pub fn import_config_json(&mut self, config_json: &str) -> anyhow::Result<()> {
-        self.runner.import_config_json(config_json)?;
-        self.spec.net = self.runner.net.clone();
+        let cfg: crate::config::NetworkConfig = serde_json::from_str(config_json)?;
+        // A config import may change the physical network shape. The old
+        // path only replaced Runner::net, leaving hidden-layer matrices and
+        // state vectors at their previous dimensions. That made a persisted
+        // 1x1 workspace report the new config while still containing one
+        // hidden neuron. Preserve the runner when compatible; otherwise
+        // rebuild it so every matrix and state array matches the request.
+        let shape_compatible = self.runner.net.num_sensory_neurons == cfg.num_sensory_neurons
+            && self.runner.net.num_output_neurons == cfg.num_output_neurons
+            && self.runner.net.num_hidden_layers == cfg.num_hidden_layers
+            && (0..cfg.num_hidden_layers)
+                .all(|layer| self.runner.layer_size(layer) == cfg.num_hidden_per_layer_initial);
+
+        if shape_compatible {
+            self.runner.import_config_json(config_json)?;
+            self.spec.net = self.runner.net.clone();
+        } else {
+            let mut spec = self.spec.clone();
+            spec.net = cfg;
+            self.runner = Runner::new(
+                spec.lif.clone(),
+                spec.stdp.clone(),
+                spec.net.clone(),
+                spec.neuron_model()?,
+                spec.learning()?,
+            );
+            self.spec = spec;
+        }
         self.clear_activity();
         Ok(())
     }
@@ -249,5 +275,29 @@ impl RunnerEngine {
             neuron_model: spec.neuron_model.clone(),
             learning_rule: spec.learning_rule.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_import_rebuilds_changed_hidden_topology() {
+        let mut engine = RunnerEngine::new(EngineSpec::default()).expect("engine");
+        let mut cfg = engine.spec().net.clone();
+        cfg.num_hidden_layers = 2;
+        cfg.num_hidden_per_layer_initial = 3;
+
+        engine
+            .import_config_json(&serde_json::to_string(&cfg).expect("config json"))
+            .expect("config import");
+
+        let status = engine.status();
+        assert_eq!(status.num_hidden_layers, 2);
+        assert_eq!(
+            status.total_neurons,
+            cfg.num_sensory_neurons + 6 + cfg.num_output_neurons
+        );
     }
 }
