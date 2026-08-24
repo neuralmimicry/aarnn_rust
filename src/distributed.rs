@@ -102,8 +102,8 @@ pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
 /// Special layer index used on `StreamSpikes` to inject sensory spikes from external
 /// AER/HTTP sources into the network's next simulation step.
 pub const EXTERNAL_SENSORY_LAYER_INDEX: u32 = u32::MAX;
-/// Timeout budget for burst-mode spike forwarding fallback.
-const SPIKE_BURST_TIMEOUT: Duration = Duration::from_millis(120);
+/// Default timeout budget for burst-mode spike forwarding fallback.
+const DEFAULT_SPIKE_BURST_TIMEOUT_MS: u64 = 120;
 /// Timeout budget for short-lived gRPC connections used by burst forwarding.
 const SPIKE_BURST_CONNECT_TIMEOUT: Duration = Duration::from_millis(80);
 /// EWMA smoothing for per-peer transport latency tracking.
@@ -1036,6 +1036,10 @@ fn tracey_duration_env(name: &str, default_ms: u64) -> Duration {
 
 fn tracey_status_timeout() -> Duration {
     tracey_duration_env("NM_TRACEY_STATUS_TIMEOUT_MS", 80)
+}
+
+fn spike_burst_timeout() -> Duration {
+    tracey_duration_env("NM_SPIKE_BURST_TIMEOUT_MS", DEFAULT_SPIKE_BURST_TIMEOUT_MS)
 }
 
 fn tracey_status_cache_ttl() -> Duration {
@@ -3298,7 +3302,7 @@ impl DistributedNode {
                         self.request_spike_stream(key.clone(), addr.clone()).await;
                         let burst_start = std::time::Instant::now();
                         let burst_result = tokio::time::timeout(
-                            SPIKE_BURST_TIMEOUT,
+                            spike_burst_timeout(),
                             self.send_spike_batches_burst(&key, &addr, remaining.clone()),
                         )
                         .await;
@@ -3323,7 +3327,7 @@ impl DistributedNode {
                                 nm_err!(
                                     "[warn] burst spike forwarding to {} timed out after {:?}",
                                     key,
-                                    SPIKE_BURST_TIMEOUT
+                                    spike_burst_timeout()
                                 );
                                 let mut state = self.state.write().await;
                                 state.record_spike_transport_failure(&key, method);
