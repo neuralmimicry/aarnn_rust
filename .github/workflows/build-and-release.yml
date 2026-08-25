@@ -802,11 +802,20 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y podman
           fi
+          if ! command -v runc >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y runc
+          fi
           command -v podman >/dev/null 2>&1 || {
             echo "podman is required on the build runner."
             exit 1
           }
+          command -v runc >/dev/null 2>&1 || {
+            echo "runc is required on the build runner."
+            exit 1
+          }
           podman --version
+          runc --version
 
       - name: Configure rootless podman runtime environment
         shell: bash
@@ -828,10 +837,10 @@ jobs:
             "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
-          if command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
-          elif command -v runc >/dev/null 2>&1; then
+          if command -v runc >/dev/null 2>&1; then
             oci_runtime="runc"
+          elif command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
@@ -1000,11 +1009,20 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y podman
           fi
+          if ! command -v runc >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y runc
+          fi
           command -v podman >/dev/null 2>&1 || {
             echo "podman is required on the build runner."
             exit 1
           }
+          command -v runc >/dev/null 2>&1 || {
+            echo "runc is required on the build runner."
+            exit 1
+          }
           podman --version
+          runc --version
 
       - name: Configure rootless podman runtime environment
         shell: bash
@@ -1025,10 +1043,10 @@ jobs:
           printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
             "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
-          if command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
-          elif command -v runc >/dev/null 2>&1; then
+          if command -v runc >/dev/null 2>&1; then
             oci_runtime="runc"
+          elif command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
