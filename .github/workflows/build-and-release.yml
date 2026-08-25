@@ -125,6 +125,14 @@ jobs:
           clean: false
           path: repo-build-release
 
+      - name: Use large runner-backed temporary directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_tmp="${RUNNER_TEMP}/rust-tmp"
+          mkdir -p "${rust_tmp}"
+          echo "TMPDIR=${rust_tmp}" >> "${GITHUB_ENV}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0
         with:
