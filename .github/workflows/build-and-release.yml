@@ -136,7 +136,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install native build dependencies
         shell: bash
@@ -199,6 +199,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Run lint checks
+        run: cargo clippy --workspace --all-targets --all-features
+
       - name: Enforce Gail image tag policy
         run: bash scripts/check_gail_image_tags.sh .
 
@@ -220,6 +223,13 @@ jobs:
           --lib
           --bin web_ui
           --test '*'
+
+      - name: Run doctests and Phase 0 fixture
+        env:
+          NM_DISABLE_OPENCL: "1"
+        run: |
+          cargo test --locked --all-features --doc
+          cargo test --locked --test phase0_baseline
 
       - name: Build release binaries
         run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui

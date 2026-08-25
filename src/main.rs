@@ -19,12 +19,15 @@ mod aer;
 mod affinity;
 #[cfg(feature = "robot_io")]
 mod bridge;
+mod causal;
 #[cfg(feature = "opencl")]
 mod cl_compute;
 mod config;
 mod deployment;
+mod deterministic;
 mod distributed;
 mod engine;
+mod field_events;
 mod fpaa;
 mod ga;
 #[cfg(feature = "opencl")]
@@ -33,6 +36,7 @@ mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
 mod network;
+mod neuron_kernels;
 #[cfg(feature = "openmpi")]
 mod openmpi_runtime;
 #[cfg(feature = "ui")]
@@ -46,10 +50,15 @@ mod sim;
 #[allow(dead_code)]
 mod spike_io;
 mod stimuli;
+#[cfg(feature = "superdense_executor")]
+mod superdense;
 #[cfg(feature = "growth3d")]
 mod topology;
+#[cfg(feature = "superdense_executor")]
+mod topology_model;
 #[cfg(feature = "ui")]
 mod ui;
+#[cfg(feature = "viz")]
 mod viz;
 
 use anyhow::Context;
@@ -1682,10 +1691,47 @@ fn main() -> anyhow::Result<()> {
     let rt = rt_builder.build()?;
     let _guard = rt.enter();
 
+    let aer_cfg = {
+        let mut cfg = AerIoConfig::default();
+        cfg.listen_addr = args.aer_listen.clone();
+        cfg.peer_addr = args.aer_peer.clone();
+        cfg.sensory_base = args.aer_sensory_base;
+        cfg.output_base = args.aer_output_base;
+        cfg.max_events = args.aer_max_events;
+        cfg.max_packet_bytes = args.aer_max_packet_bytes;
+        if cfg.enabled() { Some(cfg) } else { None }
+    };
+
+    // Claim the IPC endpoint before distributed startup.  Node initialisation
+    // may load a large snapshot or wait for orchestration; Webots uses socket
+    // presence as its readiness signal and must be able to connect during that
+    // work.  The bound server is transferred into the UI simulation thread.
+    #[cfg(all(feature = "ui", feature = "robot_io", unix))]
+    let early_ipc_service = if args.ui && args.ipc {
+        ui::bind_ipc_endpoint(&args.brain_id, &net_cfg, aer_cfg.as_ref())
+    } else {
+        None
+    };
+
     // Configure distributed simulation roles (Orchestrator or Compute Node).
     let mut distributed_node = None;
     if args.orchestrator || args.node {
+        let distributed_start = std::time::Instant::now();
+        nm_err!(
+            "[startup] initialising distributed node (role={}, brain={}, snapshot_bytes={})",
+            if args.orchestrator {
+                "orchestrator"
+            } else {
+                "node"
+            },
+            args.brain_id,
+            startup_snapshot_json.as_ref().map(String::len).unwrap_or(0)
+        );
         distributed_node = Some(rt.block_on(async { start_distributed(&args).await })?);
+        nm_err!(
+            "[startup] distributed node ready after {:.3}s",
+            distributed_start.elapsed().as_secs_f64()
+        );
         if args.orchestrator {
             if let Some(node) = distributed_node.clone() {
                 let startup_networks = build_orchestrator_startup_networks(
@@ -1745,17 +1791,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let aer_cfg = {
-        let mut cfg = AerIoConfig::default();
-        cfg.listen_addr = args.aer_listen.clone();
-        cfg.peer_addr = args.aer_peer.clone();
-        cfg.sensory_base = args.aer_sensory_base;
-        cfg.output_base = args.aer_output_base;
-        cfg.max_events = args.aer_max_events;
-        cfg.max_packet_bytes = args.aer_max_packet_bytes;
-        if cfg.enabled() { Some(cfg) } else { None }
-    };
-
     let ga_search_enabled = args.ga_search || args.auto_ga;
 
     // Interactive Mode: Launch the real-time visualization interface.
@@ -1775,6 +1810,8 @@ fn main() -> anyhow::Result<()> {
             net_cfg,
             args.brain_id.clone(),
             args.ipc,
+            #[cfg(all(feature = "ui", feature = "robot_io", unix))]
+            early_ipc_service,
             distributed_node,
             args.ui_remote_only,
             startup_snapshot_json,
@@ -1958,24 +1995,27 @@ fn main() -> anyhow::Result<()> {
 
     // Step 6: Visualization
     // Export simulation results as various graphical diagrams.
-    viz::draw_network_diagram(
-        "neuromorphic_network_diagram.png",
-        &net_cfg,
-        &sim_out.weights,
-    )?;
-    viz::draw_spike_raster(
-        "spike_raster.png",
-        &sim_out.spikes_h,
-        &sim_out.spikes_o,
-        lif.dt,
-    )?;
-    viz::draw_weight_histograms("weight_histograms.png", &sim_out.weights, false)?;
-    viz::draw_weight_histograms("weight_histograms_output.png", &sim_out.weights, true)?;
-    viz::draw_final_weighted_network("final_weighted_network.png", &net_cfg, &sim_out.weights)?;
+    #[cfg(feature = "viz")]
+    {
+        viz::draw_network_diagram(
+            "neuromorphic_network_diagram.png",
+            &net_cfg,
+            &sim_out.weights,
+        )?;
+        viz::draw_spike_raster(
+            "spike_raster.png",
+            &sim_out.spikes_h,
+            &sim_out.spikes_o,
+            lif.dt,
+        )?;
+        viz::draw_weight_histograms("weight_histograms.png", &sim_out.weights, false)?;
+        viz::draw_weight_histograms("weight_histograms_output.png", &sim_out.weights, true)?;
+        viz::draw_final_weighted_network("final_weighted_network.png", &net_cfg, &sim_out.weights)?;
 
-    nm_log!(
-        "Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png"
-    );
+        nm_log!(
+            "Files generated:\n - neuromorphic_network_diagram.png\n - spike_raster.png\n - weight_histograms.png\n - final_weighted_network.png\n - weight_histograms_output.png"
+        );
+    }
     Ok(())
 }
 
@@ -2475,6 +2515,8 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     std::sync::Arc::new(tokio::sync::RwLock::new(ManagedNetwork {
                         id: args.brain_id.clone(),
                         runner,
+                        #[cfg(feature = "superdense_executor")]
+                        superdense: superdense::SuperdenseController::new(),
                         assigned_layers,
                         redundant_layers: Vec::new(),
                         remote_spikes_fwd: std::collections::HashMap::new(),

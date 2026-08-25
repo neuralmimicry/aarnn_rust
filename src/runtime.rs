@@ -5,7 +5,7 @@ use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
 use crate::runtime_api::{
     AutoscalerReport, RuntimeStatusResponse, WorkspaceActivityResponse, WorkspaceControlAction,
     WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
-    WorkspaceSnapshotResponse, WorkspaceSummary,
+    WorkspaceSnapshotResponse, WorkspaceSummary, WorkspaceTopologyResponse,
 };
 use crate::shared_fs::{FileLease, acquire_lease_with_timeout, try_acquire_lease};
 use anyhow::{Context, anyhow};
@@ -1418,6 +1418,32 @@ impl RuntimeManager {
         Ok(WorkspaceActivityResponse {
             workspace_id: handle.key.workspace_id.clone(),
             activity,
+        })
+    }
+
+    pub async fn workspace_topology(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        max_nodes: usize,
+        max_edges: usize,
+    ) -> anyhow::Result<WorkspaceTopologyResponse> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let workspace_id = handle.key.workspace_id.clone();
+        let handle_for_topology = handle.clone();
+        let topology = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let engine = handle_for_topology
+                .engine
+                .lock()
+                .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
+            Ok(engine.topology_snapshot(max_nodes, max_edges))
+        })
+        .await
+        .context("workspace topology task failed")??;
+        Ok(WorkspaceTopologyResponse {
+            workspace_id,
+            topology,
         })
     }
 

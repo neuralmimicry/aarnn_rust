@@ -11,6 +11,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.19",
 ]
 
@@ -39,6 +40,7 @@ dependencies = [
  "hex",
  "ibverbs",
  "image 0.25.10",
+ "jni 0.21.1",
  "memmap2",
  "mpi",
  "ndarray",
@@ -8282,6 +8284,10 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
 
 [[package]]
 name = "y4m"

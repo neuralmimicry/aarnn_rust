@@ -1,4 +1,4 @@
-use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus};
+use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus, EngineTopologySnapshot};
 use anyhow::{Context, anyhow};
 use reqwest::Method;
 use reqwest::blocking::{Client, RequestBuilder};
@@ -172,6 +172,12 @@ pub struct WorkspaceSnapshotResponse {
 pub struct WorkspaceActivityResponse {
     pub workspace_id: String,
     pub activity: EngineActivity,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceTopologyResponse {
+    pub workspace_id: String,
+    pub topology: EngineTopologySnapshot,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -351,6 +357,21 @@ impl BlockingRuntimeClient {
         self.request_json(
             Method::GET,
             &format!("/api/runtime/workspaces/{}/activity", workspace_id),
+        )
+    }
+
+    pub fn workspace_topology(
+        &mut self,
+        workspace_id: &str,
+        max_nodes: usize,
+        max_edges: usize,
+    ) -> anyhow::Result<WorkspaceTopologyResponse> {
+        self.request_json(
+            Method::GET,
+            &format!(
+                "/api/runtime/workspaces/{}/topology?max_nodes={}&max_edges={}",
+                workspace_id, max_nodes, max_edges
+            ),
         )
     }
 

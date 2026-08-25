@@ -468,6 +468,9 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "runtime", "workspaces", _, "activity"]) => {
             Some(AccessRequirement::aarnn_observe())
         }
+        ("GET", ["api", "runtime", "workspaces", _, "topology"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
         ("POST", ["api", "runtime", "workspaces", _, "control"]) => {
             Some(AccessRequirement::aarnn_use())
         }
@@ -1329,6 +1332,13 @@ struct RuntimeWorkspaceSnapshotQuery {
 }
 
 #[derive(Deserialize, Default)]
+struct RuntimeWorkspaceTopologyQuery {
+    owner: Option<String>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
+}
+
+#[derive(Deserialize, Default)]
 struct RuntimeWorkspaceOwnerQuery {
     owner: Option<String>,
 }
@@ -1759,6 +1769,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/runtime/workspaces/{workspace_id}/activity",
             get(runtime_workspace_activity),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/topology",
+            get(runtime_workspace_topology),
         )
         .route(
             "/runtime/workspaces/{workspace_id}/control",
@@ -2257,6 +2271,62 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             },
             "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "hidden", "output", "output_history", "source"]
           },
+          "WorkspaceTopologyResponse": {
+            "type": "object",
+            "properties": {
+              "workspace_id": { "type": "string" },
+              "topology": { "$ref": "#/components/schemas/WorkspaceTopology" }
+            },
+            "required": ["workspace_id", "topology"]
+          },
+          "WorkspaceTopology": {
+            "type": "object",
+            "description": "Bounded read-only projection of the authorised workspace topology. Node IDs are scoped to topology_generation.",
+            "properties": {
+              "schema_version": { "type": "integer", "format": "uint32" },
+              "topology_generation": { "type": "string" },
+              "step": { "type": "integer", "format": "uint64" },
+              "sim_time_ms": { "type": "number", "format": "double" },
+              "layers": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceTopologyLayer" } },
+              "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceTopologyNode" } },
+              "edges": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceTopologyEdge" } },
+              "total_node_count": { "type": "integer", "format": "uint64" },
+              "total_edge_count": { "type": "integer", "format": "uint64" },
+              "truncated": { "type": "boolean" }
+            },
+            "required": ["schema_version", "topology_generation", "step", "sim_time_ms", "layers", "nodes", "edges", "total_node_count", "total_edge_count", "truncated"]
+          },
+          "WorkspaceTopologyLayer": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "kind": { "type": "string" },
+              "neuron_count": { "type": "integer", "format": "uint64" },
+              "visible_node_count": { "type": "integer", "format": "uint64" }
+            },
+            "required": ["id", "name", "kind", "neuron_count", "visible_node_count"]
+          },
+          "WorkspaceTopologyNode": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "layer_id": { "type": "string" },
+              "index": { "type": "integer", "format": "uint64" },
+              "active": { "type": "boolean" }
+            },
+            "required": ["id", "layer_id", "index", "active"]
+          },
+          "WorkspaceTopologyEdge": {
+            "type": "object",
+            "properties": {
+              "source_id": { "type": "string" },
+              "target_id": { "type": "string" },
+              "kind": { "type": "string" },
+              "weight": { "type": "number", "format": "double" }
+            },
+            "required": ["source_id", "target_id", "kind", "weight"]
+          },
           "UpdateNetworkPayload": {
             "type": "object",
             "properties": {
@@ -2598,6 +2668,26 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "parameters": [],
             "responses": {
               "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatusResponse" } } } },
+            }
+          }
+        },
+        "/api/runtime/workspaces/{workspace_id}/topology": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Get a bounded authorised workspace topology projection",
+            "operationId": "getWorkspaceTopology",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } },
+              { "name": "owner", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Administrator-only workspace owner override." },
+              { "name": "max_nodes", "in": "query", "required": false, "schema": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4096 } },
+              { "name": "max_edges", "in": "query", "required": false, "schema": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 32768 } }
+            ],
+            "responses": {
+              "200": { "description": "Bounded topology projection with exact non-zero edges for included nodes.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceTopologyResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Workspace owner access denied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "404": { "description": "Workspace not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -3934,6 +4024,35 @@ async fn runtime_workspace_activity(
         .await
     {
         Ok(activity) => Json(activity).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_topology(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceTopologyQuery>,
+) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state
+        .runtime
+        .workspace_topology(
+            &owner,
+            &workspace_id,
+            query.max_nodes.unwrap_or(512),
+            query.max_edges.unwrap_or(4096),
+        )
+        .await
+    {
+        Ok(topology) => Json(topology).into_response(),
         Err(err) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": err.to_string() })),
@@ -7087,6 +7206,10 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/snapshot"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/topology"),
             Some(AccessRequirement::aarnn_observe())
         );
     }

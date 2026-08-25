@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "brain_id": 7,
+  "topology_generation": 2,
+  "logical_tag": {"tick": 12, "microstep": 3},
+  "q32_32_raw": 6442450944,
+  "event_digest": "b7d07857bd339b769b84f95eac4be1c7",
+  "state_digest": "e1a1a0796385248918e324315a1a3ffe"
+}

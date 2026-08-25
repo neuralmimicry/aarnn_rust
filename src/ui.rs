@@ -451,12 +451,17 @@ struct IpcHandshake {
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 enum IpcEvent {
-    Data(f32, f32, Option<String>),       // t_ms, reward, peer_path
+    Data {
+        t_ms: f32,
+        inputs: Vec<f32>,
+        reward: f32,
+        peer: Option<String>,
+    },
     Config(IpcHandshake, Option<String>), // handshake, peer_path
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-struct IpcUdsServer {
+pub(crate) struct IpcUdsServer {
     sock: UnixDatagram,
     #[allow(dead_code)]
     s: usize,
@@ -473,6 +478,78 @@ struct IpcUdsServer {
     recent_mismatches: u64,
     total_received: u64,
     dt_ms: f32,
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+enum IpcCommand {
+    SendSizeHint,
+    SendOutputs(Vec<f32>),
+}
+
+/// Bounded hand-off between the early IPC endpoint and the simulation thread.
+///
+/// The socket must remain serviced while a startup snapshot or distributed
+/// node is loading.  The service owns the socket for its whole lifetime; the
+/// simulation thread only receives admitted decoded frames and submits output
+/// replies.  A full event queue retains the pending frame and stops draining
+/// the kernel socket, providing bounded backpressure without dropping a frame.
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+pub(crate) struct IpcUdsService {
+    events: std::sync::mpsc::Receiver<IpcEvent>,
+    commands: std::sync::mpsc::SyncSender<IpcCommand>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    s: usize,
+    o: usize,
+    dt_ms: f32,
+}
+
+fn ipc_socket_path(brain_id: &str) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        if brain_id == "default" {
+            format!("{}/aarnn_rust.nn", home)
+        } else {
+            format!("{}/aarnn_rust.{}.nn", home, brain_id)
+        }
+    } else if brain_id == "default" {
+        "/tmp/aarnn_rust.nn".to_string()
+    } else {
+        format!("/tmp/aarnn_rust.{}.nn", brain_id)
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+fn stats_log_enabled() -> bool {
+    std::env::var("NM_IPC_DIAGNOSTIC")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(all(feature = "robot_io", unix))]
+pub(crate) fn bind_ipc_endpoint(
+    brain_id: &str,
+    net_cfg: &crate::config::NetworkConfig,
+    aer_cfg: Option<&AerIoConfig>,
+) -> Option<IpcUdsService> {
+    let path = ipc_socket_path(brain_id);
+    match IpcUdsServer::bind(
+        &path,
+        net_cfg.num_sensory_neurons.max(1),
+        net_cfg.num_output_neurons.max(1),
+        aer_cfg.map(|cfg| cfg.sensory_base).unwrap_or(4096),
+        aer_cfg.map(|cfg| cfg.output_base).unwrap_or(16384),
+    ) {
+        Ok(server) => Some(server.start()),
+        Err(error) => {
+            nm_err!("[IpcUdsServer] Early bind failed for {}: {}", path, error);
+            None
+        }
+    }
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
@@ -520,128 +597,146 @@ impl IpcUdsServer {
             dt_ms: default_dt_ms,
         })
     }
-    fn poll_next_event(&mut self, dst_inputs: &mut [f32]) -> Option<IpcEvent> {
+    fn poll_next_event(&mut self) -> Option<IpcEvent> {
         let need_data = (1 + self.s) * 4;
         let need_data_reward = (2 + self.s) * 4;
-        let mut latest_data: Option<IpcEvent> = None;
-        let mut latest_config: Option<IpcEvent> = None;
-        loop {
-            match self.sock.recv_from(&mut self.req_buf) {
-                Ok((n, addr)) => {
-                    if n == 0 {
-                        continue;
+        match self.sock.recv_from(&mut self.req_buf) {
+            Ok((n, addr)) => {
+                if n == 0 {
+                    return None;
+                }
+                if n == self.req_buf.len() {
+                    self.truncated_packets = self.truncated_packets.saturating_add(1);
+                    if self.truncated_packets == 1 || self.truncated_packets % 64 == 0 {
+                        nm_err!(
+                            "[IpcUdsServer] Received packet at recv buffer limit ({} bytes). Consider increasing NM_IPC_UDS_RECV_BUF_BYTES.",
+                            self.req_buf.len()
+                        );
                     }
-                    if n == self.req_buf.len() {
-                        self.truncated_packets = self.truncated_packets.saturating_add(1);
-                        if self.truncated_packets == 1 || self.truncated_packets % 64 == 0 {
+                }
+                if n > 0 && self.req_buf[0] == b'{' {
+                    match serde_json::from_slice::<IpcHandshake>(&self.req_buf[..n]) {
+                        Ok(hs) => {
+                            self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
                             nm_err!(
-                                "[IpcUdsServer] Received packet at recv buffer limit ({} bytes). Consider increasing NM_IPC_UDS_RECV_BUF_BYTES.",
-                                self.req_buf.len()
+                                "[IpcUdsServer] Handshake received S_names={} O_names={}",
+                                hs.s_names.len(),
+                                hs.o_names.len()
                             );
+                            self.send_size_hint_to_last_peer();
+                            let peer_str = self
+                                .last_peer
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().to_string());
+                            // Apply the negotiated dimensions immediately so
+                            // frames already queued behind this handshake can
+                            // be decoded before the simulation thread receives
+                            // the configuration event.
+                            let (new_s, new_o) = resolve_ipc_handshake_sizes(&hs, self.s, self.o);
+                            self.s = new_s;
+                            self.o = new_o;
+                            if let Some(dt_ms) = hs
+                                .dt_ms
+                                .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
+                            {
+                                self.dt_ms = dt_ms;
+                            }
+                            return Some(IpcEvent::Config(hs, peer_str));
+                        }
+                        Err(err) => {
+                            nm_err!("[IpcUdsServer] Handshake parse failed: {}", err);
+                            self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                            return None;
                         }
                     }
-                    if n > 0 && self.req_buf[0] == b'{' {
-                        match serde_json::from_slice::<IpcHandshake>(&self.req_buf[..n]) {
-                            Ok(hs) => {
-                                self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                                nm_err!(
-                                    "[IpcUdsServer] Handshake received S_names={} O_names={}",
-                                    hs.s_names.len(),
-                                    hs.o_names.len()
-                                );
-                                self.send_size_hint_to_last_peer();
-                                let peer_str = self
-                                    .last_peer
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string());
-                                latest_config = Some(IpcEvent::Config(hs, peer_str));
-                                continue;
-                            }
-                            Err(err) => {
-                                nm_err!("[IpcUdsServer] Handshake parse failed: {}", err);
-                                self.recent_mismatches = self.recent_mismatches.saturating_add(1);
-                                continue;
-                            }
-                        }
-                    }
-                    if n >= 4 && &self.req_buf[..4] == b"AER1" {
-                        self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                        let peer_str = self
-                            .last_peer
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string());
-                        for v in dst_inputs.iter_mut() {
-                            *v = 0.0;
-                        }
-                        match decode_events(&self.req_buf[..n]) {
-                            Ok(events) => {
-                                for ev in events {
-                                    if ev.value == 0 {
-                                        continue;
-                                    }
-                                    let idx = if ev.addr >= self.aer_sensory_base {
-                                        (ev.addr - self.aer_sensory_base) as usize
-                                    } else {
-                                        ev.addr as usize
-                                    };
-                                    if idx < dst_inputs.len() {
-                                        dst_inputs[idx] = 1.0;
-                                    }
+                }
+                if n >= 4 && &self.req_buf[..4] == b"AER1" {
+                    self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
+                    let peer_str = self
+                        .last_peer
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string());
+                    match decode_events(&self.req_buf[..n]) {
+                        Ok(events) => {
+                            let mut inputs = vec![0.0f32; self.s];
+                            for ev in events {
+                                if ev.value == 0 {
+                                    continue;
                                 }
-                                latest_data = Some(IpcEvent::Data(self.dt_ms, 0.0, peer_str));
-                                continue;
+                                let idx = if ev.addr >= self.aer_sensory_base {
+                                    (ev.addr - self.aer_sensory_base) as usize
+                                } else {
+                                    ev.addr as usize
+                                };
+                                if idx < inputs.len() {
+                                    inputs[idx] = 1.0;
+                                }
                             }
-                            Err(_) => {
-                                self.recent_mismatches = self.recent_mismatches.saturating_add(1);
-                                self.send_size_hint_to_addr(&addr);
-                                continue;
-                            }
+                            return Some(IpcEvent::Data {
+                                t_ms: self.dt_ms,
+                                inputs,
+                                reward: 0.0,
+                                peer: peer_str,
+                            });
+                        }
+                        Err(_) => {
+                            self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                            self.send_size_hint_to_addr(&addr);
+                            return None;
                         }
                     }
-                    if n == need_data || n == need_data_reward {
-                        self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
-                        let peer_str = self
-                            .last_peer
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string());
-                        self.total_received = self.total_received.saturating_add(1);
-                        let mut rdr = &self.req_buf[..];
-                        let read_f32 = |bytes: &mut &[u8]| -> f32 {
-                            let (head, rest) = bytes.split_at(4);
-                            *bytes = rest;
-                            f32::from_le_bytes(head.try_into().unwrap())
-                        };
-                        let t_ms = read_f32(&mut rdr);
-                        for i in 0..self.s.min(dst_inputs.len()) {
-                            dst_inputs[i] = read_f32(&mut rdr);
-                        }
-                        let reward = if n == need_data_reward {
-                            read_f32(&mut rdr)
-                        } else {
-                            0.0
-                        };
-                        latest_data = Some(IpcEvent::Data(t_ms, reward, peer_str));
-                        continue;
+                }
+                if n == need_data || n == need_data_reward {
+                    self.last_peer = addr.as_pathname().map(|p| p.to_path_buf());
+                    let peer_str = self
+                        .last_peer
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string());
+                    self.total_received = self.total_received.saturating_add(1);
+                    if self.total_received == 1 || self.total_received.is_multiple_of(100) {
+                        nm_log!(
+                            "[IpcUdsServer] Received data frame #{} with S={} bytes={}",
+                            self.total_received,
+                            self.s,
+                            n
+                        );
+                    }
+                    let mut rdr = &self.req_buf[..];
+                    let read_f32 = |bytes: &mut &[u8]| -> f32 {
+                        let (head, rest) = bytes.split_at(4);
+                        *bytes = rest;
+                        f32::from_le_bytes(head.try_into().unwrap())
+                    };
+                    let t_ms = read_f32(&mut rdr);
+                    let mut inputs = Vec::with_capacity(self.s);
+                    for _ in 0..self.s {
+                        inputs.push(read_f32(&mut rdr));
+                    }
+                    let reward = if n == need_data_reward {
+                        read_f32(&mut rdr)
                     } else {
-                        self.recent_mismatches = self.recent_mismatches.saturating_add(1);
-                        self.send_size_hint_to_addr(&addr);
-                        continue;
-                    }
+                        0.0
+                    };
+                    return Some(IpcEvent::Data {
+                        t_ms,
+                        inputs,
+                        reward,
+                        peer: peer_str,
+                    });
+                } else {
+                    self.recent_mismatches = self.recent_mismatches.saturating_add(1);
+                    self.send_size_hint_to_addr(&addr);
+                    return None;
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // Prioritize data frames over handshake/config frames when both
-                    // are present in the same drain window. If config wins first,
-                    // IPC-driven stepping can be skipped and lock-step controllers
-                    // may wait indefinitely for a reply that never gets produced.
-                    return latest_data.or(latest_config);
-                }
-                Err(_) => {
-                    return latest_data.or(latest_config);
-                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return None;
+            }
+            Err(_) => {
+                return None;
             }
         }
     }
-    #[allow(dead_code)]
     fn send_outputs(&mut self, outputs: &[f32]) -> std::io::Result<()> {
         if let Some(ref peer) = self.last_peer {
             let mut buf = Vec::with_capacity(outputs.len() * 4);
@@ -676,19 +771,100 @@ impl IpcUdsServer {
             }
         }
     }
-    #[allow(dead_code)]
-    fn stop(&mut self) {}
-    #[allow(dead_code)]
-    fn take_recent_drops(&mut self) -> u64 {
-        let d = self.recent_drops;
-        self.recent_drops = 0;
-        d
+    fn start(self) -> IpcUdsService {
+        let capacity = std::env::var("NM_IPC_QUEUE_MAX_FRAMES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(64)
+            .clamp(1, 4096);
+        self.start_with_capacity(capacity)
     }
-    #[allow(dead_code)]
-    fn take_recent_mismatches(&mut self) -> u64 {
-        let m = self.recent_mismatches;
-        self.recent_mismatches = 0;
-        m
+
+    #[cfg(test)]
+    fn start_with_capacity(self, capacity: usize) -> IpcUdsService {
+        self.start_inner(capacity.max(1))
+    }
+
+    #[cfg(not(test))]
+    fn start_with_capacity(self, capacity: usize) -> IpcUdsService {
+        self.start_inner(capacity.max(1))
+    }
+
+    fn start_inner(mut self, capacity: usize) -> IpcUdsService {
+        let initial_s = self.s;
+        let initial_o = self.o;
+        let initial_dt_ms = self.dt_ms;
+        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(capacity);
+        let (command_tx, command_rx) = std::sync::mpsc::sync_channel(capacity);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        std::thread::Builder::new()
+            .name("ipc-uds-service".into())
+            .spawn(move || {
+                let mut pending: Option<IpcEvent> = None;
+                while !thread_stop.load(std::sync::atomic::Ordering::Acquire) {
+                    while let Ok(command) = command_rx.try_recv() {
+                        match command {
+                            IpcCommand::SendSizeHint => self.send_size_hint_to_last_peer(),
+                            IpcCommand::SendOutputs(outputs) => {
+                                if let Err(error) = self.send_outputs(&outputs) {
+                                    nm_err!("[IpcUdsServer] Output reply failed: {}", error);
+                                }
+                            }
+                        }
+                    }
+
+                    if pending.is_none() {
+                        pending = self.poll_next_event();
+                    }
+                    if let Some(event) = pending.take() {
+                        match event_tx.try_send(event) {
+                            Ok(()) => {}
+                            Err(std::sync::mpsc::TrySendError::Full(event)) => {
+                                pending = Some(event);
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                        }
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+            })
+            .expect("failed to spawn bounded IPC service");
+
+        IpcUdsService {
+            events: event_rx,
+            commands: command_tx,
+            stop,
+            s: initial_s,
+            o: initial_o,
+            dt_ms: initial_dt_ms,
+        }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+impl IpcUdsService {
+    fn try_recv_event(&self) -> Option<IpcEvent> {
+        self.events.try_recv().ok()
+    }
+
+    fn send_outputs(&self, outputs: &[f32]) -> bool {
+        self.commands
+            .send(IpcCommand::SendOutputs(outputs.to_vec()))
+            .is_ok()
+    }
+
+    fn send_size_hint_to_last_peer(&self) -> bool {
+        self.commands.send(IpcCommand::SendSizeHint).is_ok()
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io", unix))]
+impl Drop for IpcUdsService {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -726,6 +902,105 @@ fn ipc_handshake_has_explicit_dimensions(handshake: &IpcHandshake) -> bool {
         || handshake.expected_o.filter(|&v| v > 0).is_some()
         || handshake.num_sensory_neurons.filter(|&v| v > 0).is_some()
         || handshake.num_output_neurons.filter(|&v| v > 0).is_some()
+}
+
+#[cfg(all(test, feature = "ui", feature = "robot_io", unix))]
+mod ipc_service_tests {
+    use super::*;
+    use std::os::unix::net::UnixDatagram;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn unique_socket(label: &str) -> String {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("aarnn-{label}-{}-{nonce}.sock", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn next_event(service: &IpcUdsService) -> IpcEvent {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(event) = service.try_recv_event() {
+                return event;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for IPC event");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn service_preserves_handshake_and_queued_frames_during_startup() {
+        let server_path = unique_socket("server");
+        let client_path = unique_socket("client");
+        let server = IpcUdsServer::bind(&server_path, 1, 1, 4096, 16384)
+            .expect("bind server")
+            .start_with_capacity(1);
+        let client = UnixDatagram::bind(&client_path).expect("bind client");
+
+        client
+            .send_to(br#"{"sensory":2,"output":1,"dt_ms":2.0}"#, &server_path)
+            .expect("send handshake");
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&2.0f32.to_le_bytes());
+        frame.extend_from_slice(&0.75f32.to_le_bytes());
+        frame.extend_from_slice(&0.25f32.to_le_bytes());
+        client.send_to(&frame, &server_path).expect("send frame");
+
+        match next_event(&server) {
+            IpcEvent::Config(handshake, _) => {
+                assert_eq!(handshake.sensory, Some(2));
+            }
+            IpcEvent::Data { .. } => panic!("data overtook handshake"),
+        }
+        match next_event(&server) {
+            IpcEvent::Data {
+                t_ms,
+                inputs,
+                reward,
+                ..
+            } => {
+                assert_eq!(t_ms, 2.0);
+                assert_eq!(inputs, vec![0.75, 0.25]);
+                assert_eq!(reward, 0.0);
+            }
+            IpcEvent::Config(_, _) => panic!("missing queued data frame"),
+        }
+
+        drop(server);
+        let _ = std::fs::remove_file(&server_path);
+        let _ = std::fs::remove_file(&client_path);
+    }
+
+    #[test]
+    fn service_routes_output_reply_through_socket_owner() {
+        let server_path = unique_socket("reply-server");
+        let client_path = unique_socket("reply-client");
+        let server = IpcUdsServer::bind(&server_path, 1, 1, 4096, 16384)
+            .expect("bind server")
+            .start_with_capacity(2);
+        let client = UnixDatagram::bind(&client_path).expect("bind client");
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&1.0f32.to_le_bytes());
+        frame.extend_from_slice(&0.0f32.to_le_bytes());
+        client.send_to(&frame, &server_path).expect("send frame");
+        let _ = next_event(&server);
+
+        assert!(server.send_outputs(&[0.25]));
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set timeout");
+        let mut reply = [0u8; 4];
+        client.recv(&mut reply).expect("receive output");
+        assert_eq!(f32::from_le_bytes(reply), 0.25);
+
+        drop(server);
+        let _ = std::fs::remove_file(&server_path);
+        let _ = std::fs::remove_file(&client_path);
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -772,10 +1047,11 @@ struct CachedEdge {
 ///
 /// If `growth_enabled` is true and the binary is compiled with the
 /// `growth3d` feature, the Runner starts in growth mode (1×1 bootstrap).
-pub fn launch_ui(
+pub(crate) fn launch_ui(
     net_cfg: crate::config::NetworkConfig,
     brain_id: String,
     ipc_enabled: bool,
+    #[cfg(all(feature = "robot_io", unix))] early_ipc_service: Option<IpcUdsService>,
     distributed_node: Option<DistributedNode>,
     remote_only: bool,
     startup_snapshot_json: Option<String>,
@@ -820,6 +1096,8 @@ pub fn launch_ui(
                 net_cfg,
                 brain_id,
                 ipc_enabled,
+                #[cfg(all(feature = "robot_io", unix))]
+                early_ipc_service,
                 distributed_node,
                 remote_only,
                 startup_snapshot_json,
@@ -1337,6 +1615,19 @@ struct App {
     auto_dt_enabled: bool,
     responsiveness_target_ms: f32,
     last_longterm_update: std::time::Instant,
+    // Dedicated read-only network graph workspace. This only changes the
+    // presentation shell; it cannot issue neural or management commands.
+    graph_explorer: bool,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_path: Option<String>,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_frame: u32,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_delay_frames: u32,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_close: bool,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_requested: bool,
     // Pop-out window state
     show_neuron_detail: bool,
     selected_neuron_pick: Option<ContextPick>,
@@ -1885,6 +2176,7 @@ impl App {
         net_cfg: crate::config::NetworkConfig,
         brain_id: String,
         _ipc_enabled: bool,
+        #[cfg(all(feature = "robot_io", unix))] prebound_ipc_service: Option<IpcUdsService>,
         distributed_node: Option<DistributedNode>,
         remote_only: bool,
         startup_snapshot_json: Option<String>,
@@ -1893,6 +2185,24 @@ impl App {
         startup_remote_orchestrators: Vec<String>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
+        // Claim the IPC endpoint before importing a potentially large snapshot or
+        // rebuilding morphology.  Webots uses socket presence as its readiness
+        // signal; delaying the bind until after Runner::new can exceed the
+        // controller startup deadline even though the UI is otherwise healthy.
+        // The endpoint remains owned by the simulation thread below, and queued
+        // datagrams are drained only after the authoritative runner exists.
+        let ipc_sock_path = ipc_socket_path(&brain_id);
+        #[cfg(all(feature = "robot_io", unix))]
+        let early_ipc_service = prebound_ipc_service.or_else(|| {
+            if _ipc_enabled {
+                bind_ipc_endpoint(&brain_id, &net_cfg, aer_cfg.as_ref())
+            } else {
+                None
+            }
+        });
+        #[cfg(all(feature = "robot_io", unix))]
+        let ipc_bound_early = early_ipc_service.is_some();
+
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
         let initial_lif = lif.clone();
@@ -2002,11 +2312,27 @@ impl App {
         let mut aer_link = aer_cfg.and_then(|cfg| AerLink::bind(cfg).ok());
 
         #[cfg(all(feature = "robot_io", unix))]
-        let mut sim_ipc_server: Option<IpcUdsServer> = None;
+        let mut sim_ipc_service: Option<IpcUdsService> = early_ipc_service;
 
+        let runner_start = std::time::Instant::now();
         std::thread::Builder::new()
             .name("simulation".into())
             .spawn(move || {
+                nm_err!(
+                    "[simulation] thread started (remote_only={}, ipc_bound={}, runner_init={:.3}s)",
+                    sim_remote_only,
+                    {
+                        #[cfg(all(feature = "robot_io", unix))]
+                        {
+                            sim_ipc_service.is_some()
+                        }
+                        #[cfg(not(all(feature = "robot_io", unix)))]
+                        {
+                            false
+                        }
+                    },
+                    runner_start.elapsed().as_secs_f64()
+                );
                 // Keep simulation controller thread unpinned so the scheduler can
                 // spread its control-path load instead of concentrating it on one core.
                 let mut ipc_seed_rng = rand::rng();
@@ -2307,14 +2633,15 @@ impl App {
                                     ipc_aer_output_base,
                                 ) {
                                     Ok(srv) => {
-                                        sim_ipc_server = Some(srv);
+                                        sim_ipc_service = Some(srv.start());
                                     }
                                     Err(_) => {
-                                        sim_ipc_server = None;
+                                        sim_ipc_service = None;
                                     }
                                 }
                             }
                             SimControl::Shutdown => {
+                                nm_err!("[simulation] shutdown requested");
                                 return;
                             }
                             _ => {}
@@ -2352,11 +2679,23 @@ impl App {
 
                     #[cfg(all(feature = "robot_io", unix))]
                     if spikes_source.is_none() {
-                    if let Some(ref mut srv) = sim_ipc_server {
-                        let mut inputs = vec![0.0f32; srv.s];
-                        if let Some(ev) = srv.poll_next_event(&mut inputs) {
+                    if let Some(ref mut srv) = sim_ipc_service {
+                        if let Some(ev) = srv.try_recv_event() {
                             match ev {
-                                IpcEvent::Data(t_ms, reward, peer) => {
+                                IpcEvent::Data {
+                                    t_ms,
+                                    inputs,
+                                    reward,
+                                    peer,
+                                } => {
+                                    if stats_log_enabled() {
+                                        nm_err!(
+                                            "[simulation] IPC data admitted (t_ms={:.3}, inputs={}, peer={:?})",
+                                            t_ms,
+                                            inputs.len(),
+                                            peer
+                                        );
+                                    }
                                     let mut spk = vec![0i8; srv.s];
                                     let (io_cfg, io_profile, encode_ctx) =
                                         if let Ok(r) = sim_runner.try_read() {
@@ -2536,7 +2875,7 @@ impl App {
                         let mut idle_sleep_ms = sim_idle_sleep_ms;
                         #[cfg(all(feature = "robot_io", unix))]
                         {
-                            if sim_ipc_server.is_some() {
+                            if sim_ipc_service.is_some() {
                                 // Keep IPC round-trip latency low when Webots is driving the
                                 // simulation via UDS, even if playback is paused in the UI.
                                 idle_sleep_ms = sim_ipc_idle_sleep_ms;
@@ -2551,7 +2890,7 @@ impl App {
                     }
 
                     #[cfg(all(feature = "robot_io", unix))]
-                    let ipc_driven = sim_ipc_server.is_some();
+                    let ipc_driven = sim_ipc_service.is_some();
                     #[cfg(not(all(feature = "robot_io", unix)))]
                     let ipc_driven = false;
 
@@ -2601,6 +2940,13 @@ impl App {
                                 }
                             }
                             if let Ok(mut r) = sim_runner.try_write() {
+                                if stats_log_enabled() {
+                                    nm_err!(
+                                        "[simulation] stepping IPC frame (sensory={}, dt_ms={:?})",
+                                        spikes.len(),
+                                        ipc_dt
+                                    );
+                                }
                                 r.external_reward = reward_source.unwrap_or(0.0);
                                 if let Some(link) = aer_link.as_mut() {
                                     let start_us = (r.t_ms * 1000.0) as u64;
@@ -2706,7 +3052,7 @@ impl App {
                                     }
                                 }
                                 #[cfg(all(feature = "robot_io", unix))]
-                                if let Some(ref srv) = sim_ipc_server {
+                                if let Some(ref srv) = sim_ipc_service {
                                     let mut out = vec![0.0f32; srv.o];
                                     let io_cfg = r.net.spike_io.clone();
                                     let io_profile =
@@ -3009,7 +3355,7 @@ impl App {
                                 } else {
                                     // Non-IPC playback: reply with stale data to
                                     // avoid blocking the local step loop.
-                                    if let Some(ref srv) = sim_ipc_server {
+                                    if let Some(ref srv) = sim_ipc_service {
                                         if ipc_last_reply_values.len() != srv.o {
                                             ipc_last_reply_values.resize(srv.o, 0.5);
                                         }
@@ -3019,8 +3365,14 @@ impl App {
                             }
                             #[cfg(all(feature = "robot_io", unix))]
                             if let Some(out_vals) = ipc_reply_values {
-                                if let Some(ref mut srv) = sim_ipc_server {
+                                if let Some(ref srv) = sim_ipc_service {
                                     ipc_last_reply_values = out_vals.clone();
+                                    if stats_log_enabled() {
+                                        nm_err!(
+                                            "[simulation] queueing IPC reply (outputs={})",
+                                            out_vals.len()
+                                        );
+                                    }
                                     let _ = srv.send_outputs(&out_vals);
                                     if let Ok(mut stats) = sim_ipc_stats.try_write() {
                                         stats.last_steps = ipc_steps_taken;
@@ -3513,6 +3865,39 @@ impl App {
             auto_dt_enabled: true,
             responsiveness_target_ms: 12.0, // Aim for ~12ms calculation time to leave room for UI
             last_longterm_update: std::time::Instant::now(),
+            graph_explorer: std::env::var("NM_UI_GRAPH_ONLY")
+                .ok()
+                .map(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_path: std::env::var("NM_UI_CAPTURE_TO")
+                .ok()
+                .filter(|path| path.ends_with(".png")),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_frame: 0,
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_delay_frames: std::env::var("NM_UI_CAPTURE_DELAY_FRAMES")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(45)
+                .clamp(1, 600),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_close: std::env::var("NM_UI_CAPTURE_CLOSE")
+                .ok()
+                .map(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(true),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_requested: false,
             show_neuron_detail: false,
             selected_neuron_pick: None,
             detail_camera_zoom: 1.0,
@@ -3541,21 +3926,7 @@ impl App {
             detail_last_neuron: None,
             detail_waiting_for_activation: false,
             last_ui_render_time: std::time::Instant::now(),
-            ipc_sock_path: {
-                if let Ok(home) = std::env::var("HOME") {
-                    if brain_id == "default" {
-                        format!("{}/aarnn_rust.nn", home)
-                    } else {
-                        format!("{}/aarnn_rust.{}.nn", home, brain_id)
-                    }
-                } else {
-                    if brain_id == "default" {
-                        "/tmp/aarnn_rust.nn".to_string()
-                    } else {
-                        format!("/tmp/aarnn_rust.{}.nn", brain_id)
-                    }
-                }
-            },
+            ipc_sock_path,
             #[cfg(all(feature = "robot_io", unix))]
             ipc_connected: false,
             #[cfg(all(feature = "robot_io", unix))]
@@ -3690,7 +4061,7 @@ impl App {
         }
 
         #[cfg(all(feature = "robot_io", unix))]
-        if _ipc_enabled {
+        if _ipc_enabled && !ipc_bound_early {
             let _ = app
                 .sim_tx
                 .send(SimControl::BindIpc(app.ipc_sock_path.clone(), n_s, o));
@@ -7498,6 +7869,51 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         observe_time!("App::update");
         observe_hit!("ui_frame");
+
+        #[cfg(feature = "ui_screenshot")]
+        {
+            // Capture the rendered egui framebuffer after the graph cache has
+            // had time to populate. This is opt-in and intended for UI
+            // evidence; normal UI sessions never request or write a file.
+            let screenshot = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(image) = screenshot {
+                if let Some(path) = self.ui_capture_path.take() {
+                    let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
+                    for pixel in &image.pixels {
+                        rgba.extend_from_slice(&pixel.to_array());
+                    }
+                    match image::save_buffer(
+                        &path,
+                        &rgba,
+                        image.size[0] as u32,
+                        image.size[1] as u32,
+                        image::ColorType::Rgba8,
+                    ) {
+                        Ok(()) => nm_log!("[ui] screenshot saved to {}", path),
+                        Err(error) => {
+                            nm_err!("[ui] screenshot save failed for {}: {}", path, error)
+                        }
+                    }
+                    if self.ui_capture_close {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            } else if self.ui_capture_path.is_some() && !self.ui_capture_requested {
+                self.ui_capture_frame = self.ui_capture_frame.saturating_add(1);
+                if self.ui_capture_frame >= self.ui_capture_delay_frames {
+                    self.ui_capture_requested = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::default(),
+                    ));
+                }
+            }
+        }
+
         let ui_frame_ms = (ctx.input(|i| i.unstable_dt).max(0.0) * 1000.0) as f32;
         crate::ga::ga_update_ui_frame_ms(ui_frame_ms);
         #[cfg(feature = "sysinfo")]
@@ -9176,14 +9592,56 @@ impl eframe::App for App {
         {
             observe_time!("App::update/render");
             egui::Panel::top("top").show_inside(ui, |ui| {
-                ui.heading("Neuromorphic Network");
-                ui.label("Comparison of conventional models with Auto-Asynchronous Recursive Neuromorphic Network (AARNN)");
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading("Neuromorphic Network");
+                    ui.separator();
+                    ui.selectable_value(&mut self.graph_explorer, false, "Dashboard");
+                    ui.selectable_value(&mut self.graph_explorer, true, "Graph Explorer");
+                    if self.graph_explorer {
+                        ui.separator();
+                        ui.label("Read-only connected topology");
+                        ui.add(
+                            egui::Slider::new(&mut self.camera_zoom, 0.25..=4.0)
+                                .text("Zoom")
+                                .show_value(false),
+                        );
+                        #[cfg(feature = "growth3d")]
+                        {
+                            ui.add(
+                                egui::Slider::new(&mut self.camera_yaw_degrees, -80.0..=80.0)
+                                    .text("Rotate")
+                                    .show_value(false),
+                            );
+                        }
+                        if ui.button("Reset camera").clicked() {
+                            self.camera_zoom = 1.0;
+                            self.camera_yaw_degrees = 0.0;
+                            self.camera_pitch_degrees = 0.0;
+                            self.cam_pan = egui::Vec2::ZERO;
+                        }
+                    } else {
+                        ui.label("AARNN operational dashboard");
+                    }
+                });
             });
 
-            egui::Panel::right("controls")
-                .resizable(true)
-                .default_size(260.0_f32)
-                .show_inside(ui, |ui| {
+            // Graph Explorer is a presentation surface: give its canvas the
+            // full width and keep operational controls on the Dashboard tab.
+            // Use a distinct panel id so egui's remembered dashboard width
+            // cannot reappear when switching back to the graph.
+            let controls_panel_id = if self.graph_explorer {
+                "graph_explorer_controls"
+            } else {
+                "controls"
+            };
+            egui::Panel::right(controls_panel_id)
+                    .resizable(true)
+                    .size_range(0.0..=600.0)
+                    .default_size(if self.graph_explorer { 0.0 } else { 260.0_f32 })
+                    .show_inside(ui, |ui| {
+                    if self.graph_explorer {
+                        return;
+                    }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.heading("Controls");

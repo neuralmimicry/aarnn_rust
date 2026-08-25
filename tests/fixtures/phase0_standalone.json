@@ -1,0 +1,28 @@
+{
+  "code_revision": "92b525d",
+  "toolchain": "1.92.0-x86_64-unknown-linux-gnu",
+  "fixture_command": "cargo test --test phase0_baseline",
+  "seed": 305441741,
+  "duration_ms": 6.0,
+  "sensory_spikes": [
+    [1, 0, 0, 1],
+    [0, 1, 1, 0],
+    [1, 1, 0, 0],
+    [0, 0, 1, 1],
+    [1, 0, 1, 0],
+    [0, 1, 0, 1]
+  ],
+  "network": {
+    "num_sensory_neurons": 4,
+    "num_hidden_layers": 2,
+    "num_hidden_per_layer_initial": 3,
+    "num_output_neurons": 2,
+    "p_in": 1.0,
+    "p_hidden": 1.0,
+    "p_out": 1.0,
+    "growth_enabled": false,
+    "use_morphology": false,
+    "use_aarnn_delays": false
+  },
+  "expected_digest": "e60b83dc0209bfc4"
+}

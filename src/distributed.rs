@@ -86,6 +86,8 @@ use crate::deployment::{DeploymentConfig, ExecutionMode};
 use crate::runner::Runner;
 use crate::sim::{Learning, NeuronModel};
 use crate::spike_io::transport::{encode_exchange, spikes_from_transport};
+#[cfg(feature = "superdense_executor")]
+use crate::superdense::SuperdenseController;
 use anyhow::Context;
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -324,6 +326,8 @@ fn apply_control_to_managed_network(
         }
         proto::control_update::Action::Repeat => {
             net.runner.reset();
+            #[cfg(feature = "superdense_executor")]
+            net.superdense.reset();
             net.remote_spikes_fwd.clear();
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
@@ -350,6 +354,8 @@ fn apply_control_to_managed_network(
                 }
             }
             net.runner = runner;
+            #[cfg(feature = "superdense_executor")]
+            net.superdense.reset();
             net.remote_spikes_fwd.clear();
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
@@ -375,6 +381,8 @@ fn apply_control_to_managed_network(
                 }
             }
             net.runner = runner;
+            #[cfg(feature = "superdense_executor")]
+            net.superdense.reset();
             net.remote_spikes_fwd.clear();
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
@@ -1824,6 +1832,8 @@ fn limit_target_nodes_for_deployment(
 pub struct ManagedNetwork {
     pub id: String,
     pub runner: Runner,
+    #[cfg(feature = "superdense_executor")]
+    pub(crate) superdense: SuperdenseController,
     pub assigned_layers: Vec<u32>,
     pub redundant_layers: Vec<u32>,
     /// Spikes received from other nodes for layers adjacent to our assigned layers.
@@ -1847,6 +1857,16 @@ pub struct ManagedNetwork {
     /// Used to avoid expensive no-op reimports on periodic rebalance heartbeats.
     pub last_config_fingerprint: Option<u64>,
     pub workspace_binding: Option<NetworkWorkspaceBinding>,
+}
+
+#[cfg(feature = "superdense_executor")]
+impl ManagedNetwork {
+    fn step_with_superdense(
+        &mut self,
+        sensory: Option<&[i8]>,
+    ) -> Result<crate::runner::StepOut, crate::superdense::SuperdenseError> {
+        self.superdense.step(&mut self.runner, sensory)
+    }
 }
 
 fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
@@ -3786,6 +3806,8 @@ impl DistributedNode {
                                     e
                                 );
                             }
+                            #[cfg(feature = "superdense_executor")]
+                            net.superdense.reset();
                             net.last_config_fingerprint = incoming_cfg_fp;
                             if !net.assigned_layers.is_empty() {
                                 if let (Some(min), Some(max)) = (
@@ -3803,6 +3825,8 @@ impl DistributedNode {
                         } else if let Ok(new_cfg) = serde_json::from_str::<NetworkConfig>(&cfg_str)
                         {
                             net.runner.apply_config(new_cfg);
+                            #[cfg(feature = "superdense_executor")]
+                            net.superdense.reset();
                             net.last_config_fingerprint = incoming_cfg_fp;
                         }
                     }
@@ -3818,6 +3842,8 @@ impl DistributedNode {
                         if let Some(m) = NeuronModel::from_str(&cmd.neuron_model) {
                             if net.runner.neuron_model != m {
                                 net.runner.set_model(m);
+                                #[cfg(feature = "superdense_executor")]
+                                net.superdense.reset();
                             }
                         }
                     }
@@ -3825,6 +3851,8 @@ impl DistributedNode {
                         if let Some(l) = Learning::from_str(&cmd.learning_rule) {
                             if net.runner.learning != l {
                                 net.runner.set_learning(l);
+                                #[cfg(feature = "superdense_executor")]
+                                net.superdense.reset();
                             }
                         }
                     }
@@ -3923,6 +3951,8 @@ impl DistributedNode {
                         Arc::new(RwLock::new(ManagedNetwork {
                             id: network_id,
                             runner,
+                            #[cfg(feature = "superdense_executor")]
+                            superdense: SuperdenseController::new(),
                             assigned_layers: cmd.layers,
                             redundant_layers: cmd.redundant_layers,
                             remote_spikes_fwd: HashMap::new(),
@@ -4039,6 +4069,22 @@ impl DistributedNode {
                 }
 
                 let external_sensory = net.external_sensory_spikes.take();
+                #[cfg(feature = "superdense_executor")]
+                let out = match net.step_with_superdense(external_sensory.as_deref()) {
+                    Ok(out) => out,
+                    Err(error) => {
+                        if external_sensory.is_some() {
+                            net.external_sensory_spikes = external_sensory;
+                        }
+                        nm_err!(
+                            "[warn] Superdense step for network {} deferred for retry: {}",
+                            net.id,
+                            error
+                        );
+                        continue;
+                    }
+                };
+                #[cfg(not(feature = "superdense_executor"))]
                 let out = if let Some(ref sensory) = external_sensory {
                     net.runner.step(Some(sensory.as_slice()))
                 } else {
@@ -5862,6 +5908,69 @@ mod tests {
         assert_eq!(
             state.choose_spike_transport("peer-d", true, true),
             SpikeTransportMethod::Mpi
+        );
+    }
+
+    #[tokio::test]
+    async fn phase0_seven_node_capture_matches_current_compatibility_behaviour() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/architecture/baseline/phase0-seven-node-layer.json"
+        ))
+        .expect("valid seven-node Phase 0 fixture");
+        let assignments = build_sharded_node_assignments(
+            &[
+                ("node-01".to_string(), 7.0),
+                ("node-02".to_string(), 6.0),
+                ("node-03".to_string(), 5.0),
+                ("node-04".to_string(), 4.0),
+                ("node-05".to_string(), 3.0),
+                ("node-06".to_string(), 2.0),
+                ("node-07".to_string(), 1.0),
+            ],
+            3,
+        );
+        let captured_assignments: Vec<serde_json::Value> = assignments
+            .iter()
+            .map(|(node_id, layers, redundant_layers)| {
+                serde_json::json!({
+                    "node_id": node_id,
+                    "layers": layers,
+                    "redundant_layers": redundant_layers,
+                })
+            })
+            .collect();
+        assert_eq!(
+            serde_json::json!({
+                "anchor_node": assignments[0].0,
+                "assignments": captured_assignments,
+            }),
+            fixture["assignment_observation"]
+        );
+
+        let node = DistributedNode::new("fixture-node".to_string(), false);
+        let initial_transport = node
+            .state
+            .read()
+            .await
+            .choose_spike_transport("fixture-peer", true, false)
+            .as_str();
+        let mut state = node.state.write().await;
+        for _ in 0..SPIKE_FAILOVER_STREAK {
+            state.record_spike_transport_failure(
+                "fixture-peer",
+                SpikeTransportMethod::PersistentStream,
+            );
+        }
+        let fallback_transport = state
+            .choose_spike_transport("fixture-peer", true, false)
+            .as_str();
+        assert_eq!(
+            serde_json::json!({
+                "burst_timeout_ms": spike_burst_timeout().as_millis(),
+                "initial_preference_with_persistent_stream": initial_transport,
+                "preference_after_three_persistent_failures": fallback_transport,
+            }),
+            fixture["transport_observation"]
         );
     }
 }

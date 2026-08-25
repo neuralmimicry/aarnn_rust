@@ -75,6 +75,16 @@ making the orchestrator reachable is insufficient. The SwarmHPC deployment runs
 engine pods on their node networks at TCP 50052, separate from the orchestrator
 on TCP 50051.
 
+The causal migration contracts are currently reference-only and default-off.
+The generated causal service has a bounded validation/echo implementation for
+contract testing, not a production shard receiver or durable acknowledgement
+boundary.
+Do not enable `causal_transport`, `replicated_durability`, `management_v1` or
+`workstation_io` in a deployment until the corresponding generated protocol,
+quorum, durable-store and browser/native-device gates have passed. Existing
+layer/vector `SpikeBatch` traffic is compatibility behaviour and is not a
+claim of causally coherent distributed execution.
+
 Useful checks:
 
 ```bash
@@ -86,6 +96,18 @@ systemctl status aarnn-node
 journalctl -u aarnn-node -n 100 --no-pager
 ss -lntup | grep -E ':50050|:50051|:50052'
 ```
+
+For authorised read-only workspace observation, the gateway also provides:
+
+```text
+GET /api/runtime/workspaces/{workspace_id}/topology?max_nodes=512&max_edges=4096
+```
+
+The response is bounded and carries `topology_generation`, layer/node metadata,
+active state and exact non-zero weighted edges for the included nodes. It is a
+local-runner compatibility projection until the distributed shard snapshot RPC
+and generated management clients are accepted; it must not be treated as
+cluster-global topology evidence.
 
 The web UI and Rust UI connect to the orchestrator, not independently to every
 worker. Their status/node selectors therefore include native nodes as soon as

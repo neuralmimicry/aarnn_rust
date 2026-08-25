@@ -3,15 +3,21 @@ name = "aarnn_rust"
 version = "0.1.27"
 edition = "2024"
 
+[workspace]
+members = [".", "tools/xtask"]
+default-members = ["."]
+resolver = "2"
+
 [dependencies]
 ndarray = { version = "0.17", features = ["blas", "rayon"] }
 ndarray-rand = "0.16"
 rand = { version = "0.10", features = ["thread_rng"] }
 rand_distr = "0.6"
+jni = { version = "0.21", optional = true }
 clap = { version = "4.6", features = ["derive"] }
-plotters = "0.3"
-plotters-svg = "0.3"
-plotters-bitmap = "0.3"
+plotters = { version = "0.3", optional = true }
+plotters-svg = { version = "0.3", optional = true }
+plotters-bitmap = { version = "0.3", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = "2.0"
@@ -81,7 +87,11 @@ version = "6.4"
 optional = true
 
 [features]
-default = ["parallel", "sysinfo"]
+default = ["parallel", "sysinfo", "viz"]
+
+# Host-only batch visualisation. Android and other portable profiles do not
+# pull desktop font/rendering dependencies into the native library.
+viz = ["dep:plotters", "dep:plotters-svg", "dep:plotters-bitmap"]
 
 # Enable the interactive UI and audio providers via optional dependencies
 # Use "dep:" to activate optional deps as features
@@ -97,6 +107,11 @@ ui = [
     # serde and serde_json are always available
     "sysinfo",
 ]
+
+# Development-only native framebuffer capture for UI evidence. The eframe
+# feature is inert unless NM_UI_CAPTURE_TO is explicitly supplied. Set
+# NM_UI_CAPTURE_CLOSE=0 to keep the UI/runtime alive after the one-shot save.
+ui_screenshot = ["ui", "robot_io", "dep:image"]
 
 # Experimental: enable 3D spatial growth of the hidden topology
 growth3d = []
@@ -128,6 +143,21 @@ desktop_ui_workload = [
     "image_input",
     "robot_io",
 ]
+
+# Distributed-emulator migration gates. The reference contracts are always
+# compilable for tests; runtime adoption remains explicitly opt-in until each
+# phase's production integration gate is completed.
+superdense_executor = []
+virtual_partitioning = ["superdense_executor"]
+causal_transport = ["virtual_partitioning"]
+multi_brain_scheduler = ["causal_transport"]
+replicated_durability = ["multi_brain_scheduler"]
+management_v1 = ["replicated_durability"]
+workstation_io = ["management_v1"]
+
+# Android JNI entry points. Native packaging is performed by the Android
+# Gradle build into generated output; no ABI library is checked into source.
+mobile_android = ["dep:jni", "parallel"]
 
 # Backward-compatible alias for the previous broad container feature set.
 container = ["desktop_ui_workload"]

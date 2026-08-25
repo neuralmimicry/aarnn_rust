@@ -28,6 +28,13 @@ service DistributedNeuromorphic {
   rpc GetNetworkActivity(NetworkActivityRequest) returns (NetworkActivityResponse);
 }
 
+// Additive causal data-plane service.  StreamSpikes remains the compatibility
+// service until shard ownership, durable accounting and a generation-boundary
+// migration have been accepted.
+service CausalDataPlane {
+  rpc StreamEvents(stream CausalEventEnvelope) returns (stream CausalEventEnvelope);
+}
+
 message GAEvaluationRequest {
   string config_json = 1;
   double sim_time_ms = 2;
@@ -190,6 +197,40 @@ message SpikeBatch {
   bytes aer_payload = 6;
   // Base address for decoding (0 means addresses are relative)
   uint32 aer_base = 7;
+}
+
+// Additive Phase 4 reference envelope. Legacy SpikeBatch remains available
+// until a generation-boundary migration switches a brain to causal_transport.
+message LogicalTag {
+  uint64 tick = 1;
+  uint32 microstep = 2;
+}
+
+message CausalEventEnvelope {
+  enum EventStage {
+    EVENT_STAGE_UNKNOWN = 0;
+    SPIKE_DECISION = 1;
+    AXONAL_DEPARTURE = 2;
+    AXONAL_ARRIVAL = 3;
+    SYNAPTIC_TRANSITION = 4;
+    POSTSYNAPTIC_EFFECT = 5;
+    PLASTICITY_UPDATE = 6;
+    FIELD_UPDATE = 7;
+  }
+  uint32 schema_version = 1;
+  uint64 brain_id = 2;
+  uint64 stream_id = 3;
+  uint64 sequence = 4;
+  uint64 lease_term = 5;
+  uint64 route_id = 6;
+  uint64 partition_generation = 7;
+  LogicalTag tag = 8;
+  uint64 event_id = 9;
+  EventStage stage = 10;
+  uint64 source_id = 11;
+  uint64 target_id = 12;
+  bytes payload = 13;
+  bool deferred_from_nonconvergence = 14;
 }
 
 message NetworkUpdateRequest {
