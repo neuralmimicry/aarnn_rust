@@ -401,10 +401,14 @@ jobs:
             "${job_run_root}" "${job_storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
-          if command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
-          elif command -v runc >/dev/null 2>&1; then
+          # Hosted Ubuntu runners currently ship a crun build that can fail
+          # before the first container starts with "unknown version
+          # specified". Prefer runc when available and retain crun as the
+          # fallback used by ARM self-hosted runners.
+          if command -v runc >/dev/null 2>&1; then
             oci_runtime="runc"
+          elif command -v crun >/dev/null 2>&1; then
+            oci_runtime="crun"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
