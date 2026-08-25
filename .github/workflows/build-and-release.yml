@@ -77,6 +77,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # qc01 is also the Kubernetes control-plane host.  Keep concurrent Rust
+  # linkers bounded so the ARM64 verification job cannot starve PostgreSQL,
+  # Gail, and the other tenant workloads while compiling large test binaries.
+  CARGO_BUILD_JOBS: "2"
   # Keep every JavaScript action on the Node 24 runtime, including actions
   # whose metadata still declares an older runtime during the transition.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
