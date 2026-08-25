@@ -86,10 +86,24 @@ pub fn bootstrap(
 }
 
 pub fn spike_transport_available() -> bool {
+    let mpi_env_present = [
+        "OMPI_COMM_WORLD_SIZE",
+        "OMPI_COMM_WORLD_RANK",
+        "MPI_LOCALRANKID",
+        "PMI_SIZE",
+        "PMIX_RANK",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some());
     let enabled = std::env::var("NM_MPI_TRANSPORT")
         .ok()
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-        .unwrap_or(true);
+        // OpenMPI is an optional transport.  Do not call MPI initialisation in
+        // ordinary gRPC/UDS processes merely because the binary was compiled
+        // with `--all-features`; outside an MPI launcher that initialisation can
+        // block while looking for a job runtime.  An explicit opt-in remains
+        // available for managed environments that provide their own launcher.
+        .unwrap_or(mpi_env_present);
     if !enabled {
         return false;
     }

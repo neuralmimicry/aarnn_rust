@@ -36,11 +36,12 @@ use crate::aarnn::dynamics::{
 #[cfg(feature = "growth3d")]
 use crate::aarnn::plasticity::enforce_dale_matrix_cols_with_mask as dale_enforce_cols_with_mask;
 use crate::aarnn::plasticity::{
-    ShortTermPlasticityParams, apply_synaptic_scaling_matrix_rows as scale_synaptic_rows,
-    enforce_dale_matrix_cols as dale_enforce_cols,
+    PlasticityRule, ShortTermPlasticityParams, WeightProposal,
+    apply_synaptic_scaling_matrix_rows as scale_synaptic_rows, apply_weight_delta,
+    commit_weight_proposals, enforce_dale_matrix_cols as dale_enforce_cols,
     is_inhibitory_presyn as inferred_inhibitory_presyn,
     release_probability as release_probability_ref, stp_update_slice as stp_update_slice_ref,
-    triplet_eta_scale,
+    triplet_eta_scale, weight_delta,
 };
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::aarnn::transmission::{
@@ -52,18 +53,18 @@ use crate::aarnn::transmission::{
 use crate::cl_compute::{
     Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, CLBuffers, ExecuteKernel, OpenCLManager,
 };
-#[cfg(feature = "growth3d")]
-use crate::config::AarnnBioParams;
 use crate::config::{
-    AarnnBiomimicryProfile, apply_clumping_layer_defaults,
+    AarnnBioParams, AarnnBiomimicryProfile, apply_clumping_layer_defaults,
     backfill_aarnn_biomimicry_profile_missing_fields, infer_biomimicry_profile,
 };
 #[cfg(feature = "growth3d")]
 use crate::config::{DevelopmentStage, DevelopmentStageMode};
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
+use crate::field_events::{FieldEvent, FieldKind, FieldReduction, FieldScope};
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{EvolutionResult, Morphology};
 use crate::network::{BuiltNetwork, build_network};
+use crate::neuron_kernels::{izh_transition, lif_transition};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
 use crate::topology::{EarlyCell3D, EarlyCellPhase, Node3D, Topology3D};
@@ -79,6 +80,15 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+
+#[inline]
+fn runner_plasticity_rule(learning: Learning) -> PlasticityRule {
+    match learning {
+        Learning::Stdp | Learning::Aarnn => PlasticityRule::Stdp,
+        Learning::Hebb => PlasticityRule::Hebb,
+        Learning::Oja => PlasticityRule::Oja,
+    }
+}
 
 // -------------------- Save / Load helper types --------------------
 #[derive(Serialize, Deserialize, Clone)]
@@ -305,6 +315,15 @@ pub struct SnapshotRuntimeState {
     pub neuromod_serotonin: f32,
     pub resonance_level: f32,
     pub external_reward: f32,
+    /// Explicit field values admitted at a logical boundary.  Defaults keep
+    /// snapshots written before field events readable.
+    pub ambient_field_drive: f32,
+    pub perceptual_field_drive: f64,
+    /// Mean sensory prediction error from the most recently admitted input.
+    /// This is persisted so derived next-tick neuromodulator field events can
+    /// be replayed without consulting packet-arrival or wall-clock state.
+    #[serde(default)]
+    pub perceptual_mean_error: f64,
     pub sleep_active: bool,
     pub world_model_state: Vec<f64>,
     pub world_model_proj: Option<Matrix2>,
@@ -549,6 +568,36 @@ mod snapshot_payload_tests {
     #[test]
     fn invalid_json_is_not_accepted_as_a_snapshot() {
         assert!(decode_snapshot_with_profile_backfill("{not-json").is_err());
+    }
+
+    #[test]
+    fn executor_owned_tick_is_validated_before_runner_mutation() {
+        let mut config = NetworkConfig::default();
+        config.clumping_design = crate::config::ClumpingDesign::None;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 2;
+        config.num_sensory_neurons = 2;
+        config.num_output_neurons = 1;
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            config,
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+        assert!(matches!(
+            runner.step_at(crate::deterministic::LogicalTag::new(1, 0), None),
+            Err(RunnerTimeError::TickMismatch {
+                expected: 1,
+                actual: 0
+            })
+        ));
+        assert!(matches!(
+            runner.step_at(crate::deterministic::LogicalTag::new(0, 1), None),
+            Err(RunnerTimeError::NonZeroMicrostep(_))
+        ));
+        assert_eq!(runner.t, 0);
+        assert_eq!(runner.t_ms, 0.0);
     }
 }
 
@@ -1129,6 +1178,12 @@ pub struct Runner {
     pub resonance_level: f32,
     // External reward channel (AARNN)
     pub external_reward: f32,
+    // Explicit scheduled field state applied by the causal executor.
+    pub ambient_field_drive: f32,
+    pub perceptual_field_drive: f64,
+    /// Mean sensory prediction error from the most recently admitted input.
+    /// It is an explicit causal input to the next neuromodulator field event.
+    pub perceptual_mean_error: f64,
     // Sleep/dream state (AARNN)
     pub sleep_active: bool,
     // World-model phase-space state (AARNN)
@@ -1396,6 +1451,42 @@ pub struct StepOut {
     pub t_ms: f64,
     pub spk_h: Vec<Array1<i8>>, // current spikes
     pub spk_o: Array1<i8>,
+}
+
+/// Inputs and derived error signals admitted for one biological transition.
+///
+/// This is the first explicit phase result in the migration away from the
+/// monolithic runner kernel. The values are captured before synaptic release,
+/// accumulation or neuron state mutation consumes them.
+struct InputPhaseResult {
+    sensory: Vec<i8>,
+    perceptual_error_drive: f64,
+    #[cfg(not(feature = "superdense_executor"))]
+    perceptual_mean_err: f64,
+}
+
+/// Logical-time mismatch at the temporary legacy-kernel boundary.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RunnerTimeError {
+    #[error("legacy runner accepts only tick-boundary work, received {0}")]
+    NonZeroMicrostep(crate::deterministic::LogicalTag),
+    #[error("logical tick {tick} cannot be represented by this runner")]
+    TickOutOfRange { tick: u64 },
+    #[error("runner state is at tick {actual}, executor supplied tick {expected}")]
+    TickMismatch { expected: usize, actual: usize },
+    #[error("runner tick overflowed while committing logical tick {tick}")]
+    TickOverflow { tick: u64 },
+}
+
+/// Failure to apply an explicit causal field update before biological work.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum FieldApplicationError {
+    #[error(transparent)]
+    Invalid(#[from] crate::field_events::FieldEventError),
+    #[error("field scope {0:?} is not representable by this local runner")]
+    UnsupportedScope(FieldScope),
+    #[error("field layer {0} is outside the runner's hidden topology")]
+    InvalidLayer(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1712,34 +1803,6 @@ impl Runner {
     #[inline]
     fn sanitize_current_array(curr: &mut Array1<f64>) {
         sanitize_current_array_ref(curr);
-    }
-
-    #[inline]
-    fn sanitize_izh_state(v: f64, u: f64, p: IzhikevichParams) -> (f64, f64, bool) {
-        let rest_v = if p.membrane_reset_potential_c.is_finite() {
-            p.membrane_reset_potential_c
-        } else {
-            -65.0
-        };
-        let rest_u = p.recovery_sensitivity_b * rest_v;
-        if !v.is_finite() || !u.is_finite() {
-            return (rest_v, rest_u, true);
-        }
-        let v_min = (rest_v - 120.0).min(-150.0);
-        let v_max = (p.v_th + 80.0).max(40.0);
-        let u_min = (rest_u - 400.0).min(-600.0);
-        let u_max = (rest_u + 400.0).max(600.0);
-        (v.clamp(v_min, v_max), u.clamp(u_min, u_max), false)
-    }
-
-    #[inline]
-    fn integrate_izh_step(v: f64, u: f64, i: f64, p: IzhikevichParams) -> (f64, f64, bool) {
-        let (v0, u0, reset0) = Self::sanitize_izh_state(v, u, p);
-        let i0 = Self::sanitize_current_value(i);
-        let nv = v0 + p.dt * (0.04 * v0 * v0 + 5.0 * v0 + 140.0 - u0 + i0);
-        let nu = u0 + p.dt * (p.recovery_time_constant_a * (p.recovery_sensitivity_b * nv - u0));
-        let (nv2, nu2, reset1) = Self::sanitize_izh_state(nv, nu, p);
-        (nv2, nu2, reset0 || reset1)
     }
 
     pub fn sim_parallel_status(&self) -> SimParallelStatus {
@@ -4145,6 +4208,9 @@ impl Runner {
             neuromod_serotonin: net.aarnn_neuromod_baseline_serotonin.max(0.0),
             resonance_level: 0.0,
             external_reward: 0.0,
+            ambient_field_drive: 0.0,
+            perceptual_field_drive: 0.0,
+            perceptual_mean_error: 0.0,
             sleep_active: false,
             world_model_state: Vec::new(),
             world_model_proj: None,
@@ -4545,6 +4611,9 @@ impl Runner {
             neuromod_serotonin: self.neuromod_serotonin,
             resonance_level: self.resonance_level,
             external_reward: self.external_reward,
+            ambient_field_drive: self.ambient_field_drive,
+            perceptual_field_drive: self.perceptual_field_drive,
+            perceptual_mean_error: self.perceptual_mean_error,
             sleep_active: self.sleep_active,
             world_model_state: self.world_model_state.clone(),
             world_model_proj: self.world_model_proj.as_ref().map(mat_from_nd),
@@ -4721,6 +4790,9 @@ impl Runner {
         self.neuromod_serotonin = state.neuromod_serotonin;
         self.resonance_level = state.resonance_level;
         self.external_reward = state.external_reward;
+        self.ambient_field_drive = state.ambient_field_drive;
+        self.perceptual_field_drive = state.perceptual_field_drive;
+        self.perceptual_mean_error = state.perceptual_mean_error;
         self.sleep_active = state.sleep_active;
         self.world_model_state = state.world_model_state;
         self.world_model_proj = state.world_model_proj.as_ref().map(nd_from_mat);
@@ -5213,11 +5285,16 @@ impl Runner {
 
     #[allow(dead_code)]
     pub fn import_network_json(&mut self, s: &str) -> anyhow::Result<()> {
-        let snap = decode_snapshot_with_profile_backfill(s)?;
+        let mut snap = decode_snapshot_with_profile_backfill(s)?;
         let snapshot_step = snap.t;
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;
-        let snapshot_runtime_state = snap.runtime_state;
+        let snapshot_runtime_state = snap.runtime_state.take();
+        let snapshot_presence_in = snap.p_in.take();
+        let snapshot_presence_fwd = snap.p_fwd.take();
+        let snapshot_presence_bwd = snap.p_bwd.take();
+        let snapshot_presence_rec = snap.p_rec.take();
+        let snapshot_presence_out = snap.p_out.take();
         // Update config first to ensure dimensions agree
         self.net = snap.net;
         self.layer_range = snap.layer_range.map(|(s, e)| s..e);
@@ -5227,21 +5304,6 @@ impl Runner {
         self.w_hh_bwd = snap.w_hh_bwd.iter().map(nd_from_mat).collect();
         self.w_hh_rec = snap.w_hh_rec.iter().map(nd_from_mat).collect();
         self.w_out = nd_from_mat(&snap.w_out);
-        if let Some(p) = snap.p_in {
-            self.conn_presence_in = nd_from_mat_u32(&p);
-        }
-        if let Some(p) = snap.p_fwd {
-            self.conn_presence_fwd = p.iter().map(nd_from_mat_u32).collect();
-        }
-        if let Some(p) = snap.p_bwd {
-            self.conn_presence_bwd = p.iter().map(nd_from_mat_u32).collect();
-        }
-        if let Some(p) = snap.p_rec {
-            self.conn_presence_rec = p.iter().map(nd_from_mat_u32).collect();
-        }
-        if let Some(p) = snap.p_out {
-            self.conn_presence_out = nd_from_mat_u32(&p);
-        }
         // A persisted developmental snapshot can legitimately contain an
         // output layer whose rows were all pruned during early morphology.
         // Keep the I/O contract usable: repair only zero-in-degree outputs,
@@ -5434,6 +5496,26 @@ impl Runner {
         if let Some(runtime_state) = snapshot_runtime_state {
             self.apply_snapshot_runtime_state(runtime_state);
         }
+        // Presence counters are structural persisted state. Restore them only
+        // after the final topology/state dimensions exist; restoring before
+        // reset made an additional import lose counters and broke replay
+        // idempotence.
+        if let Some(presence) = snapshot_presence_in {
+            self.conn_presence_in = nd_from_mat_u32(&presence);
+        }
+        if let Some(presence) = snapshot_presence_fwd {
+            self.conn_presence_fwd = presence.iter().map(nd_from_mat_u32).collect();
+        }
+        if let Some(presence) = snapshot_presence_bwd {
+            self.conn_presence_bwd = presence.iter().map(nd_from_mat_u32).collect();
+        }
+        if let Some(presence) = snapshot_presence_rec {
+            self.conn_presence_rec = presence.iter().map(nd_from_mat_u32).collect();
+        }
+        if let Some(presence) = snapshot_presence_out {
+            self.conn_presence_out = nd_from_mat_u32(&presence);
+        }
+        self.sync_presence_sizes();
         self.t = snapshot_step;
         self.t_ms = snapshot_time_ms;
         if let Some(seed) = snapshot_rng_seed {
@@ -5553,6 +5635,9 @@ impl Runner {
         self.neuromod_serotonin = self.net.aarnn_neuromod_baseline_serotonin.max(0.0);
         self.resonance_level = 0.0;
         self.external_reward = 0.0;
+        self.ambient_field_drive = 0.0;
+        self.perceptual_field_drive = 0.0;
+        self.perceptual_mean_error = 0.0;
         self.sleep_active = false;
         self.world_model_state.clear();
         self.world_model_proj = None;
@@ -6276,6 +6361,1105 @@ impl Runner {
     /// - When AARNN+morphology are active, synaptic currents are accumulated
     ///   using exact per‑synapse delays.
     pub fn step(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
+        let current_tick = self.t;
+        let mut output = self.run_legacy_biological_kernel(s_t_external);
+        self.commit_legacy_tick(current_tick)
+            .expect("legacy runner tick overflow");
+        output.t = self.t;
+        output.t_ms = self.t_ms;
+        output
+    }
+
+    /// Execute the temporary monolithic kernel under an executor-owned logical
+    /// tick. This migration boundary rejects stale/future tags before mutation;
+    /// the kernel is still scheduled only at microstep zero until its internal
+    /// biological stages are fully extracted.
+    pub fn step_at(
+        &mut self,
+        tag: crate::deterministic::LogicalTag,
+        s_t_external: Option<&[i8]>,
+    ) -> Result<StepOut, RunnerTimeError> {
+        if tag.microstep != 0 {
+            return Err(RunnerTimeError::NonZeroMicrostep(tag));
+        }
+        let expected = usize::try_from(tag.tick)
+            .map_err(|_| RunnerTimeError::TickOutOfRange { tick: tag.tick })?;
+        if self.t != expected {
+            return Err(RunnerTimeError::TickMismatch {
+                expected,
+                actual: self.t,
+            });
+        }
+        let expected_next = expected
+            .checked_add(1)
+            .ok_or(RunnerTimeError::TickOverflow { tick: tag.tick })?;
+        let mut output = self.run_legacy_biological_kernel(s_t_external);
+        self.commit_legacy_tick(expected)?;
+        debug_assert_eq!(self.t, expected_next);
+        output.t = self.t;
+        output.t_ms = self.t_ms;
+        Ok(output)
+    }
+
+    /// Apply one validated scheduled field update.  The local reference
+    /// runner represents a whole-brain scope and explicit hidden-layer
+    /// threshold deltas.  Component/shard routing is deliberately rejected
+    /// until the Phase 3 shard-owned state exists; accepting it here would
+    /// create an implicit multi-writer path.
+    pub fn apply_field_event(&mut self, event: &FieldEvent) -> Result<(), FieldApplicationError> {
+        event.validate()?;
+        let layer = match event.scope {
+            FieldScope::WholeBrain => None,
+            FieldScope::Layer(layer) => {
+                if usize::try_from(layer)
+                    .ok()
+                    .is_none_or(|layer| layer >= self.net.num_hidden_layers)
+                {
+                    return Err(FieldApplicationError::InvalidLayer(layer));
+                }
+                Some(layer as usize)
+            }
+            scope @ (FieldScope::Component(_) | FieldScope::Shard(_)) => {
+                return Err(FieldApplicationError::UnsupportedScope(scope));
+            }
+        };
+
+        let reduced_value = |current: f64| match event.reduction {
+            FieldReduction::ExponentialMovingAverage { alpha_millionths } => {
+                let alpha = f64::from(alpha_millionths) / 1_000_000.0;
+                current * (1.0 - alpha) + event.value * alpha
+            }
+            _ => event.value,
+        };
+
+        match event.kind {
+            FieldKind::HomeostaticThresholdDelta => {
+                let delta = event.value;
+                if let Some(layer) = layer {
+                    self.thr_offset_h[layer]
+                        .mapv_inplace(|value| (value + delta).clamp(-1.0e6, 1.0e6));
+                } else {
+                    for values in &mut self.thr_offset_h {
+                        values.mapv_inplace(|value| (value + delta).clamp(-1.0e6, 1.0e6));
+                    }
+                    self.thr_offset_o
+                        .mapv_inplace(|value| (value + delta).clamp(-1.0e6, 1.0e6));
+                }
+            }
+            FieldKind::ResonanceLevel => {
+                if layer.is_some() {
+                    return Err(FieldApplicationError::UnsupportedScope(event.scope));
+                }
+                self.resonance_level =
+                    reduced_value(self.resonance_level as f64).clamp(0.0, 1.0) as f32;
+            }
+            FieldKind::AmbientDrive => {
+                if layer.is_some() {
+                    return Err(FieldApplicationError::UnsupportedScope(event.scope));
+                }
+                self.ambient_field_drive =
+                    reduced_value(self.ambient_field_drive as f64).clamp(0.0, 1.0e6) as f32;
+            }
+            FieldKind::PerceptualErrorDrive => {
+                if layer.is_some() {
+                    return Err(FieldApplicationError::UnsupportedScope(event.scope));
+                }
+                self.perceptual_field_drive =
+                    reduced_value(self.perceptual_field_drive).clamp(0.0, 1.0e6);
+            }
+            FieldKind::Dopamine | FieldKind::Acetylcholine | FieldKind::Serotonin => {
+                if layer.is_some() {
+                    return Err(FieldApplicationError::UnsupportedScope(event.scope));
+                }
+                match event.kind {
+                    FieldKind::Dopamine => {
+                        self.neuromod_dopamine =
+                            reduced_value(self.neuromod_dopamine as f64).clamp(0.0, 3.0) as f32
+                    }
+                    FieldKind::Acetylcholine => {
+                        self.neuromod_ach =
+                            reduced_value(self.neuromod_ach as f64).clamp(0.0, 3.0) as f32
+                    }
+                    FieldKind::Serotonin => {
+                        self.neuromod_serotonin =
+                            reduced_value(self.neuromod_serotonin as f64).clamp(0.0, 3.0) as f32
+                    }
+                    _ => unreachable!("matched neuromodulator field kind"),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Derive the global AARNN state that becomes eligible at the next
+    /// biological quantum. The opt-in executor publishes these values as
+    /// one-shot causal field events after the current spike decision has
+    /// committed. This keeps neuromodulator and resonance state out of a
+    /// hidden runner-wide producer path while preserving their declared
+    /// logical-time dependency on the completed tick.
+    #[cfg(feature = "superdense_executor")]
+    pub(crate) fn derive_next_global_field_events(
+        &self,
+        current_tag: crate::deterministic::LogicalTag,
+    ) -> Result<Vec<FieldEvent>, crate::field_events::FieldEventError> {
+        if !matches!(self.neuron_model, NeuronModel::Aarnn) {
+            return Ok(Vec::new());
+        }
+
+        let effective_tag = current_tag
+            .next_quantum()
+            .map_err(|_| crate::field_events::FieldEventError::LogicalTimeOverflow)?;
+        let sensory_rate = self
+            .spk_hist_s
+            .front()
+            .map(|spikes| {
+                if self.net.num_sensory_neurons == 0 {
+                    0.0
+                } else {
+                    spikes.iter().filter(|&&spike| spike != 0).count() as f32
+                        / self.net.num_sensory_neurons as f32
+                }
+            })
+            .unwrap_or(0.0);
+        let output_rate = if self.net.num_output_neurons == 0 {
+            0.0
+        } else {
+            self.last_spk_o.iter().filter(|&&spike| spike != 0).count() as f32
+                / self.net.num_output_neurons as f32
+        };
+        let total_hidden = (0..self.net.num_hidden_layers)
+            .map(|layer| self.layer_size(layer))
+            .sum::<usize>();
+        let active_hidden = self
+            .last_spk_h
+            .iter()
+            .flat_map(|spikes| spikes.iter())
+            .filter(|&&spike| spike != 0)
+            .count();
+        let hidden_rate = if total_hidden == 0 {
+            0.0
+        } else {
+            active_hidden as f32 / total_hidden as f32
+        };
+        let world_model_error = if self.net.world_model_enabled
+            && !self.world_model_state.is_empty()
+            && self.world_model_state.len() == self.world_model_prev_state.len()
+        {
+            let sum = self
+                .world_model_state
+                .iter()
+                .zip(self.world_model_prev_state.iter())
+                .map(|(current, previous)| {
+                    let difference = (*current - *previous).abs() as f32;
+                    difference / (1.0 + difference)
+                })
+                .sum::<f32>();
+            sum / self.world_model_state.len() as f32
+        } else {
+            0.0
+        };
+
+        let decay = self.net.aarnn_neuromod_decay.clamp(0.0, 1.0);
+        let retain = 1.0 - decay;
+        let error = (self.perceptual_mean_error as f32).clamp(0.0, 1.0);
+        let stability = (1.0 - error).max(0.0);
+        let reward_proxy = (self.net.aarnn_reward_proxy + self.external_reward).clamp(0.0, 1.0);
+        let signal_value = |signal: NeuromodSignal| -> f32 {
+            match signal {
+                NeuromodSignal::None => 0.0,
+                NeuromodSignal::RewardProxy => reward_proxy,
+                NeuromodSignal::PerceptualError => error,
+                NeuromodSignal::WorldModelError => world_model_error,
+                NeuromodSignal::OutputSpikes => output_rate,
+                NeuromodSignal::SensorySpikes => sensory_rate,
+                NeuromodSignal::HiddenSpikes => hidden_rate,
+                NeuromodSignal::Stability => stability,
+            }
+        };
+        let target_dopamine = (self.net.aarnn_neuromod_baseline_dopamine.max(0.0)
+            + self.net.aarnn_neuromod_error_gain.max(0.0)
+                * signal_value(self.net.aarnn_neuromod_dopamine_signal))
+        .clamp(0.0, 3.0);
+        let target_ach = (self.net.aarnn_neuromod_baseline_ach.max(0.0)
+            + self.net.aarnn_neuromod_activity_gain.max(0.0)
+                * signal_value(self.net.aarnn_neuromod_ach_signal))
+        .clamp(0.0, 3.0);
+        let target_serotonin = (self.net.aarnn_neuromod_baseline_serotonin.max(0.0)
+            + self.net.aarnn_neuromod_stability_gain.max(0.0)
+                * signal_value(self.net.aarnn_neuromod_serotonin_signal))
+        .clamp(0.0, 3.0);
+        let next_dopamine = self.neuromod_dopamine * retain + target_dopamine * decay;
+        let next_ach = self.neuromod_ach * retain + target_ach * decay;
+        let next_serotonin = self.neuromod_serotonin * retain + target_serotonin * decay;
+        let resonance_decay = self.net.aarnn_resonance_decay.clamp(0.0, 1.0);
+        let next_resonance = self.resonance_level * (1.0 - resonance_decay)
+            + hidden_rate.clamp(0.0, 1.0) * resonance_decay;
+
+        const FIELD_EVENT_NAMESPACE: u64 = 0x4000_0000_0000_0000;
+        let make_event = |ordinal: u64,
+                          kind: FieldKind,
+                          value: f32|
+         -> Result<FieldEvent, crate::field_events::FieldEventError> {
+            let raw = FIELD_EVENT_NAMESPACE
+                .checked_add(
+                    current_tag
+                        .tick
+                        .checked_mul(8)
+                        .and_then(|base| base.checked_add(ordinal))
+                        .ok_or(crate::field_events::FieldEventError::EventIdOverflow)?,
+                )
+                .ok_or(crate::field_events::FieldEventError::EventIdOverflow)?;
+            let id = crate::deterministic::EventId::new(raw)
+                .map_err(|_| crate::field_events::FieldEventError::EventIdOverflow)?;
+            FieldEvent::new(
+                id,
+                effective_tag,
+                FieldScope::WholeBrain,
+                crate::field_events::FieldCadence::Once,
+                FieldReduction::Replace,
+                kind,
+                f64::from(value),
+            )
+        };
+
+        [
+            (1, FieldKind::Dopamine, next_dopamine),
+            (2, FieldKind::Acetylcholine, next_ach),
+            (3, FieldKind::Serotonin, next_serotonin),
+            (4, FieldKind::ResonanceLevel, next_resonance),
+        ]
+        .into_iter()
+        .map(|(ordinal, kind, value)| make_event(ordinal, kind, value))
+        .collect()
+    }
+
+    /// Collect and transform external/replayed input for one biological tick.
+    ///
+    /// This phase owns sensory admission, feedback, sleep replay, thalamic
+    /// gating and perceptual prediction. It does not update synaptic weights,
+    /// membrane state, plasticity traces or structural topology.
+    fn collect_input_phase(
+        &mut self,
+        s_t_external: Option<&[i8]>,
+        num_sensory_neurons: usize,
+        num_output_neurons: usize,
+        is_aarnn: bool,
+        sleep_active: bool,
+    ) -> InputPhaseResult {
+        // Build sensory spikes (external if provided)
+        let mut s_t = vec![0i8; num_sensory_neurons];
+        if let Some(src) = s_t_external {
+            let len = src.len().min(s_t.len());
+            s_t[..len].copy_from_slice(&src[..len]);
+        }
+        // optional feedback from previous step
+        if self.feedback_enabled {
+            for k in 0..num_output_neurons {
+                if self.last_spk_o[k] != 0 {
+                    let idx = self.feedback_map[k] as isize;
+                    if idx >= 0 && (idx as usize) < s_t.len() {
+                        s_t[idx as usize] = 1;
+                    }
+                }
+            }
+        }
+
+        // Sleep/dream: replace sensory inputs with replay/prediction
+        if sleep_active && s_t_external.is_none() && num_sensory_neurons > 0 {
+            let mut dream = vec![0i8; num_sensory_neurons];
+            let replay_p = self.net.sleep_dream_replay_prob.clamp(0.0, 1.0);
+            let use_replay = !self.spk_hist_s.is_empty() && fastrand::f32() < replay_p;
+            if use_replay {
+                let idx = fastrand::usize(..self.spk_hist_s.len());
+                let frame = &self.spk_hist_s[idx];
+                let len = frame.len().min(dream.len());
+                if len > 0 {
+                    if let Some(slice) = frame.as_slice() {
+                        dream[..len].copy_from_slice(&slice[..len]);
+                    } else {
+                        for i in 0..len {
+                            dream[i] = frame[i];
+                        }
+                    }
+                }
+            } else {
+                let thresh = self.net.sleep_dream_threshold.clamp(0.0, 1.0) as f64;
+                for i in 0..num_sensory_neurons {
+                    if self.pred_s.get(i).copied().unwrap_or(0.0) >= thresh {
+                        dream[i] = 1;
+                    }
+                }
+            }
+            s_t = dream;
+        }
+
+        // Thalamic gating: modulate sensory inputs (AARNN only)
+        if is_aarnn && self.net.thalamic_gating_enabled && num_sensory_neurons > 0 {
+            let hz = self.net.thalamic_gate_hz.max(0.0);
+            let duty = self.net.thalamic_gate_duty.clamp(0.01, 1.0);
+            let floor = self.net.thalamic_gate_floor.clamp(0.0, 1.0);
+            let gate = if hz > 0.0 {
+                let dt_s = (self.lif.dt.max(0.001) as f32) / 1000.0;
+                let step = std::f32::consts::TAU * hz * dt_s;
+                self.thalamic_gate_phase =
+                    (self.thalamic_gate_phase + step) % std::f32::consts::TAU;
+                let phase_gate = self.thalamic_gate_phase.sin() * 0.5 + 0.5;
+                let open = phase_gate >= 1.0 - duty;
+                if open { 1.0 } else { floor }
+            } else {
+                floor
+            };
+            if gate < 1.0 {
+                for i in 0..num_sensory_neurons {
+                    if s_t[i] != 0 && fastrand::f32() > gate {
+                        s_t[i] = 0;
+                    }
+                }
+            }
+        }
+
+        // Perceptual loop: predict sensory spikes and update prediction state (AARNN only)
+        let mut perceptual_error_drive = 0.0f64;
+        let mut perceptual_mean_err = 0.0f64;
+        if is_aarnn && self.net.perceptual_loop_enabled && num_sensory_neurons > 0 {
+            let lr = self.net.perceptual_prediction_lr.clamp(0.0, 1.0) as f64;
+            let decay = self.net.perceptual_prediction_decay.clamp(0.0, 1.0) as f64;
+            let thresh = self.net.perceptual_prediction_threshold.clamp(0.0, 1.0) as f64;
+            let fb_gain = self.net.perceptual_feedback_gain.clamp(0.0, 1.0) as f64;
+
+            if decay > 0.0 {
+                let retain = (1.0 - decay).max(0.0);
+                for v in self.pred_s.iter_mut() {
+                    *v *= retain;
+                }
+            }
+
+            let mut pred_from_output = vec![0.0f64; num_sensory_neurons];
+            if fb_gain > 0.0 && num_output_neurons > 0 {
+                for k in 0..num_output_neurons {
+                    if self.last_spk_o[k] != 0 {
+                        let idx = self.feedback_map[k] as isize;
+                        if idx >= 0 && (idx as usize) < num_sensory_neurons {
+                            pred_from_output[idx as usize] = 1.0;
+                        }
+                    }
+                }
+            }
+
+            let mut err_sum = 0.0f64;
+            for i in 0..num_sensory_neurons {
+                let pred = if fb_gain > 0.0 {
+                    (1.0 - fb_gain) * self.pred_s[i] + fb_gain * pred_from_output[i]
+                } else {
+                    self.pred_s[i]
+                };
+                let pred_bin = if pred >= thresh { 1.0 } else { 0.0 };
+                let actual = s_t[i] as f64;
+                let err = actual - pred_bin;
+                err_sum += err.abs();
+
+                if lr > 0.0 {
+                    self.pred_s[i] += lr * (actual - self.pred_s[i]);
+                    if self.pred_s[i] < 0.0 {
+                        self.pred_s[i] = 0.0;
+                    }
+                    if self.pred_s[i] > 1.0 {
+                        self.pred_s[i] = 1.0;
+                    }
+                }
+            }
+
+            let mean_err = err_sum / (num_sensory_neurons as f64);
+            perceptual_error_drive = (self.net.perceptual_error_gain.max(0.0) as f64) * mean_err;
+            perceptual_mean_err = mean_err;
+        }
+
+        self.perceptual_mean_error = perceptual_mean_err;
+        InputPhaseResult {
+            sensory: s_t,
+            perceptual_error_drive: perceptual_error_drive + self.perceptual_field_drive,
+            #[cfg(not(feature = "superdense_executor"))]
+            perceptual_mean_err,
+        }
+    }
+
+    /// Apply deterministic CPU short-term-plasticity release updates for the
+    /// synaptic transition phase. Device-backed updates are selected and
+    /// reconciled by the surrounding runner orchestration; this method owns
+    /// only the reference fallback and writes release buffers for downstream
+    /// current accumulation.
+    fn apply_cpu_stp_release_phase(
+        &mut self,
+        sensory: &[i8],
+        previous_hidden_spikes: &[Array1<i8>],
+        sensory_release: &mut [f64],
+        hidden_release: &mut [Vec<f64>],
+        update_sensory: bool,
+        update_hidden: &[bool],
+    ) {
+        if update_sensory {
+            stp_update_slice_ref(
+                sensory,
+                self.stp_u_s
+                    .as_slice_mut()
+                    .expect("contiguous sensory STP utilization"),
+                self.stp_x_s
+                    .as_slice_mut()
+                    .expect("contiguous sensory STP resources"),
+                sensory_release,
+                |index| {
+                    let bio = {
+                        #[cfg(feature = "growth3d")]
+                        {
+                            &self.bio_s[index]
+                        }
+                        #[cfg(not(feature = "growth3d"))]
+                        {
+                            &self.net.aarnn_bio
+                        }
+                    };
+                    let decays = Self::get_decays_static(self.lif.dt, bio);
+                    ShortTermPlasticityParams {
+                        baseline_utilization: bio.stp_u,
+                        recovery_decay: decays.stp_rec_decay,
+                        facilitation_decay: decays.stp_facil_decay,
+                    }
+                },
+            );
+        }
+
+        for (layer, should_update) in update_hidden.iter().copied().enumerate() {
+            if should_update {
+                continue;
+            }
+            let Some(previous) = previous_hidden_spikes.get(layer) else {
+                continue;
+            };
+            let Some(utilization) = self.stp_u_h.get_mut(layer) else {
+                continue;
+            };
+            let Some(resources) = self.stp_x_h.get_mut(layer) else {
+                continue;
+            };
+            let Some(release) = hidden_release.get_mut(layer) else {
+                continue;
+            };
+            stp_update_slice_ref(
+                previous
+                    .as_slice()
+                    .expect("contiguous hidden spike history"),
+                utilization
+                    .as_slice_mut()
+                    .expect("contiguous hidden STP utilization"),
+                resources
+                    .as_slice_mut()
+                    .expect("contiguous hidden STP resources"),
+                release,
+                |index| {
+                    let bio = {
+                        #[cfg(feature = "growth3d")]
+                        {
+                            &self.bio_h[layer][index]
+                        }
+                        #[cfg(not(feature = "growth3d"))]
+                        {
+                            &self.net.aarnn_bio
+                        }
+                    };
+                    let decays = Self::get_decays_static(self.lif.dt, bio);
+                    ShortTermPlasticityParams {
+                        baseline_utilization: bio.stp_u,
+                        recovery_decay: decays.stp_rec_decay,
+                        facilitation_decay: decays.stp_facil_decay,
+                    }
+                },
+            );
+        }
+    }
+
+    /// Apply one CPU LIF transition to a hidden layer. The pre-transition
+    /// voltage and refractory state are captured first so each neuron observes
+    /// the same causal input independently of loop order.
+    fn update_lif_layer_cpu(&mut self, layer: usize, currents: &[f64]) -> Array1<i8> {
+        let layer_len = self
+            .v_h
+            .get(layer)
+            .map(|values| values.len())
+            .unwrap_or(0)
+            .min(currents.len());
+        let old_v = (0..layer_len)
+            .map(|index| self.v_h[layer][index])
+            .collect::<Vec<_>>();
+        let old_refractory = (0..layer_len)
+            .map(|index| self.refr_h.as_ref().unwrap()[layer][index])
+            .collect::<Vec<_>>();
+        let mut fired = vec![0i8; layer_len];
+        let refractory = self.refr_h.as_mut().unwrap();
+        for index in 0..layer_len {
+            let transition = lif_transition(
+                old_v[index],
+                old_refractory[index],
+                currents[index],
+                self.decay_m,
+                self.lif,
+            );
+            self.v_h[layer][index] = transition.voltage;
+            refractory[layer][index] = transition.refractory;
+            fired[index] = transition.fired as i8;
+        }
+        Array1::from_vec(fired)
+    }
+
+    /// Apply one serial CPU LIF transition to the output population.
+    ///
+    /// The output population owns its membrane and refractory state just as a
+    /// hidden layer does; keeping this transition behind a separate boundary
+    /// prevents the output path from becoming a second, subtly different
+    /// neuron implementation during executor migration.
+    fn update_lif_output_cpu(&mut self, currents: &[f64]) -> Array1<i8> {
+        let neuron_count = self.v_o.len().min(currents.len());
+        let old_v = (0..neuron_count)
+            .map(|index| self.v_o[index])
+            .collect::<Vec<_>>();
+        let old_refractory = (0..neuron_count)
+            .map(|index| self.refr_o.as_ref().unwrap()[index])
+            .collect::<Vec<_>>();
+        let mut fired = vec![0i8; neuron_count];
+        let refractory = self.refr_o.as_mut().unwrap();
+        for index in 0..neuron_count {
+            let transition = lif_transition(
+                old_v[index],
+                old_refractory[index],
+                currents[index],
+                self.decay_m,
+                self.lif,
+            );
+            self.v_o[index] = transition.voltage;
+            refractory[index] = transition.refractory;
+            fired[index] = transition.fired as i8;
+        }
+        Array1::from_vec(fired)
+    }
+
+    /// Apply one serial Izhikevich/AARNN transition to a hidden layer,
+    /// including adaptive-threshold and refractory state ownership.
+    fn update_izh_layer_cpu(
+        &mut self,
+        layer: usize,
+        currents: &[f64],
+        params: IzhikevichParams,
+        use_adaptive_threshold: bool,
+        use_refractory: bool,
+        refractory_steps: i32,
+        bio: &AarnnBioParams,
+    ) -> Array1<i8> {
+        let layer_len = self
+            .v_h
+            .get(layer)
+            .map(|values| values.len())
+            .unwrap_or(0)
+            .min(currents.len());
+        let old_v = (0..layer_len)
+            .map(|index| self.v_h[layer][index])
+            .collect::<Vec<_>>();
+        let old_u = (0..layer_len)
+            .map(|index| self.u_h.as_ref().unwrap()[layer][index])
+            .collect::<Vec<_>>();
+        let old_refractory = if use_refractory {
+            Some(
+                (0..layer_len)
+                    .map(|index| self.izh_refr_h.as_ref().unwrap()[layer][index])
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+        let mut fired = vec![0i8; layer_len];
+        for index in 0..layer_len {
+            let transition = izh_transition(
+                old_v[index],
+                old_u[index],
+                currents[index],
+                params,
+                self.thr_offset_h[layer][index],
+                use_adaptive_threshold,
+                bio.adaptive_threshold_increment,
+                bio.adaptive_threshold_min,
+                bio.adaptive_threshold_max,
+                old_refractory.as_ref().map(|values| values[index]),
+                refractory_steps,
+            );
+            self.v_h[layer][index] = transition.voltage;
+            self.u_h.as_mut().unwrap()[layer][index] = transition.recovery;
+            fired[index] = transition.fired as i8;
+            if use_adaptive_threshold {
+                self.thr_offset_h[layer][index] = transition.threshold_offset;
+            }
+            if use_refractory {
+                let refractory = self.izh_refr_h.as_mut().unwrap();
+                refractory[layer][index] = transition.refractory;
+            }
+        }
+        Array1::from_vec(fired)
+    }
+
+    /// Apply one serial CPU Izhikevich/AARNN transition to the output
+    /// population, including optional adaptive-threshold and refractory state
+    /// ownership.
+    fn update_izh_output_cpu(
+        &mut self,
+        currents: &[f64],
+        params: IzhikevichParams,
+        use_adaptive_threshold: bool,
+        use_refractory: bool,
+        refractory_steps: i32,
+        bio: &AarnnBioParams,
+    ) -> Array1<i8> {
+        let neuron_count = self.v_o.len().min(currents.len());
+        let old_v = (0..neuron_count)
+            .map(|index| self.v_o[index])
+            .collect::<Vec<_>>();
+        let old_u = (0..neuron_count)
+            .map(|index| self.u_o.as_ref().unwrap()[index])
+            .collect::<Vec<_>>();
+        let old_refractory = if use_refractory {
+            Some(
+                (0..neuron_count)
+                    .map(|index| self.izh_refr_o.as_ref().unwrap()[index])
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+        let mut fired = vec![0i8; neuron_count];
+        for index in 0..neuron_count {
+            let transition = izh_transition(
+                old_v[index],
+                old_u[index],
+                currents[index],
+                params,
+                self.thr_offset_o[index],
+                use_adaptive_threshold,
+                bio.adaptive_threshold_increment,
+                bio.adaptive_threshold_min,
+                bio.adaptive_threshold_max,
+                old_refractory.as_ref().map(|values| values[index]),
+                refractory_steps,
+            );
+            self.v_o[index] = transition.voltage;
+            self.u_o.as_mut().unwrap()[index] = transition.recovery;
+            fired[index] = transition.fired as i8;
+            if use_adaptive_threshold {
+                self.thr_offset_o[index] = transition.threshold_offset;
+            }
+            if use_refractory {
+                let refractory = self.izh_refr_o.as_mut().unwrap();
+                refractory[index] = transition.refractory;
+            }
+        }
+        Array1::from_vec(fired)
+    }
+
+    /// Decay adaptive-threshold and homeostatic state before the neuron
+    /// transition phase. Per-neuron AARNN biology remains authoritative when
+    /// growth topology is enabled; the scalar path uses the shared reference
+    /// decays. No spikes, weights or topology are changed here.
+    #[allow(unused_variables)]
+    fn decay_threshold_homeostasis_phase(
+        &mut self,
+        use_adaptive_threshold: bool,
+        use_homeostasis: bool,
+        default_decays: AarnnDecays,
+    ) {
+        if use_adaptive_threshold {
+            #[cfg(not(feature = "growth3d"))]
+            {
+                #[cfg(feature = "parallel")]
+                self.thr_offset_h
+                    .par_iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.thr_decay));
+                #[cfg(not(feature = "parallel"))]
+                self.thr_offset_h
+                    .iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.thr_decay));
+                self.thr_offset_o
+                    .mapv_inplace(|v| v * default_decays.thr_decay);
+            }
+            #[cfg(feature = "growth3d")]
+            {
+                let lif_dt = self.lif.dt;
+                for layer in 0..self.net.num_hidden_layers {
+                    let bio_l = &self.bio_h[layer];
+                    self.thr_offset_h[layer]
+                        .iter_mut()
+                        .zip(bio_l.iter())
+                        .for_each(|(value, bio)| {
+                            *value *= Self::get_decays_static(lif_dt, bio).thr_decay;
+                        });
+                }
+                let bio_o = &self.bio_o;
+                self.thr_offset_o
+                    .iter_mut()
+                    .zip(bio_o.iter())
+                    .for_each(|(value, bio)| {
+                        *value *= Self::get_decays_static(lif_dt, bio).thr_decay;
+                    });
+            }
+        }
+        if use_homeostasis {
+            #[cfg(not(feature = "growth3d"))]
+            {
+                #[cfg(feature = "parallel")]
+                self.rate_ema_h
+                    .par_iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.homeo_decay));
+                #[cfg(not(feature = "parallel"))]
+                self.rate_ema_h
+                    .iter_mut()
+                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.homeo_decay));
+                self.rate_ema_o
+                    .mapv_inplace(|v| v * default_decays.homeo_decay);
+            }
+            #[cfg(feature = "growth3d")]
+            {
+                let lif_dt = self.lif.dt;
+                for layer in 0..self.net.num_hidden_layers {
+                    let bio_l = &self.bio_h[layer];
+                    self.rate_ema_h[layer]
+                        .iter_mut()
+                        .zip(bio_l.iter())
+                        .for_each(|(value, bio)| {
+                            *value *= Self::get_decays_static(lif_dt, bio).homeo_decay;
+                        });
+                }
+                let bio_o = &self.bio_o;
+                self.rate_ema_o
+                    .iter_mut()
+                    .zip(bio_o.iter())
+                    .for_each(|(value, bio)| {
+                        *value *= Self::get_decays_static(lif_dt, bio).homeo_decay;
+                    });
+            }
+        }
+    }
+
+    /// Commit a hidden population's spike decision into history, traces and
+    /// optional homeostatic state. This is the post-neuron transition phase;
+    /// growth-rate accounting remains separate so topology proposals cannot be
+    /// mistaken for committed neural state.
+    fn record_hidden_spike_phase(
+        &mut self,
+        layer: usize,
+        spikes: &Array1<i8>,
+        use_homeostasis: bool,
+        homeo_decay: f64,
+        base_homeo_target: f64,
+        bio: &AarnnBioParams,
+    ) {
+        self.last_spk_h[layer] = spikes.clone();
+        if let Some(history) = self.spk_hist_h.get_mut(layer) {
+            history.push_front(spikes.clone());
+            while history.len() > self.hist_len {
+                history.pop_back();
+            }
+        }
+        let neuron_count = self
+            .x_post_h
+            .get(layer)
+            .map(|values| values.len())
+            .unwrap_or(0)
+            .min(spikes.len());
+        for index in 0..neuron_count {
+            if spikes[index] != 0 {
+                self.x_post_h[layer][index] += 1.0;
+                self.x_pre_h[layer][index] += 1.0;
+            }
+        }
+        if use_homeostasis {
+            for index in 0..neuron_count {
+                if spikes[index] != 0 {
+                    self.rate_ema_h[layer][index] += 1.0 - homeo_decay;
+                }
+                let error = self.rate_ema_h[layer][index] - base_homeo_target;
+                self.thr_offset_h[layer][index] += bio.homeostasis_gain * error;
+            }
+        }
+    }
+
+    /// Commit the output population's spike decision into externally visible
+    /// history, traces, morphology stimulation and optional homeostasis.
+    fn record_output_spike_phase(
+        &mut self,
+        spikes: &Array1<i8>,
+        use_homeostasis: bool,
+        homeo_decay: f64,
+        base_homeo_target: f64,
+        bio: &AarnnBioParams,
+    ) {
+        self.last_spk_o = spikes.clone();
+        self.push_output_spike_history();
+        let neuron_count = self.x_post_o.len().min(spikes.len());
+        for index in 0..neuron_count {
+            if spikes[index] != 0 {
+                self.x_post_o[index] += 1.0;
+                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                if self.net.use_morphology && index < self.morph.output_somas.len() {
+                    self.morph.output_somas[index].stimuli += 1.0;
+                }
+            }
+        }
+        if use_homeostasis {
+            for index in 0..neuron_count {
+                if spikes[index] != 0 {
+                    self.rate_ema_o[index] += 1.0 - homeo_decay;
+                }
+                let error = self.rate_ema_o[index] - base_homeo_target;
+                self.thr_offset_o[index] += bio.homeostasis_gain * error;
+            }
+        }
+    }
+
+    /// Evaluate and commit the CPU long-term-plasticity transition through one
+    /// explicit proposal boundary per authoritative weight matrix.
+    ///
+    /// The legacy OpenCL path remains separate until device/reference equivalence
+    /// is certified. When no device is selected, serial and Rayon builds use this
+    /// deterministic reference path; proposal generation never mutates a matrix,
+    /// and commit validates captured base weights before applying clamped deltas.
+    #[allow(unused_variables)]
+    fn apply_cpu_plasticity_proposals(
+        &mut self,
+        eta: f64,
+        sensory_spikes: &[i8],
+        in_l: usize,
+        out_l: usize,
+        num_hidden_layers: usize,
+        is_aarnn: bool,
+    ) {
+        let rule = runner_plasticity_rule(self.learning);
+        let w_min = self.stdp.w_min;
+        let w_max = self.stdp.w_max;
+
+        if in_l == 0 && self.is_layer_assigned(0) && !self.w_in.is_empty() {
+            let (rows, cols) = self.w_in.dim();
+            let mut proposals = Vec::with_capacity(rows.saturating_mul(cols));
+            for row in 0..rows {
+                for col in 0..cols {
+                    let pre = if sensory_spikes.get(col).copied().unwrap_or(0) != 0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let post = if self
+                        .last_spk_h
+                        .get(0)
+                        .and_then(|spikes| spikes.get(row))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let pre_trace = self.x_pre_in.get(col).copied().unwrap_or(0.0);
+                    let post_trace = self
+                        .x_post_h
+                        .get(0)
+                        .and_then(|trace| trace.get(row))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let current = self.w_in[(row, col)];
+                    proposals.push(WeightProposal::new(
+                        row,
+                        col,
+                        current,
+                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+                    ));
+                }
+            }
+            commit_weight_proposals(&mut self.w_in, &proposals, w_min, w_max)
+                .expect("CPU input plasticity proposals must commit atomically");
+            #[cfg(feature = "opencl")]
+            {
+                self.cl_w_in_dirty = true;
+            }
+        }
+
+        for l in 0..num_hidden_layers.saturating_sub(1) {
+            if l >= self.w_hh_fwd.len() || l >= self.w_hh_bwd.len() {
+                continue;
+            }
+            let (fwd_rows, fwd_cols) = self.w_hh_fwd[l].dim();
+            let mut fwd_proposals = Vec::with_capacity(fwd_rows.saturating_mul(fwd_cols));
+            for row in 0..fwd_rows {
+                for col in 0..fwd_cols {
+                    let pre = if self
+                        .last_spk_h
+                        .get(l)
+                        .and_then(|spikes| spikes.get(col))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let post = if self
+                        .last_spk_h
+                        .get(l + 1)
+                        .and_then(|spikes| spikes.get(row))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let pre_trace = self
+                        .x_pre_h
+                        .get(l)
+                        .and_then(|trace| trace.get(col))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let post_trace = self
+                        .x_post_h
+                        .get(l + 1)
+                        .and_then(|trace| trace.get(row))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let current = self.w_hh_fwd[l][(row, col)];
+                    fwd_proposals.push(WeightProposal::new(
+                        row,
+                        col,
+                        current,
+                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+                    ));
+                }
+            }
+            commit_weight_proposals(&mut self.w_hh_fwd[l], &fwd_proposals, w_min, w_max)
+                .expect("CPU forward plasticity proposals must commit atomically");
+
+            let (bwd_rows, bwd_cols) = self.w_hh_bwd[l].dim();
+            let mut bwd_proposals = Vec::with_capacity(bwd_rows.saturating_mul(bwd_cols));
+            for row in 0..bwd_rows {
+                for col in 0..bwd_cols {
+                    let pre = if self
+                        .last_spk_h
+                        .get(l + 1)
+                        .and_then(|spikes| spikes.get(col))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let post = if self
+                        .last_spk_h
+                        .get(l)
+                        .and_then(|spikes| spikes.get(row))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let pre_trace = self
+                        .x_pre_h
+                        .get(l + 1)
+                        .and_then(|trace| trace.get(col))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let post_trace = self
+                        .x_post_h
+                        .get(l)
+                        .and_then(|trace| trace.get(row))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let current = self.w_hh_bwd[l][(row, col)];
+                    bwd_proposals.push(WeightProposal::new(
+                        row,
+                        col,
+                        current,
+                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+                    ));
+                }
+            }
+            commit_weight_proposals(&mut self.w_hh_bwd[l], &bwd_proposals, w_min, w_max)
+                .expect("CPU backward plasticity proposals must commit atomically");
+            #[cfg(feature = "opencl")]
+            {
+                if l < self.cl_w_hh_fwd_dirty.len() {
+                    self.cl_w_hh_fwd_dirty[l] = true;
+                }
+                if l < self.cl_w_hh_bwd_dirty.len() {
+                    self.cl_w_hh_bwd_dirty[l] = true;
+                }
+            }
+        }
+
+        if self.is_layer_assigned(num_hidden_layers) && out_l < self.net.num_hidden_layers + 1 {
+            let (rows, cols) = self.w_out.dim();
+            let mut proposals = Vec::with_capacity(rows.saturating_mul(cols));
+            for row in 0..rows {
+                for col in 0..cols {
+                    let pre = if self
+                        .last_spk_h
+                        .get(out_l)
+                        .and_then(|spikes| spikes.get(col))
+                        .copied()
+                        .unwrap_or(0)
+                        != 0
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let post = if self.last_spk_o.get(row).copied().unwrap_or(0) != 0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let pre_trace = self
+                        .x_pre_h
+                        .get(out_l)
+                        .and_then(|trace| trace.get(col))
+                        .copied()
+                        .unwrap_or(0.0);
+                    let post_trace = self.x_post_o.get(row).copied().unwrap_or(0.0);
+                    let current = self.w_out[(row, col)];
+                    proposals.push(WeightProposal::new(
+                        row,
+                        col,
+                        current,
+                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+                    ));
+                }
+            }
+            commit_weight_proposals(&mut self.w_out, &proposals, w_min, w_max)
+                .expect("CPU output plasticity proposals must commit atomically");
+            #[cfg(feature = "opencl")]
+            {
+                self.cl_w_out_dirty = true;
+            }
+        }
+
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if is_aarnn && matches!(self.learning, Learning::Aarnn) {
+            self.apply_dendritic_bouton_plasticity_overlay(eta, sensory_spikes);
+        }
+    }
+
+    /// Temporary monolithic biological kernel. It mutates biological state but
+    /// deliberately does not own or advance logical time; the facade/executor
+    /// commits the tick only after this method returns.
+    fn run_legacy_biological_kernel(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
         fastrand::seed(self.rng.get_seed());
         let (in_l, out_l) = self.get_io_layers();
 
@@ -6423,8 +7607,6 @@ impl Runner {
         let syn_decay_nmda = default_decays.syn_decay_nmda;
         #[allow(unused_variables)]
         let syn_decay_gaba = default_decays.syn_decay_gaba;
-        #[allow(unused_variables)]
-        let thr_decay = default_decays.thr_decay;
         let homeo_decay = default_decays.homeo_decay;
         let base_homeo_target = default_decays.base_homeo_target;
         let izh_refractory_steps = default_decays.izh_refractory_steps;
@@ -6441,133 +7623,17 @@ impl Runner {
             self.released_events.clear();
         }
 
-        // Build sensory spikes (external if provided)
-        let mut s_t = vec![0i8; num_sensory_neurons];
-        if let Some(src) = s_t_external {
-            let len = src.len().min(s_t.len());
-            s_t[..len].copy_from_slice(&src[..len]);
-        }
-        // optional feedback from previous step
-        if self.feedback_enabled {
-            for k in 0..num_output_neurons {
-                if self.last_spk_o[k] != 0 {
-                    let idx = self.feedback_map[k] as isize;
-                    if idx >= 0 && (idx as usize) < s_t.len() {
-                        s_t[idx as usize] = 1;
-                    }
-                }
-            }
-        }
-
-        // Sleep/dream: replace sensory inputs with replay/prediction
-        if sleep_active && s_t_external.is_none() && num_sensory_neurons > 0 {
-            let mut dream = vec![0i8; num_sensory_neurons];
-            let replay_p = self.net.sleep_dream_replay_prob.clamp(0.0, 1.0);
-            let use_replay = !self.spk_hist_s.is_empty() && fastrand::f32() < replay_p;
-            if use_replay {
-                let idx = fastrand::usize(..self.spk_hist_s.len());
-                let frame = &self.spk_hist_s[idx];
-                let len = frame.len().min(dream.len());
-                if len > 0 {
-                    if let Some(slice) = frame.as_slice() {
-                        dream[..len].copy_from_slice(&slice[..len]);
-                    } else {
-                        for i in 0..len {
-                            dream[i] = frame[i];
-                        }
-                    }
-                }
-            } else {
-                let thresh = self.net.sleep_dream_threshold.clamp(0.0, 1.0) as f64;
-                for i in 0..num_sensory_neurons {
-                    if self.pred_s.get(i).copied().unwrap_or(0.0) >= thresh {
-                        dream[i] = 1;
-                    }
-                }
-            }
-            s_t = dream;
-        }
-
-        // Thalamic gating: modulate sensory inputs (AARNN only)
-        if is_aarnn && self.net.thalamic_gating_enabled && num_sensory_neurons > 0 {
-            let hz = self.net.thalamic_gate_hz.max(0.0);
-            let duty = self.net.thalamic_gate_duty.clamp(0.01, 1.0);
-            let floor = self.net.thalamic_gate_floor.clamp(0.0, 1.0);
-            let gate = if hz > 0.0 {
-                let dt_s = (self.lif.dt.max(0.001) as f32) / 1000.0;
-                let step = std::f32::consts::TAU * hz * dt_s;
-                self.thalamic_gate_phase =
-                    (self.thalamic_gate_phase + step) % std::f32::consts::TAU;
-                let phase_gate = self.thalamic_gate_phase.sin() * 0.5 + 0.5;
-                let open = phase_gate >= 1.0 - duty;
-                if open { 1.0 } else { floor }
-            } else {
-                floor
-            };
-            if gate < 1.0 {
-                for i in 0..num_sensory_neurons {
-                    if s_t[i] != 0 && fastrand::f32() > gate {
-                        s_t[i] = 0;
-                    }
-                }
-            }
-        }
-
-        // Perceptual loop: predict sensory spikes and update prediction state (AARNN only)
-        let mut perceptual_error_drive = 0.0f64;
-        let mut perceptual_mean_err = 0.0f64;
-        if is_aarnn && self.net.perceptual_loop_enabled && num_sensory_neurons > 0 {
-            let lr = self.net.perceptual_prediction_lr.clamp(0.0, 1.0) as f64;
-            let decay = self.net.perceptual_prediction_decay.clamp(0.0, 1.0) as f64;
-            let thresh = self.net.perceptual_prediction_threshold.clamp(0.0, 1.0) as f64;
-            let fb_gain = self.net.perceptual_feedback_gain.clamp(0.0, 1.0) as f64;
-
-            if decay > 0.0 {
-                let retain = (1.0 - decay).max(0.0);
-                for v in self.pred_s.iter_mut() {
-                    *v *= retain;
-                }
-            }
-
-            let mut pred_from_output = vec![0.0f64; num_sensory_neurons];
-            if fb_gain > 0.0 && num_output_neurons > 0 {
-                for k in 0..num_output_neurons {
-                    if self.last_spk_o[k] != 0 {
-                        let idx = self.feedback_map[k] as isize;
-                        if idx >= 0 && (idx as usize) < num_sensory_neurons {
-                            pred_from_output[idx as usize] = 1.0;
-                        }
-                    }
-                }
-            }
-
-            let mut err_sum = 0.0f64;
-            for i in 0..num_sensory_neurons {
-                let pred = if fb_gain > 0.0 {
-                    (1.0 - fb_gain) * self.pred_s[i] + fb_gain * pred_from_output[i]
-                } else {
-                    self.pred_s[i]
-                };
-                let pred_bin = if pred >= thresh { 1.0 } else { 0.0 };
-                let actual = s_t[i] as f64;
-                let err = actual - pred_bin;
-                err_sum += err.abs();
-
-                if lr > 0.0 {
-                    self.pred_s[i] += lr * (actual - self.pred_s[i]);
-                    if self.pred_s[i] < 0.0 {
-                        self.pred_s[i] = 0.0;
-                    }
-                    if self.pred_s[i] > 1.0 {
-                        self.pred_s[i] = 1.0;
-                    }
-                }
-            }
-
-            let mean_err = err_sum / (num_sensory_neurons as f64);
-            perceptual_error_drive = (self.net.perceptual_error_gain.max(0.0) as f64) * mean_err;
-            perceptual_mean_err = mean_err;
-        }
+        let input_phase = self.collect_input_phase(
+            s_t_external,
+            num_sensory_neurons,
+            num_output_neurons,
+            is_aarnn,
+            sleep_active,
+        );
+        let s_t = input_phase.sensory;
+        let perceptual_error_drive = input_phase.perceptual_error_drive;
+        #[cfg(not(feature = "superdense_executor"))]
+        let perceptual_mean_err = input_phase.perceptual_mean_err;
 
         let mut stp_release_s: Vec<f64> = if use_stp {
             vec![0.0; num_sensory_neurons]
@@ -6731,143 +7797,21 @@ impl Runner {
                 self.cl_stp_ok = false;
                 self.clear_cl_stp_buffers();
             }
-            if !stp_gpu_updated_s {
-                stp_update_slice_ref(
-                    &s_t,
-                    self.stp_u_s
-                        .as_slice_mut()
-                        .expect("contiguous sensory STP utilization"),
-                    self.stp_x_s
-                        .as_slice_mut()
-                        .expect("contiguous sensory STP resources"),
-                    &mut stp_release_s,
-                    |_i| {
-                        let bio = {
-                            #[cfg(feature = "growth3d")]
-                            {
-                                &self.bio_s[_i]
-                            }
-                            #[cfg(not(feature = "growth3d"))]
-                            {
-                                &self.net.aarnn_bio
-                            }
-                        };
-                        let d = Self::get_decays_static(self.lif.dt, bio);
-                        ShortTermPlasticityParams {
-                            baseline_utilization: bio.stp_u,
-                            recovery_decay: d.stp_rec_decay,
-                            facilitation_decay: d.stp_facil_decay,
-                        }
-                    },
-                );
-            }
-            for l in 0..num_hidden_layers {
-                if stp_gpu_updated_h[l] {
-                    continue;
-                }
-                stp_update_slice_ref(
-                    prev_spk_h[l]
-                        .as_slice()
-                        .expect("contiguous hidden spike history"),
-                    self.stp_u_h[l]
-                        .as_slice_mut()
-                        .expect("contiguous hidden STP utilization"),
-                    self.stp_x_h[l]
-                        .as_slice_mut()
-                        .expect("contiguous hidden STP resources"),
-                    &mut stp_release_h[l],
-                    |_j| {
-                        let bio = {
-                            #[cfg(feature = "growth3d")]
-                            {
-                                &self.bio_h[l][_j]
-                            }
-                            #[cfg(not(feature = "growth3d"))]
-                            {
-                                &self.net.aarnn_bio
-                            }
-                        };
-                        let d = Self::get_decays_static(self.lif.dt, bio);
-                        ShortTermPlasticityParams {
-                            baseline_utilization: bio.stp_u,
-                            recovery_decay: d.stp_rec_decay,
-                            facilitation_decay: d.stp_facil_decay,
-                        }
-                    },
-                );
-            }
+            self.apply_cpu_stp_release_phase(
+                &s_t,
+                &prev_spk_h,
+                &mut stp_release_s,
+                &mut stp_release_h,
+                !stp_gpu_updated_s,
+                &stp_gpu_updated_h,
+            );
         }
 
-        if use_adaptive_threshold {
-            #[cfg(not(feature = "growth3d"))]
-            {
-                // Scalar decay: parallel across layers; mapv_inplace is SIMD-vectorized.
-                #[cfg(feature = "parallel")]
-                self.thr_offset_h
-                    .par_iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
-                #[cfg(not(feature = "parallel"))]
-                self.thr_offset_h
-                    .iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * thr_decay));
-                self.thr_offset_o.mapv_inplace(|v| v * thr_decay);
-            }
-            #[cfg(feature = "growth3d")]
-            {
-                let lif_dt = self.lif.dt;
-                for l in 0..num_hidden_layers {
-                    let bio_l = &self.bio_h[l];
-                    self.thr_offset_h[l]
-                        .iter_mut()
-                        .zip(bio_l.iter())
-                        .for_each(|(v, b)| {
-                            *v *= Self::get_decays_static(lif_dt, b).thr_decay;
-                        });
-                }
-                let bio_o = &self.bio_o;
-                self.thr_offset_o
-                    .iter_mut()
-                    .zip(bio_o.iter())
-                    .for_each(|(v, b)| {
-                        *v *= Self::get_decays_static(lif_dt, b).thr_decay;
-                    });
-            }
-        }
-        if use_homeostasis {
-            #[cfg(not(feature = "growth3d"))]
-            {
-                // Scalar decay: parallel across layers.
-                #[cfg(feature = "parallel")]
-                self.rate_ema_h
-                    .par_iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
-                #[cfg(not(feature = "parallel"))]
-                self.rate_ema_h
-                    .iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * homeo_decay));
-                self.rate_ema_o.mapv_inplace(|v| v * homeo_decay);
-            }
-            #[cfg(feature = "growth3d")]
-            {
-                let lif_dt = self.lif.dt;
-                for l in 0..num_hidden_layers {
-                    let bio_l = &self.bio_h[l];
-                    self.rate_ema_h[l]
-                        .iter_mut()
-                        .zip(bio_l.iter())
-                        .for_each(|(v, b)| {
-                            *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
-                        });
-                }
-                let bio_o = &self.bio_o;
-                self.rate_ema_o
-                    .iter_mut()
-                    .zip(bio_o.iter())
-                    .for_each(|(v, b)| {
-                        *v *= Self::get_decays_static(lif_dt, b).homeo_decay;
-                    });
-            }
-        }
+        self.decay_threshold_homeostasis_phase(
+            use_adaptive_threshold,
+            use_homeostasis,
+            default_decays,
+        );
 
         // Pre-calculate active indices for sparse accumulation (avoids O(N*M) dense loops)
         let active_s_indices: Vec<usize> = s_t
@@ -6896,7 +7840,8 @@ impl Runner {
             })
         });
         #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
-        let _has_sparse_recv_in = false;
+        #[allow(unused_variables)]
+        let has_sparse_recv_in = false;
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         let has_sparse_hidden_maps = self
@@ -6912,7 +7857,8 @@ impl Runner {
                 .iter()
                 .any(|rows| rows.iter().any(|v| !v.is_empty()));
         #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
-        let _has_sparse_hidden_maps = false;
+        #[allow(unused_variables)]
+        let has_sparse_hidden_maps = false;
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         let has_sparse_recv_out = self.recv_out.iter().enumerate().any(|(k, syns)| {
@@ -6924,9 +7870,13 @@ impl Runner {
             })
         });
         #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
-        let _has_sparse_recv_out = false;
+        #[allow(unused_variables)]
+        let has_sparse_recv_out = false;
 
-        // Update neuromodulator and resonance state (AARNN only)
+        // Update neuromodulator and resonance state (AARNN only). The
+        // superdense path publishes these derived values as next-tick causal
+        // field events instead of mutating runner-wide fields here.
+        #[cfg(not(feature = "superdense_executor"))]
         if is_aarnn {
             let sensory_rate = if num_sensory_neurons > 0 {
                 active_s_indices.len() as f32 / num_sensory_neurons as f32
@@ -7093,38 +8043,74 @@ impl Runner {
                 }
             }
 
-            // AARNN Skull-based spontaneous spiking for all hidden neurons
-            let ambient = self.net.aarnn_ambient_energy_level * dt_f32;
+            // AARNN ambient drive is a global field. The opt-in executor
+            // admits it explicitly at this tag; the legacy path retains its
+            // historical configuration-plus-field behaviour.
+            #[cfg(feature = "superdense_executor")]
+            let ambient = self.ambient_field_drive * dt_f32;
+            #[cfg(not(feature = "superdense_executor"))]
+            let ambient = (self.net.aarnn_ambient_energy_level + self.ambient_field_drive) * dt_f32;
             if ambient > 0.0 {
-                #[cfg(feature = "morpho")]
-                if self.net.use_morphology {
-                    if let Some(ref skull) = self.morph.skull_membrane {
-                        for l in 0..num_hidden_layers {
-                            let nj = self.layer_size(l);
-                            for j in 0..nj {
-                                if l < self.morph.somas.len() && j < self.morph.somas[l].len() {
-                                    let pos = self.morph.somas[l][j].pos;
-                                    let dist = pos.dist(skull.center);
-                                    if dist < skull.radius {
-                                        let factor = (1.0 - dist / skull.radius).max(0.0);
-                                        // Ambient spiking probability (scaled for stability)
-                                        if fastrand::f32() < ambient * factor * 0.05 {
-                                            self.v_h[l][j] += 10.0;
+                #[cfg(feature = "superdense_executor")]
+                {
+                    #[cfg(feature = "morpho")]
+                    if self.net.use_morphology {
+                        if let Some(ref skull) = self.morph.skull_membrane {
+                            for l in 0..num_hidden_layers {
+                                let nj = self.layer_size(l);
+                                for j in 0..nj {
+                                    if l < self.morph.somas.len() && j < self.morph.somas[l].len() {
+                                        let pos = self.morph.somas[l][j].pos;
+                                        let dist = pos.dist(skull.center);
+                                        if dist < skull.radius {
+                                            let factor = (1.0 - dist / skull.radius).max(0.0);
+                                            self.v_h[l][j] += f64::from(ambient * factor * 0.5);
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                #[cfg(not(feature = "morpho"))]
-                {
-                    // Fallback if morphology not enabled: global probability
+                    #[cfg(not(feature = "morpho"))]
                     for l in 0..num_hidden_layers {
                         let nj = self.layer_size(l);
                         for j in 0..nj {
-                            if fastrand::f32() < ambient * 0.005 {
-                                self.v_h[l][j] += 10.0;
+                            self.v_h[l][j] += f64::from(ambient * 0.05);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "superdense_executor"))]
+                {
+                    #[cfg(feature = "morpho")]
+                    if self.net.use_morphology {
+                        if let Some(ref skull) = self.morph.skull_membrane {
+                            for l in 0..num_hidden_layers {
+                                let nj = self.layer_size(l);
+                                for j in 0..nj {
+                                    if l < self.morph.somas.len() && j < self.morph.somas[l].len() {
+                                        let pos = self.morph.somas[l][j].pos;
+                                        let dist = pos.dist(skull.center);
+                                        if dist < skull.radius {
+                                            let factor = (1.0 - dist / skull.radius).max(0.0);
+                                            // Ambient spiking probability (scaled for stability)
+                                            if fastrand::f32() < ambient * factor * 0.05 {
+                                                self.v_h[l][j] += 10.0;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "morpho"))]
+                    {
+                        // Fallback if morphology not enabled: global probability
+                        for l in 0..num_hidden_layers {
+                            let nj = self.layer_size(l);
+                            for j in 0..nj {
+                                if fastrand::f32() < ambient * 0.005 {
+                                    self.v_h[l][j] += 10.0;
+                                }
                             }
                         }
                     }
@@ -7146,15 +8132,34 @@ impl Runner {
                 } else {
                     ambient_scale
                 };
-                for l in 0..num_hidden_layers {
-                    let v_layer = &mut self.v_h[l];
-                    let x_layer = &self.x_post_h[l];
-                    let nj = v_layer.len();
-                    for j in 0..nj {
-                        let trace = x_layer[j] as f32;
-                        let resonance = trace / (1.0 + trace);
-                        if fastrand::f32() < resonance_gain * resonance * ambient_scale {
-                            v_layer[j] += 10.0;
+                #[cfg(feature = "superdense_executor")]
+                {
+                    let field_level = self.resonance_level.clamp(0.0, 1.0);
+                    for l in 0..num_hidden_layers {
+                        let v_layer = &mut self.v_h[l];
+                        let x_layer = &self.x_post_h[l];
+                        let nj = v_layer.len();
+                        for j in 0..nj {
+                            let trace = x_layer[j] as f32;
+                            let resonance = trace / (1.0 + trace);
+                            let drive = (resonance_gain * resonance * field_level * ambient_scale)
+                                .clamp(0.0, 1.0);
+                            v_layer[j] += f64::from(10.0 * drive);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "superdense_executor"))]
+                {
+                    for l in 0..num_hidden_layers {
+                        let v_layer = &mut self.v_h[l];
+                        let x_layer = &self.x_post_h[l];
+                        let nj = v_layer.len();
+                        for j in 0..nj {
+                            let trace = x_layer[j] as f32;
+                            let resonance = trace / (1.0 + trace);
+                            if fastrand::f32() < resonance_gain * resonance * ambient_scale {
+                                v_layer[j] += 10.0;
+                            }
                         }
                     }
                 }
@@ -8142,15 +9147,18 @@ impl Runner {
                                 let res: Vec<(f64, i32, i8)> = (0..num_hidden_0_neurons)
                                     .into_par_iter()
                                     .map(|j| {
-                                        let v = old_v_slice[j] * self.decay_m + i_h0[j];
-                                        let v_clamped = v.clamp(-5.0, 5.0);
-                                        let active = old_ref_slice[j] <= 0;
-                                        let did_fire = active && v_clamped >= self.lif.v_th;
-                                        if did_fire {
-                                            (self.lif.v_reset, self.lif.refractory as i32, 1)
-                                        } else {
-                                            (v_clamped, (old_ref_slice[j] - 1).max(0), 0)
-                                        }
+                                        let transition = lif_transition(
+                                            old_v_slice[j],
+                                            old_ref_slice[j],
+                                            i_h0[j],
+                                            self.decay_m,
+                                            self.lif,
+                                        );
+                                        (
+                                            transition.voltage,
+                                            transition.refractory,
+                                            transition.fired as i8,
+                                        )
                                     })
                                     .collect();
                                 for j in 0..num_hidden_0_neurons {
@@ -8162,24 +9170,10 @@ impl Runner {
                                 }
                                 Array1::from_vec(res.into_iter().map(|t| t.2).collect())
                             } else {
-                                let mut fired = vec![0i8; num_hidden_0_neurons];
-                                for j in 0..num_hidden_0_neurons {
-                                    let v = old_v_slice[j] * self.decay_m + i_h0[j];
-                                    let v_clamped = v.clamp(-5.0, 5.0);
-                                    let active = old_ref_slice[j] <= 0;
-                                    let did_fire = active && v_clamped >= self.lif.v_th;
-                                    if did_fire {
-                                        self.v_h[0][j] = self.lif.v_reset;
-                                        let refh_mut = self.refr_h.as_mut().unwrap();
-                                        refh_mut[0][j] = self.lif.refractory as i32;
-                                        fired[j] = 1;
-                                    } else {
-                                        self.v_h[0][j] = v_clamped;
-                                        let refh_mut = self.refr_h.as_mut().unwrap();
-                                        refh_mut[0][j] = (old_ref_slice[j] - 1).max(0);
-                                    }
-                                }
-                                Array1::from_vec(fired)
+                                self.update_lif_layer_cpu(
+                                    0,
+                                    i_h0.as_slice().expect("contiguous hidden layer current"),
+                                )
                             }
                         }
                         NeuronModel::Izh(_) | NeuronModel::Aarnn => {
@@ -8198,35 +9192,33 @@ impl Runner {
                                 Vec::new()
                             };
                             if can_parallel_heavy(num_hidden_0_neurons) {
-                                let res: Vec<(f64, f64, i8)> = (0..num_hidden_0_neurons)
+                                let res: Vec<(f64, f64, f64, i32, i8)> = (0..num_hidden_0_neurons)
                                     .into_par_iter()
                                     .map(|j| {
-                                        let (nv, nu, unstable) = Self::integrate_izh_step(
-                                            old_v[j], old_u[j], i_h0[j], p,
+                                        let transition = izh_transition(
+                                            old_v[j],
+                                            old_u[j],
+                                            i_h0[j],
+                                            p,
+                                            self.thr_offset_h[0][j],
+                                            use_adaptive_threshold,
+                                            bio.adaptive_threshold_increment,
+                                            bio.adaptive_threshold_min,
+                                            bio.adaptive_threshold_max,
+                                            if use_izh_refractory {
+                                                Some(old_refr[j])
+                                            } else {
+                                                None
+                                            },
+                                            izh_refractory_steps,
                                         );
-                                        let mut did_fire = nv >= p.v_th;
-                                        if use_adaptive_threshold {
-                                            let thr_offset = self.thr_offset_h[0][j].clamp(
-                                                bio.adaptive_threshold_min,
-                                                bio.adaptive_threshold_max,
-                                            );
-                                            did_fire = nv >= (p.v_th + thr_offset);
-                                        }
-                                        if use_izh_refractory && old_refr[j] > 0 {
-                                            did_fire = false;
-                                        }
-                                        if unstable {
-                                            did_fire = false;
-                                        }
-                                        let (nv2, nu2) = if did_fire {
-                                            (
-                                                p.membrane_reset_potential_c,
-                                                nu + p.recovery_increment_d,
-                                            )
-                                        } else {
-                                            (nv, nu)
-                                        };
-                                        (nv2, nu2, did_fire as i8)
+                                        (
+                                            transition.voltage,
+                                            transition.recovery,
+                                            transition.threshold_offset,
+                                            transition.refractory,
+                                            transition.fired as i8,
+                                        )
                                     })
                                     .collect();
                                 for j in 0..num_hidden_0_neurons {
@@ -8238,109 +9230,40 @@ impl Runner {
                                 }
                                 if use_adaptive_threshold {
                                     for j in 0..num_hidden_0_neurons {
-                                        if res[j].2 != 0 {
-                                            self.thr_offset_h[0][j] = (self.thr_offset_h[0][j]
-                                                + bio.adaptive_threshold_increment)
-                                                .clamp(
-                                                    bio.adaptive_threshold_min,
-                                                    bio.adaptive_threshold_max,
-                                                );
-                                        }
+                                        self.thr_offset_h[0][j] = res[j].2;
                                     }
                                 }
                                 if use_izh_refractory {
                                     if let Some(r) = self.izh_refr_h.as_mut() {
                                         for j in 0..num_hidden_0_neurons {
-                                            if res[j].2 != 0 {
-                                                r[0][j] = izh_refractory_steps;
-                                            } else {
-                                                r[0][j] = (r[0][j] - 1).max(0);
-                                            }
+                                            r[0][j] = res[j].3;
                                         }
                                     }
                                 }
-                                Array1::from_vec(res.into_iter().map(|t| t.2).collect())
+                                Array1::from_vec(res.into_iter().map(|t| t.4).collect())
                             } else {
-                                let mut fired = vec![0i8; num_hidden_0_neurons];
-                                for j in 0..num_hidden_0_neurons {
-                                    let (nv, nu, unstable) =
-                                        Self::integrate_izh_step(old_v[j], old_u[j], i_h0[j], p);
-                                    let mut did_fire = nv >= p.v_th;
-                                    if use_adaptive_threshold {
-                                        let thr_offset = self.thr_offset_h[0][j].clamp(
-                                            bio.adaptive_threshold_min,
-                                            bio.adaptive_threshold_max,
-                                        );
-                                        did_fire = nv >= (p.v_th + thr_offset);
-                                    }
-                                    if use_izh_refractory {
-                                        if let Some(r) = self.izh_refr_h.as_ref() {
-                                            if r[0][j] > 0 {
-                                                did_fire = false;
-                                            }
-                                        }
-                                    }
-                                    if unstable {
-                                        did_fire = false;
-                                    }
-                                    let (nv2, nu2) = if did_fire {
-                                        (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
-                                    } else {
-                                        (nv, nu)
-                                    };
-                                    self.v_h[0][j] = nv2;
-                                    let uh_mut = self.u_h.as_mut().unwrap();
-                                    uh_mut[0][j] = nu2;
-                                    fired[j] = did_fire as i8;
-                                    if use_adaptive_threshold && did_fire {
-                                        self.thr_offset_h[0][j] = (self.thr_offset_h[0][j]
-                                            + bio.adaptive_threshold_increment)
-                                            .clamp(
-                                                bio.adaptive_threshold_min,
-                                                bio.adaptive_threshold_max,
-                                            );
-                                    }
-                                    if use_izh_refractory {
-                                        if let Some(r) = self.izh_refr_h.as_mut() {
-                                            if did_fire {
-                                                r[0][j] = izh_refractory_steps;
-                                            } else {
-                                                r[0][j] = (r[0][j] - 1).max(0);
-                                            }
-                                        }
-                                    }
-                                }
-                                Array1::from_vec(fired)
+                                self.update_izh_layer_cpu(
+                                    0,
+                                    i_h0.as_slice().expect("contiguous hidden layer current"),
+                                    p,
+                                    use_adaptive_threshold,
+                                    use_izh_refractory,
+                                    izh_refractory_steps,
+                                    &bio,
+                                )
                             }
                         }
                     }
                 }
             };
-            self.last_spk_h[0] = spk_h0.clone();
-            {
-                // push current spikes to history (front)
-                if let Some(dq) = self.spk_hist_h.get_mut(0) {
-                    dq.push_front(spk_h0.clone());
-                    while dq.len() > self.hist_len {
-                        dq.pop_back();
-                    }
-                }
-            }
-            for j in 0..num_hidden_0_neurons {
-                if spk_h0[j] != 0 {
-                    self.x_post_h[0][j] += 1.0;
-                    self.x_pre_h[0][j] += 1.0;
-                }
-            }
-            if use_homeostasis {
-                for j in 0..num_hidden_0_neurons {
-                    if spk_h0[j] != 0 {
-                        self.rate_ema_h[0][j] += 1.0 - homeo_decay;
-                    }
-                    let err = self.rate_ema_h[0][j] - base_homeo_target;
-                    self.thr_offset_h[0][j] += bio.homeostasis_gain * err;
-                }
-            }
+            self.record_hidden_spike_phase(
+                0,
+                &spk_h0,
+                use_homeostasis,
+                homeo_decay,
+                base_homeo_target,
+                &bio,
+            );
             #[cfg(feature = "growth3d")]
             if self.net.growth_enabled {
                 for j in 0..num_hidden_0_neurons {
@@ -10109,15 +11032,18 @@ impl Runner {
                                     let res: Vec<(f64, i32, i8)> = (0..num_current_hidden_neurons)
                                         .into_par_iter()
                                         .map(|j| {
-                                            let v = old_v[j] * self.decay_m + i_f[j] + i_b[j];
-                                            let v_clamped = v.clamp(-5.0, 5.0);
-                                            let active = old_refr[j] <= 0;
-                                            let fired = active && v_clamped >= self.lif.v_th;
-                                            if fired {
-                                                (self.lif.v_reset, self.lif.refractory as i32, 1)
-                                            } else {
-                                                (v_clamped, (old_refr[j] - 1).max(0), 0)
-                                            }
+                                            let transition = lif_transition(
+                                                old_v[j],
+                                                old_refr[j],
+                                                i_f[j] + i_b[j],
+                                                self.decay_m,
+                                                self.lif,
+                                            );
+                                            (
+                                                transition.voltage,
+                                                transition.refractory,
+                                                transition.fired as i8,
+                                            )
                                         })
                                         .collect();
                                     let refh = self.refr_h.as_mut().unwrap();
@@ -10127,20 +11053,12 @@ impl Runner {
                                         spk[j] = res[j].2;
                                     }
                                 } else {
-                                    let refh = self.refr_h.as_mut().unwrap();
-                                    for j in 0..num_current_hidden_neurons {
-                                        let v = self.v_h[l][j] * self.decay_m + i_f[j] + i_b[j];
-                                        self.v_h[l][j] = v.clamp(-5.0, 5.0);
-                                        let active = refh[l][j] <= 0;
-                                        let fired = active && self.v_h[l][j] >= self.lif.v_th;
-                                        if fired {
-                                            self.v_h[l][j] = self.lif.v_reset;
-                                            refh[l][j] = self.lif.refractory as i32;
-                                        } else {
-                                            refh[l][j] = (refh[l][j] - 1).max(0);
-                                        }
-                                        spk[j] = fired as i8;
-                                    }
+                                    let total_current = i_f
+                                        .iter()
+                                        .zip(i_b.iter())
+                                        .map(|(forward, backward)| forward + backward)
+                                        .collect::<Vec<_>>();
+                                    spk = self.update_lif_layer_cpu(l, &total_current);
                                 }
                             }
                             NeuronModel::Izh(_) | NeuronModel::Aarnn => {
@@ -10164,7 +11082,8 @@ impl Runner {
                                     Vec::new()
                                 };
                                 if can_parallel_light(num_current_hidden_neurons) {
-                                    let res: Vec<(f64, f64, i8)> = (0..num_current_hidden_neurons)
+                                    let res: Vec<(f64, f64, f64, i32, i8)> = (0
+                                        ..num_current_hidden_neurons)
                                         .into_par_iter()
                                         .map(|j| {
                                             let (bio, p) = {
@@ -10179,87 +11098,58 @@ impl Runner {
                                                     (&self.net.aarnn_bio, p_default)
                                                 }
                                             };
-                                            let (nv, nu, unstable) = Self::integrate_izh_step(
+                                            let neuron_refractory_steps = {
+                                                #[cfg(feature = "growth3d")]
+                                                {
+                                                    Self::get_decays_static(self.lif.dt, bio)
+                                                        .izh_refractory_steps
+                                                }
+                                                #[cfg(not(feature = "growth3d"))]
+                                                {
+                                                    izh_refractory_steps
+                                                }
+                                            };
+                                            let transition = izh_transition(
                                                 old_v[j],
                                                 old_u[j],
                                                 i_f[j] + i_b[j],
                                                 p,
+                                                self.thr_offset_h[l][j],
+                                                use_adaptive_threshold,
+                                                bio.adaptive_threshold_increment,
+                                                bio.adaptive_threshold_min,
+                                                bio.adaptive_threshold_max,
+                                                if use_izh_refractory {
+                                                    Some(old_refr[j])
+                                                } else {
+                                                    None
+                                                },
+                                                neuron_refractory_steps,
                                             );
-                                            let mut fired = nv >= p.v_th;
-                                            if use_adaptive_threshold {
-                                                let thr_offset = self.thr_offset_h[l][j].clamp(
-                                                    bio.adaptive_threshold_min,
-                                                    bio.adaptive_threshold_max,
-                                                );
-                                                fired = nv >= (p.v_th + thr_offset);
-                                            }
-                                            if use_izh_refractory && old_refr[j] > 0 {
-                                                fired = false;
-                                            }
-                                            if unstable {
-                                                fired = false;
-                                            }
-                                            let (nv2, nu2) = if fired {
-                                                (
-                                                    p.membrane_reset_potential_c,
-                                                    nu + p.recovery_increment_d,
-                                                )
-                                            } else {
-                                                (nv, nu)
-                                            };
-                                            (nv2, nu2, fired as i8)
+                                            (
+                                                transition.voltage,
+                                                transition.recovery,
+                                                transition.threshold_offset,
+                                                transition.refractory,
+                                                transition.fired as i8,
+                                            )
                                         })
                                         .collect();
                                     let uh = self.u_h.as_mut().unwrap();
                                     for j in 0..num_current_hidden_neurons {
                                         self.v_h[l][j] = res[j].0;
                                         uh[l][j] = res[j].1;
-                                        spk[j] = res[j].2;
+                                        spk[j] = res[j].4;
                                     }
                                     if use_adaptive_threshold {
                                         for j in 0..num_current_hidden_neurons {
-                                            if spk[j] != 0 {
-                                                let bio = {
-                                                    #[cfg(feature = "growth3d")]
-                                                    {
-                                                        &self.bio_h[l][j]
-                                                    }
-                                                    #[cfg(not(feature = "growth3d"))]
-                                                    {
-                                                        &self.net.aarnn_bio
-                                                    }
-                                                };
-                                                self.thr_offset_h[l][j] = (self.thr_offset_h[l][j]
-                                                    + bio.adaptive_threshold_increment)
-                                                    .clamp(
-                                                        bio.adaptive_threshold_min,
-                                                        bio.adaptive_threshold_max,
-                                                    );
-                                            }
+                                            self.thr_offset_h[l][j] = res[j].2;
                                         }
                                     }
                                     if use_izh_refractory {
                                         if let Some(r) = self.izh_refr_h.as_mut() {
                                             for j in 0..num_current_hidden_neurons {
-                                                if spk[j] != 0 {
-                                                    let steps = {
-                                                        #[cfg(feature = "growth3d")]
-                                                        {
-                                                            Self::get_decays_static(
-                                                                self.lif.dt,
-                                                                &self.bio_h[l][j],
-                                                            )
-                                                            .izh_refractory_steps
-                                                        }
-                                                        #[cfg(not(feature = "growth3d"))]
-                                                        {
-                                                            izh_refractory_steps
-                                                        }
-                                                    };
-                                                    r[l][j] = steps;
-                                                } else {
-                                                    r[l][j] = (r[l][j] - 1).max(0);
-                                                }
+                                                r[l][j] = res[j].3;
                                             }
                                         }
                                     }
@@ -10278,70 +11168,48 @@ impl Runner {
                                                 (&self.net.aarnn_bio, p_default)
                                             }
                                         };
-                                        let (nv, nu, unstable) = Self::integrate_izh_step(
+                                        let neuron_refractory_steps = {
+                                            #[cfg(feature = "growth3d")]
+                                            {
+                                                Self::get_decays_static(self.lif.dt, bio)
+                                                    .izh_refractory_steps
+                                            }
+                                            #[cfg(not(feature = "growth3d"))]
+                                            {
+                                                izh_refractory_steps
+                                            }
+                                        };
+                                        let old_refractory = if use_izh_refractory {
+                                            Some(self.izh_refr_h.as_ref().unwrap()[l][j])
+                                        } else {
+                                            None
+                                        };
+                                        let transition = izh_transition(
                                             self.v_h[l][j],
                                             uh[l][j],
                                             i_f[j] + i_b[j],
                                             p,
+                                            self.thr_offset_h[l][j],
+                                            use_adaptive_threshold,
+                                            bio.adaptive_threshold_increment,
+                                            bio.adaptive_threshold_min,
+                                            bio.adaptive_threshold_max,
+                                            old_refractory,
+                                            neuron_refractory_steps,
                                         );
-                                        let mut fired = nv >= p.v_th;
+                                        self.v_h[l][j] = transition.voltage;
+                                        uh[l][j] = transition.recovery;
+                                        spk[j] = transition.fired as i8;
                                         if use_adaptive_threshold {
-                                            let thr_offset = self.thr_offset_h[l][j].clamp(
-                                                bio.adaptive_threshold_min,
-                                                bio.adaptive_threshold_max,
-                                            );
-                                            fired = nv >= (p.v_th + thr_offset);
-                                        }
-                                        if use_izh_refractory {
-                                            if let Some(r) = self.izh_refr_h.as_ref() {
-                                                if r[l][j] > 0 {
-                                                    fired = false;
-                                                }
-                                            }
-                                        }
-                                        if unstable {
-                                            fired = false;
-                                        }
-                                        let (nv2, nu2) = if fired {
-                                            (
-                                                p.membrane_reset_potential_c,
-                                                nu + p.recovery_increment_d,
-                                            )
-                                        } else {
-                                            (nv, nu)
-                                        };
-                                        self.v_h[l][j] = nv2;
-                                        uh[l][j] = nu2;
-                                        spk[j] = fired as i8;
-                                        if use_adaptive_threshold && fired {
-                                            self.thr_offset_h[l][j] = (self.thr_offset_h[l][j]
-                                                + bio.adaptive_threshold_increment)
-                                                .clamp(
-                                                    bio.adaptive_threshold_min,
-                                                    bio.adaptive_threshold_max,
-                                                );
+                                            self.thr_offset_h[l][j] = transition.threshold_offset;
                                         }
                                         if use_izh_refractory {
                                             if let Some(r) = self.izh_refr_h.as_mut() {
-                                                if fired {
-                                                    let steps = {
-                                                        #[cfg(feature = "growth3d")]
-                                                        {
-                                                            Self::get_decays_static(
-                                                                self.lif.dt,
-                                                                &self.bio_h[l][j],
-                                                            )
-                                                            .izh_refractory_steps
-                                                        }
-                                                        #[cfg(not(feature = "growth3d"))]
-                                                        {
-                                                            izh_refractory_steps
-                                                        }
-                                                    };
-                                                    r[l][j] = steps;
+                                                r[l][j] = if transition.fired {
+                                                    neuron_refractory_steps
                                                 } else {
-                                                    r[l][j] = (r[l][j] - 1).max(0);
-                                                }
+                                                    transition.refractory
+                                                };
                                             }
                                         }
                                     }
@@ -10351,30 +11219,14 @@ impl Runner {
                         spk
                     }
                 };
-                self.last_spk_h[l] = spk.clone();
-                {
-                    if let Some(dq) = self.spk_hist_h.get_mut(l) {
-                        dq.push_front(spk.clone());
-                        while dq.len() > self.hist_len {
-                            dq.pop_back();
-                        }
-                    }
-                }
-                for j in 0..num_current_hidden_neurons {
-                    if spk[j] != 0 {
-                        self.x_post_h[l][j] += 1.0;
-                        self.x_pre_h[l][j] += 1.0;
-                    }
-                }
-                if use_homeostasis {
-                    for j in 0..num_current_hidden_neurons {
-                        if spk[j] != 0 {
-                            self.rate_ema_h[l][j] += 1.0 - homeo_decay;
-                        }
-                        let err = self.rate_ema_h[l][j] - base_homeo_target;
-                        self.thr_offset_h[l][j] += bio.homeostasis_gain * err;
-                    }
-                }
+                self.record_hidden_spike_phase(
+                    l,
+                    &spk,
+                    use_homeostasis,
+                    homeo_decay,
+                    base_homeo_target,
+                    &bio,
+                );
                 #[cfg(feature = "growth3d")]
                 if self.net.growth_enabled {
                     if can_parallel_light(num_current_hidden_neurons) {
@@ -11466,15 +12318,18 @@ impl Runner {
                             let res: Vec<(f64, i32, i8)> = (0..num_output_neurons)
                                 .into_par_iter()
                                 .map(|k| {
-                                    let v = old_v[k] * self.decay_m + i_o[k];
-                                    let v_clamped = v.clamp(-5.0, 5.0);
-                                    let active = old_refr[k] <= 0;
-                                    let fired = active && v_clamped >= self.lif.v_th;
-                                    if fired {
-                                        (self.lif.v_reset, self.lif.refractory as i32, 1)
-                                    } else {
-                                        (v_clamped, (old_refr[k] - 1).max(0), 0)
-                                    }
+                                    let transition = lif_transition(
+                                        old_v[k],
+                                        old_refr[k],
+                                        i_o[k],
+                                        self.decay_m,
+                                        self.lif,
+                                    );
+                                    (
+                                        transition.voltage,
+                                        transition.refractory,
+                                        transition.fired as i8,
+                                    )
                                 })
                                 .collect();
                             let ro = self.refr_o.as_mut().unwrap();
@@ -11484,20 +12339,7 @@ impl Runner {
                                 r[k] = res[k].2;
                             }
                         } else {
-                            let ro = self.refr_o.as_mut().unwrap();
-                            for k in 0..num_output_neurons {
-                                let v = self.v_o[k] * self.decay_m + i_o[k];
-                                self.v_o[k] = v.clamp(-5.0, 5.0);
-                                let active = ro[k] <= 0;
-                                let fired = active && self.v_o[k] >= self.lif.v_th;
-                                if fired {
-                                    self.v_o[k] = self.lif.v_reset;
-                                    ro[k] = self.lif.refractory as i32;
-                                } else {
-                                    ro[k] = (ro[k] - 1).max(0);
-                                }
-                                r[k] = fired as i8;
-                            }
+                            r = self.update_lif_output_cpu(i_o.as_slice().unwrap());
                         }
                         r
                     }
@@ -11520,137 +12362,75 @@ impl Runner {
                             Vec::new()
                         };
                         if can_parallel_light(num_output_neurons) {
-                            let res: Vec<(f64, f64, i8)> = (0..num_output_neurons)
+                            let res: Vec<(f64, f64, f64, i32, i8)> = (0..num_output_neurons)
                                 .into_par_iter()
                                 .map(|k| {
-                                    let (nv, nu, unstable) =
-                                        Self::integrate_izh_step(old_v[k], old_u[k], i_o[k], p);
-                                    let mut fired = nv >= p.v_th;
-                                    if use_adaptive_threshold {
-                                        let thr_offset = self.thr_offset_o[k].clamp(
-                                            bio.adaptive_threshold_min,
-                                            bio.adaptive_threshold_max,
-                                        );
-                                        fired = nv >= (p.v_th + thr_offset);
-                                    }
-                                    if use_izh_refractory && old_refr[k] > 0 {
-                                        fired = false;
-                                    }
-                                    if unstable {
-                                        fired = false;
-                                    }
-                                    let (nv2, nu2) = if fired {
-                                        (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
-                                    } else {
-                                        (nv, nu)
-                                    };
-                                    (nv2, nu2, fired as i8)
+                                    let transition = izh_transition(
+                                        old_v[k],
+                                        old_u[k],
+                                        i_o[k],
+                                        p,
+                                        self.thr_offset_o[k],
+                                        use_adaptive_threshold,
+                                        bio.adaptive_threshold_increment,
+                                        bio.adaptive_threshold_min,
+                                        bio.adaptive_threshold_max,
+                                        if use_izh_refractory {
+                                            Some(old_refr[k])
+                                        } else {
+                                            None
+                                        },
+                                        izh_refractory_steps,
+                                    );
+                                    (
+                                        transition.voltage,
+                                        transition.recovery,
+                                        transition.threshold_offset,
+                                        transition.refractory,
+                                        transition.fired as i8,
+                                    )
                                 })
                                 .collect();
                             let uo = self.u_o.as_mut().unwrap();
                             for k in 0..num_output_neurons {
                                 self.v_o[k] = res[k].0;
                                 uo[k] = res[k].1;
-                                r[k] = res[k].2;
+                                r[k] = res[k].4;
                             }
                             if use_adaptive_threshold {
                                 for k in 0..num_output_neurons {
-                                    if r[k] != 0 {
-                                        self.thr_offset_o[k] = (self.thr_offset_o[k]
-                                            + bio.adaptive_threshold_increment)
-                                            .clamp(
-                                                bio.adaptive_threshold_min,
-                                                bio.adaptive_threshold_max,
-                                            );
-                                    }
+                                    self.thr_offset_o[k] = res[k].2;
                                 }
                             }
                             if use_izh_refractory {
                                 if let Some(ro) = self.izh_refr_o.as_mut() {
                                     for k in 0..num_output_neurons {
-                                        if r[k] != 0 {
-                                            ro[k] = izh_refractory_steps;
-                                        } else {
-                                            ro[k] = (ro[k] - 1).max(0);
-                                        }
+                                        ro[k] = res[k].3;
                                     }
                                 }
                             }
                         } else {
-                            let uo = self.u_o.as_mut().unwrap();
-                            for k in 0..num_output_neurons {
-                                let (nv, nu, unstable) =
-                                    Self::integrate_izh_step(self.v_o[k], uo[k], i_o[k], p);
-                                let mut fired = nv >= p.v_th;
-                                if use_adaptive_threshold {
-                                    let thr_offset = self.thr_offset_o[k].clamp(
-                                        bio.adaptive_threshold_min,
-                                        bio.adaptive_threshold_max,
-                                    );
-                                    fired = nv >= (p.v_th + thr_offset);
-                                }
-                                if use_izh_refractory {
-                                    if let Some(ro) = self.izh_refr_o.as_ref() {
-                                        if ro[k] > 0 {
-                                            fired = false;
-                                        }
-                                    }
-                                }
-                                if unstable {
-                                    fired = false;
-                                }
-                                let (nv2, nu2) = if fired {
-                                    (p.membrane_reset_potential_c, nu + p.recovery_increment_d)
-                                } else {
-                                    (nv, nu)
-                                };
-                                self.v_o[k] = nv2;
-                                uo[k] = nu2;
-                                r[k] = fired as i8;
-                                if use_adaptive_threshold && fired {
-                                    self.thr_offset_o[k] = (self.thr_offset_o[k]
-                                        + bio.adaptive_threshold_increment)
-                                        .clamp(
-                                            bio.adaptive_threshold_min,
-                                            bio.adaptive_threshold_max,
-                                        );
-                                }
-                                if use_izh_refractory {
-                                    if let Some(ro) = self.izh_refr_o.as_mut() {
-                                        if fired {
-                                            ro[k] = izh_refractory_steps;
-                                        } else {
-                                            ro[k] = (ro[k] - 1).max(0);
-                                        }
-                                    }
-                                }
-                            }
+                            r = self.update_izh_output_cpu(
+                                i_o.as_slice().unwrap(),
+                                p,
+                                use_adaptive_threshold,
+                                use_izh_refractory,
+                                izh_refractory_steps,
+                                &bio,
+                            );
                         }
                         r
                     }
                 }
             }
         };
-        self.last_spk_o = spk_o.clone();
-        self.push_output_spike_history();
-        for k in 0..num_output_neurons {
-            if spk_o[k] != 0 {
-                self.x_post_o[k] += 1.0;
-                #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                if self.net.use_morphology && k < self.morph.output_somas.len() {
-                    self.morph.output_somas[k].stimuli += 1.0;
-                }
-            }
-        }
-        if use_homeostasis {
-            for k in 0..num_output_neurons {
-                if spk_o[k] != 0 {
-                    self.rate_ema_o[k] += 1.0 - homeo_decay;
-                }
-                let err = self.rate_ema_o[k] - base_homeo_target;
-                self.thr_offset_o[k] += bio.homeostasis_gain * err;
-            }
-        }
+        self.record_output_spike_phase(
+            &spk_o,
+            use_homeostasis,
+            homeo_decay,
+            base_homeo_target,
+            &bio,
+        );
 
         // Learning updates (local, online)
         {
@@ -11697,114 +12477,94 @@ impl Runner {
                 }
             }
             if eta != 0.0 {
-                // W_in (H0 x S)
-                if self.is_layer_assigned(0) {
-                    #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
-                    let mut gpu_success = false;
-                    #[cfg(feature = "opencl")]
-                    {
-                        let cl_mgr = self.cl.clone();
-                        if let Some(ref cl) = cl_mgr {
-                            if matches!(self.learning, Learning::Stdp | Learning::Aarnn) {
-                                self.sync_cl_w_in_to_gpu();
-                                // Need sensory trace and spikes on GPU
-                                let s_len = self.net.num_sensory_neurons;
-                                if self.cl_x_pre_in.is_none() || self.cl_x_pre_in_size != s_len {
-                                    if let Ok(new_buf) = unsafe {
-                                        Buffer::create(
-                                            &cl.context,
-                                            CL_MEM_READ_ONLY,
-                                            s_len * std::mem::size_of::<f64>(),
-                                            ptr::null_mut(),
-                                        )
-                                    } {
-                                        self.cl_x_pre_in = Some(new_buf);
-                                        self.cl_x_pre_in_size = s_len;
-                                    }
-                                }
-                                if self.cl_s_t.is_none() || self.cl_s_t_size != s_len {
-                                    if let Ok(new_buf) = unsafe {
-                                        Buffer::create(
-                                            &cl.context,
-                                            CL_MEM_READ_ONLY,
-                                            s_len * std::mem::size_of::<i8>(),
-                                            ptr::null_mut(),
-                                        )
-                                    } {
-                                        self.cl_s_t = Some(new_buf);
-                                        self.cl_s_t_size = s_len;
-                                    }
-                                }
+                #[cfg(feature = "opencl")]
+                let use_cpu_reference_plasticity = self.cl.is_none();
+                #[cfg(not(feature = "opencl"))]
+                let use_cpu_reference_plasticity = true;
 
-                                #[cfg(feature = "opencl")]
-                                let cl_mgr = self.cl.clone();
-                                #[cfg(feature = "opencl")]
-                                if let Some(ref cl) = cl_mgr {
-                                    let w_buf_opt = self.cl_w_in.as_ref();
-                                    let x_pre_buf_opt = self.cl_x_pre_in.as_mut();
-                                    let s_buf_opt = self.cl_s_t.as_mut();
-                                    let h0_buf_opt =
-                                        if let Some(Some(b)) = self.cl_buffers_h.get_mut(0) {
-                                            Some(b)
-                                        } else {
-                                            None
-                                        };
-
-                                    if let (
-                                        Some(w_buf),
-                                        Some(x_pre_buf),
-                                        Some(s_buf),
-                                        Some(h0_buf),
-                                    ) = (w_buf_opt, x_pre_buf_opt, s_buf_opt, h0_buf_opt)
+                if use_cpu_reference_plasticity {
+                    self.apply_cpu_plasticity_proposals(
+                        eta,
+                        &s_t,
+                        in_l,
+                        out_l,
+                        num_hidden_layers,
+                        is_aarnn,
+                    );
+                } else {
+                    // W_in (H0 x S)
+                    if self.is_layer_assigned(0) {
+                        #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
+                        let mut gpu_success = false;
+                        #[cfg(feature = "opencl")]
+                        {
+                            let cl_mgr = self.cl.clone();
+                            if let Some(ref cl) = cl_mgr {
+                                if matches!(self.learning, Learning::Stdp | Learning::Aarnn) {
+                                    self.sync_cl_w_in_to_gpu();
+                                    // Need sensory trace and spikes on GPU
+                                    let s_len = self.net.num_sensory_neurons;
+                                    if self.cl_x_pre_in.is_none() || self.cl_x_pre_in_size != s_len
                                     {
-                                        gpu_success = true;
-                                        unsafe {
-                                            if let Some(slice) = self.x_pre_in.as_slice() {
-                                                if let Err(e) = cl.queue.enqueue_write_buffer(
-                                                    x_pre_buf,
-                                                    CL_TRUE,
-                                                    0,
-                                                    slice,
-                                                    &[],
-                                                ) {
-                                                    nm_log!(
-                                                        "[warn] OpenCL learning x_pre_in write failed: {:?}",
-                                                        e
-                                                    );
-                                                    gpu_success = false;
-                                                }
+                                        if let Ok(new_buf) = unsafe {
+                                            Buffer::create(
+                                                &cl.context,
+                                                CL_MEM_READ_ONLY,
+                                                s_len * std::mem::size_of::<f64>(),
+                                                ptr::null_mut(),
+                                            )
+                                        } {
+                                            self.cl_x_pre_in = Some(new_buf);
+                                            self.cl_x_pre_in_size = s_len;
+                                        }
+                                    }
+                                    if self.cl_s_t.is_none() || self.cl_s_t_size != s_len {
+                                        if let Ok(new_buf) = unsafe {
+                                            Buffer::create(
+                                                &cl.context,
+                                                CL_MEM_READ_ONLY,
+                                                s_len * std::mem::size_of::<i8>(),
+                                                ptr::null_mut(),
+                                            )
+                                        } {
+                                            self.cl_s_t = Some(new_buf);
+                                            self.cl_s_t_size = s_len;
+                                        }
+                                    }
+
+                                    #[cfg(feature = "opencl")]
+                                    let cl_mgr = self.cl.clone();
+                                    #[cfg(feature = "opencl")]
+                                    if let Some(ref cl) = cl_mgr {
+                                        let w_buf_opt = self.cl_w_in.as_ref();
+                                        let x_pre_buf_opt = self.cl_x_pre_in.as_mut();
+                                        let s_buf_opt = self.cl_s_t.as_mut();
+                                        let h0_buf_opt =
+                                            if let Some(Some(b)) = self.cl_buffers_h.get_mut(0) {
+                                                Some(b)
                                             } else {
-                                                gpu_success = false;
-                                            }
+                                                None
+                                            };
 
-                                            if gpu_success {
-                                                if let Err(e) = cl.queue.enqueue_write_buffer(
-                                                    s_buf,
-                                                    CL_TRUE,
-                                                    0,
-                                                    &s_t,
-                                                    &[],
-                                                ) {
-                                                    nm_log!(
-                                                        "[warn] OpenCL learning s_t write failed: {:?}",
-                                                        e
-                                                    );
-                                                    gpu_success = false;
-                                                }
-                                            }
-
-                                            if gpu_success {
-                                                // Ensure x_post is synced
-                                                if let Some(slice) = self.x_post_h[0].as_slice() {
+                                        if let (
+                                            Some(w_buf),
+                                            Some(x_pre_buf),
+                                            Some(s_buf),
+                                            Some(h0_buf),
+                                        ) = (w_buf_opt, x_pre_buf_opt, s_buf_opt, h0_buf_opt)
+                                        {
+                                            gpu_success = true;
+                                            unsafe {
+                                                if let Some(slice) = self.x_pre_in.as_slice() {
                                                     if let Err(e) = cl.queue.enqueue_write_buffer(
-                                                        &mut h0_buf.x_trace,
+                                                        x_pre_buf,
                                                         CL_TRUE,
                                                         0,
                                                         slice,
                                                         &[],
                                                     ) {
                                                         nm_log!(
-                                                            "[warn] OpenCL learning x_trace write failed: {:?}",
+                                                            "[warn] OpenCL learning x_pre_in write failed: {:?}",
                                                             e
                                                         );
                                                         gpu_success = false;
@@ -11812,518 +12572,574 @@ impl Runner {
                                                 } else {
                                                     gpu_success = false;
                                                 }
-                                            }
-                                        }
 
-                                        if gpu_success {
-                                            let rule = match self.learning {
-                                                Learning::Stdp | Learning::Aarnn => 0i32,
-                                                Learning::Hebb => 1i32,
-                                                Learning::Oja => 2i32,
-                                            };
+                                                if gpu_success {
+                                                    if let Err(e) = cl.queue.enqueue_write_buffer(
+                                                        s_buf,
+                                                        CL_TRUE,
+                                                        0,
+                                                        &s_t,
+                                                        &[],
+                                                    ) {
+                                                        nm_log!(
+                                                            "[warn] OpenCL learning s_t write failed: {:?}",
+                                                            e
+                                                        );
+                                                        gpu_success = false;
+                                                    }
+                                                }
 
-                                            let kernel_plasticity =
-                                                cl.kernel_plasticity_update.lock().unwrap();
-                                            unsafe {
-                                                let launch = ExecuteKernel::new(&kernel_plasticity)
-                                                    .set_arg(w_buf)
-                                                    .set_arg(s_buf)
-                                                    .set_arg(&h0_buf.spk)
-                                                    .set_arg(x_pre_buf)
-                                                    .set_arg(&h0_buf.x_trace)
-                                                    .set_arg(&eta)
-                                                    .set_arg(&self.stdp.w_min)
-                                                    .set_arg(&self.stdp.w_max)
-                                                    .set_arg(&(num_sensory_neurons as i32))
-                                                    .set_arg(&(num_hidden_0_neurons as i32))
-                                                    .set_arg(&rule)
-                                                    .set_global_work_sizes(&[
-                                                        num_hidden_0_neurons,
-                                                        num_sensory_neurons,
-                                                    ])
-                                                    .enqueue_nd_range(&cl.queue);
-                                                if let Err(e) = launch {
-                                                    nm_log!(
-                                                        "[warn] OpenCL plasticity kernel failed: {:?}",
-                                                        e
-                                                    );
-                                                    gpu_success = false;
+                                                if gpu_success {
+                                                    // Ensure x_post is synced
+                                                    if let Some(slice) = self.x_post_h[0].as_slice()
+                                                    {
+                                                        if let Err(e) =
+                                                            cl.queue.enqueue_write_buffer(
+                                                                &mut h0_buf.x_trace,
+                                                                CL_TRUE,
+                                                                0,
+                                                                slice,
+                                                                &[],
+                                                            )
+                                                        {
+                                                            nm_log!(
+                                                                "[warn] OpenCL learning x_trace write failed: {:?}",
+                                                                e
+                                                            );
+                                                            gpu_success = false;
+                                                        }
+                                                    } else {
+                                                        gpu_success = false;
+                                                    }
                                                 }
                                             }
-                                        }
-                                    }
-                                }
 
-                                #[cfg(feature = "opencl")]
-                                if gpu_success {
-                                    self.sync_cl_w_in_from_gpu();
-                                }
-                            }
-                        }
-                    }
-
-                    if !gpu_success {
-                        if in_l == 0 {
-                            if can_parallel_matrix(
-                                num_hidden_0_neurons,
-                                self.net.num_sensory_neurons,
-                            ) {
-                                let num_sensory_neurons = self.net.num_sensory_neurons;
-                                let w_min = self.stdp.w_min;
-                                let w_max = self.stdp.w_max;
-                                let learning = self.learning;
-                                let last_spk_h0 = self.last_spk_h[0].as_slice().unwrap();
-                                let x_post_h0 = self.x_post_h[0].as_slice().unwrap();
-                                let x_pre_in = self.x_pre_in.as_slice().unwrap();
-                                let sensory_spikes = s_t.as_slice();
-
-                                self.w_in
-                                    .axis_iter_mut(ndarray::Axis(0))
-                                    .into_par_iter()
-                                    .enumerate()
-                                    .for_each(|(j, mut row)| {
-                                        let post = if last_spk_h0[j] != 0 { 1.0 } else { 0.0 };
-                                        let x_post = x_post_h0[j];
-                                        // Skip rows where neither the post-synaptic neuron fired
-                                        // nor has a meaningful eligibility trace, and learning
-                                        // is not unconditional (Hebb/Oja). This avoids touching
-                                        // cache lines for the ~95% of inactive neurons each step.
-                                        if post == 0.0
-                                            && x_post <= 1e-6
-                                            && !matches!(learning, Learning::Hebb | Learning::Oja)
-                                        {
-                                            return;
-                                        }
-                                        if post != 0.0 {
-                                            for i in 0..num_sensory_neurons {
-                                                let pre =
-                                                    if sensory_spikes[i] != 0 { 1.0 } else { 0.0 };
-                                                let dw = match learning {
-                                                    Learning::Stdp | Learning::Aarnn => {
-                                                        eta * ((x_post * pre)
-                                                            - (post * x_pre_in[i]))
-                                                    }
-                                                    Learning::Hebb => eta * (post * pre),
-                                                    Learning::Oja => {
-                                                        eta * ((post * pre)
-                                                            - (post * post) * row[i])
-                                                    }
-                                                };
-                                                row[i] = (row[i] + dw).clamp(w_min, w_max);
-                                            }
-                                        } else if x_post > 1e-6
-                                            || matches!(learning, Learning::Hebb | Learning::Oja)
-                                        {
-                                            for &i in &active_s_indices {
-                                                let pre = 1.0;
-                                                let dw = match learning {
-                                                    Learning::Stdp | Learning::Aarnn => {
-                                                        eta * (x_post * pre)
-                                                    }
-                                                    Learning::Hebb => 0.0,
-                                                    Learning::Oja => 0.0,
-                                                };
-                                                if dw != 0.0 {
-                                                    row[i] = (row[i] + dw).clamp(w_min, w_max);
-                                                }
-                                            }
-                                        }
-                                    });
-                            } else {
-                                for j in 0..num_hidden_0_neurons {
-                                    let post = if self.last_spk_h[0][j] != 0 { 1.0 } else { 0.0 };
-                                    for i in 0..self.net.num_sensory_neurons {
-                                        let pre = if s_t[i] != 0 { 1.0 } else { 0.0 };
-                                        let dw = match self.learning {
-                                            Learning::Stdp | Learning::Aarnn => {
-                                                eta * ((post * self.x_pre_in[i])
-                                                    - (self.x_post_h[0][j] * pre))
-                                            }
-                                            Learning::Hebb => eta * (post * pre),
-                                            Learning::Oja => {
-                                                eta * ((post * pre)
-                                                    - (post * post) * self.w_in[(j, i)])
-                                            }
-                                        };
-                                        self.w_in[(j, i)] = (self.w_in[(j, i)] + dw)
-                                            .clamp(self.stdp.w_min, self.stdp.w_max);
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(feature = "opencl")]
-                        {
-                            self.cl_w_in_dirty = true;
-                        }
-                    }
-                }
-                // Hidden fwd/bwd: iterate using actual interface shapes
-                for l in 0..num_hidden_layers.saturating_sub(1) {
-                    let num_current_layer_neurons = self.layer_size(l);
-                    let num_next_layer_neurons = self.layer_size(l + 1);
-                    // Only update if both layers are nonzero
-                    if num_current_layer_neurons == 0 || num_next_layer_neurons == 0 {
-                        continue;
-                    }
-                    if can_parallel_matrix(num_current_layer_neurons, num_next_layer_neurons) {
-                        let learning = self.learning;
-                        let w_min = self.stdp.w_min;
-                        let w_max = self.stdp.w_max;
-                        let last_spk_cur = self.last_spk_h[l].as_slice().unwrap();
-                        let last_spk_next = self.last_spk_h[l + 1].as_slice().unwrap();
-                        let x_pre_cur = self.x_pre_h[l].as_slice().unwrap();
-                        let x_pre_next = self.x_pre_h[l + 1].as_slice().unwrap();
-                        let x_post_cur = self.x_post_h[l].as_slice().unwrap();
-                        let x_post_next = self.x_post_h[l + 1].as_slice().unwrap();
-
-                        self.w_hh_fwd[l]
-                            .axis_iter_mut(ndarray::Axis(0))
-                            .into_par_iter()
-                            .enumerate()
-                            .for_each(|(j, mut row)| {
-                                let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
-                                let x_post = x_post_next[j];
-                                if post == 0.0
-                                    && x_post <= 1e-6
-                                    && !matches!(learning, Learning::Hebb | Learning::Oja)
-                                {
-                                    return;
-                                }
-                                for i in 0..num_current_layer_neurons {
-                                    let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
-                                    let dw = match learning {
-                                        Learning::Stdp | Learning::Aarnn => {
-                                            eta * ((post * x_pre_cur[i]) - (x_post * pre))
-                                        }
-                                        Learning::Hebb => eta * (post * pre),
-                                        Learning::Oja => {
-                                            eta * ((post * pre) - (post * post) * row[i])
-                                        }
-                                    };
-                                    row[i] = (row[i] + dw).clamp(w_min, w_max);
-                                }
-                            });
-
-                        self.w_hh_bwd[l]
-                            .axis_iter_mut(ndarray::Axis(0))
-                            .into_par_iter()
-                            .enumerate()
-                            .for_each(|(i, mut row)| {
-                                let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
-                                let x_post = x_post_cur[i];
-                                if pre == 0.0
-                                    && x_post <= 1e-6
-                                    && !matches!(learning, Learning::Hebb | Learning::Oja)
-                                {
-                                    return;
-                                }
-                                for j in 0..num_next_layer_neurons {
-                                    let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
-                                    let dw = match learning {
-                                        Learning::Stdp | Learning::Aarnn => {
-                                            eta * ((pre * x_pre_next[j]) - (x_post * post))
-                                        }
-                                        Learning::Hebb => eta * (post * pre),
-                                        Learning::Oja => {
-                                            eta * ((post * pre) - (post * post) * row[j])
-                                        }
-                                    };
-                                    row[j] = (row[j] + dw).clamp(w_min, w_max);
-                                }
-                            });
-                    } else {
-                        for j in 0..num_next_layer_neurons {
-                            for i in 0..num_current_layer_neurons {
-                                let pre = if self
-                                    .last_spk_h
-                                    .get(l)
-                                    .and_then(|v| v.get(i))
-                                    .copied()
-                                    .unwrap_or(0)
-                                    != 0
-                                {
-                                    1.0
-                                } else {
-                                    0.0
-                                };
-                                let post = if self
-                                    .last_spk_h
-                                    .get(l + 1)
-                                    .and_then(|v| v.get(j))
-                                    .copied()
-                                    .unwrap_or(0)
-                                    != 0
-                                {
-                                    1.0
-                                } else {
-                                    0.0
-                                };
-                                let dwf = match self.learning {
-                                    Learning::Stdp | Learning::Aarnn => {
-                                        eta * ((post
-                                            * self
-                                                .x_pre_h
-                                                .get(l)
-                                                .and_then(|v| v.get(i))
-                                                .copied()
-                                                .unwrap_or(0.0))
-                                            - (self
-                                                .x_post_h
-                                                .get(l + 1)
-                                                .and_then(|v| v.get(j))
-                                                .copied()
-                                                .unwrap_or(0.0)
-                                                * pre))
-                                    }
-                                    Learning::Hebb => eta * (post * pre),
-                                    Learning::Oja => {
-                                        let w = self
-                                            .w_hh_fwd
-                                            .get(l)
-                                            .and_then(|m| m.get((j, i)))
-                                            .copied()
-                                            .unwrap_or(0.0);
-                                        eta * ((post * pre) - (post * post) * w)
-                                    }
-                                };
-                                if let Some(w) =
-                                    self.w_hh_fwd.get_mut(l).and_then(|m| m.get_mut((j, i)))
-                                {
-                                    *w = (*w + dwf).clamp(self.stdp.w_min, self.stdp.w_max);
-                                }
-                                let dwb = match self.learning {
-                                    Learning::Stdp | Learning::Aarnn => {
-                                        eta * ((pre
-                                            * self
-                                                .x_pre_h
-                                                .get(l + 1)
-                                                .and_then(|v| v.get(j))
-                                                .copied()
-                                                .unwrap_or(0.0))
-                                            - (self
-                                                .x_post_h
-                                                .get(l)
-                                                .and_then(|v| v.get(i))
-                                                .copied()
-                                                .unwrap_or(0.0)
-                                                * post))
-                                    }
-                                    Learning::Hebb => eta * (post * pre),
-                                    Learning::Oja => {
-                                        let w = self
-                                            .w_hh_bwd
-                                            .get(l)
-                                            .and_then(|m| m.get((i, j)))
-                                            .copied()
-                                            .unwrap_or(0.0);
-                                        eta * ((post * pre) - (post * post) * w)
-                                    }
-                                };
-                                if let Some(w) =
-                                    self.w_hh_bwd.get_mut(l).and_then(|m| m.get_mut((i, j)))
-                                {
-                                    *w = (*w + dwb).clamp(self.stdp.w_min, self.stdp.w_max);
-                                }
-                            }
-                        }
-                    }
-                    #[cfg(feature = "opencl")]
-                    {
-                        if l < self.cl_w_hh_fwd_dirty.len() {
-                            self.cl_w_hh_fwd_dirty[l] = true;
-                        }
-                        if l < self.cl_w_hh_bwd_dirty.len() {
-                            self.cl_w_hh_bwd_dirty[l] = true;
-                        }
-                    }
-                }
-                // W_out uses out_l layer
-                if self.is_layer_assigned(num_hidden_layers) {
-                    let out_conn_layer = out_l;
-                    let num_last_layer_neurons = self.layer_size(out_conn_layer);
-                    #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
-                    let mut gpu_success = false;
-                    #[cfg(feature = "opencl")]
-                    if self.cl.is_some() {
-                        if num_last_layer_neurons > 0 && num_output_neurons > 0 {
-                            self.sync_cl_w_out_to_gpu();
-
-                            if let Some(ref cl) = self.cl {
-                                let cl_out_opt = self.cl_w_out.as_ref();
-                                let buf_last_ptr = if let Some(Some(b)) =
-                                    self.cl_buffers_h.get_mut(out_conn_layer)
-                                {
-                                    Some(b as *mut CLBuffers)
-                                } else {
-                                    None
-                                };
-                                let buf_o_ptr =
-                                    self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
-
-                                if let (Some(cl_out), Some(buf_last_p), Some(buf_o_p)) =
-                                    (cl_out_opt, buf_last_ptr, buf_o_ptr)
-                                {
-                                    gpu_success = true;
-                                    let buf_last = unsafe { &mut *buf_last_p };
-                                    let buf_o = unsafe { &mut *buf_o_p };
-
-                                    let rule = match self.learning {
-                                        Learning::Stdp | Learning::Aarnn => 0i32,
-                                        Learning::Hebb => 1i32,
-                                        Learning::Oja => 2i32,
-                                    };
-
-                                    // Ensure traces are synced
-                                    unsafe {
-                                        if let (Some(s1), Some(s2)) = (
-                                            self.x_post_h[out_conn_layer].as_slice(),
-                                            self.x_post_o.as_slice(),
-                                        ) {
-                                            if let Err(e) = cl.queue.enqueue_write_buffer(
-                                                &mut buf_last.x_trace,
-                                                CL_TRUE,
-                                                0,
-                                                s1,
-                                                &[],
-                                            ) {
-                                                nm_log!(
-                                                    "[warn] OpenCL learning out last_trace write failed: {:?}",
-                                                    e
-                                                );
-                                                gpu_success = false;
-                                            }
                                             if gpu_success {
-                                                if let Err(e) = cl.queue.enqueue_write_buffer(
-                                                    &mut buf_o.x_trace,
-                                                    CL_TRUE,
-                                                    0,
-                                                    s2,
-                                                    &[],
-                                                ) {
-                                                    nm_log!(
-                                                        "[warn] OpenCL learning out o_trace write failed: {:?}",
-                                                        e
-                                                    );
-                                                    gpu_success = false;
+                                                let rule = match self.learning {
+                                                    Learning::Stdp | Learning::Aarnn => 0i32,
+                                                    Learning::Hebb => 1i32,
+                                                    Learning::Oja => 2i32,
+                                                };
+
+                                                let kernel_plasticity =
+                                                    cl.kernel_plasticity_update.lock().unwrap();
+                                                unsafe {
+                                                    let launch =
+                                                        ExecuteKernel::new(&kernel_plasticity)
+                                                            .set_arg(w_buf)
+                                                            .set_arg(s_buf)
+                                                            .set_arg(&h0_buf.spk)
+                                                            .set_arg(x_pre_buf)
+                                                            .set_arg(&h0_buf.x_trace)
+                                                            .set_arg(&eta)
+                                                            .set_arg(&self.stdp.w_min)
+                                                            .set_arg(&self.stdp.w_max)
+                                                            .set_arg(&(num_sensory_neurons as i32))
+                                                            .set_arg(&(num_hidden_0_neurons as i32))
+                                                            .set_arg(&rule)
+                                                            .set_global_work_sizes(&[
+                                                                num_hidden_0_neurons,
+                                                                num_sensory_neurons,
+                                                            ])
+                                                            .enqueue_nd_range(&cl.queue);
+                                                    if let Err(e) = launch {
+                                                        nm_log!(
+                                                            "[warn] OpenCL plasticity kernel failed: {:?}",
+                                                            e
+                                                        );
+                                                        gpu_success = false;
+                                                    }
                                                 }
                                             }
-                                        } else {
-                                            gpu_success = false;
                                         }
                                     }
 
+                                    #[cfg(feature = "opencl")]
                                     if gpu_success {
-                                        let kernel_plasticity =
-                                            cl.kernel_plasticity_update.lock().unwrap();
-                                        unsafe {
-                                            let launch = ExecuteKernel::new(&kernel_plasticity)
-                                                .set_arg(cl_out)
-                                                .set_arg(&buf_last.spk)
-                                                .set_arg(&buf_o.spk)
-                                                .set_arg(&buf_last.x_trace)
-                                                .set_arg(&buf_o.x_trace)
-                                                .set_arg(&eta)
-                                                .set_arg(&self.stdp.w_min)
-                                                .set_arg(&self.stdp.w_max)
-                                                .set_arg(&(num_last_layer_neurons as i32))
-                                                .set_arg(&(num_output_neurons as i32))
-                                                .set_arg(&rule)
-                                                .set_global_work_sizes(&[
-                                                    num_output_neurons,
-                                                    num_last_layer_neurons,
-                                                ])
-                                                .enqueue_nd_range(&cl.queue);
-                                            if let Err(e) = launch {
-                                                nm_log!(
-                                                    "[warn] OpenCL out plasticity kernel failed: {:?}",
-                                                    e
-                                                );
-                                                gpu_success = false;
-                                            }
-                                        }
+                                        self.sync_cl_w_in_from_gpu();
                                     }
                                 }
                             }
                         }
-                    }
 
-                    #[cfg(feature = "opencl")]
-                    if gpu_success {
-                        self.sync_cl_w_out_from_gpu();
-                    }
+                        if !gpu_success {
+                            if in_l == 0 {
+                                if can_parallel_matrix(
+                                    num_hidden_0_neurons,
+                                    self.net.num_sensory_neurons,
+                                ) {
+                                    let num_sensory_neurons = self.net.num_sensory_neurons;
+                                    let w_min = self.stdp.w_min;
+                                    let w_max = self.stdp.w_max;
+                                    let learning = self.learning;
+                                    let last_spk_h0 = self.last_spk_h[0].as_slice().unwrap();
+                                    let x_post_h0 = self.x_post_h[0].as_slice().unwrap();
+                                    let x_pre_in = self.x_pre_in.as_slice().unwrap();
+                                    let sensory_spikes = s_t.as_slice();
 
-                    if !gpu_success {
-                        if can_parallel_matrix(num_output_neurons, num_last_layer_neurons) {
+                                    self.w_in
+                                        .axis_iter_mut(ndarray::Axis(0))
+                                        .into_par_iter()
+                                        .enumerate()
+                                        .for_each(|(j, mut row)| {
+                                            let post = if last_spk_h0[j] != 0 { 1.0 } else { 0.0 };
+                                            let x_post = x_post_h0[j];
+                                            // Skip rows where neither the post-synaptic neuron fired
+                                            // nor has a meaningful eligibility trace, and learning
+                                            // is not unconditional (Hebb/Oja). This avoids touching
+                                            // cache lines for the ~95% of inactive neurons each step.
+                                            if post == 0.0
+                                                && x_post <= 1e-6
+                                                && !matches!(
+                                                    learning,
+                                                    Learning::Hebb | Learning::Oja
+                                                )
+                                            {
+                                                return;
+                                            }
+                                            if post != 0.0 {
+                                                for i in 0..num_sensory_neurons {
+                                                    let pre = if sensory_spikes[i] != 0 {
+                                                        1.0
+                                                    } else {
+                                                        0.0
+                                                    };
+                                                    let dw = weight_delta(
+                                                        runner_plasticity_rule(learning),
+                                                        eta,
+                                                        pre,
+                                                        post,
+                                                        x_pre_in[i],
+                                                        x_post,
+                                                        row[i],
+                                                    );
+                                                    row[i] = apply_weight_delta(
+                                                        row[i], dw, w_min, w_max,
+                                                    );
+                                                }
+                                            } else if x_post > 1e-6
+                                                || matches!(
+                                                    learning,
+                                                    Learning::Hebb | Learning::Oja
+                                                )
+                                            {
+                                                for &i in &active_s_indices {
+                                                    let pre = 1.0;
+                                                    let dw = weight_delta(
+                                                        runner_plasticity_rule(learning),
+                                                        eta,
+                                                        pre,
+                                                        post,
+                                                        x_pre_in[i],
+                                                        x_post,
+                                                        row[i],
+                                                    );
+                                                    if dw != 0.0 {
+                                                        row[i] = apply_weight_delta(
+                                                            row[i], dw, w_min, w_max,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        });
+                                } else {
+                                    for j in 0..num_hidden_0_neurons {
+                                        let post =
+                                            if self.last_spk_h[0][j] != 0 { 1.0 } else { 0.0 };
+                                        for i in 0..self.net.num_sensory_neurons {
+                                            let pre = if s_t[i] != 0 { 1.0 } else { 0.0 };
+                                            let dw = weight_delta(
+                                                runner_plasticity_rule(self.learning),
+                                                eta,
+                                                pre,
+                                                post,
+                                                self.x_pre_in[i],
+                                                self.x_post_h[0][j],
+                                                self.w_in[(j, i)],
+                                            );
+                                            self.w_in[(j, i)] = apply_weight_delta(
+                                                self.w_in[(j, i)],
+                                                dw,
+                                                self.stdp.w_min,
+                                                self.stdp.w_max,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(feature = "opencl")]
+                            {
+                                self.cl_w_in_dirty = true;
+                            }
+                        }
+                    }
+                    // Hidden fwd/bwd: iterate using actual interface shapes
+                    for l in 0..num_hidden_layers.saturating_sub(1) {
+                        let num_current_layer_neurons = self.layer_size(l);
+                        let num_next_layer_neurons = self.layer_size(l + 1);
+                        // Only update if both layers are nonzero
+                        if num_current_layer_neurons == 0 || num_next_layer_neurons == 0 {
+                            continue;
+                        }
+                        if can_parallel_matrix(num_current_layer_neurons, num_next_layer_neurons) {
+                            let learning = self.learning;
                             let w_min = self.stdp.w_min;
                             let w_max = self.stdp.w_max;
-                            let learning = self.learning;
-                            let last_spk_h_last =
-                                self.last_spk_h[out_conn_layer].as_slice().unwrap();
-                            let last_spk_o = self.last_spk_o.as_slice().unwrap();
-                            let x_post_o = self.x_post_o.as_slice().unwrap();
-                            let x_pre_h_last = self.x_pre_h[out_conn_layer].as_slice().unwrap();
+                            let last_spk_cur = self.last_spk_h[l].as_slice().unwrap();
+                            let last_spk_next = self.last_spk_h[l + 1].as_slice().unwrap();
+                            let x_pre_cur = self.x_pre_h[l].as_slice().unwrap();
+                            let x_pre_next = self.x_pre_h[l + 1].as_slice().unwrap();
+                            let x_post_cur = self.x_post_h[l].as_slice().unwrap();
+                            let x_post_next = self.x_post_h[l + 1].as_slice().unwrap();
 
-                            self.w_out
+                            self.w_hh_fwd[l]
                                 .axis_iter_mut(ndarray::Axis(0))
                                 .into_par_iter()
                                 .enumerate()
-                                .for_each(|(k, mut row)| {
-                                    let post = if last_spk_o[k] != 0 { 1.0 } else { 0.0 };
-                                    let x_post = x_post_o[k];
+                                .for_each(|(j, mut row)| {
+                                    let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
+                                    let x_post = x_post_next[j];
                                     if post == 0.0
                                         && x_post <= 1e-6
                                         && !matches!(learning, Learning::Hebb | Learning::Oja)
                                     {
                                         return;
                                     }
-                                    for j in 0..num_last_layer_neurons {
-                                        let pre = if last_spk_h_last[j] != 0 { 1.0 } else { 0.0 };
-                                        let dw = match learning {
-                                            Learning::Stdp | Learning::Aarnn => {
-                                                eta * ((x_post * pre) - (post * x_pre_h_last[j]))
-                                            }
-                                            Learning::Hebb => eta * (post * pre),
-                                            Learning::Oja => {
-                                                eta * ((post * pre) - (post * post) * row[j])
-                                            }
-                                        };
-                                        row[j] = (row[j] + dw).clamp(w_min, w_max);
+                                    for i in 0..num_current_layer_neurons {
+                                        let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
+                                        let dw = weight_delta(
+                                            runner_plasticity_rule(learning),
+                                            eta,
+                                            pre,
+                                            post,
+                                            x_pre_cur[i],
+                                            x_post,
+                                            row[i],
+                                        );
+                                        row[i] = apply_weight_delta(row[i], dw, w_min, w_max);
+                                    }
+                                });
+
+                            self.w_hh_bwd[l]
+                                .axis_iter_mut(ndarray::Axis(0))
+                                .into_par_iter()
+                                .enumerate()
+                                .for_each(|(i, mut row)| {
+                                    let pre = if last_spk_cur[i] != 0 { 1.0 } else { 0.0 };
+                                    let x_post = x_post_cur[i];
+                                    if pre == 0.0
+                                        && x_post <= 1e-6
+                                        && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                    {
+                                        return;
+                                    }
+                                    for j in 0..num_next_layer_neurons {
+                                        let post = if last_spk_next[j] != 0 { 1.0 } else { 0.0 };
+                                        let dw = weight_delta(
+                                            runner_plasticity_rule(learning),
+                                            eta,
+                                            post,
+                                            pre,
+                                            x_pre_next[j],
+                                            x_post,
+                                            row[j],
+                                        );
+                                        row[j] = apply_weight_delta(row[j], dw, w_min, w_max);
                                     }
                                 });
                         } else {
-                            for k in 0..num_output_neurons {
-                                for j in 0..num_last_layer_neurons {
-                                    let pre = if self.last_spk_h[out_conn_layer][j] != 0 {
+                            for j in 0..num_next_layer_neurons {
+                                for i in 0..num_current_layer_neurons {
+                                    let pre = if self
+                                        .last_spk_h
+                                        .get(l)
+                                        .and_then(|v| v.get(i))
+                                        .copied()
+                                        .unwrap_or(0)
+                                        != 0
+                                    {
                                         1.0
                                     } else {
                                         0.0
                                     };
-                                    let post = if self.last_spk_o[k] != 0 { 1.0 } else { 0.0 };
-                                    let dw = match self.learning {
-                                        Learning::Stdp | Learning::Aarnn => {
-                                            eta * ((post * self.x_pre_h[out_conn_layer][j])
-                                                - (self.x_post_o[k] * pre))
-                                        }
-                                        Learning::Hebb => eta * (post * pre),
-                                        Learning::Oja => {
-                                            eta * ((post * pre)
-                                                - (post * post) * self.w_out[(k, j)])
-                                        }
+                                    let post = if self
+                                        .last_spk_h
+                                        .get(l + 1)
+                                        .and_then(|v| v.get(j))
+                                        .copied()
+                                        .unwrap_or(0)
+                                        != 0
+                                    {
+                                        1.0
+                                    } else {
+                                        0.0
                                     };
-                                    self.w_out[(k, j)] = (self.w_out[(k, j)] + dw)
-                                        .clamp(self.stdp.w_min, self.stdp.w_max);
+                                    let dwf = weight_delta(
+                                        runner_plasticity_rule(self.learning),
+                                        eta,
+                                        pre,
+                                        post,
+                                        self.x_pre_h
+                                            .get(l)
+                                            .and_then(|v| v.get(i))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                        self.x_post_h
+                                            .get(l + 1)
+                                            .and_then(|v| v.get(j))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                        self.w_hh_fwd
+                                            .get(l)
+                                            .and_then(|m| m.get((j, i)))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                    );
+                                    if let Some(w) =
+                                        self.w_hh_fwd.get_mut(l).and_then(|m| m.get_mut((j, i)))
+                                    {
+                                        *w = apply_weight_delta(
+                                            *w,
+                                            dwf,
+                                            self.stdp.w_min,
+                                            self.stdp.w_max,
+                                        );
+                                    }
+                                    let dwb = weight_delta(
+                                        runner_plasticity_rule(self.learning),
+                                        eta,
+                                        post,
+                                        pre,
+                                        self.x_pre_h
+                                            .get(l + 1)
+                                            .and_then(|v| v.get(j))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                        self.x_post_h
+                                            .get(l)
+                                            .and_then(|v| v.get(i))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                        self.w_hh_bwd
+                                            .get(l)
+                                            .and_then(|m| m.get((i, j)))
+                                            .copied()
+                                            .unwrap_or(0.0),
+                                    );
+                                    if let Some(w) =
+                                        self.w_hh_bwd.get_mut(l).and_then(|m| m.get_mut((i, j)))
+                                    {
+                                        *w = apply_weight_delta(
+                                            *w,
+                                            dwb,
+                                            self.stdp.w_min,
+                                            self.stdp.w_max,
+                                        );
+                                    }
                                 }
                             }
                         }
                         #[cfg(feature = "opencl")]
                         {
-                            self.cl_w_out_dirty = true;
+                            if l < self.cl_w_hh_fwd_dirty.len() {
+                                self.cl_w_hh_fwd_dirty[l] = true;
+                            }
+                            if l < self.cl_w_hh_bwd_dirty.len() {
+                                self.cl_w_hh_bwd_dirty[l] = true;
+                            }
                         }
                     }
-                }
-                #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                if is_aarnn && matches!(self.learning, Learning::Aarnn) {
-                    self.apply_dendritic_bouton_plasticity_overlay(eta, &s_t);
+                    // W_out uses out_l layer
+                    if self.is_layer_assigned(num_hidden_layers) {
+                        let out_conn_layer = out_l;
+                        let num_last_layer_neurons = self.layer_size(out_conn_layer);
+                        #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
+                        let mut gpu_success = false;
+                        #[cfg(feature = "opencl")]
+                        if self.cl.is_some() {
+                            if num_last_layer_neurons > 0 && num_output_neurons > 0 {
+                                self.sync_cl_w_out_to_gpu();
+
+                                if let Some(ref cl) = self.cl {
+                                    let cl_out_opt = self.cl_w_out.as_ref();
+                                    let buf_last_ptr = if let Some(Some(b)) =
+                                        self.cl_buffers_h.get_mut(out_conn_layer)
+                                    {
+                                        Some(b as *mut CLBuffers)
+                                    } else {
+                                        None
+                                    };
+                                    let buf_o_ptr =
+                                        self.cl_buffer_o.as_mut().map(|b| b as *mut CLBuffers);
+
+                                    if let (Some(cl_out), Some(buf_last_p), Some(buf_o_p)) =
+                                        (cl_out_opt, buf_last_ptr, buf_o_ptr)
+                                    {
+                                        gpu_success = true;
+                                        let buf_last = unsafe { &mut *buf_last_p };
+                                        let buf_o = unsafe { &mut *buf_o_p };
+
+                                        let rule = match self.learning {
+                                            Learning::Stdp | Learning::Aarnn => 0i32,
+                                            Learning::Hebb => 1i32,
+                                            Learning::Oja => 2i32,
+                                        };
+
+                                        // Ensure traces are synced
+                                        unsafe {
+                                            if let (Some(s1), Some(s2)) = (
+                                                self.x_post_h[out_conn_layer].as_slice(),
+                                                self.x_post_o.as_slice(),
+                                            ) {
+                                                if let Err(e) = cl.queue.enqueue_write_buffer(
+                                                    &mut buf_last.x_trace,
+                                                    CL_TRUE,
+                                                    0,
+                                                    s1,
+                                                    &[],
+                                                ) {
+                                                    nm_log!(
+                                                        "[warn] OpenCL learning out last_trace write failed: {:?}",
+                                                        e
+                                                    );
+                                                    gpu_success = false;
+                                                }
+                                                if gpu_success {
+                                                    if let Err(e) = cl.queue.enqueue_write_buffer(
+                                                        &mut buf_o.x_trace,
+                                                        CL_TRUE,
+                                                        0,
+                                                        s2,
+                                                        &[],
+                                                    ) {
+                                                        nm_log!(
+                                                            "[warn] OpenCL learning out o_trace write failed: {:?}",
+                                                            e
+                                                        );
+                                                        gpu_success = false;
+                                                    }
+                                                }
+                                            } else {
+                                                gpu_success = false;
+                                            }
+                                        }
+
+                                        if gpu_success {
+                                            let kernel_plasticity =
+                                                cl.kernel_plasticity_update.lock().unwrap();
+                                            unsafe {
+                                                let launch = ExecuteKernel::new(&kernel_plasticity)
+                                                    .set_arg(cl_out)
+                                                    .set_arg(&buf_last.spk)
+                                                    .set_arg(&buf_o.spk)
+                                                    .set_arg(&buf_last.x_trace)
+                                                    .set_arg(&buf_o.x_trace)
+                                                    .set_arg(&eta)
+                                                    .set_arg(&self.stdp.w_min)
+                                                    .set_arg(&self.stdp.w_max)
+                                                    .set_arg(&(num_last_layer_neurons as i32))
+                                                    .set_arg(&(num_output_neurons as i32))
+                                                    .set_arg(&rule)
+                                                    .set_global_work_sizes(&[
+                                                        num_output_neurons,
+                                                        num_last_layer_neurons,
+                                                    ])
+                                                    .enqueue_nd_range(&cl.queue);
+                                                if let Err(e) = launch {
+                                                    nm_log!(
+                                                        "[warn] OpenCL out plasticity kernel failed: {:?}",
+                                                        e
+                                                    );
+                                                    gpu_success = false;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        #[cfg(feature = "opencl")]
+                        if gpu_success {
+                            self.sync_cl_w_out_from_gpu();
+                        }
+
+                        if !gpu_success {
+                            if can_parallel_matrix(num_output_neurons, num_last_layer_neurons) {
+                                let w_min = self.stdp.w_min;
+                                let w_max = self.stdp.w_max;
+                                let learning = self.learning;
+                                let last_spk_h_last =
+                                    self.last_spk_h[out_conn_layer].as_slice().unwrap();
+                                let last_spk_o = self.last_spk_o.as_slice().unwrap();
+                                let x_post_o = self.x_post_o.as_slice().unwrap();
+                                let x_pre_h_last = self.x_pre_h[out_conn_layer].as_slice().unwrap();
+
+                                self.w_out
+                                    .axis_iter_mut(ndarray::Axis(0))
+                                    .into_par_iter()
+                                    .enumerate()
+                                    .for_each(|(k, mut row)| {
+                                        let post = if last_spk_o[k] != 0 { 1.0 } else { 0.0 };
+                                        let x_post = x_post_o[k];
+                                        if post == 0.0
+                                            && x_post <= 1e-6
+                                            && !matches!(learning, Learning::Hebb | Learning::Oja)
+                                        {
+                                            return;
+                                        }
+                                        for j in 0..num_last_layer_neurons {
+                                            let pre =
+                                                if last_spk_h_last[j] != 0 { 1.0 } else { 0.0 };
+                                            let dw = weight_delta(
+                                                runner_plasticity_rule(learning),
+                                                eta,
+                                                pre,
+                                                post,
+                                                x_pre_h_last[j],
+                                                x_post,
+                                                row[j],
+                                            );
+                                            row[j] = apply_weight_delta(row[j], dw, w_min, w_max);
+                                        }
+                                    });
+                            } else {
+                                for k in 0..num_output_neurons {
+                                    for j in 0..num_last_layer_neurons {
+                                        let pre = if self.last_spk_h[out_conn_layer][j] != 0 {
+                                            1.0
+                                        } else {
+                                            0.0
+                                        };
+                                        let post = if self.last_spk_o[k] != 0 { 1.0 } else { 0.0 };
+                                        let dw = weight_delta(
+                                            runner_plasticity_rule(self.learning),
+                                            eta,
+                                            pre,
+                                            post,
+                                            self.x_pre_h[out_conn_layer][j],
+                                            self.x_post_o[k],
+                                            self.w_out[(k, j)],
+                                        );
+                                        self.w_out[(k, j)] = apply_weight_delta(
+                                            self.w_out[(k, j)],
+                                            dw,
+                                            self.stdp.w_min,
+                                            self.stdp.w_max,
+                                        );
+                                    }
+                                }
+                            }
+                            #[cfg(feature = "opencl")]
+                            {
+                                self.cl_w_out_dirty = true;
+                            }
+                        }
+                    }
+                    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                    if is_aarnn && matches!(self.learning, Learning::Aarnn) {
+                        self.apply_dendritic_bouton_plasticity_overlay(eta, &s_t);
+                    }
                 }
             }
         }
@@ -12922,15 +13738,36 @@ impl Runner {
             }
         }
 
-        self.t += 1;
-        self.t_ms += self.lif.dt;
         self.rng.seed(fastrand::get_seed());
+        self.stage_output_phase()
+    }
+
+    /// Stage committed neural output for the executor or compatibility
+    /// facade. This phase only copies the externally visible spike result;
+    /// logical time is advanced separately by [`Self::commit_legacy_tick`].
+    fn stage_output_phase(&self) -> StepOut {
         StepOut {
             t: self.t,
             t_ms: self.t_ms,
             spk_h: self.last_spk_h.clone(),
             spk_o: self.last_spk_o.clone(),
         }
+    }
+
+    fn commit_legacy_tick(&mut self, expected: usize) -> Result<(), RunnerTimeError> {
+        if self.t != expected {
+            return Err(RunnerTimeError::TickMismatch {
+                expected,
+                actual: self.t,
+            });
+        }
+        self.t = expected
+            .checked_add(1)
+            .ok_or(RunnerTimeError::TickOverflow {
+                tick: u64::try_from(expected).unwrap_or(u64::MAX),
+            })?;
+        self.t_ms += self.lif.dt;
+        Ok(())
     }
 
     #[cfg(feature = "growth3d")]
@@ -18820,6 +19657,250 @@ mod tests {
     }
 
     #[test]
+    fn input_collection_phase_preserves_external_payload_and_error_contract() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.num_sensory_neurons = 4;
+        net.num_output_neurons = 2;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        let mut runner = Runner::new(lif, stdp, net, NeuronModel::Lif, Learning::Stdp);
+
+        let sensory_count = runner.net.num_sensory_neurons;
+        let output_count = runner.net.num_output_neurons;
+        let result = runner.collect_input_phase(
+            Some(&[1, 0, 1, 0, 1]),
+            sensory_count,
+            output_count,
+            false,
+            false,
+        );
+
+        assert_eq!(result.sensory, vec![1, 0, 1, 0]);
+        assert_eq!(result.perceptual_error_drive, 0.0);
+        #[cfg(not(feature = "superdense_executor"))]
+        assert_eq!(result.perceptual_mean_err, 0.0);
+    }
+
+    #[test]
+    fn cpu_synaptic_release_phase_updates_release_buffers_deterministically() {
+        let mut runner = mk_aarnn_growth_runner();
+        runner.net.num_sensory_neurons = 4;
+        runner.net.num_output_neurons = 2;
+        runner.ensure_state_dimensions();
+        let sensory = vec![1i8; runner.stp_u_s.len()];
+        let previous_hidden_spikes = runner.last_spk_h.clone();
+        let mut sensory_release = vec![0.0; runner.stp_u_s.len()];
+        let mut hidden_release = runner
+            .stp_u_h
+            .iter()
+            .map(|layer| vec![0.0; layer.len()])
+            .collect::<Vec<_>>();
+        let update_hidden = vec![false; runner.stp_u_h.len()];
+
+        runner.apply_cpu_stp_release_phase(
+            &sensory,
+            &previous_hidden_spikes,
+            &mut sensory_release,
+            &mut hidden_release,
+            true,
+            &update_hidden,
+        );
+
+        assert!(sensory_release.iter().any(|release| *release > 0.0));
+        assert_eq!(hidden_release.len(), runner.stp_u_h.len());
+        assert!(
+            hidden_release
+                .iter()
+                .flat_map(|layer| layer.iter())
+                .all(|release| *release >= 0.0)
+        );
+    }
+
+    #[test]
+    fn cpu_lif_layer_phase_commits_voltage_refractory_and_spike_together() {
+        let mut runner = mk_runner();
+        runner.v_h[0][0] = 0.0;
+        let threshold_crossing_current = runner.lif.v_th + 1.0;
+
+        let spikes = runner.update_lif_layer_cpu(0, &[threshold_crossing_current]);
+
+        assert_eq!(spikes.as_slice().unwrap(), &[1]);
+        assert_eq!(runner.v_h[0][0], runner.lif.v_reset);
+        assert_eq!(
+            runner.refr_h.as_ref().unwrap()[0][0],
+            runner.lif.refractory as i32
+        );
+    }
+
+    #[test]
+    fn cpu_lif_layer_phase_handles_non_initial_hidden_layer() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 2;
+        net.num_hidden_per_layer_initial = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+
+        let spikes = runner.update_lif_layer_cpu(1, &[runner.lif.v_th + 1.0, 0.0]);
+
+        assert_eq!(spikes.len(), 2);
+        assert_eq!(spikes[0], 1);
+        assert_eq!(runner.v_h[1][0], runner.lif.v_reset);
+        assert_eq!(
+            runner.refr_h.as_ref().unwrap()[1][0],
+            runner.lif.refractory as i32
+        );
+    }
+
+    #[test]
+    fn cpu_lif_output_phase_commits_voltage_refractory_and_spike_together() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_output_neurons = 1;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+
+        let spikes = runner.update_lif_output_cpu(&[runner.lif.v_th + 1.0]);
+
+        assert_eq!(spikes.as_slice().unwrap(), &[1]);
+        assert_eq!(runner.v_o[0], runner.lif.v_reset);
+        assert_eq!(
+            runner.refr_o.as_ref().unwrap()[0],
+            runner.lif.refractory as i32
+        );
+    }
+
+    #[test]
+    fn cpu_izh_layer_phase_commits_finite_state_and_spike_result() {
+        let mut runner = mk_aarnn_growth_runner();
+        runner.net.num_sensory_neurons = 4;
+        runner.net.num_output_neurons = 2;
+        runner.ensure_state_dimensions();
+        let params = runner.effective_izh_params().unwrap();
+        let bio = runner.net.aarnn_bio.clone();
+
+        let spikes = runner.update_izh_layer_cpu(0, &[1_000.0], params, false, false, 0, &bio);
+
+        assert_eq!(spikes.len(), 1);
+        assert!(spikes[0] == 0 || spikes[0] == 1);
+        assert!(runner.v_h[0][0].is_finite());
+        assert!(runner.u_h.as_ref().unwrap()[0][0].is_finite());
+        if spikes[0] != 0 {
+            assert_eq!(runner.v_h[0][0], params.membrane_reset_potential_c);
+        }
+    }
+
+    #[test]
+    fn cpu_izh_output_phase_commits_finite_state_and_spike_result() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_output_neurons = 1;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        let params = runner.effective_izh_params().unwrap();
+        let bio = runner.net.aarnn_bio.clone();
+
+        let spikes = runner.update_izh_output_cpu(&[1_000.0], params, false, false, 0, &bio);
+
+        assert_eq!(spikes.len(), 1);
+        assert!(spikes[0] == 0 || spikes[0] == 1);
+        assert!(runner.v_o[0].is_finite());
+        assert!(runner.u_o.as_ref().unwrap()[0].is_finite());
+        if spikes[0] != 0 {
+            assert_eq!(runner.v_o[0], params.membrane_reset_potential_c);
+        }
+    }
+
+    #[test]
+    fn threshold_homeostasis_decay_phase_uses_biological_decays() {
+        let mut runner = mk_aarnn_growth_runner();
+        runner.thr_offset_h[0][0] = 2.0;
+        runner.rate_ema_h[0][0] = 2.0;
+        let bio = runner.bio_h[0][0].clone();
+        let decays = Runner::get_decays_static(runner.lif.dt, &bio);
+
+        runner.decay_threshold_homeostasis_phase(true, true, decays);
+
+        assert_eq!(runner.thr_offset_h[0][0], 2.0 * decays.thr_decay);
+        assert_eq!(runner.rate_ema_h[0][0], 2.0 * decays.homeo_decay);
+    }
+
+    #[test]
+    fn spike_recording_phase_commits_hidden_history_traces_and_homeostasis() {
+        let mut runner = mk_aarnn_growth_runner();
+        let spikes = Array1::from_vec(vec![1]);
+        let bio = runner.net.aarnn_bio.clone();
+        let initial_history_len = runner.spk_hist_h[0].len();
+
+        runner.record_hidden_spike_phase(0, &spikes, true, 0.9, 0.0, &bio);
+
+        assert_eq!(runner.last_spk_h[0], spikes);
+        assert_eq!(runner.x_post_h[0][0], 1.0);
+        assert_eq!(runner.x_pre_h[0][0], 1.0);
+        assert!(runner.rate_ema_h[0][0] > 0.0);
+        assert!(runner.spk_hist_h[0].len() <= initial_history_len.max(runner.hist_len));
+        assert_eq!(runner.spk_hist_h[0].front(), Some(&spikes));
+    }
+
+    #[test]
+    fn spike_recording_phase_commits_output_history_traces_and_homeostasis() {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_output_neurons = 1;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        let mut runner = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        let spikes = Array1::from_vec(vec![1]);
+        let bio = runner.net.aarnn_bio.clone();
+        let initial_history_len = runner.spk_hist_o.len();
+
+        runner.record_output_spike_phase(&spikes, true, 0.9, 0.0, &bio);
+
+        assert_eq!(runner.last_spk_o, spikes);
+        assert_eq!(runner.x_post_o[0], 1.0);
+        assert!(runner.rate_ema_o[0] > 0.0);
+        assert!(runner.spk_hist_o.len() <= initial_history_len.max(runner.hist_len));
+        assert_eq!(runner.spk_hist_o.front(), Some(&spikes));
+    }
+
+    #[test]
     fn aarnn_growth_preserves_explicit_hidden_topology() {
         let mut net = NetworkConfig::default();
         net.clumping_design = crate::config::ClumpingDesign::None;
@@ -19025,6 +20106,42 @@ mod tests {
                 && (node.z - 0.456).abs() < 1.0e-6,
             "imported topology was overwritten during reset"
         );
+    }
+
+    #[test]
+    fn repeated_snapshot_import_preserves_connection_presence_counters() {
+        let mut runner = mk_runner();
+        runner.conn_presence_in.fill(3);
+        runner.conn_presence_out.fill(5);
+        for (index, presence) in runner.conn_presence_fwd.iter_mut().enumerate() {
+            presence.fill(u32::try_from(index + 7).unwrap());
+        }
+        for (index, presence) in runner.conn_presence_bwd.iter_mut().enumerate() {
+            presence.fill(u32::try_from(index + 11).unwrap());
+        }
+        for (index, presence) in runner.conn_presence_rec.iter_mut().enumerate() {
+            presence.fill(u32::try_from(index + 13).unwrap());
+        }
+
+        let snapshot = runner.export_network_json().expect("export snapshot");
+        runner
+            .import_network_json(&snapshot)
+            .expect("first snapshot import");
+        let expected_in = runner.conn_presence_in.clone();
+        let expected_fwd = runner.conn_presence_fwd.clone();
+        let expected_bwd = runner.conn_presence_bwd.clone();
+        let expected_rec = runner.conn_presence_rec.clone();
+        let expected_out = runner.conn_presence_out.clone();
+
+        let reexported = runner.export_network_json().expect("re-export snapshot");
+        runner
+            .import_network_json(&reexported)
+            .expect("second snapshot import");
+        assert_eq!(runner.conn_presence_in, expected_in);
+        assert_eq!(runner.conn_presence_fwd, expected_fwd);
+        assert_eq!(runner.conn_presence_bwd, expected_bwd);
+        assert_eq!(runner.conn_presence_rec, expected_rec);
+        assert_eq!(runner.conn_presence_out, expected_out);
     }
 
     #[test]

@@ -1,0 +1,37 @@
+{
+  "scenario": "current-layer-sharding-compatibility",
+  "code_revision": "92b525d",
+  "toolchain": "1.92.0-x86_64-unknown-linux-gnu",
+  "fixture_command": "cargo test phase0_seven_node_capture_matches_current_compatibility_behaviour",
+  "network": {
+    "network_id": "phase0-three-layer",
+    "total_layers": 3,
+    "node_capacities": {
+      "node-01": 7.0,
+      "node-02": 6.0,
+      "node-03": 5.0,
+      "node-04": 4.0,
+      "node-05": 3.0,
+      "node-06": 2.0,
+      "node-07": 1.0
+    }
+  },
+  "assignment_observation": {
+    "anchor_node": "node-01",
+    "assignments": [
+      {"node_id": "node-01", "layers": [0, 1, 2], "redundant_layers": [0, 1, 2]},
+      {"node_id": "node-02", "layers": [0], "redundant_layers": [0]},
+      {"node_id": "node-03", "layers": [1], "redundant_layers": [1]},
+      {"node_id": "node-04", "layers": [2], "redundant_layers": [2]},
+      {"node_id": "node-05", "layers": [0], "redundant_layers": [0]},
+      {"node_id": "node-06", "layers": [1], "redundant_layers": [1]},
+      {"node_id": "node-07", "layers": [2], "redundant_layers": [2]}
+    ]
+  },
+  "transport_observation": {
+    "burst_timeout_ms": 120,
+    "initial_preference_with_persistent_stream": "persistent-grpc-stream",
+    "preference_after_three_persistent_failures": "burst-grpc-stream"
+  },
+  "interpretation": "Compatibility evidence only; overlapping layer/vector views are not certified as causally coherent distributed execution."
+}

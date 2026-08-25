@@ -10,6 +10,21 @@ This repository is the full neuromorphic autonomous AI platform — GPU-accelera
 
 This repository integrates the existing neuromorphic build and container workflow with an operator-driven autonomous AI platform.
 
+The distributed-emulator migration is delivered behind explicit Cargo gates.
+The default runtime remains backward compatible; the reference causal
+contracts and deterministic tests are documented in
+[`docs/architecture.md`](docs/architecture.md) and the living phase plans under
+[`docs/execplans/`](docs/execplans/).
+
+The updated mobile product boundary is documented in
+[`docs/mobile-platform.md`](docs/mobile-platform.md). The shared Rust crate
+currently exposes host-testable lifecycle, standalone checkpoint/restore,
+discovery-observation and safe-unavailable capability contracts through
+`mobile_runtime`. An Android Studio/Gradle shell is now scaffolded under
+`apps/android`; signed mobile products and device evidence remain gated by
+the platform toolchains and production blockers in
+[`docs/production-blocker-runbook.md`](docs/production-blocker-runbook.md).
+
 ## Included capabilities
 
 - Existing multi-architecture container build based on the project `Containerfile`

@@ -15,10 +15,13 @@
 
 #![cfg(feature = "opencl")]
 
+use crate::aarnn::plasticity::{ShortTermPlasticityParams, ShortTermPlasticityState, stp_step};
+use crate::config::{IzhikevichParams, LIFParams};
 use crate::gpu_api::{
     CL_DEVICE_TYPE_CPU, CL_DEVICE_TYPE_GPU, CommandQueue, Context, Device, Kernel, Program,
     cl_device_id, cl_device_type,
 };
+use crate::neuron_kernels::{izh_transition, lif_transition};
 use opencl3::platform::get_platforms;
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -450,12 +453,29 @@ kernel void izh_step(
     global char* spk
 ) {
     size_t id = get_global_id(0);
+    double rest_v = isfinite(membrane_reset_potential_c) ? membrane_reset_potential_c : -65.0;
+    double rest_u = recovery_sensitivity_b * rest_v;
     double cv = v[id];
     double cu = u[id];
-    
-    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + i_total[id]);
+    if (!isfinite(cv) || !isfinite(cu)) {
+        cv = rest_v;
+        cu = rest_u;
+    }
+    double v_min = fmin(rest_v - 120.0, -150.0);
+    double v_max = fmax(v_th + 80.0, 40.0);
+    double u_min = fmin(rest_u - 400.0, -600.0);
+    double u_max = fmax(rest_u + 400.0, 600.0);
+    cv = fmin(fmax(cv, v_min), v_max);
+    cu = fmin(fmax(cu, u_min), u_max);
+    double current = isfinite(i_total[id]) ? i_total[id] : 0.0;
+    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + current);
     double nu = cu + dt * (recovery_time_constant_a * (recovery_sensitivity_b * nv - cu));
-    
+    if (!isfinite(nv) || !isfinite(nu)) {
+        nv = rest_v;
+        nu = rest_u;
+    }
+    nv = fmin(fmax(nv, v_min), v_max);
+    nu = fmin(fmax(nu, u_min), u_max);
     bool fired = nv >= v_th;
     if (fired) {
         v[id] = membrane_reset_potential_c;
@@ -794,10 +814,29 @@ extern "C" __global__ void izh_step(
 ) {
     unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
     if ((int)id >= n_neurons) return;
+    double rest_v = isfinite(membrane_reset_potential_c) ? membrane_reset_potential_c : -65.0;
+    double rest_u = recovery_sensitivity_b * rest_v;
     double cv = v[id];
     double cu = u[id];
-    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + i_total[id]);
+    if (!isfinite(cv) || !isfinite(cu)) {
+        cv = rest_v;
+        cu = rest_u;
+    }
+    double v_min = fmin(rest_v - 120.0, -150.0);
+    double v_max = fmax(v_th + 80.0, 40.0);
+    double u_min = fmin(rest_u - 400.0, -600.0);
+    double u_max = fmax(rest_u + 400.0, 600.0);
+    cv = clampd(cv, v_min, v_max);
+    cu = clampd(cu, u_min, u_max);
+    double current = isfinite(i_total[id]) ? i_total[id] : 0.0;
+    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + current);
     double nu = cu + dt * (recovery_time_constant_a * (recovery_sensitivity_b * nv - cu));
+    if (!isfinite(nv) || !isfinite(nu)) {
+        nv = rest_v;
+        nu = rest_u;
+    }
+    nv = clampd(nv, v_min, v_max);
+    nu = clampd(nu, u_min, u_max);
     int fired = nv >= v_th;
     if (fired) {
         v[id] = membrane_reset_potential_c;
@@ -1253,7 +1292,7 @@ impl OpenCLManager {
                 .map_err(|e| anyhow::anyhow!("OpenCL error: {}", e))?,
         );
 
-        Ok(Self {
+        let manager = Self {
             device,
             execution_target,
             is_cuda_backend,
@@ -1272,7 +1311,9 @@ impl OpenCLManager {
             kernel_stp_update,
             kernel_plasticity_update,
             kernel_morpho_energy,
-        })
+        };
+        manager.verify_reference_equivalence()?;
+        Ok(manager)
     }
 
     pub fn execution_target(&self) -> OpenCLExecutionTarget {
@@ -1281,5 +1322,299 @@ impl OpenCLManager {
 
     pub fn is_cuda_backend(&self) -> bool {
         self.is_cuda_backend
+    }
+
+    /// Execute bounded reference vectors on the selected device before it is
+    /// allowed to service biological state.  A device that cannot reproduce
+    /// the shared CPU transition is rejected and the caller falls back to the
+    /// deterministic software path.  This is a certification gate, not a
+    /// biological-validation claim.
+    fn verify_reference_equivalence(&self) -> anyhow::Result<()> {
+        const N: usize = 4;
+        let lif_params = LIFParams::default();
+        let lif_v = [0.0, 0.5, 1.5, -3.0];
+        let lif_refr = [0, 2, 0, 1];
+        let lif_current = [2.0, 2.0, -0.25, 9.0];
+        let decay = 0.95;
+        let mut v_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut refr_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<i32>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut current_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_ONLY,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let spk_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<i8>(),
+                ptr::null_mut(),
+            )
+        }?;
+        unsafe {
+            self.queue
+                .enqueue_write_buffer(&mut v_buf, CL_TRUE, 0, &lif_v, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut refr_buf, CL_TRUE, 0, &lif_refr, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut current_buf, CL_TRUE, 0, &lif_current, &[])?;
+            let kernel = self.kernel_lif_step.lock().unwrap();
+            ExecuteKernel::new(&kernel)
+                .set_arg(&v_buf)
+                .set_arg(&refr_buf)
+                .set_arg(&current_buf)
+                .set_arg(&decay)
+                .set_arg(&lif_params.v_th)
+                .set_arg(&lif_params.v_reset)
+                .set_arg(&(lif_params.refractory as i32))
+                .set_arg(&spk_buf)
+                .set_global_work_size(N)
+                .enqueue_nd_range(&self.queue)?;
+        }
+        let mut actual_v = [0.0; N];
+        let mut actual_refr = [0; N];
+        let mut actual_spk = [0; N];
+        unsafe {
+            self.queue
+                .enqueue_read_buffer(&v_buf, CL_TRUE, 0, &mut actual_v, &[])?;
+            self.queue
+                .enqueue_read_buffer(&refr_buf, CL_TRUE, 0, &mut actual_refr, &[])?;
+            self.queue
+                .enqueue_read_buffer(&spk_buf, CL_TRUE, 0, &mut actual_spk, &[])?;
+        }
+        for i in 0..N {
+            let expected = lif_transition(lif_v[i], lif_refr[i], lif_current[i], decay, lif_params);
+            if !actual_v[i].is_finite()
+                || (actual_v[i] - expected.voltage).abs() > 1.0e-12
+                || actual_refr[i] != expected.refractory
+                || actual_spk[i] != expected.fired as i8
+            {
+                anyhow::bail!("device LIF reference mismatch at index {}", i);
+            }
+        }
+
+        let izh_params = IzhikevichParams::from_preset("RS", 1.0);
+        let izh_v = [f64::NAN, -65.0, 30.0, -80.0];
+        let izh_u = [f64::INFINITY, -13.0, -12.0, -20.0];
+        let izh_current = [0.0, 1_000.0, 0.0, -2.0];
+        let mut izh_v_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut izh_u_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut izh_current_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_ONLY,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let izh_spk_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<i8>(),
+                ptr::null_mut(),
+            )
+        }?;
+        unsafe {
+            self.queue
+                .enqueue_write_buffer(&mut izh_v_buf, CL_TRUE, 0, &izh_v, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut izh_u_buf, CL_TRUE, 0, &izh_u, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut izh_current_buf, CL_TRUE, 0, &izh_current, &[])?;
+            let kernel = self.kernel_izh_step.lock().unwrap();
+            ExecuteKernel::new(&kernel)
+                .set_arg(&izh_v_buf)
+                .set_arg(&izh_u_buf)
+                .set_arg(&izh_current_buf)
+                .set_arg(&izh_params.dt)
+                .set_arg(&izh_params.recovery_time_constant_a)
+                .set_arg(&izh_params.recovery_sensitivity_b)
+                .set_arg(&izh_params.membrane_reset_potential_c)
+                .set_arg(&izh_params.recovery_increment_d)
+                .set_arg(&izh_params.v_th)
+                .set_arg(&izh_spk_buf)
+                .set_global_work_size(N)
+                .enqueue_nd_range(&self.queue)?;
+        }
+        let mut actual_izh_v = [0.0; N];
+        let mut actual_izh_u = [0.0; N];
+        let mut actual_izh_spk = [0; N];
+        unsafe {
+            self.queue
+                .enqueue_read_buffer(&izh_v_buf, CL_TRUE, 0, &mut actual_izh_v, &[])?;
+            self.queue
+                .enqueue_read_buffer(&izh_u_buf, CL_TRUE, 0, &mut actual_izh_u, &[])?;
+            self.queue
+                .enqueue_read_buffer(&izh_spk_buf, CL_TRUE, 0, &mut actual_izh_spk, &[])?;
+        }
+        for i in 0..N {
+            let expected = izh_transition(
+                izh_v[i],
+                izh_u[i],
+                izh_current[i],
+                izh_params,
+                0.0,
+                false,
+                0.0,
+                0.0,
+                0.0,
+                None,
+                0,
+            );
+            if !actual_izh_v[i].is_finite()
+                || !actual_izh_u[i].is_finite()
+                || (actual_izh_v[i] - expected.voltage).abs() > 1.0e-10
+                || (actual_izh_u[i] - expected.recovery).abs() > 1.0e-10
+                || actual_izh_spk[i] != expected.fired as i8
+            {
+                anyhow::bail!("device Izhikevich reference mismatch at index {}", i);
+            }
+        }
+
+        let pre = [0, 1, 0, 1];
+        let params = ShortTermPlasticityParams {
+            baseline_utilization: 0.2,
+            recovery_decay: 0.9,
+            facilitation_decay: 0.9,
+        };
+        let mut pre_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_ONLY,
+                N * size_of::<i8>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut stp_u_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let mut stp_x_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let release_buf = unsafe {
+            Buffer::create(
+                &self.context,
+                CL_MEM_READ_WRITE,
+                N * size_of::<f64>(),
+                ptr::null_mut(),
+            )
+        }?;
+        let initial_u = [0.2, 0.4, 0.1, 0.8];
+        let initial_x = [1.0, 0.7, 0.3, 0.9];
+        unsafe {
+            self.queue
+                .enqueue_write_buffer(&mut pre_buf, CL_TRUE, 0, &pre, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut stp_u_buf, CL_TRUE, 0, &initial_u, &[])?;
+            self.queue
+                .enqueue_write_buffer(&mut stp_x_buf, CL_TRUE, 0, &initial_x, &[])?;
+            let kernel = self.kernel_stp_update.lock().unwrap();
+            ExecuteKernel::new(&kernel)
+                .set_arg(&stp_u_buf)
+                .set_arg(&stp_x_buf)
+                .set_arg(&pre_buf)
+                .set_arg(&release_buf)
+                .set_arg(&params.baseline_utilization)
+                .set_arg(&params.recovery_decay)
+                .set_arg(&params.facilitation_decay)
+                .set_global_work_size(N)
+                .enqueue_nd_range(&self.queue)?;
+        }
+        let mut actual_release = [0.0; N];
+        let mut actual_pre = [0_i8; N];
+        let mut actual_u = [0.0; N];
+        let mut actual_x = [0.0; N];
+        unsafe {
+            self.queue
+                .enqueue_read_buffer(&release_buf, CL_TRUE, 0, &mut actual_release, &[])?;
+            self.queue
+                .enqueue_read_buffer(&pre_buf, CL_TRUE, 0, &mut actual_pre, &[])?;
+            self.queue
+                .enqueue_read_buffer(&stp_u_buf, CL_TRUE, 0, &mut actual_u, &[])?;
+            self.queue
+                .enqueue_read_buffer(&stp_x_buf, CL_TRUE, 0, &mut actual_x, &[])?;
+        }
+        for i in 0..N {
+            let expected = stp_step(
+                &mut ShortTermPlasticityState {
+                    utilization: initial_u[i],
+                    available_resources: initial_x[i],
+                },
+                pre[i] != 0,
+                params,
+            );
+            if (actual_release[i] - expected).abs() > 1.0e-12 {
+                anyhow::bail!(
+                    "device STP reference mismatch at index {}: pre={} actual={:.17e}, expected={:.17e}, u={:.17e}, x={:.17e}",
+                    i,
+                    actual_pre[i],
+                    actual_release[i],
+                    expected,
+                    actual_u[i],
+                    actual_x[i]
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpenCLManager;
+
+    /// Hardware CI opts in explicitly; ordinary tests remain deterministic on
+    /// hosts without an OpenCL platform.  The production constructor always
+    /// runs this gate, so this test exercises the same path when a device is
+    /// available.
+    #[test]
+    fn hardware_reference_gate_is_opt_in() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        OpenCLManager::new_with_preferred_device_index(0)
+            .expect("selected accelerator must pass reference equivalence");
     }
 }

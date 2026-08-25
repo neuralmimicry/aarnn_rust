@@ -16,6 +16,153 @@
 
 use ndarray::Array2;
 
+/// One pure long-term-plasticity proposal for a matrix-owned synapse.
+///
+/// The proposal captures the weight observed while the biological transition was
+/// evaluated. Commit validates that observation before mutating the authoritative
+/// matrix, so a later shard-owned implementation cannot accidentally apply a stale
+/// delta or let two writers update the same coordinate silently.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeightProposal {
+    pub row: usize,
+    pub col: usize,
+    pub base_weight: f64,
+    pub delta: f64,
+}
+
+impl WeightProposal {
+    #[inline]
+    pub const fn new(row: usize, col: usize, base_weight: f64, delta: f64) -> Self {
+        Self {
+            row,
+            col,
+            base_weight,
+            delta,
+        }
+    }
+}
+
+/// Errors raised while committing a deterministic proposal batch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WeightCommitError {
+    InvalidNumericalValue {
+        row: usize,
+        col: usize,
+    },
+    OutOfBounds {
+        row: usize,
+        col: usize,
+    },
+    DuplicateCoordinate {
+        row: usize,
+        col: usize,
+    },
+    StaleBaseWeight {
+        row: usize,
+        col: usize,
+        expected: f64,
+        actual: f64,
+    },
+}
+
+/// Commit a validated, canonically ordered proposal batch atomically.
+///
+/// Validation completes before the first matrix write. Proposals are sorted by
+/// coordinate for deterministic commit order, duplicate coordinates are rejected,
+/// and the captured base weight must still match the authoritative matrix. This is
+/// the reference commit boundary for CPU and later shard-owned plasticity paths.
+pub fn commit_weight_proposals(
+    matrix: &mut Array2<f64>,
+    proposals: &[WeightProposal],
+    w_min: f64,
+    w_max: f64,
+) -> Result<usize, WeightCommitError> {
+    let mut ordered = proposals.to_vec();
+    ordered.sort_by_key(|proposal| (proposal.row, proposal.col));
+
+    let mut previous = None;
+    for proposal in &ordered {
+        if !proposal.base_weight.is_finite() || !proposal.delta.is_finite() {
+            return Err(WeightCommitError::InvalidNumericalValue {
+                row: proposal.row,
+                col: proposal.col,
+            });
+        }
+        if proposal.row >= matrix.nrows() || proposal.col >= matrix.ncols() {
+            return Err(WeightCommitError::OutOfBounds {
+                row: proposal.row,
+                col: proposal.col,
+            });
+        }
+        let coordinate = (proposal.row, proposal.col);
+        if previous == Some(coordinate) {
+            return Err(WeightCommitError::DuplicateCoordinate {
+                row: proposal.row,
+                col: proposal.col,
+            });
+        }
+        previous = Some(coordinate);
+        let actual = matrix[coordinate];
+        if actual.to_bits() != proposal.base_weight.to_bits() {
+            return Err(WeightCommitError::StaleBaseWeight {
+                row: proposal.row,
+                col: proposal.col,
+                expected: proposal.base_weight,
+                actual,
+            });
+        }
+    }
+
+    for proposal in &ordered {
+        let coordinate = (proposal.row, proposal.col);
+        matrix[coordinate] = apply_weight_delta(proposal.base_weight, proposal.delta, w_min, w_max);
+    }
+    Ok(ordered.len())
+}
+
+/// Long-term synaptic rules supported by the reference biological kernels.
+///
+/// The arguments to [`weight_delta`] are expressed from the perspective of
+/// one directed synapse: `pre_*` belongs to its source and `post_*` belongs to
+/// its target. Keeping this calculation independent of matrices makes serial,
+/// Rayon and later shard-owned implementations share one authoritative rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlasticityRule {
+    Stdp,
+    Hebb,
+    Oja,
+}
+
+/// Calculate one bounded-step weight change without mutating model state.
+///
+/// STDP uses the conventional causal term `post * pre_trace` minus the
+/// anti-causal term `pre * post_trace`. Clamping is deliberately left to
+/// [`apply_weight_delta`] so proposal generation and commit remain separate.
+#[inline]
+pub fn weight_delta(
+    rule: PlasticityRule,
+    eta: f64,
+    pre_spike: f64,
+    post_spike: f64,
+    pre_trace: f64,
+    post_trace: f64,
+    current_weight: f64,
+) -> f64 {
+    match rule {
+        PlasticityRule::Stdp => eta * (post_spike * pre_trace - pre_spike * post_trace),
+        PlasticityRule::Hebb => eta * post_spike * pre_spike,
+        PlasticityRule::Oja => {
+            eta * (post_spike * pre_spike - post_spike * post_spike * current_weight)
+        }
+    }
+}
+
+/// Apply one proposal to a weight using the configured finite bounds.
+#[inline]
+pub fn apply_weight_delta(current_weight: f64, delta: f64, w_min: f64, w_max: f64) -> f64 {
+    (current_weight + delta).clamp(w_min, w_max)
+}
+
 /// State of one short-term plasticity channel.
 ///
 /// `utilization` corresponds to the fraction of available resources recruited by a
@@ -252,5 +399,66 @@ mod tests {
     fn test_triplet_gain_clamps() {
         let scale = triplet_eta_scale(10.0, 10.0, 0.0, 1.0, 0.0);
         assert_eq!(scale, 5.0);
+    }
+
+    #[test]
+    fn weight_delta_is_directional_and_bounded_only_at_commit() {
+        let delta = weight_delta(PlasticityRule::Stdp, 0.5, 1.0, 0.0, 0.25, 0.75, 0.4);
+        assert_eq!(delta, -0.375);
+        assert_eq!(
+            apply_weight_delta(0.1, delta, 0.0, 1.0),
+            0.0,
+            "the rule emits a proposal; the commit boundary owns clamping"
+        );
+    }
+
+    #[test]
+    fn weight_delta_matches_the_reference_rules() {
+        assert_eq!(
+            weight_delta(PlasticityRule::Hebb, 0.2, 1.0, 1.0, 9.0, 9.0, 0.5),
+            0.2
+        );
+        assert_eq!(
+            weight_delta(PlasticityRule::Oja, 0.2, 1.0, 1.0, 9.0, 9.0, 0.5),
+            0.1
+        );
+    }
+
+    #[test]
+    fn proposal_commit_is_canonical_and_rejects_stale_writers_without_mutation() {
+        let mut matrix = Array2::from_shape_vec((1, 2), vec![0.2, 0.4]).unwrap();
+        let proposals = [
+            WeightProposal::new(0, 1, 0.4, 0.3),
+            WeightProposal::new(0, 0, 0.2, -0.5),
+        ];
+        assert_eq!(
+            commit_weight_proposals(&mut matrix, &proposals, 0.0, 1.0),
+            Ok(2)
+        );
+        assert_eq!(matrix[(0, 0)], 0.0);
+        assert_eq!(matrix[(0, 1)], 0.7);
+
+        let before = matrix.clone();
+        let stale = [WeightProposal::new(0, 0, 0.2, 0.1)];
+        assert!(matches!(
+            commit_weight_proposals(&mut matrix, &stale, 0.0, 1.0),
+            Err(WeightCommitError::StaleBaseWeight { .. })
+        ));
+        assert_eq!(matrix, before);
+    }
+
+    #[test]
+    fn proposal_commit_rejects_duplicate_coordinates_before_any_write() {
+        let mut matrix = Array2::from_shape_vec((1, 1), vec![0.2]).unwrap();
+        let before = matrix.clone();
+        let proposals = [
+            WeightProposal::new(0, 0, 0.2, 0.1),
+            WeightProposal::new(0, 0, 0.2, 0.2),
+        ];
+        assert_eq!(
+            commit_weight_proposals(&mut matrix, &proposals, 0.0, 1.0),
+            Err(WeightCommitError::DuplicateCoordinate { row: 0, col: 0 })
+        );
+        assert_eq!(matrix, before);
     }
 }

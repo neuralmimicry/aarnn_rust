@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.AARNN" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#335C81</item>
+    </style>
+</resources>

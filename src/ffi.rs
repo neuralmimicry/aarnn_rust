@@ -163,7 +163,11 @@ fn parse_config(json: &str) -> anyhow::Result<(IoMapping, Runner, Quantizer)> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
+/// # Safety
+///
+/// `config_json` must be null or point to a valid NUL-terminated UTF-8 C
+/// string for the duration of this call.
+pub unsafe extern "C" fn nm_init(config_json: *const c_char) -> c_int {
     if config_json.is_null() {
         return -1;
     }
@@ -190,7 +194,11 @@ pub extern "C" fn nm_init(config_json: *const c_char) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f32) -> c_int {
+/// # Safety
+///
+/// `data` must be null or point to at least `len` readable `f32` values for
+/// the duration of this call.
+pub unsafe extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
         None => return -1,
@@ -209,7 +217,11 @@ pub extern "C" fn nm_set_port_by_index(start: usize, len: usize, data: *const f3
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) -> c_int {
+/// # Safety
+///
+/// `out` must be null or point to at least `len` writable `f32` values for
+/// the duration of this call.
+pub unsafe extern "C" fn nm_get_port_by_index(start: usize, len: usize, out: *mut f32) -> c_int {
     let state_mutex = match STATE.get() {
         Some(m) => m,
         None => return -1,

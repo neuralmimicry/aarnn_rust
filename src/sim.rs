@@ -19,7 +19,9 @@ use rand::{Rng, RngExt};
 use crate::aarnn::dynamics::{
     SynapticDriveParams, apply_synaptic_filter as apply_aarnn_synaptic_filter,
 };
-use crate::aarnn::plasticity::{ShortTermPlasticityParams, stp_update_slice};
+use crate::aarnn::plasticity::{
+    PlasticityRule, ShortTermPlasticityParams, apply_weight_delta, stp_update_slice, weight_delta,
+};
 #[cfg(feature = "opencl")]
 use crate::cl_compute::{
     Buffer, CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ClResult,
@@ -76,6 +78,15 @@ pub enum Learning {
     /// AARNN-specific learning rule.
     /// *Note: In batch mode, this currently mirrors STDP updates.*
     Aarnn,
+}
+
+#[inline]
+fn plasticity_rule(learning: Learning) -> PlasticityRule {
+    match learning {
+        Learning::Stdp | Learning::Aarnn => PlasticityRule::Stdp,
+        Learning::Hebb => PlasticityRule::Hebb,
+        Learning::Oja => PlasticityRule::Oja,
+    }
 }
 
 impl Learning {
@@ -1455,15 +1466,17 @@ pub fn run_snn(
                 } else {
                     0.0
                 };
-                let dw = match learning {
-                    Learning::Stdp | Learning::Aarnn => {
-                        eta * ((post * sensory_pre_synaptic_traces[i])
-                            - (pre * hidden_post_synaptic_traces[in_l][j]))
-                    }
-                    Learning::Hebb => eta * (post * pre),
-                    Learning::Oja => eta * ((post * pre) - (post * post) * built.w_in[(j, i)]),
-                };
-                built.w_in[(j, i)] = (built.w_in[(j, i)] + dw).clamp(stdp.w_min, stdp.w_max);
+                let dw = weight_delta(
+                    plasticity_rule(learning),
+                    eta,
+                    pre,
+                    post,
+                    sensory_pre_synaptic_traces[i],
+                    hidden_post_synaptic_traces[in_l][j],
+                    built.w_in[(j, i)],
+                );
+                built.w_in[(j, i)] =
+                    apply_weight_delta(built.w_in[(j, i)], dw, stdp.w_min, stdp.w_max);
                 if built.w_in[(j, i)].abs() > 1e-8 {
                     conn_presence_in[j][i] += 1;
                 }
@@ -1483,33 +1496,31 @@ pub fn run_snn(
                     } else {
                         0.0
                     };
-                    let dwf = match learning {
-                        Learning::Stdp | Learning::Aarnn => {
-                            eta * ((post * hidden_pre_synaptic_traces[l][i])
-                                - (pre * hidden_post_synaptic_traces[l + 1][j]))
-                        }
-                        Learning::Hebb => eta * (post * pre),
-                        Learning::Oja => {
-                            eta * ((post * pre) - (post * post) * built.w_hh_fwd[l][(j, i)])
-                        }
-                    };
+                    let dwf = weight_delta(
+                        plasticity_rule(learning),
+                        eta,
+                        pre,
+                        post,
+                        hidden_pre_synaptic_traces[l][i],
+                        hidden_post_synaptic_traces[l + 1][j],
+                        built.w_hh_fwd[l][(j, i)],
+                    );
                     built.w_hh_fwd[l][(j, i)] =
-                        (built.w_hh_fwd[l][(j, i)] + dwf).clamp(stdp.w_min, stdp.w_max);
+                        apply_weight_delta(built.w_hh_fwd[l][(j, i)], dwf, stdp.w_min, stdp.w_max);
                     if built.w_hh_fwd[l][(j, i)].abs() > 1e-8 {
                         conn_presence_fwd[l][j][i] += 1;
                     }
-                    let dwb = match learning {
-                        Learning::Stdp | Learning::Aarnn => {
-                            eta * ((pre * hidden_pre_synaptic_traces[l + 1][j])
-                                - (post * hidden_post_synaptic_traces[l][i]))
-                        }
-                        Learning::Hebb => eta * (post * pre),
-                        Learning::Oja => {
-                            eta * ((post * pre) - (post * post) * built.w_hh_bwd[l][(i, j)])
-                        }
-                    };
+                    let dwb = weight_delta(
+                        plasticity_rule(learning),
+                        eta,
+                        post,
+                        pre,
+                        hidden_pre_synaptic_traces[l + 1][j],
+                        hidden_post_synaptic_traces[l][i],
+                        built.w_hh_bwd[l][(i, j)],
+                    );
                     built.w_hh_bwd[l][(i, j)] =
-                        (built.w_hh_bwd[l][(i, j)] + dwb).clamp(stdp.w_min, stdp.w_max);
+                        apply_weight_delta(built.w_hh_bwd[l][(i, j)], dwb, stdp.w_min, stdp.w_max);
                     if built.w_hh_bwd[l][(i, j)].abs() > 1e-8 {
                         conn_presence_bwd[l][i][j] += 1;
                     }
@@ -1529,15 +1540,17 @@ pub fn run_snn(
                 } else {
                     0.0
                 };
-                let dw = match learning {
-                    Learning::Stdp | Learning::Aarnn => {
-                        eta * ((post * hidden_pre_synaptic_traces[out_l][j])
-                            - (pre * output_post_synaptic_traces[k]))
-                    }
-                    Learning::Hebb => eta * (post * pre),
-                    Learning::Oja => eta * ((post * pre) - (post * post) * built.w_out[(k, j)]),
-                };
-                built.w_out[(k, j)] = (built.w_out[(k, j)] + dw).clamp(stdp.w_min, stdp.w_max);
+                let dw = weight_delta(
+                    plasticity_rule(learning),
+                    eta,
+                    pre,
+                    post,
+                    hidden_pre_synaptic_traces[out_l][j],
+                    output_post_synaptic_traces[k],
+                    built.w_out[(k, j)],
+                );
+                built.w_out[(k, j)] =
+                    apply_weight_delta(built.w_out[(k, j)], dw, stdp.w_min, stdp.w_max);
                 if built.w_out[(k, j)].abs() > 1e-8 {
                     conn_presence_out[k][j] += 1;
                 }

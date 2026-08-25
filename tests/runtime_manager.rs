@@ -1,3 +1,4 @@
+use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceDetailResponse,
@@ -54,18 +55,40 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
     .await
     .unwrap();
 
+    let mut network = NetworkConfig::default();
+    network.num_sensory_neurons = 3;
+    network.num_hidden_layers = 2;
+    network.num_hidden_per_layer_initial = 4;
+    network.num_output_neurons = 2;
+    // This fixture exercises the matrix-backed topology contract. Morphology
+    // mode owns its topology through a separate feature-gated representation
+    // and intentionally clears these compatibility matrices at startup.
+    network.growth_enabled = false;
+    network.use_morphology = false;
+
     let detail = runtime
         .create_workspace(
             "alice",
             WorkspaceCreateRequest {
                 workspace_id: Some("alpha".to_string()),
                 name: Some("Alpha".to_string()),
+                config_json: Some(serde_json::to_string(&network).unwrap()),
                 ..WorkspaceCreateRequest::default()
             },
         )
         .await
         .unwrap();
     assert_eq!(detail.summary.workspace_id, "alpha");
+
+    let topology = runtime
+        .workspace_topology("alice", "alpha", 64, 128)
+        .await
+        .unwrap();
+    assert_eq!(topology.workspace_id, "alpha");
+    assert_eq!(topology.topology.schema_version, 1);
+    assert!(!topology.topology.layers.is_empty());
+    assert!(!topology.topology.edges.is_empty());
+    assert!(topology.topology.edges.len() <= 128);
 
     runtime
         .control_workspace("alice", "alpha", WorkspaceControlAction::Start)
