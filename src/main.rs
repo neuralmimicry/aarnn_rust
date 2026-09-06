@@ -16,45 +16,87 @@
 mod obs;
 mod aarnn;
 mod aer;
+mod aer_transport;
 mod affinity;
+mod authoritative_shard;
+mod brain_migration_session;
 #[cfg(feature = "robot_io")]
 mod bridge;
 mod causal;
+mod causal_transport;
+mod checkpoint_transfer;
 #[cfg(feature = "opencl")]
 mod cl_compute;
+mod cluster_snapshot;
 mod config;
+mod consistent_cut;
+mod data_plane;
 mod deployment;
 mod deterministic;
 mod distributed;
+mod durability;
 mod engine;
+mod federation;
 mod field_events;
 mod fpaa;
 mod ga;
+mod generated_management;
 #[cfg(feature = "opencl")]
 mod gpu_api;
+mod managed_durability;
+mod managed_partial_shard_runtime;
+mod managed_shard_runtime;
+#[cfg(feature = "stable_executor_live")]
+mod managed_stable_executor;
+mod management;
+mod migration;
+mod migration_coordinator;
+mod migration_executor;
+mod migration_group;
+mod migration_operation;
+mod migration_transfer;
 mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
 mod network;
 mod neuron_kernels;
+mod node_auth;
 #[cfg(feature = "openmpi")]
 mod openmpi_runtime;
+mod partial_shard_executor;
+mod peripheral;
+mod placement;
+#[cfg(feature = "stable_executor_live")]
+mod placement_automation;
+mod placement_controller;
+mod placement_registry;
 #[cfg(feature = "ui")]
 mod providers;
 mod rdma;
+mod recovery;
 mod runner;
 mod runtime;
 mod runtime_api;
+mod scientific_validation;
+mod shard_executor;
 mod shared_fs;
 mod sim;
 #[allow(dead_code)]
 mod spike_io;
+mod stable_executor_authority;
+mod stable_executor_durable;
+mod stable_executor_store;
+mod stable_outbound;
+#[cfg(feature = "stable_executor_live")]
+mod stable_runtime_bootstrap;
+mod stable_shard_dispatch;
+mod stable_shard_transport;
+mod stable_worker;
 mod stimuli;
 #[cfg(feature = "superdense_executor")]
 mod superdense;
 #[cfg(feature = "growth3d")]
 mod topology;
-#[cfg(feature = "superdense_executor")]
 mod topology_model;
 #[cfg(feature = "ui")]
 mod ui;
@@ -62,7 +104,7 @@ mod ui;
 mod viz;
 
 use anyhow::Context;
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use serde::Deserialize;
@@ -255,9 +297,89 @@ impl From<FpaaTransportArg> for FpaaTransportPreference {
 }
 
 /// Command-Line Interface (CLI) arguments for the AARNN.
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    /// Brain lifecycle and placement operations.
+    Brain {
+        #[command(subcommand)]
+        command: BrainCommand,
+    },
+    /// Node-level placement operations.
+    Node {
+        #[command(subcommand)]
+        command: NodeCommand,
+    },
+    /// Read-only operation inspection.
+    Operation {
+        #[command(subcommand)]
+        command: OperationCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BrainCommand {
+    /// Evaluate a local placement request without applying it.
+    Placement {
+        #[command(subcommand)]
+        command: BrainPlacementCommand,
+    },
+    /// Submit a whole-brain migration to the local durable journal.
+    Migrate(LocalMigrationCommand),
+    /// Submit a consolidation migration to the local durable journal.
+    Consolidate(LocalMigrationCommand),
+    /// Submit a reclaim migration to the local durable journal.
+    Reclaim(LocalMigrationCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum BrainPlacementCommand {
+    /// Produce a deterministic placement plan from a request JSON file.
+    Plan {
+        /// PlacementRequest JSON input.
+        request: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum NodeCommand {
+    /// Submit an evacuation migration to the local durable journal.
+    Evacuate(LocalMigrationCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum OperationCommand {
+    /// Inspect a persisted migration journal without mutating it.
+    Watch(OperationWatchCommand),
+}
+
+#[derive(Debug, Args)]
+struct LocalMigrationCommand {
+    /// MigrationRequest JSON input.
+    request: String,
+    /// Persisted migration journal path.
+    #[arg(long)]
+    journal: String,
+    /// Optional MigrationGroupSpec JSON input.
+    #[arg(long)]
+    group: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct OperationWatchCommand {
+    /// Persisted migration journal path.
+    journal: String,
+    /// Optional operation ID to select.
+    #[arg(long)]
+    id: Option<u64>,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Neuromorphic simulation and visualization engine", long_about = None)]
 struct Cli {
+    /// Structured management commands. Flat flags below remain supported for
+    /// compatibility with existing automation.
+    #[command(subcommand)]
+    command: Option<CliCommand>,
     /// Total duration of the simulation in milliseconds.
     #[arg(long, default_value_t = 10000.0)]
     simulation_time_ms: f64,
@@ -334,6 +456,28 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     node: bool,
 
+    /// Reopen a verified stable-ID durable runtime from a versioned manifest.
+    ///
+    /// A node opens this as a local stable worker runtime. An orchestrator may
+    /// also open it when paired with `--stable-migration-spec`; that explicit
+    /// deployment manifest registers the source migration executor after the
+    /// runtime and its authority have been verified.
+    #[arg(long)]
+    stable_runtime_manifest: Option<String>,
+
+    /// Bootstrap a partial stable-shard worker from a verified checkpoint
+    /// subset, explicit placement plan and authenticated source allow-list.
+    /// The node remains inert unless this manifest validates completely.
+    #[arg(long, conflicts_with = "stable_runtime_manifest")]
+    stable_worker_manifest: Option<String>,
+
+    /// Deployment-controlled migration registration manifest.  When supplied
+    /// on an orchestrator that also opens `--stable-runtime-manifest`, the
+    /// validated source runtime is registered with the authenticated
+    /// management migration dispatcher during startup.
+    #[arg(long)]
+    stable_migration_spec: Option<String>,
+
     /// Stable distributed node identifier. Defaults to a generated identifier.
     #[arg(long)]
     node_id: Option<String>,
@@ -355,6 +499,118 @@ struct Cli {
     /// Accepted values: start, stop, reset, repeat, new
     #[arg(long, value_parser = ["start", "stop", "reset", "repeat", "new"])]
     cluster_control_action: Option<String>,
+
+    /// Submit a versioned, proposal-only placement command JSON file to the
+    /// orchestrator and print the verified placement plan. Applying a plan
+    /// remains an authorised management operation behind the phase gates.
+    #[arg(long)]
+    placement_command_json: Option<String>,
+
+    /// Submit an ApplyPlacement command through the orchestrator registry.
+    /// Optional evidence files are sent as bounded versioned JSON DTOs.
+    #[arg(long)]
+    placement_apply_command_json: Option<String>,
+
+    /// Cutover evidence JSON paired with --placement-apply-command-json.
+    #[arg(long)]
+    placement_cutover_json: Option<String>,
+
+    /// Repartition lineage JSON paired with --placement-apply-command-json.
+    #[arg(long)]
+    placement_repartition_json: Option<String>,
+
+    /// StableWorkerActivationCommand JSON paired with
+    /// --placement-apply-command-json. The orchestrator validates and queues
+    /// it only for an enrolled target node after publishing the placement.
+    #[arg(long)]
+    placement_stable_worker_activation_json: Option<String>,
+
+    /// Evaluate a placement request locally and print the same immutable,
+    /// proposal-only result used by the orchestrator. This is intentionally
+    /// separate from `--placement-command-json`: the local path constructs
+    /// the authenticated command envelope itself and never contacts a worker.
+    /// It is useful for offline QA and resource-inventory adapters.
+    #[arg(long, visible_alias = "brain-placement-plan")]
+    placement_request_local_json: Option<String>,
+
+    /// Apply a previously verified placement cutover request to the durable
+    /// local reference registry. This is a CLI rehearsal/control path: it
+    /// requires checkpoint/cutover evidence and never contacts workers.
+    #[arg(long)]
+    placement_apply_local_json: Option<String>,
+
+    /// JSON registry path used by --placement-apply-local-json.
+    #[arg(long)]
+    placement_registry_json: Option<String>,
+
+    /// Kind selected by a structured migration subcommand.
+    #[arg(skip)]
+    migration_kind_override: Option<crate::migration_operation::MigrationKind>,
+
+    /// Submit a durable migration operation to the local reference journal.
+    /// This is an offline orchestrator rehearsal and never contacts a worker.
+    #[arg(
+        long,
+        visible_alias = "brain-migrate",
+        visible_alias = "brain-consolidate",
+        visible_alias = "brain-reclaim",
+        visible_alias = "node-evacuate"
+    )]
+    migration_submit_local_json: Option<String>,
+
+    /// Advance a durable migration operation using an evidence-bearing
+    /// transition JSON document.
+    #[arg(long)]
+    migration_transition_local_json: Option<String>,
+
+    /// Cancel a durable migration operation using a bounded, fenced JSON
+    /// cancellation document.
+    #[arg(long)]
+    migration_cancel_local_json: Option<String>,
+
+    /// Journal path used by the local migration submit/transition commands.
+    #[arg(long)]
+    migration_journal_json: Option<String>,
+
+    /// Submit a migration DTO through the authenticated orchestrator.
+    #[arg(long)]
+    migration_command_json: Option<String>,
+
+    /// Optional MigrationGroupSpec JSON file for brain-wide barrier control.
+    #[arg(long)]
+    migration_group_json: Option<String>,
+
+    /// Advance a migration DTO through the authenticated orchestrator.
+    #[arg(long)]
+    migration_advance_command_json: Option<String>,
+
+    /// Optional MigrationGroupUpdate JSON file for shard cutover evidence.
+    #[arg(long)]
+    migration_group_update_json: Option<String>,
+
+    /// Cancel a migration through the authenticated orchestrator. The JSON
+    /// file contains MigrationCancellation fields; --migration-brain-id names
+    /// the brain whose operation is being cancelled.
+    #[arg(long)]
+    migration_cancel_command_json: Option<String>,
+
+    /// Principal carried in the versioned migration management request.
+    #[arg(long)]
+    migration_principal_id: Option<String>,
+
+    /// Brain ID for a remote migration transition.
+    #[arg(long)]
+    migration_brain_id: Option<u64>,
+
+    /// Read a bounded local migration journal and print the current operation
+    /// state. This is observational and never advances or mutates an operation.
+    #[arg(long = "operation-watch", visible_alias = "operation-watch-journal")]
+    operation_watch_journal: Option<String>,
+
+    /// Optional operation ID to select from --operation-watch; otherwise all
+    /// journal operations are returned in their stable serialized order.
+    #[arg(long)]
+    operation_watch_id: Option<u64>,
 
     /// Execution modes for this network or network set.
     #[arg(long = "execution-mode", value_enum, value_delimiter = ',', num_args = 1..)]
@@ -1041,7 +1297,9 @@ fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        let mut client = DistributedNeuromorphicClient::connect(addr.clone())
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = DistributedNeuromorphicClient::connect(endpoint)
             .await
             .with_context(|| format!("Failed to connect to orchestrator at {}", addr))?;
         let network_id = match explicit_network_id {
@@ -1151,6 +1409,681 @@ fn autodetected_orchestrator_addr(args: &Cli) -> Option<String> {
     detect_infrastructure(&roots)
         .ok()
         .and_then(|infra| infra.recommended_orchestrator_addr())
+}
+
+/// Submit a placement proposal through the orchestrator management contract.
+/// The CLI only transports a versioned DTO and displays the returned plan; it
+/// never opens a worker connection or applies placement locally.
+fn handle_placement_plan(args: &Cli) -> anyhow::Result<()> {
+    use crate::generated_management::proto::PlacementCommandRequest;
+    use crate::generated_management::proto::management_client::ManagementClient;
+
+    let command_path = args
+        .placement_command_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--placement-command-json is required"))?;
+    let command_json = std::fs::read_to_string(command_path)
+        .with_context(|| format!("failed to read placement command JSON: {command_path}"))?;
+    let addr = args
+        .orchestrator_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_runtime_url)
+        .or_else(|| autodetected_orchestrator_addr(args).map(|value| normalize_runtime_url(&value)))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--orchestrator-addr is required for placement planning unless infrastructure detection can resolve it"
+            )
+        })?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = ManagementClient::connect(endpoint)
+            .await
+            .with_context(|| format!("failed to connect to orchestrator at {addr}"))?;
+        let response = client
+            .plan_placement(PlacementCommandRequest {
+                command_json,
+                cutover_json: String::new(),
+                repartition_json: String::new(),
+                stable_worker_activation_json: String::new(),
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("placement planning failed: {status}"))?
+            .into_inner();
+        if !response.error_code.is_empty() {
+            anyhow::bail!("placement planning failed: {}", response.error_code);
+        }
+        let plan: serde_json::Value = serde_json::from_str(&response.plan_json)
+            .context("orchestrator returned invalid placement plan JSON")?;
+        print_json_pretty(&serde_json::json!({
+            "command_digest": response.command_digest,
+            "plan": plan,
+            "applied": false
+        }))?;
+        Ok(())
+    })
+}
+
+fn handle_remote_placement_apply(args: &Cli) -> anyhow::Result<()> {
+    use crate::generated_management::proto::PlacementCommandRequest;
+    use crate::generated_management::proto::management_client::ManagementClient;
+
+    const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
+    let command_path = args
+        .placement_apply_command_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--placement-apply-command-json is required"))?;
+    let command_json = std::fs::read_to_string(command_path)
+        .with_context(|| format!("failed to read placement command JSON: {command_path}"))?;
+    if command_json.len() > MAX_JSON_BYTES {
+        anyhow::bail!("placement command exceeds the bounded request size");
+    }
+    let read_optional = |path: Option<&String>| -> anyhow::Result<String> {
+        let Some(path) = path.filter(|path| !path.trim().is_empty()) else {
+            return Ok(String::new());
+        };
+        let value = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read placement evidence JSON: {path}"))?;
+        if value.len() > MAX_JSON_BYTES {
+            anyhow::bail!("placement evidence exceeds the bounded request size");
+        }
+        Ok(value)
+    };
+    let cutover_json = read_optional(args.placement_cutover_json.as_ref())?;
+    let repartition_json = read_optional(args.placement_repartition_json.as_ref())?;
+    let stable_worker_activation_json =
+        read_optional(args.placement_stable_worker_activation_json.as_ref())?;
+    let addr = args
+        .orchestrator_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_runtime_url)
+        .or_else(|| autodetected_orchestrator_addr(args).map(|value| normalize_runtime_url(&value)))
+        .ok_or_else(|| anyhow::anyhow!("--orchestrator-addr is required for placement apply"))?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = ManagementClient::connect(endpoint)
+            .await
+            .with_context(|| format!("failed to connect to orchestrator at {addr}"))?;
+        let response = client
+            .apply_placement(PlacementCommandRequest {
+                command_json,
+                cutover_json,
+                repartition_json,
+                stable_worker_activation_json,
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("placement apply failed: {status}"))?
+            .into_inner();
+        if !response.error_code.is_empty() {
+            anyhow::bail!("placement apply failed: {}", response.error_code);
+        }
+        print_json_pretty(&serde_json::json!({
+            "receipt": serde_json::from_str::<serde_json::Value>(&response.receipt_json)?,
+            "registry": serde_json::from_str::<serde_json::Value>(&response.registry_json)?,
+            "applied": true,
+            "transport": "management-grpc"
+        }))
+    })
+}
+
+/// Evaluate a placement request without a network dependency.
+///
+/// Resource inventory adapters such as the Ansible QA harness provide a
+/// `PlacementRequest`, not a forged command digest. Constructing the command
+/// here keeps canonical serialisation and digest rules in Rust and makes the
+/// local result equivalent to the orchestrator's proposal path. The function
+/// is deliberately bounded and proposal-only: it does not persist state,
+/// grant a lease or contact a worker.
+fn handle_local_placement_request(args: &Cli) -> anyhow::Result<()> {
+    use crate::placement::{
+        PlacementCommand, PlacementCommandKind, PlacementPlanner, PlacementRequest,
+    };
+
+    const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+    let request_path = args
+        .placement_request_local_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--placement-request-local-json is required"))?;
+    let request_json = std::fs::read_to_string(request_path)
+        .with_context(|| format!("failed to read placement request JSON: {request_path}"))?;
+    if request_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!(
+            "placement request exceeds the bounded {} byte limit",
+            MAX_REQUEST_BYTES
+        );
+    }
+    let request: PlacementRequest =
+        serde_json::from_str(&request_json).context("invalid placement request JSON")?;
+    let brain_id = request.brain_id;
+    let command = PlacementCommand::new(
+        "local-placement-proposal",
+        "local-placement-proposal",
+        "local-qa",
+        brain_id,
+        1,
+        request.lease_term,
+        PlacementCommandKind::PlanPlacement(request),
+    )
+    .map_err(|error| anyhow::anyhow!("placement request rejected: {error}"))?;
+    let PlacementCommandKind::PlanPlacement(request) = &command.kind else {
+        unreachable!("local placement handler constructs only PlanPlacement commands");
+    };
+    let plan = PlacementPlanner
+        .plan(request.clone())
+        .map_err(|error| anyhow::anyhow!("placement planning failed: {error}"))?;
+    plan.verify()
+        .map_err(|error| anyhow::anyhow!("planner emitted an invalid plan: {error}"))?;
+    print_json_pretty(&serde_json::json!({
+        "command_digest": command.digest(),
+        "plan": plan,
+        "applied": false,
+        "transport": "local-reference"
+    }))
+}
+
+/// Apply one authenticated-orchestrator-produced cutover request to the
+/// crash-safe reference registry. The request contains its optimistic version,
+/// leader term, immutable plan and per-shard cutover evidence. Keeping this
+/// path local makes it useful for offline migration rehearsal and avoids
+/// accidentally treating a proposal as a worker command.
+fn handle_local_placement_apply(args: &Cli) -> anyhow::Result<()> {
+    use crate::placement_registry::{PersistedPlacementRegistry, PlacementApplyRequest};
+
+    const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+    let request_path = args
+        .placement_apply_local_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--placement-apply-local-json is required"))?;
+    let registry_path = args
+        .placement_registry_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--placement-registry-json is required"))?;
+    let request_json = std::fs::read_to_string(request_path)
+        .with_context(|| format!("failed to read placement apply JSON: {request_path}"))?;
+    if request_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("placement apply request exceeds the bounded request size");
+    }
+    let request: PlacementApplyRequest =
+        serde_json::from_str(&request_json).context("invalid placement apply request JSON")?;
+    let brain_id = request.plan.brain_id;
+    let leader_term = request.observed_leader_term;
+    let mut registry = PersistedPlacementRegistry::open(registry_path, brain_id, leader_term)
+        .map_err(|error| anyhow::anyhow!("failed to open placement registry: {error}"))?;
+    let receipt = registry
+        .apply(request)
+        .map_err(|error| anyhow::anyhow!("placement apply rejected: {error}"))?;
+    print_json_pretty(&serde_json::json!({
+        "receipt": receipt,
+        "resource_version": registry.state().resource_version,
+        "authorities": registry.state().authorities,
+        "applied": true,
+        "transport": "local-reference"
+    }))
+}
+
+/// Submit one migration request to the crash-safe local reference journal.
+/// Checkpoint transfer and authority cutover are deliberately separate: a
+/// successful submission only reserves an operation identity and its fenced
+/// plan digests.
+fn handle_local_migration_submit(args: &Cli) -> anyhow::Result<()> {
+    use crate::migration_group::MigrationGroupSpec;
+    use crate::migration_operation::{MigrationRequest, PersistedMigrationJournal};
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let request_path = args
+        .migration_submit_local_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-submit-local-json is required"))?;
+    let journal_path = args
+        .migration_journal_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-journal-json is required"))?;
+    let raw = std::fs::read_to_string(request_path)
+        .with_context(|| format!("failed to read migration request JSON: {request_path}"))?;
+    if raw.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration request exceeds the bounded request size");
+    }
+    let mut request: MigrationRequest =
+        serde_json::from_str(&raw).context("invalid migration request JSON")?;
+    if let Some(kind) = args.migration_kind_override {
+        request.kind = kind;
+    }
+    let group_spec = args
+        .migration_group_json
+        .as_ref()
+        .map(std::fs::read_to_string)
+        .transpose()?
+        .map(|raw| serde_json::from_str::<MigrationGroupSpec>(&raw))
+        .transpose()
+        .context("invalid migration group JSON")?;
+    let mut journal = PersistedMigrationJournal::open(
+        journal_path,
+        request.brain_id,
+        request.observed_leader_term,
+    )
+    .map_err(|error| anyhow::anyhow!("failed to open migration journal: {error}"))?;
+    let operation = journal
+        .submit_with_group(request, group_spec)
+        .map_err(|error| anyhow::anyhow!("migration submission rejected: {error}"))?;
+    print_json_pretty(&serde_json::json!({
+        "operation": operation,
+        "resource_version": journal.journal().resource_version,
+        "transport": "local-reference"
+    }))
+}
+
+/// Advance one operation after a shard/checkpoint adapter has produced the
+/// evidence for that phase.  The journal itself validates ordering, fencing,
+/// optimistic concurrency and monotonic transfer progress.
+fn handle_local_migration_transition(args: &Cli) -> anyhow::Result<()> {
+    use crate::migration_group::MigrationGroupUpdate;
+    use crate::migration_operation::{MigrationTransition, PersistedMigrationJournal};
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let transition_path = args
+        .migration_transition_local_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-transition-local-json is required"))?;
+    let journal_path = args
+        .migration_journal_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-journal-json is required"))?;
+    let raw = std::fs::read_to_string(transition_path)
+        .with_context(|| format!("failed to read migration transition JSON: {transition_path}"))?;
+    if raw.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration transition exceeds the bounded request size");
+    }
+    let transition: MigrationTransition =
+        serde_json::from_str(&raw).context("invalid migration transition JSON")?;
+    let group_update = args
+        .migration_group_update_json
+        .as_ref()
+        .map(std::fs::read_to_string)
+        .transpose()?
+        .map(|raw| serde_json::from_str::<MigrationGroupUpdate>(&raw))
+        .transpose()
+        .context("invalid migration group update JSON")?;
+    let brain_id = read_migration_brain_id(journal_path)?;
+    let mut journal =
+        PersistedMigrationJournal::open(journal_path, brain_id, transition.observed_leader_term)
+            .map_err(|error| anyhow::anyhow!("failed to open migration journal: {error}"))?;
+    let mut transition = transition;
+    if let Some(mut group_update) = group_update {
+        if group_update.operation_id != transition.operation_id {
+            anyhow::bail!("migration group update operation does not match transition");
+        }
+        group_update.expected_resource_version = transition.expected_resource_version;
+        journal
+            .apply_group_update(group_update)
+            .map_err(|error| anyhow::anyhow!("migration group update rejected: {error}"))?;
+        transition.expected_resource_version = journal.journal().resource_version;
+    }
+    let operation = journal
+        .transition(transition)
+        .map_err(|error| anyhow::anyhow!("migration transition rejected: {error}"))?;
+    print_json_pretty(&serde_json::json!({
+        "operation": operation,
+        "resource_version": journal.journal().resource_version,
+        "transport": "local-reference"
+    }))
+}
+
+/// Cancel one operation through the crash-safe local reference journal. The
+/// journal records `Aborting` and `Aborted` separately, so a crash between the
+/// two writes remains recoverable and cannot be mistaken for a successful
+/// migration cancellation.
+fn handle_local_migration_cancel(args: &Cli) -> anyhow::Result<()> {
+    use crate::migration_operation::{MigrationCancellation, PersistedMigrationJournal};
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let request_path = args
+        .migration_cancel_local_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-cancel-local-json is required"))?;
+    let journal_path = args
+        .migration_journal_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-journal-json is required"))?;
+    let raw = std::fs::read_to_string(request_path)
+        .with_context(|| format!("failed to read migration cancellation JSON: {request_path}"))?;
+    if raw.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration cancellation exceeds the bounded request size");
+    }
+    let cancellation: MigrationCancellation =
+        serde_json::from_str(&raw).context("invalid migration cancellation JSON")?;
+    let mut journal = PersistedMigrationJournal::open(
+        journal_path,
+        read_migration_brain_id(journal_path)?,
+        cancellation.observed_leader_term,
+    )
+    .map_err(|error| anyhow::anyhow!("failed to open migration journal: {error}"))?;
+    let operation = journal
+        .cancel(
+            cancellation.operation_id,
+            cancellation.observed_leader_term,
+            cancellation.expected_resource_version,
+            cancellation.reason,
+        )
+        .map_err(|error| anyhow::anyhow!("migration cancellation rejected: {error}"))?;
+    print_json_pretty(&serde_json::json!({
+        "operation": operation,
+        "resource_version": journal.journal().resource_version,
+        "transport": "local-reference"
+    }))
+}
+
+/// Print a bounded migration journal view without acquiring a writer lock or
+/// changing operation state. The persisted journal remains the authoritative
+/// source; this command is intentionally a read-only CLI convenience.
+fn handle_operation_watch(args: &Cli) -> anyhow::Result<()> {
+    const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+    let path = args
+        .operation_watch_journal
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--operation-watch is required"))?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read migration journal: {path}"))?;
+    if raw.len() > MAX_JOURNAL_BYTES {
+        anyhow::bail!("migration journal exceeds the bounded read size");
+    }
+    let document: serde_json::Value =
+        serde_json::from_str(&raw).context("invalid migration journal JSON")?;
+    let journal = document
+        .get("journal")
+        .ok_or_else(|| anyhow::anyhow!("migration journal document is missing journal state"))?;
+    let operations = journal
+        .get("operations")
+        .ok_or_else(|| anyhow::anyhow!("migration journal is missing operations"))?;
+    let selected = if let Some(operation_id) = args.operation_watch_id {
+        operations
+            .get(operation_id.to_string())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("migration operation {operation_id} was not found"))?
+    } else {
+        operations.clone()
+    };
+    print_json_pretty(&serde_json::json!({
+        "brain_id": journal.get("brain_id"),
+        "leader_term": journal.get("leader_term"),
+        "resource_version": journal.get("resource_version"),
+        "operations": selected,
+        "transport": "local-reference-read-only"
+    }))
+}
+
+/// Translate structured subcommands into the established bounded handlers.
+/// Keeping one implementation for each operation prevents the nested CLI and
+/// compatibility flags from drifting in validation, serialization or error
+/// behaviour.
+fn apply_nested_command(args: &mut Cli, command: CliCommand) -> anyhow::Result<()> {
+    match command {
+        CliCommand::Brain { command } => match command {
+            BrainCommand::Placement { command } => match command {
+                BrainPlacementCommand::Plan { request } => {
+                    args.placement_request_local_json = Some(request);
+                    handle_local_placement_request(args)
+                }
+            },
+            BrainCommand::Migrate(command) => {
+                args.migration_submit_local_json = Some(command.request);
+                args.migration_journal_json = Some(command.journal);
+                args.migration_group_json = command.group;
+                args.migration_kind_override =
+                    Some(crate::migration_operation::MigrationKind::MigrateBrain);
+                handle_local_migration_submit(args)
+            }
+            BrainCommand::Consolidate(command) => {
+                args.migration_submit_local_json = Some(command.request);
+                args.migration_journal_json = Some(command.journal);
+                args.migration_group_json = command.group;
+                args.migration_kind_override =
+                    Some(crate::migration_operation::MigrationKind::Consolidate);
+                handle_local_migration_submit(args)
+            }
+            BrainCommand::Reclaim(command) => {
+                args.migration_submit_local_json = Some(command.request);
+                args.migration_journal_json = Some(command.journal);
+                args.migration_group_json = command.group;
+                args.migration_kind_override =
+                    Some(crate::migration_operation::MigrationKind::Reclaim);
+                handle_local_migration_submit(args)
+            }
+        },
+        CliCommand::Node { command } => match command {
+            NodeCommand::Evacuate(command) => {
+                args.migration_submit_local_json = Some(command.request);
+                args.migration_journal_json = Some(command.journal);
+                args.migration_group_json = command.group;
+                args.migration_kind_override =
+                    Some(crate::migration_operation::MigrationKind::Evacuate);
+                handle_local_migration_submit(args)
+            }
+        },
+        CliCommand::Operation { command } => match command {
+            OperationCommand::Watch(command) => {
+                args.operation_watch_journal = Some(command.journal);
+                args.operation_watch_id = command.id;
+                handle_operation_watch(args)
+            }
+        },
+    }
+}
+
+fn read_migration_brain_id(path: &str) -> anyhow::Result<crate::deterministic::BrainId> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read migration journal: {path}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).context("invalid migration journal JSON")?;
+    let raw_id = value
+        .get("journal")
+        .and_then(|journal| journal.get("brain_id"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("migration journal does not contain a numeric brain_id"))?;
+    crate::deterministic::BrainId::new(raw_id)
+        .map_err(|error| anyhow::anyhow!("invalid migration brain_id: {error}"))
+}
+
+fn migration_orchestrator_addr(args: &Cli) -> anyhow::Result<String> {
+    args.orchestrator_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_runtime_url)
+        .or_else(|| autodetected_orchestrator_addr(args).map(|value| normalize_runtime_url(&value)))
+        .ok_or_else(|| anyhow::anyhow!("--orchestrator-addr is required for migration control"))
+}
+
+fn migration_principal(args: &Cli) -> anyhow::Result<String> {
+    args.migration_principal_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("--migration-principal-id is required for migration control")
+        })
+}
+
+fn handle_remote_migration_submit(args: &Cli) -> anyhow::Result<()> {
+    use crate::generated_management::proto::MigrationCommandRequest;
+    use crate::generated_management::proto::management_client::ManagementClient;
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let command_path = args
+        .migration_command_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-command-json is required"))?;
+    let command_json = std::fs::read_to_string(command_path)
+        .with_context(|| format!("failed to read migration command JSON: {command_path}"))?;
+    if command_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration command exceeds the bounded request size");
+    }
+    let group_json = args
+        .migration_group_json
+        .as_ref()
+        .map(std::fs::read_to_string)
+        .transpose()?
+        .unwrap_or_default();
+    if group_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration group exceeds the bounded request size");
+    }
+    let principal_id = migration_principal(args)?;
+    let addr = migration_orchestrator_addr(args)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = ManagementClient::connect(endpoint)
+            .await
+            .with_context(|| format!("failed to connect to orchestrator at {addr}"))?;
+        let response = client
+            .submit_migration(MigrationCommandRequest {
+                principal_id,
+                command_json,
+                group_json,
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("migration submission failed: {status}"))?
+            .into_inner();
+        if !response.error_code.is_empty() {
+            anyhow::bail!("migration submission failed: {}", response.error_code);
+        }
+        print_json_pretty(&serde_json::json!({
+            "operation": serde_json::from_str::<serde_json::Value>(&response.operation_json)?,
+            "journal": serde_json::from_str::<serde_json::Value>(&response.journal_json)?,
+            "transport": "management-grpc"
+        }))
+    })
+}
+
+fn handle_remote_migration_advance(args: &Cli) -> anyhow::Result<()> {
+    use crate::generated_management::proto::MigrationAdvanceRequest;
+    use crate::generated_management::proto::management_client::ManagementClient;
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let transition_path = args
+        .migration_advance_command_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-advance-command-json is required"))?;
+    let transition_json = std::fs::read_to_string(transition_path)
+        .with_context(|| format!("failed to read migration transition JSON: {transition_path}"))?;
+    if transition_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration transition exceeds the bounded request size");
+    }
+    let group_update_json = args
+        .migration_group_update_json
+        .as_ref()
+        .map(std::fs::read_to_string)
+        .transpose()?
+        .unwrap_or_default();
+    if group_update_json.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration group update exceeds the bounded request size");
+    }
+    let brain_id = args
+        .migration_brain_id
+        .ok_or_else(|| anyhow::anyhow!("--migration-brain-id is required for migration advance"))?;
+    let principal_id = migration_principal(args)?;
+    let addr = migration_orchestrator_addr(args)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = ManagementClient::connect(endpoint)
+            .await
+            .with_context(|| format!("failed to connect to orchestrator at {addr}"))?;
+        let response = client
+            .advance_migration(MigrationAdvanceRequest {
+                principal_id,
+                transition_json,
+                brain_id,
+                group_update_json,
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("migration transition failed: {status}"))?
+            .into_inner();
+        if !response.error_code.is_empty() {
+            anyhow::bail!("migration transition failed: {}", response.error_code);
+        }
+        print_json_pretty(&serde_json::json!({
+            "operation": serde_json::from_str::<serde_json::Value>(&response.operation_json)?,
+            "journal": serde_json::from_str::<serde_json::Value>(&response.journal_json)?,
+            "transport": "management-grpc"
+        }))
+    })
+}
+
+fn handle_remote_migration_cancel(args: &Cli) -> anyhow::Result<()> {
+    use crate::generated_management::proto::MigrationCancelRequest;
+    use crate::generated_management::proto::management_client::ManagementClient;
+    use crate::migration_operation::MigrationCancellation;
+
+    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    let command_path = args
+        .migration_cancel_command_json
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("--migration-cancel-command-json is required"))?;
+    let raw = std::fs::read_to_string(command_path)
+        .with_context(|| format!("failed to read migration cancellation JSON: {command_path}"))?;
+    if raw.len() > MAX_REQUEST_BYTES {
+        anyhow::bail!("migration cancellation exceeds the bounded request size");
+    }
+    let cancellation: MigrationCancellation =
+        serde_json::from_str(&raw).context("invalid migration cancellation JSON")?;
+    let brain_id = args
+        .migration_brain_id
+        .ok_or_else(|| anyhow::anyhow!("--migration-brain-id is required for migration cancel"))?;
+    let principal_id = migration_principal(args)?;
+    let addr = migration_orchestrator_addr(args)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let endpoint = crate::management::grpc_client_endpoint(&addr)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut client = ManagementClient::connect(endpoint)
+            .await
+            .with_context(|| format!("failed to connect to orchestrator at {addr}"))?;
+        let response = client
+            .cancel_migration(MigrationCancelRequest {
+                principal_id,
+                brain_id,
+                operation_id: cancellation.operation_id,
+                observed_leader_term: cancellation.observed_leader_term.raw(),
+                expected_resource_version: cancellation.expected_resource_version,
+                reason: cancellation.reason,
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("migration cancellation failed: {status}"))?
+            .into_inner();
+        if !response.error_code.is_empty() {
+            anyhow::bail!("migration cancellation failed: {}", response.error_code);
+        }
+        print_json_pretty(&serde_json::json!({
+            "operation": serde_json::from_str::<serde_json::Value>(&response.operation_json)?,
+            "journal": serde_json::from_str::<serde_json::Value>(&response.journal_json)?,
+            "transport": "management-grpc"
+        }))
+    })
 }
 
 fn build_runtime_client(args: &Cli) -> anyhow::Result<BlockingRuntimeClient> {
@@ -1506,6 +2439,54 @@ fn maybe_apply_openmpi_bootstrap(_args: &mut Cli) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     let mut args = Cli::parse();
 
+    if args.stable_runtime_manifest.is_some() && (!args.node && !args.orchestrator) {
+        return Err(anyhow::anyhow!(
+            "--stable-runtime-manifest requires --node or --orchestrator"
+        ));
+    }
+    if args.stable_worker_manifest.is_some() && (!args.node || args.orchestrator) {
+        return Err(anyhow::anyhow!(
+            "--stable-worker-manifest requires --node and cannot be used by an orchestrator"
+        ));
+    }
+    #[cfg(not(feature = "stable_executor_live"))]
+    if args.stable_runtime_manifest.is_some() {
+        return Err(anyhow::anyhow!(
+            "--stable-runtime-manifest requires a binary built with --features stable_executor_live"
+        ));
+    }
+    if args.stable_worker_manifest.is_some() {
+        if !args.node || args.orchestrator {
+            return Err(anyhow::anyhow!(
+                "--stable-worker-manifest requires --node and cannot be used by an orchestrator"
+            ));
+        }
+        #[cfg(not(feature = "stable_executor_live"))]
+        return Err(anyhow::anyhow!(
+            "--stable-worker-manifest requires a binary built with --features stable_executor_live"
+        ));
+    }
+    if args.stable_migration_spec.is_some() && !args.orchestrator {
+        return Err(anyhow::anyhow!(
+            "--stable-migration-spec requires --orchestrator"
+        ));
+    }
+    if args.stable_migration_spec.is_some() && args.stable_runtime_manifest.is_none() {
+        return Err(anyhow::anyhow!(
+            "--stable-migration-spec requires --stable-runtime-manifest"
+        ));
+    }
+    #[cfg(not(feature = "stable_executor_live"))]
+    if args.stable_worker_manifest.is_some() {
+        return Err(anyhow::anyhow!(
+            "--stable-worker-manifest requires a binary built with --features stable_executor_live"
+        ));
+    }
+
+    if let Some(command) = args.command.take() {
+        return apply_nested_command(&mut args, command);
+    }
+
     if args.quiet {
         crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -1516,6 +2497,41 @@ fn main() -> anyhow::Result<()> {
 
     if args.cluster_control_network.is_some() || args.cluster_control_action.is_some() {
         return handle_cluster_control(&args);
+    }
+
+    if args.placement_command_json.is_some() {
+        return handle_placement_plan(&args);
+    }
+    if args.placement_apply_command_json.is_some() {
+        return handle_remote_placement_apply(&args);
+    }
+
+    if args.placement_request_local_json.is_some() {
+        return handle_local_placement_request(&args);
+    }
+    if args.placement_apply_local_json.is_some() {
+        return handle_local_placement_apply(&args);
+    }
+    if args.migration_submit_local_json.is_some() {
+        return handle_local_migration_submit(&args);
+    }
+    if args.migration_transition_local_json.is_some() {
+        return handle_local_migration_transition(&args);
+    }
+    if args.migration_cancel_local_json.is_some() {
+        return handle_local_migration_cancel(&args);
+    }
+    if args.operation_watch_journal.is_some() {
+        return handle_operation_watch(&args);
+    }
+    if args.migration_command_json.is_some() {
+        return handle_remote_migration_submit(&args);
+    }
+    if args.migration_advance_command_json.is_some() {
+        return handle_remote_migration_advance(&args);
+    }
+    if args.migration_cancel_command_json.is_some() {
+        return handle_remote_migration_cancel(&args);
     }
 
     maybe_apply_openmpi_bootstrap(&mut args)?;
@@ -2311,19 +3327,333 @@ fn run_continuous(
     }
 }
 
+#[cfg(feature = "stable_executor_live")]
+async fn open_stable_runtime_manifest(
+    path: String,
+    network_id: String,
+) -> anyhow::Result<crate::managed_stable_executor::ManagedStableExecutor> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = crate::stable_runtime_bootstrap::StableRuntimeBootstrapManifest::load(&path)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to load stable runtime manifest {path}: {error}")
+            })?;
+        let bootstrap = manifest.open_for_network(&network_id).map_err(|error| {
+            anyhow::anyhow!("failed to open stable runtime manifest {path}: {error}")
+        })?;
+        Ok(bootstrap.runtime)
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("stable runtime bootstrap task failed: {error}"))?
+}
+
+#[cfg(feature = "stable_executor_live")]
+async fn open_stable_worker_manifest(
+    path: String,
+    expected_node_id: String,
+) -> anyhow::Result<crate::stable_runtime_bootstrap::StablePartialWorkerBootstrap> {
+    tokio::task::spawn_blocking(move || {
+        let manifest =
+            crate::stable_runtime_bootstrap::StablePartialWorkerBootstrapManifest::load(&path)
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to load stable worker manifest {path}: {error}")
+                })?;
+        if manifest.node_id != expected_node_id {
+            return Err(anyhow::anyhow!(
+                "stable worker manifest node {} does not match local node {}",
+                manifest.node_id,
+                expected_node_id
+            ));
+        }
+        manifest.open().map_err(|error| {
+            anyhow::anyhow!("failed to open stable worker manifest {path}: {error}")
+        })
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("stable worker bootstrap task failed: {error}"))?
+}
+
+/// Register the source runtime's migration executor from a deployment-owned
+/// manifest.  Filesystem parsing and authority/registry opening happen on a
+/// blocking worker; the async startup path only installs the already-validated
+/// executor in the node-owned registry.
+#[cfg(all(feature = "stable_executor_live", feature = "management_v1"))]
+async fn register_deployment_migration_executor(
+    node: crate::distributed::DistributedNode,
+    network_id: String,
+    path: String,
+) -> anyhow::Result<()> {
+    let (manifest_network_id, settings) = tokio::task::spawn_blocking(move || {
+        let manifest = crate::migration_executor::StableMigrationDeploymentManifest::load(&path)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to load stable migration spec {path}: {error}")
+            })?;
+        if manifest.network_id != network_id {
+            return Err(anyhow::anyhow!(
+                "stable migration spec network {} does not match startup network {}",
+                manifest.network_id,
+                network_id
+            ));
+        }
+        let manifest_network_id = manifest.network_id.clone();
+        let settings = manifest.into_settings().map_err(|error| {
+            anyhow::anyhow!("failed to construct stable migration settings: {error}")
+        })?;
+        Ok::<_, anyhow::Error>((manifest_network_id, settings))
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("stable migration manifest task failed: {error}"))??;
+
+    let brain_id = node
+        .register_stable_network_migration_executor(&manifest_network_id, settings)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("stable migration executor registration failed: {error}")
+        })?;
+    nm_log!(
+        "[startup] registered stable migration executor for network {} and brain {}",
+        manifest_network_id,
+        brain_id
+    );
+    Ok(())
+}
+
+/// Start the opt-in live placement reconciler. The input is a deployment
+/// controlled stable runtime catalogue; it is never assembled from discovery
+/// or the legacy Runner. Each reconcile persists the placement before any
+/// worker command is queued, and every per-node command remains independently
+/// retryable after an orchestrator restart.
+#[cfg(all(feature = "stable_executor_live", feature = "management_v1"))]
+async fn start_automatic_placement_loop(
+    node: crate::distributed::DistributedNode,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let enabled = std::env::var("NM_AUTOMATIC_PLACEMENT_ENABLED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    let Some(spec_path) = std::env::var("NM_AUTOMATIC_PLACEMENT_SPEC")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if !enabled {
+        nm_log!(
+            "[placement] automatic placement spec is configured but disabled; set NM_AUTOMATIC_PLACEMENT_ENABLED=1 to opt in"
+        );
+        return Ok(());
+    }
+    let spec = crate::placement_automation::PlacementAutomationSpec::load(&spec_path)
+        .map_err(|error| anyhow::anyhow!("automatic placement spec is invalid: {error}"))?;
+    let registry_root = std::env::var("NM_PLACEMENT_REGISTRY_DIR").map_err(|_| {
+        anyhow::anyhow!("NM_PLACEMENT_REGISTRY_DIR is required for automatic placement")
+    })?;
+    let registry_path = std::path::PathBuf::from(registry_root)
+        .join(format!("brain-{}.json", spec.runtime.brain_id.raw()));
+    let policy = crate::placement_controller::AutomaticPlacementPolicy::default();
+    let coordinator = crate::placement_automation::PlacementAutomationCoordinator::open(
+        spec,
+        registry_path,
+        policy,
+    )
+    .map_err(|error| anyhow::anyhow!("automatic placement coordinator failed to open: {error}"))?;
+    let coordinator = std::sync::Arc::new(std::sync::Mutex::new(coordinator));
+    let network_id = coordinator
+        .lock()
+        .map_err(|_| anyhow::anyhow!("automatic placement coordinator lock poisoned"))?
+        .spec()
+        .network_id
+        .clone();
+    let profile = {
+        let guard = coordinator
+            .lock()
+            .map_err(|_| anyhow::anyhow!("automatic placement coordinator lock poisoned"))?;
+        let mut profiles = guard
+            .spec()
+            .demands
+            .iter()
+            .map(|demand| demand.required_numerical_profile.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if profiles.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "automatic placement requires one deterministic numerical profile per runtime"
+            ));
+        }
+        profiles
+            .into_iter()
+            .next()
+            .expect("one profile was checked")
+    };
+    let interval_ms = std::env::var("NM_AUTOMATIC_PLACEMENT_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(5_000)
+        .clamp(250, 60_000);
+    nm_log!(
+        "[placement] automatic reconciler enabled for network {} with {}ms interval",
+        network_id,
+        interval_ms
+    );
+
+    let mut shutdown_rx = shutdown_rx;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(interval_ms));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() { break; }
+                    continue;
+                }
+            }
+            if *shutdown_rx.borrow() {
+                break;
+            }
+
+            let (allowed_nodes, failure_domains, storage_bytes, network_bytes) = match coordinator
+                .lock()
+            {
+                Ok(guard) => (
+                    guard.spec().allowed_nodes.clone(),
+                    guard.spec().failure_domains.clone(),
+                    guard.spec().storage_bytes_per_node,
+                    guard.spec().network_bytes_per_second_per_node,
+                ),
+                Err(_) => {
+                    nm_err!("[placement] automatic coordinator lock poisoned; stopping reconciler");
+                    break;
+                }
+            };
+            let resources = node
+                .get_placement_resource_observations(
+                    &allowed_nodes,
+                    &failure_domains,
+                    &profile,
+                    storage_bytes,
+                    network_bytes,
+                )
+                .await;
+            let brain_id = match coordinator.lock() {
+                Ok(guard) => guard.spec().runtime.brain_id,
+                Err(_) => break,
+            };
+            let tag = node
+                .get_authoritative_placement_tag(&network_id, brain_id)
+                .await;
+            let coordinator_for_reconcile = coordinator.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut guard = coordinator_for_reconcile
+                    .lock()
+                    .map_err(|_| "automatic coordinator lock poisoned".to_owned())?;
+                let retryable = guard
+                    .retryable_activation_dispatches()
+                    .map_err(|error| error.to_string())?;
+                let active_migrations = retryable.len().min(u16::MAX as usize) as u16;
+                let outcome = guard
+                    .reconcile(
+                        resources,
+                        tag,
+                        crate::placement::PlacementIntent::Automatic,
+                        active_migrations,
+                        None,
+                    )
+                    .map_err(|error| error.to_string());
+                Ok::<_, String>((outcome, retryable))
+            })
+            .await;
+            let (outcome, mut dispatches) = match result {
+                Ok(Ok(value)) => value,
+                Ok(Err(error)) => {
+                    nm_err!("[placement] automatic reconcile failed: {}", error);
+                    continue;
+                }
+                Err(error) => {
+                    nm_err!("[placement] automatic reconcile task failed: {}", error);
+                    continue;
+                }
+            };
+            if let Ok(crate::placement_automation::PlacementReconcileOutcome::Applied {
+                activations,
+                ..
+            }) = outcome
+            {
+                dispatches.extend(activations);
+            }
+            if dispatches.is_empty() {
+                continue;
+            }
+
+            let attempts = futures_util::future::join_all(dispatches.into_iter().map(|dispatch| {
+                let node = node.clone();
+                async move {
+                    let key = dispatch.activation_idempotency_key.clone();
+                    let result = node.queue_stable_worker_activation(dispatch.command).await;
+                    (key, result)
+                }
+            }))
+            .await;
+            for (activation_key, result) in attempts {
+                let coordinator_for_status = coordinator.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mut guard = coordinator_for_status
+                        .lock()
+                        .map_err(|_| "automatic coordinator lock poisoned".to_owned())?;
+                    match result {
+                        Ok(_) => guard
+                            .registry_mut()
+                            .record_activation_outcome(
+                                activation_key,
+                                crate::placement_registry::PlacementActivationState::Queued,
+                                "",
+                            )
+                            .map_err(|error| error.to_string()),
+                        Err(error) => guard
+                            .registry_mut()
+                            .record_activation_outcome(
+                                activation_key,
+                                crate::placement_registry::PlacementActivationState::Failed,
+                                error,
+                            )
+                            .map_err(|error| error.to_string()),
+                    }
+                })
+                .await;
+            }
+        }
+    });
+    Ok(())
+}
+
 /// Initializes a node for distributed simulation.
 ///
 /// Depending on the CLI arguments, the node will either act as:
 /// - **Orchestrator**: Manages the cluster, assigns partitions, and aggregates results.
 /// - **Compute Node**: Performs a subset of the network simulation.
 async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::DistributedNode> {
+    use crate::causal_transport::proto::causal_data_plane_server::CausalDataPlaneServer;
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
-    use crate::distributed::proto::{HeartbeatRequest, JoinRequest};
+    use crate::distributed::proto::stable_checkpoint_transfer_server::StableCheckpointTransferServer;
+    use crate::distributed::proto::{HeartbeatRequest, JoinRequest, NetworkCommandResult};
     use crate::distributed::{
         DistributedNode, ManagedNetwork,
         proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
     };
-    use tonic::transport::{Channel, Endpoint, Server};
+    #[cfg(feature = "management_v1")]
+    use crate::generated_management::proto::management_server::ManagementServer;
+    #[cfg(feature = "management_v1")]
+    use crate::management::{
+        ManagementOperationDispatcher, PersistedManagementOrchestrator,
+        PlacementActivationDispatcher, Policy, SecuredManagementGrpcService,
+    };
+    use crate::stable_shard_transport::proto::stable_shard_data_plane_server::StableShardDataPlaneServer;
+    use tonic::transport::{Channel, Server};
 
     let explicit_node_id = args
         .node_id
@@ -2367,12 +3697,60 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             format!("{}_{}", args.brain_id, fastrand::u32(..))
         }
     };
+    if args.stable_runtime_manifest.is_some() {
+        if !args.node && !args.orchestrator {
+            return Err(anyhow::anyhow!(
+                "--stable-runtime-manifest requires --node or --orchestrator"
+            ));
+        }
+        #[cfg(not(feature = "stable_executor_live"))]
+        return Err(anyhow::anyhow!(
+            "--stable-runtime-manifest requires a binary built with --features stable_executor_live"
+        ));
+    }
+    crate::distributed::validate_production_cutover_config(&node_id, args.orchestrator)
+        .map_err(|error| anyhow::anyhow!(error))?;
     let node = DistributedNode::new(node_id.clone(), args.orchestrator);
+    #[cfg(feature = "stable_executor_live")]
+    if let Some(path) = args.stable_worker_manifest.as_ref() {
+        let bootstrap = open_stable_worker_manifest(path.clone(), node_id.clone()).await?;
+        let brain_id = bootstrap.manifest.runtime.brain_id;
+        let network_id = args.brain_id.clone();
+        let max_input_events = bootstrap.manifest.runtime.max_input_events;
+        let max_steps_per_poll = bootstrap.manifest.runtime.max_steps_per_poll;
+        node.register_stable_shard_receiver_for_network(
+            network_id,
+            max_input_events,
+            max_steps_per_poll,
+            bootstrap.receiver,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to register stable worker receiver for brain {brain_id}: {error}"
+            )
+        })?;
+        node.register_stable_shard_dispatcher(brain_id, bootstrap.dispatcher)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to register stable worker dispatcher for brain {brain_id}: {error}"
+                )
+            })?;
+        nm_log!(
+            "[startup] partial stable worker bootstrapped for brain {} on node {}",
+            brain_id,
+            node_id
+        );
+    }
     node.start_optional_mpi_spike_receiver().await;
 
-    // In node role, pre-load the startup config/snapshot from local files so a
-    // large snapshot doesn't have to be delivered in one heartbeat response.
-    if args.node {
+    // In node role, or for an explicitly configured orchestrator-hosted stable
+    // runtime, pre-load the startup config/snapshot from local files so a
+    // large snapshot does not have to be delivered in one heartbeat response.
+    // The orchestrator remains control-plane-only unless the operator supplies
+    // the stable runtime manifest explicitly.
+    let hosts_stable_runtime =
+        args.node || (args.orchestrator && args.stable_runtime_manifest.is_some());
+    if hosts_stable_runtime {
         let preload_enabled = std::env::var("NM_PRELOAD_NODE_NETWORK")
             .ok()
             .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
@@ -2410,6 +3788,12 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         }
                     }
                 }
+            }
+
+            if preload_cfg.is_none() && args.stable_runtime_manifest.is_some() {
+                return Err(anyhow::anyhow!(
+                    "--stable-runtime-manifest requires a readable network snapshot or config"
+                ));
             }
 
             if let Some(mut cfg) = preload_cfg {
@@ -2503,6 +3887,13 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     );
                 }
 
+                #[cfg(feature = "stable_executor_live")]
+                let mut stable_runtime = if let Some(path) = args.stable_runtime_manifest.as_ref() {
+                    Some(open_stable_runtime_manifest(path.clone(), args.brain_id.clone()).await?)
+                } else {
+                    None
+                };
+
                 let total_layers = (runner.net.num_hidden_layers + 1) as u32;
                 let assigned_layers: Vec<u32> = (0..total_layers).collect();
                 let desired_depth = runner.net.aarnn_layer_depth as u32;
@@ -2510,31 +3901,95 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
 
                 let mut state = node.state.write().await;
                 let workspace_binding = state.workspace_bindings.get(&args.brain_id).cloned();
+                #[cfg(feature = "replicated_durability")]
+                let durable_owner = if {
+                    #[cfg(feature = "stable_executor_live")]
+                    {
+                        stable_runtime.is_some()
+                    }
+                    #[cfg(not(feature = "stable_executor_live"))]
+                    {
+                        false
+                    }
+                } {
+                    None
+                } else {
+                    crate::distributed::open_managed_durability(
+                        &args.brain_id,
+                        &state.node_id,
+                        &mut runner,
+                    )
+                };
+                #[cfg(feature = "replicated_durability")]
+                if crate::managed_durability::configured_root().is_some()
+                    && durable_owner.is_none()
+                    && {
+                        #[cfg(feature = "stable_executor_live")]
+                        {
+                            stable_runtime.is_none()
+                        }
+                        #[cfg(not(feature = "stable_executor_live"))]
+                        {
+                            true
+                        }
+                    }
+                {
+                    return Err(anyhow::anyhow!(
+                        "configured durable shard profile could not open its authoritative owner"
+                    ));
+                }
+                #[cfg(not(feature = "replicated_durability"))]
+                if crate::managed_durability::configured_root().is_some() {
+                    return Err(anyhow::anyhow!(
+                        "NM_DURABLE_SHARD_ROOT requires the replicated_durability feature"
+                    ));
+                }
+                let mut managed_network = ManagedNetwork {
+                    id: args.brain_id.clone(),
+                    runner,
+                    shard_runtime: None,
+                    #[cfg(feature = "stable_executor_live")]
+                    stable_executor: None,
+                    #[cfg(feature = "replicated_durability")]
+                    durable_owner,
+                    #[cfg(feature = "superdense_executor")]
+                    superdense: superdense::SuperdenseController::new(),
+                    assigned_layers,
+                    redundant_layers: Vec::new(),
+                    remote_spikes_fwd: std::collections::HashMap::new(),
+                    remote_spikes_bwd: std::collections::HashMap::new(),
+                    remote_spike_steps_fwd: std::collections::HashMap::new(),
+                    remote_spike_steps_bwd: std::collections::HashMap::new(),
+                    external_sensory_spikes: None,
+                    avg_step_time_ms: 0.0,
+                    desired_aarnn_depth: desired_depth,
+                    playing: false,
+                    initial_config,
+                    initial_model: model,
+                    initial_learning: learning,
+                    initial_lif: lif,
+                    initial_stdp: stdp,
+                    last_config_fingerprint: preload_config_fingerprint,
+                    workspace_binding,
+                };
+                #[cfg(feature = "stable_executor_live")]
+                if let Some(runtime) = stable_runtime.take() {
+                    managed_network
+                        .register_stable_executor(runtime)
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    managed_network.playing = true;
+                    nm_log!(
+                        "[startup] stable runtime bootstrapped for local network {}; legacy Runner is projection-only",
+                        args.brain_id
+                    );
+                }
+                #[cfg(not(feature = "stable_executor_live"))]
+                {
+                    managed_network.playing = true;
+                }
                 state.networks.insert(
                     args.brain_id.clone(),
-                    std::sync::Arc::new(tokio::sync::RwLock::new(ManagedNetwork {
-                        id: args.brain_id.clone(),
-                        runner,
-                        #[cfg(feature = "superdense_executor")]
-                        superdense: superdense::SuperdenseController::new(),
-                        assigned_layers,
-                        redundant_layers: Vec::new(),
-                        remote_spikes_fwd: std::collections::HashMap::new(),
-                        remote_spikes_bwd: std::collections::HashMap::new(),
-                        remote_spike_steps_fwd: std::collections::HashMap::new(),
-                        remote_spike_steps_bwd: std::collections::HashMap::new(),
-                        external_sensory_spikes: None,
-                        avg_step_time_ms: 0.0,
-                        desired_aarnn_depth: desired_depth,
-                        playing: true,
-                        initial_config,
-                        initial_model: model,
-                        initial_learning: learning,
-                        initial_lif: lif,
-                        initial_stdp: stdp,
-                        last_config_fingerprint: preload_config_fingerprint,
-                        workspace_binding,
-                    })),
+                    std::sync::Arc::new(tokio::sync::RwLock::new(managed_network)),
                 );
             }
         }
@@ -2557,7 +4012,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .and_then(|value| value.trim().parse::<u64>().ok())
             .map(std::time::Duration::from_millis)
             .unwrap_or_else(|| std::time::Duration::from_secs(8));
-        let endpoint = Endpoint::from_shared(orchestrator_addr.to_string())
+        let endpoint = crate::management::grpc_client_endpoint(orchestrator_addr)
             .map_err(|e| format!("invalid endpoint: {e}"))?
             .connect_timeout(connect_timeout)
             .timeout(rpc_timeout);
@@ -2571,14 +4026,21 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .max_encoding_message_size(grpc_max_msg_bytes);
         let resources = node.get_resources().await;
         let network_resources = node.get_network_resources().await;
+        let stable_executors = node.get_stable_executor_registrations().await;
+        let stable_executor_capabilities = node.get_stable_executor_capabilities().await;
         let join_req = JoinRequest {
             node_id: node_id.to_string(),
             address: advertise_addr.to_string(),
             resources: Some(resources),
             network_resources,
+            stable_executors,
+            stable_executor_capabilities,
         };
+        let mut join_request = tonic::Request::new(join_req);
+        crate::node_auth::attach_node_metadata(&mut join_request, node_id)
+            .map_err(|error| format!("join session identity: {error}"))?;
         client
-            .join(join_req)
+            .join(join_request)
             .await
             .map_err(|e| format!("join: {e}"))?;
         Ok(client)
@@ -2613,10 +4075,177 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         state.network_registry.insert(args.brain_id.clone(), status);
     }
 
+    if let Some(path) = args.stable_migration_spec.clone() {
+        #[cfg(all(feature = "stable_executor_live", feature = "management_v1"))]
+        register_deployment_migration_executor(node.clone(), args.brain_id.clone(), path).await?;
+        #[cfg(not(all(feature = "stable_executor_live", feature = "management_v1")))]
+        {
+            let _ = path;
+            return Err(anyhow::anyhow!(
+                "--stable-migration-spec requires stable_executor_live and management_v1 features"
+            ));
+        }
+    }
+
     let addr: std::net::SocketAddr = args.grpc_addr.parse()?;
     nm_log!("[info] Starting distributed node {} at {}", node_id, addr);
 
     let node_clone = node.clone();
+    #[cfg_attr(not(feature = "management_v1"), allow(unused_variables))]
+    let is_orchestrator = args.orchestrator;
+    #[cfg(feature = "management_v1")]
+    let migration_executor_registry = node.migration_executor_registry();
+    #[cfg(feature = "management_v1")]
+    let migration_dispatcher = if exposes_management_service(is_orchestrator) {
+        Some(migration_executor_registry.handler())
+    } else {
+        None
+    };
+    #[cfg(feature = "management_v1")]
+    let management_dispatcher: Option<ManagementOperationDispatcher> =
+        if exposes_management_service(is_orchestrator) {
+            let dispatch_node = node.clone();
+            Some(std::sync::Arc::new(move |brain_id, operation| {
+                let dispatch_node = dispatch_node.clone();
+                Box::pin(async move {
+                    dispatch_node
+                        .execute_management_operation(&brain_id, operation)
+                        .await
+                })
+            }))
+        } else {
+            None
+        };
+    #[cfg(feature = "management_v1")]
+    let placement_activation_dispatcher: Option<PlacementActivationDispatcher> =
+        if exposes_management_service(is_orchestrator) {
+            let dispatch_node = node.clone();
+            Some(std::sync::Arc::new(move |command| {
+                let dispatch_node = dispatch_node.clone();
+                Box::pin(async move {
+                    dispatch_node
+                        .queue_stable_worker_activation(command)
+                        .await
+                        .map(|_| ())
+                })
+            }))
+        } else {
+            None
+        };
+    #[cfg(feature = "management_v1")]
+    let management_service = if exposes_management_service(is_orchestrator) {
+        crate::management::validate_management_auth_config()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        crate::management::required_management_grpc_tls()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let mut policy = Policy::default();
+        for principal in std::env::var("NM_MANAGEMENT_PRINCIPALS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|principal| !principal.is_empty())
+        {
+            policy.grant(principal, crate::management::Capability::Operate);
+            policy.grant(principal, crate::management::Capability::Read);
+            policy.grant(principal, crate::management::Capability::Reset);
+            policy.grant(principal, crate::management::Capability::Export);
+        }
+        let state_path = std::env::var("NM_MANAGEMENT_STATE_PATH").map_err(|_| {
+            anyhow::anyhow!("NM_MANAGEMENT_STATE_PATH is required when management_v1 is enabled")
+        })?;
+        Some(
+            SecuredManagementGrpcService::with_dispatchers_and_activation(
+                PersistedManagementOrchestrator::open(
+                    state_path,
+                    crate::deterministic::LeaseTerm::new(
+                        std::env::var("NM_LEASE_TERM")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(1),
+                    )
+                    .unwrap_or(crate::deterministic::LeaseTerm::INITIAL),
+                    policy,
+                )?,
+                management_dispatcher,
+                migration_dispatcher,
+                placement_activation_dispatcher,
+            ),
+        )
+    } else {
+        // Workers expose only the data-plane service. Management clients must
+        // not be able to bypass the orchestrator by addressing a worker.
+        None
+    };
+    #[cfg(feature = "management_v1")]
+    if let Some(service) = management_service.as_ref() {
+        let activation_service = service.clone();
+        let handler: crate::distributed::StableActivationResultHandler =
+            std::sync::Arc::new(move |result| {
+                if let Err(error) = activation_service.record_stable_activation_result(&result) {
+                    nm_err!(
+                        "[warn] stable activation result could not update placement registry: {}",
+                        error
+                    );
+                }
+            });
+        node.set_stable_activation_result_handler(Some(handler))
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let registration_service = service.clone();
+        let registration_handler: crate::distributed::StableWorkerRegistrationHandler =
+            std::sync::Arc::new(move |node_id, registration| {
+                if let Err(error) =
+                    registration_service.record_stable_worker_registration(&node_id, &registration)
+                {
+                    nm_err!(
+                        "[warn] stable worker registration did not activate placement: {}",
+                        error
+                    );
+                }
+            });
+        node.set_stable_worker_registration_handler(Some(registration_handler))
+            .map_err(|error| anyhow::anyhow!(error))?;
+    }
+    #[cfg(feature = "management_v1")]
+    if is_orchestrator {
+        if let Some(service) = management_service.as_ref() {
+            // Recovery is deliberately asynchronous. A restarted
+            // orchestrator may start before workers have re-enrolled; the
+            // bounded loop retries only until each durable command has been
+            // accepted into the authenticated node session.
+            let service = service.clone();
+            let mut shutdown_rx_recovery = shutdown_rx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(2)) => {
+                            if let Err(error) = service.recover_pending_placement_activations().await {
+                                nm_err!("[warn] placement activation recovery failed: {}", error);
+                            }
+                        }
+                        changed = shutdown_rx_recovery.changed() => {
+                            if changed.is_err() || *shutdown_rx_recovery.borrow() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    #[cfg(all(feature = "stable_executor_live", feature = "management_v1"))]
+    if is_orchestrator {
+        start_automatic_placement_loop(node.clone(), shutdown_rx.clone()).await?;
+    }
+    // TLS is required for management and for the explicitly enabled live
+    // causal data plane. The reference worker profile may still use local
+    // plaintext tests when neither profile is enabled.
+    let grpc_tls =
+        crate::management::configured_grpc_server_tls().map_err(|error| anyhow::anyhow!(error))?;
+    crate::distributed::validate_live_causal_transport_config(&node_id)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    let checkpoint_transfer_service =
+        crate::checkpoint_transfer::StableCheckpointTransferService::from_env(node_id.clone())
+            .map_err(|error| anyhow::anyhow!(error))?;
     let mut shutdown_rx_server = shutdown_rx.clone();
     tokio::spawn(async move {
         let grpc_max_msg_bytes = grpc_max_message_bytes();
@@ -2632,14 +4261,95 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     }
                 }
             };
-            let result = Server::builder()
-                .add_service(
-                    DistributedNeuromorphicServer::new(node_clone.clone())
-                        .max_decoding_message_size(grpc_max_msg_bytes)
-                        .max_encoding_message_size(grpc_max_msg_bytes),
-                )
-                .serve_with_shutdown(addr, shutdown)
-                .await;
+            #[cfg(feature = "management_v1")]
+            let result = if exposes_management_service(is_orchestrator) {
+                let mut builder = match Server::builder().tls_config(
+                    grpc_tls
+                        .clone()
+                        .expect("management_v1 validates TLS for its orchestrator listener"),
+                ) {
+                    Ok(builder) => builder,
+                    Err(error) => {
+                        nm_err!("[error] gRPC TLS configuration failed: {}", error);
+                        return;
+                    }
+                };
+                let server = builder
+                    .add_service(
+                        DistributedNeuromorphicServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(
+                        CausalDataPlaneServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(StableShardDataPlaneServer::new(
+                        node_clone.stable_shard_data_plane_service(),
+                    ))
+                    .add_service(StableCheckpointTransferServer::new(
+                        checkpoint_transfer_service.clone(),
+                    ))
+                    .add_service(ManagementServer::with_interceptor(
+                        management_service
+                            .as_ref()
+                            .expect("orchestrator management service")
+                            .clone(),
+                        crate::management::management_auth_interceptor,
+                    ));
+                server.serve_with_shutdown(addr, shutdown).await
+            } else {
+                let mut builder = match grpc_tls.clone() {
+                    Some(tls) => match Server::builder().tls_config(tls) {
+                        Ok(builder) => builder,
+                        Err(error) => {
+                            nm_err!("[error] gRPC TLS configuration failed: {}", error);
+                            return;
+                        }
+                    },
+                    None => Server::builder(),
+                };
+                let server = builder
+                    .add_service(
+                        DistributedNeuromorphicServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(
+                        CausalDataPlaneServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(StableShardDataPlaneServer::new(
+                        node_clone.stable_shard_data_plane_service(),
+                    ))
+                    .add_service(StableCheckpointTransferServer::new(
+                        checkpoint_transfer_service.clone(),
+                    ));
+                server.serve_with_shutdown(addr, shutdown).await
+            };
+            #[cfg(not(feature = "management_v1"))]
+            let result = {
+                let server = Server::builder()
+                    .add_service(
+                        DistributedNeuromorphicServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(
+                        CausalDataPlaneServer::new(node_clone.clone())
+                            .max_decoding_message_size(grpc_max_msg_bytes)
+                            .max_encoding_message_size(grpc_max_msg_bytes),
+                    )
+                    .add_service(StableShardDataPlaneServer::new(
+                        node_clone.stable_shard_data_plane_service(),
+                    ))
+                    .add_service(StableCheckpointTransferServer::new(
+                        checkpoint_transfer_service.clone(),
+                    ));
+                server.serve_with_shutdown(addr, shutdown).await
+            };
             match result {
                 Ok(()) => break,
                 Err(e) => {
@@ -2661,6 +4371,17 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     let shutdown_rx_sim = shutdown_rx.clone();
     tokio::spawn(async move {
         node_sim.run_simulation(shutdown_rx_sim).await;
+    });
+
+    // Partial stable workers have an independent bounded lifecycle. Keep it
+    // separate from the compatibility simulation loop so a slow data-plane
+    // peer cannot delay legacy networks or unrelated shard workers.
+    let node_partial_workers = node.clone();
+    let shutdown_rx_partial_workers = shutdown_rx.clone();
+    tokio::spawn(async move {
+        node_partial_workers
+            .run_partial_shard_workers(shutdown_rx_partial_workers)
+            .await;
     });
 
     let shutdown_tx_ctrl = shutdown_tx.clone();
@@ -2696,6 +4417,11 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .map(std::time::Duration::from_millis)
                 .unwrap_or_else(|| std::time::Duration::from_secs(8));
+
+            // Results are retained across reconnects. If the heartbeat
+            // carrying an acknowledgement is lost, the orchestrator can
+            // safely receive the identical digest-bound result again.
+            let mut command_results: Vec<NetworkCommandResult> = Vec::new();
 
             'connection_manager: loop {
                 if *shutdown_rx_node.borrow() {
@@ -2775,13 +4501,59 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     }
                     let resources = node_inner.get_resources().await;
                     let network_resources = node_inner.get_network_resources().await;
+                    let stable_executors = node_inner.get_stable_executor_registrations().await;
+                    let stable_executor_capabilities =
+                        node_inner.get_stable_executor_capabilities().await;
+                    // Run the stable worker lifecycle independently of the
+                    // control-plane RPC. Outboxes are durable, destinations
+                    // are flushed concurrently, and a bounded timeout keeps
+                    // a slow data-plane peer from delaying rejoin/heartbeat.
+                    match tokio::time::timeout(
+                        std::time::Duration::from_millis(500),
+                        node_inner.flush_stable_shard_outboxes(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(acknowledged)) if acknowledged > 0 => nm_log!(
+                            "[stable-worker] acknowledged {} outbound shard records",
+                            acknowledged
+                        ),
+                        Ok(Err(error)) => {
+                            nm_err!("[warn] stable-worker outbox flush deferred: {}", error)
+                        }
+                        Err(_) => nm_err!(
+                            "[warn] stable-worker outbox flush exceeded its 500ms budget; records remain durable"
+                        ),
+                        _ => {}
+                    }
                     let hb_req = HeartbeatRequest {
                         node_id: node_id_inner.clone(),
                         resources: Some(resources),
                         network_resources,
+                        stable_executors,
+                        stable_executor_capabilities,
+                        command_results: command_results.clone(),
                     };
-                    match tokio::time::timeout(rpc_timeout, client.heartbeat(hb_req)).await {
+                    let mut heartbeat_request = tonic::Request::new(hb_req);
+                    if let Err(error) = crate::node_auth::attach_node_metadata(
+                        &mut heartbeat_request,
+                        &node_id_inner,
+                    ) {
+                        nm_err!(
+                            "[error] Cannot authenticate orchestrator heartbeat: {}",
+                            error
+                        );
+                        continue 'connection_manager;
+                    }
+                    match tokio::time::timeout(rpc_timeout, client.heartbeat(heartbeat_request))
+                        .await
+                    {
                         Ok(Ok(resp)) => {
+                            // The orchestrator accepted this heartbeat and
+                            // validated all submitted results. New results
+                            // produced by commands below are retained for the
+                            // next heartbeat.
+                            command_results.clear();
                             let mut resp = resp.into_inner();
                             if !resp.peers.is_empty() || !resp.network_peers.is_empty() {
                                 let mut state = node_inner.state.write().await;
@@ -2809,7 +4581,16 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                             }
                             let commands = resp.commands;
                             for cmd in commands {
-                                node_inner.handle_command(cmd).await;
+                                if let Some(result) =
+                                    node_inner.handle_command_with_result(cmd).await
+                                {
+                                    if !command_results.iter().any(|existing| {
+                                        existing.network_id == result.network_id
+                                            && existing.request_id == result.request_id
+                                    }) {
+                                        command_results.push(result);
+                                    }
+                                }
                             }
                             continue;
                         }
@@ -2897,6 +4678,25 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     }
 
     Ok(node)
+}
+
+/// Management is an orchestrator control-plane capability. Keeping this
+/// policy in one small function makes the worker cutover auditable and keeps
+/// the non-management build free of role-only dead-code warnings.
+#[cfg(any(feature = "management_v1", test))]
+const fn exposes_management_service(is_orchestrator: bool) -> bool {
+    is_orchestrator
+}
+
+#[cfg(test)]
+mod management_startup_tests {
+    use super::exposes_management_service;
+
+    #[test]
+    fn workers_do_not_expose_management_service() {
+        assert!(!exposes_management_service(false));
+        assert!(exposes_management_service(true));
+    }
 }
 
 #[allow(dead_code)]

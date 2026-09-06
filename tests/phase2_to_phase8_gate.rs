@@ -569,9 +569,12 @@ fn phase7_management_is_default_deny_and_idempotent_and_phase8_channels_are_inde
         .unwrap();
     assert_eq!(operation.id, duplicate.id);
     manager
+        .transition(operation.id, LeaseTerm::INITIAL, OperationState::Running)
+        .unwrap();
+    manager
         .transition(operation.id, LeaseTerm::INITIAL, OperationState::Succeeded)
         .unwrap();
-    assert_eq!(manager.audit().len(), 2);
+    assert_eq!(manager.audit().len(), 3);
 
     let mapping = ClockMapping {
         version: 1,

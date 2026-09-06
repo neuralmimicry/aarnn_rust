@@ -29,19 +29,18 @@ class RemoteAarnnClient(
     }
 
     fun loadWorkspace(preferredWorkspaceId: String? = null): RemoteWorkspaceSnapshot {
-        val workspaces = parseWorkspaces(request("/api/runtime/workspaces", "GET").body)
+        val workspaces = parseWorkspaces(request(GeneratedManagementClient.workspacesPath(), "GET").body)
         if (workspaces.isEmpty()) throw RemoteAarnnException("No authorised workspaces were returned")
         val summary = workspaces.firstOrNull { it.workspaceId == preferredWorkspaceId }
             ?: workspaces.first()
-        val owner = encode(summary.ownerId.ifBlank { "system" })
-        val workspace = encode(summary.workspaceId)
+        val ownerId = summary.ownerId.ifBlank { "system" }
         val activity = parseActivity(
-            request("/api/runtime/workspaces/$workspace/activity?owner=$owner", "GET").body,
+            request(GeneratedManagementClient.workspaceActivityPath(summary.workspaceId, ownerId), "GET").body,
         )
         val topology = try {
             parseTopology(
                 request(
-                    "/api/runtime/workspaces/$workspace/topology?owner=$owner&max_nodes=512&max_edges=4096",
+                    GeneratedManagementClient.workspaceTopologyPath(summary.workspaceId, ownerId),
                     "GET",
                 ).body,
             )
@@ -66,6 +65,7 @@ class RemoteAarnnClient(
             useCaches = false
             doInput = true
             setRequestProperty("Accept", "application/json")
+            setRequestProperty(GeneratedManagementClient.SCHEMA_HEADER, GeneratedManagementClient.SCHEMA_VERSION.toString())
             // The ingress is selected by this host while the emulator dials
             // the explicitly configured workstation IP.
             setRequestProperty("Host", virtualHost)

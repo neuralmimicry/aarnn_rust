@@ -14,7 +14,7 @@ case "$workload" in
             --brain-id "${AARNN_BRAIN_ID:-standalone-container}"
         )
         ;;
-    orchestrator)
+    orchestrator|stable-orchestrator)
         default_bin="${app_root}/aarnn_rust"
         default_args=(
             --orchestrator
@@ -22,7 +22,7 @@ case "$workload" in
             --brain-id "${AARNN_BRAIN_ID:-orchestrator}"
         )
         ;;
-    node)
+    node|stable-node)
         default_bin="${app_root}/aarnn_rust"
         default_args=(
             --node
@@ -50,6 +50,13 @@ case "$workload" in
         exit 64
         ;;
 esac
+
+# A deployment may provide a host- or provider-bound identity.  Keep the
+# default compatibility workloads unchanged when it is absent, but never
+# manufacture a second identity source inside the container wrapper.
+if [[ "$workload" == "node" || "$workload" == "stable-node" || "$workload" == "orchestrator" || "$workload" == "stable-orchestrator" ]] && [[ -n "${AARNN_NODE_ID:-}" ]]; then
+    default_args+=(--node-id "${AARNN_NODE_ID}")
+fi
 
 if [ "$#" -gt 0 ]; then
     case "$1" in

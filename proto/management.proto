@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package management.v1;
+
+// Versioned management contract. Authorisation, idempotency and fencing are
+// server responsibilities; clients cannot turn this contract into direct
+// worker access.
+service Management {
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+  rpc SubmitOperation(OperationRequest) returns (OperationResponse);
+  rpc GetOperation(OperationLookup) returns (OperationResponse);
+  // Proposal-only placement evaluation. Applying the returned plan remains a
+  // separate authorised operation and never addresses a worker directly.
+  rpc PlanPlacement(PlacementCommandRequest) returns (PlacementCommandResponse);
+  // Apply an immutable placement command through the orchestrator-owned
+  // registry. Optional evidence fields are versioned JSON DTOs so the RPC
+  // remains transport-only and cannot bypass the registry's validation.
+  rpc ApplyPlacement(PlacementCommandRequest) returns (PlacementApplyResponse);
+  // Brain-wide migration operations are journaled by the orchestrator. The
+  // JSON payloads are versioned DTOs and never direct worker commands.
+  rpc SubmitMigration(MigrationCommandRequest) returns (MigrationOperationResponse);
+  rpc AdvanceMigration(MigrationAdvanceRequest) returns (MigrationOperationResponse);
+  rpc GetMigration(MigrationLookup) returns (MigrationOperationResponse);
+  // Alias retained for clients that model migration state as a status
+  // resource. It uses the same fenced read contract as GetMigration.
+  rpc GetMigrationStatus(MigrationLookup) returns (MigrationOperationResponse);
+  rpc CancelMigration(MigrationCancelRequest) returns (MigrationOperationResponse);
+}
+
+message RequestContext {
+  string request_id = 1;
+  string idempotency_key = 2;
+  uint64 expected_resource_version = 3;
+  uint64 observed_leader_term = 4;
+}
+
+message StatusRequest { string brain_id = 1; }
+
+message StatusResponse {
+  uint32 schema_version = 1;
+  string brain_id = 2;
+  uint64 resource_version = 3;
+  uint64 leader_term = 4;
+  string execution_state = 5;
+  string durability_state = 6;
+}
+
+enum OperationKind {
+  OPERATION_KIND_UNKNOWN = 0;
+  START = 1;
+  STOP = 2;
+  RESET = 3;
+  EXPORT = 4;
+}
+
+message OperationRequest {
+  string principal_id = 1;
+  string brain_id = 2;
+  OperationKind kind = 3;
+  RequestContext context = 4;
+}
+
+message OperationLookup {
+  uint64 operation_id = 1;
+  string brain_id = 2;
+  uint64 observed_leader_term = 3;
+}
+
+message OperationResponse {
+  uint32 schema_version = 1;
+  uint64 operation_id = 2;
+  string state = 3;
+  uint64 resource_version = 4;
+  uint64 leader_term = 5;
+  string error_code = 6;
+}
+
+message PlacementCommandRequest {
+  // UTF-8 JSON for the versioned PlacementCommand DTO. The JSON is an
+  // explicit schema boundary; it is never treated as executable code.
+  string command_json = 1;
+  string cutover_json = 2;
+  string repartition_json = 3;
+  // Optional bounded StableWorkerActivationCommand JSON.  When supplied for
+  // ApplyPlacement, the orchestrator publishes the placement first and then
+  // queues this command for the already enrolled target node.
+  string stable_worker_activation_json = 4;
+}
+
+message PlacementCommandResponse {
+  uint32 schema_version = 1;
+  string command_digest = 2;
+  string plan_json = 3;
+  string error_code = 4;
+}
+
+message PlacementApplyResponse {
+  uint32 schema_version = 1;
+  string receipt_json = 2;
+  string registry_json = 3;
+  string error_code = 4;
+}
+
+message MigrationCommandRequest {
+  string principal_id = 1;
+  string command_json = 2;
+  // Optional MigrationGroupSpec JSON. When present, the journal creates a
+  // brain-wide barrier and requires it to commit before the operation does.
+  string group_json = 3;
+}
+
+message MigrationAdvanceRequest {
+  string principal_id = 1;
+  string transition_json = 2;
+  uint64 brain_id = 3;
+  // Optional MigrationGroupUpdate JSON. It is applied through the same
+  // journal resource-version fence as the migration transition.
+  string group_update_json = 4;
+}
+
+message MigrationLookup {
+  uint64 brain_id = 1;
+  uint64 operation_id = 2;
+  uint64 observed_leader_term = 3;
+}
+
+message MigrationCancelRequest {
+  string principal_id = 1;
+  uint64 brain_id = 2;
+  uint64 operation_id = 3;
+  uint64 observed_leader_term = 4;
+  uint64 expected_resource_version = 5;
+  string reason = 6;
+}
+
+message MigrationOperationResponse {
+  uint32 schema_version = 1;
+  string operation_json = 2;
+  string journal_json = 3;
+  string error_code = 4;
+}

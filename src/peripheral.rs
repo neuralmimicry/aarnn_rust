@@ -5,6 +5,7 @@
 //! output, actuator fencing and deduplication.
 
 use crate::deterministic::{BrainId, EventId, LeaseTerm, LogicalTag, StreamId};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
@@ -14,7 +15,7 @@ pub const MAX_PERIPHERAL_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const MAX_PERIPHERAL_QUEUE_SAMPLES: usize = 4096;
 const CAPTURE_DEDUPE_WINDOW: usize = 4096;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ChannelKind {
     UsbAer,
     Audio,
@@ -23,13 +24,13 @@ pub enum ChannelKind {
     Pointer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Direction {
     Input,
     Output,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockMapping {
     pub version: u64,
     pub capture_origin_ns: u64,
@@ -54,7 +55,7 @@ impl ClockMapping {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeripheralSample {
     pub channel: StreamId,
     pub device_epoch: u64,
@@ -66,7 +67,7 @@ pub struct PeripheralSample {
     pub payload: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelGrant {
     pub input: bool,
     pub output: bool,
@@ -83,6 +84,115 @@ struct ChannelState {
     capacity: usize,
     queue: VecDeque<PeripheralSample>,
     seen_sequences: BTreeSet<u64>,
+}
+
+/// Versioned peripheral state captured at a migration/checkpoint boundary.
+///
+/// The neural checkpoint must carry the admission cursor, queued samples and
+/// effect deduplication/fencing state explicitly.  A digest of an opaque
+/// channel blob is insufficient to reconstruct a safe destination because it
+/// cannot prove which capture sequences or effect IDs have already been
+/// accepted.  The lists are bounded by the same windows used by the live
+/// admission and actuator paths.
+pub const PERIPHERAL_CURSOR_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeripheralAdmissionCursor {
+    pub channel: StreamId,
+    pub device_epoch: u64,
+    pub mapping_version: u64,
+    pub last_capture_sequence: Option<u64>,
+    pub admitted_sequences: Vec<u64>,
+    pub queued_samples: Vec<PeripheralSample>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeripheralEffectCursor {
+    pub channel: StreamId,
+    pub device_epoch: u64,
+    pub lease_term: LeaseTerm,
+    pub armed: bool,
+    pub accepted_effect_ids: Vec<EventId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeripheralCursorState {
+    pub schema_version: u32,
+    pub admissions: Vec<PeripheralAdmissionCursor>,
+    pub effects: Vec<PeripheralEffectCursor>,
+}
+
+impl Default for PeripheralCursorState {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl PeripheralCursorState {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: PERIPHERAL_CURSOR_SCHEMA_VERSION,
+            admissions: Vec::new(),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn verify(&self) -> Result<(), PeripheralError> {
+        if self.schema_version != PERIPHERAL_CURSOR_SCHEMA_VERSION
+            || self.admissions.len() > MAX_PERIPHERAL_QUEUE_SAMPLES
+            || self.effects.len() > MAX_PERIPHERAL_QUEUE_SAMPLES
+        {
+            return Err(PeripheralError::InvalidCursorState);
+        }
+        let mut channels = BTreeSet::new();
+        for admission in &self.admissions {
+            if admission.device_epoch == 0
+                || admission.mapping_version == 0
+                || !channels.insert(admission.channel)
+                || admission.admitted_sequences.len() > CAPTURE_DEDUPE_WINDOW
+                || admission.queued_samples.len() > MAX_PERIPHERAL_QUEUE_SAMPLES
+                || admission
+                    .admitted_sequences
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || admission.queued_samples.iter().any(|sample| {
+                    sample.channel != admission.channel
+                        || sample.device_epoch != admission.device_epoch
+                        || sample.mapping_version != admission.mapping_version
+                        || sample.payload.len() > MAX_PERIPHERAL_PAYLOAD_BYTES
+                })
+            {
+                return Err(PeripheralError::InvalidCursorState);
+            }
+        }
+        channels.clear();
+        for effect in &self.effects {
+            if effect.device_epoch == 0
+                || effect.lease_term.raw() == 0
+                || !channels.insert(effect.channel)
+                || effect.accepted_effect_ids.len() > CAPTURE_DEDUPE_WINDOW
+                || effect
+                    .accepted_effect_ids
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+            {
+                return Err(PeripheralError::InvalidCursorState);
+            }
+        }
+        Ok(())
+    }
+
+    /// Re-fence effect state while retaining the dedupe set and admitted
+    /// samples.  This is used only after a newer shard lease is issued.
+    pub fn reterm(&mut self, term: LeaseTerm) -> Result<(), PeripheralError> {
+        if term.raw() == 0 {
+            return Err(PeripheralError::InvalidCursorState);
+        }
+        for effect in &mut self.effects {
+            effect.lease_term = term;
+        }
+        self.verify()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -126,6 +236,8 @@ pub enum PeripheralError {
     StaleEffectEpoch,
     #[error("device epoch space is exhausted")]
     DeviceEpochOverflow,
+    #[error("peripheral cursor state is invalid or exceeds its bounded schema")]
+    InvalidCursorState,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +423,29 @@ impl PeripheralSession {
             .ok_or(PeripheralError::UnknownChannel(channel))
     }
 
+    /// Export admission cursors and in-flight samples for an immutable
+    /// checkpoint.  The returned value is deterministic in channel order.
+    pub fn cursor_state(&self) -> Result<PeripheralCursorState, PeripheralError> {
+        let state = PeripheralCursorState {
+            schema_version: PERIPHERAL_CURSOR_SCHEMA_VERSION,
+            admissions: self
+                .channels
+                .iter()
+                .map(|(channel, state)| PeripheralAdmissionCursor {
+                    channel: *channel,
+                    device_epoch: state.epoch,
+                    mapping_version: state.mapping.version,
+                    last_capture_sequence: state.seen_sequences.iter().next_back().copied(),
+                    admitted_sequences: state.seen_sequences.iter().copied().collect(),
+                    queued_samples: state.queue.iter().cloned().collect(),
+                })
+                .collect(),
+            effects: Vec::new(),
+        };
+        state.verify()?;
+        Ok(state)
+    }
+
     /// Revoke the leased session and close every local device binding.
     pub fn revoke(&mut self) {
         for state in self.channels.values_mut() {
@@ -330,7 +465,7 @@ impl PeripheralSession {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsbAerFrame {
     pub protocol_version: u16,
     pub sequence: u64,
@@ -356,7 +491,7 @@ impl UsbAerFrame {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectCommand {
     pub id: EventId,
     pub channel: StreamId,
@@ -419,6 +554,31 @@ impl ActuatorGate {
             return Err(PeripheralError::StaleEffectEpoch);
         }
         Ok(self.accepted.insert(command.id))
+    }
+
+    /// Export the exact actuator term, epoch, armed state and effect dedupe
+    /// set required for a safe handoff.
+    pub fn cursor_state(
+        &self,
+        channel: StreamId,
+        device_epoch: u64,
+    ) -> Result<PeripheralEffectCursor, PeripheralError> {
+        let mut accepted_effect_ids = self.accepted.iter().copied().collect::<Vec<_>>();
+        accepted_effect_ids.sort_unstable();
+        let cursor = PeripheralEffectCursor {
+            channel,
+            device_epoch,
+            lease_term: self.term,
+            armed: self.armed,
+            accepted_effect_ids,
+        };
+        PeripheralCursorState {
+            schema_version: PERIPHERAL_CURSOR_SCHEMA_VERSION,
+            admissions: Vec::new(),
+            effects: vec![cursor.clone()],
+        }
+        .verify()?;
+        Ok(cursor)
     }
 }
 

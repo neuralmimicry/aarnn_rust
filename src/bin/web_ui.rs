@@ -10,12 +10,21 @@ use aarnn_rust::central_auth::{
 };
 use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure};
+use aarnn_rust::deterministic::{BrainId, LeaseTerm};
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
-    ConfigUpdate, ControlUpdate, NetworkActivityRequest, NetworkActivityResponse,
-    NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch, SpikeIndices, StatusRequest,
-    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
-    network_update_request,
+    ClusterNetworkSnapshotRequest, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
+    NetworkActivityResponse, NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch,
+    SpikeIndices, StatusRequest, control_update,
+    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+};
+use aarnn_rust::management::{
+    Capability as ManagementCapability, ManagementError, MutationContext, Operation, OperationKind,
+    OperationState, PersistedAuthorityError, PersistedManagementOrchestrator, Policy, Principal,
+};
+use aarnn_rust::migration_operation::{
+    MIGRATION_OPERATION_SCHEMA_VERSION, MigrationJournal, MigrationOperation, MigrationRequest,
+    MigrationTransition, PersistedMigrationJournal,
 };
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
@@ -66,10 +75,11 @@ use openidconnect::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::{RwLock, mpsc};
@@ -271,6 +281,14 @@ struct AppState {
     users: Arc<RwLock<UserStore>>,
     session_store: Arc<FileSessionStore>,
     runtime: Arc<RuntimeManager>,
+    /// The generated browser management gateway is backed by this persisted
+    /// orchestrator state. It is deliberately optional for the legacy
+    /// reference profile; missing state makes management requests fail closed.
+    management: Option<Arc<StdMutex<PersistedManagementOrchestrator>>>,
+    /// In-memory migration journals are used only when the reference web
+    /// profile has no `NM_MIGRATION_JOURNAL_DIR`. Production deployments set
+    /// that directory so every transition uses the crash-safe journal.
+    migration_journals: Arc<StdMutex<BTreeMap<BrainId, MigrationJournal>>>,
     chain: Option<Arc<NmChainClient>>,
     token_pricing: TokenPricing,
     commerce: CommerceConfig,
@@ -480,8 +498,18 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "runtime", "workspaces", _, "export"]) => {
             Some(AccessRequirement::aarnn_observe())
         }
+        ("GET", ["api", "management", "status"]) => Some(AccessRequirement::aarnn_observe()),
+        ("POST", ["api", "management", "operations"]) => Some(AccessRequirement::aarnn_control()),
+        ("POST", ["api", "management", "migrations"])
+        | ("POST", ["api", "management", "migrations", "advance"])
+        | ("POST", ["api", "management", "migrations", "cancel"]) => {
+            Some(AccessRequirement::aarnn_control())
+        }
+        ("GET", ["api", "management", "migrations", _]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "operations", _]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "status"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "snapshot"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "cluster_snapshot"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "activity"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "export"]) => Some(AccessRequirement::aarnn_observe()),
         ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
@@ -796,6 +824,29 @@ fn apply_local_auth_overrides(
     if args.local_pass.is_none() {
         args.local_pass = local_pass;
     }
+}
+
+fn validate_production_web_auth(args: &Args) -> anyhow::Result<()> {
+    if !aarnn_rust::management::production_cutover_enabled() {
+        return Ok(());
+    }
+    if args.auth_mode.trim().to_ascii_lowercase() != "oidc" {
+        anyhow::bail!(
+            "NM_PRODUCTION_CUTOVER requires the web UI auth mode to be oidc; local/none auth is reference-only"
+        );
+    }
+    if !args.session_cookie_secure {
+        anyhow::bail!(
+            "NM_PRODUCTION_CUTOVER requires secure HTTP-only web sessions (enable --session-cookie-secure)"
+        );
+    }
+    if args.oidc_issuer.as_deref().is_none_or(str::is_empty)
+        || args.oidc_client_id.as_deref().is_none_or(str::is_empty)
+        || args.oidc_redirect_url.as_deref().is_none_or(str::is_empty)
+    {
+        anyhow::bail!("NM_PRODUCTION_CUTOVER requires OIDC issuer, client ID and redirect URL");
+    }
+    Ok(())
 }
 
 async fn cors_middleware(
@@ -1561,10 +1612,70 @@ struct UiConfigResponse {
     neuron_daily_rate: i64,
 }
 
+#[derive(Debug, Deserialize)]
+struct ManagementHttpContext {
+    request_id: String,
+    idempotency_key: String,
+    expected_resource_version: u64,
+    observed_leader_term: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpOperationRequest {
+    principal_id: String,
+    brain_id: String,
+    /// The generated browser client sends the stable enum name. Accepting the
+    /// numeric protobuf value as well keeps the HTTP gateway compatible with
+    /// generated clients that use protobuf JSON mappings.
+    kind: Value,
+    context: ManagementHttpContext,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpStatusQuery {
+    brain_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpOperationQuery {
+    brain_id: String,
+    observed_leader_term: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpMigrationCommand {
+    principal_id: String,
+    command_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpMigrationAdvance {
+    principal_id: String,
+    transition_json: String,
+    brain_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpMigrationCancel {
+    principal_id: String,
+    brain_id: u64,
+    operation_id: u64,
+    observed_leader_term: u64,
+    expected_resource_version: u64,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagementHttpMigrationQuery {
+    brain_id: u64,
+    observed_leader_term: u64,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
+    validate_production_web_auth(&args)?;
     let auth_mode_val = AuthMode::parse(&args.auth_mode);
     let central_auth = match args.central_auth_api_base.clone() {
         Some(base_url) if !base_url.trim().is_empty() => Some(Arc::new(CentralAuthClient::new(
@@ -1698,6 +1809,38 @@ async fn main() -> anyhow::Result<()> {
         allowed_origins: cors_allowed_origins_from_env(),
     };
 
+    // The browser management client is enabled only when an explicit
+    // persisted orchestrator state path is supplied. This keeps the
+    // compatibility UI from silently becoming a direct worker-control proxy.
+    let management = match env_opt("NM_MANAGEMENT_STATE_PATH") {
+        Some(path) => {
+            let mut policy = Policy::default();
+            for principal in env_opt("NM_MANAGEMENT_PRINCIPALS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|principal| !principal.is_empty())
+            {
+                for capability in [
+                    ManagementCapability::Read,
+                    ManagementCapability::Operate,
+                    ManagementCapability::Reset,
+                    ManagementCapability::Export,
+                ] {
+                    policy.grant(principal, capability);
+                }
+            }
+            let leader_term = env_opt("NM_LEASE_TERM")
+                .and_then(|value| value.parse().ok())
+                .and_then(|value| aarnn_rust::deterministic::LeaseTerm::new(value).ok())
+                .unwrap_or(aarnn_rust::deterministic::LeaseTerm::INITIAL);
+            Some(Arc::new(StdMutex::new(
+                PersistedManagementOrchestrator::open(path, leader_term, policy)?,
+            )))
+        }
+        None => None,
+    };
+
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: std::path::PathBuf::from(&args.runtime_root),
         tick_interval_ms: args.runtime_tick_ms.max(1),
@@ -1736,6 +1879,8 @@ async fn main() -> anyhow::Result<()> {
         users: Arc::new(RwLock::new(users)),
         session_store,
         runtime,
+        management,
+        migration_journals: Arc::new(StdMutex::new(BTreeMap::new())),
         chain,
         token_pricing,
         commerce,
@@ -1786,8 +1931,28 @@ async fn main() -> anyhow::Result<()> {
             "/runtime/workspaces/{workspace_id}/export",
             get(export_runtime_workspace),
         )
+        .route("/management/status", get(management_http_status))
+        .route("/management/operations", post(management_http_submit))
+        .route(
+            "/management/migrations",
+            post(management_http_submit_migration),
+        )
+        .route(
+            "/management/migrations/advance",
+            post(management_http_advance_migration),
+        )
+        .route(
+            "/management/migrations/cancel",
+            post(management_http_cancel_migration),
+        )
+        .route(
+            "/management/migrations/{operation_id}",
+            get(management_http_get_migration),
+        )
+        .route("/operations/{operation_id}", get(management_http_operation))
         .route("/status", get(status))
         .route("/snapshot", get(snapshot))
+        .route("/cluster_snapshot", get(cluster_snapshot))
         .route("/activity", get(activity))
         .route("/export", get(export))
         .route("/aer/inject", post(aer_inject))
@@ -1805,6 +1970,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(index))
         .route("/app.js", get(app_js))
         .route("/service-access.js", get(service_access_js))
+        .route("/management-client.generated.js", get(management_client_js))
+        .route("/aer-transport.js", get(aer_transport_js))
         .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
         .route("/docs", get(docs_page))
@@ -1864,6 +2031,35 @@ async fn service_access_js() -> impl IntoResponse {
         HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/service-access.js"))
+}
+
+async fn management_client_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (
+        headers,
+        include_str!("../../web_ui/management-client.generated.js"),
+    )
+}
+
+async fn aer_transport_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (headers, include_str!("../../web_ui/aer-transport.js"))
 }
 
 async fn shell_js() -> impl IntoResponse {
@@ -2195,7 +2391,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "layer_neuron_counts": {
                 "type": "object",
                 "additionalProperties": { "type": "integer", "format": "uint64" }
-              }
+              },
+              "backup_layers": { "type": "array", "items": { "type": "integer", "format": "uint32" } }
             },
             "required": ["node_id", "layers", "layer_neuron_counts"]
           },
@@ -2217,9 +2414,24 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "last_transition_reason": { "type": "string" },
               "last_transition_ts_ms": { "type": "integer", "format": "uint64" },
               "last_transition_source": { "type": "string" },
+              "shard_movements": { "type": "array", "items": { "$ref": "#/components/schemas/ShardPlacementMovement" } },
               "distribution": { "type": "array", "items": { "$ref": "#/components/schemas/NetworkDistributionEntry" } }
             },
             "required": ["network_id", "distribution"]
+          },
+          "ShardPlacementMovement": {
+            "type": "object",
+            "properties": {
+              "shard_id": { "type": "string" },
+              "source_node": { "type": "string" },
+              "destination_node": { "type": "string" },
+              "role": { "type": "string", "enum": ["active", "backup"] },
+              "phase": { "type": "string", "enum": ["considering", "moving"] },
+              "progress_milli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+              "reason": { "type": "string" },
+              "updated_at_ms": { "type": "integer", "format": "uint64" }
+            },
+            "required": ["shard_id", "role", "phase", "progress_milli"]
           },
           "StatusResponse": {
             "type": "object",
@@ -2707,6 +2919,25 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "400": { "description": "Missing network_id or address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Snapshot fetch failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/cluster_snapshot": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Get a complete common-frontier cluster shard snapshot",
+            "operationId": "getClusterNetworkSnapshot",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "network_id", "in": "query", "required": true, "schema": { "type": "string" } },
+              { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Orchestrator address." }
+            ],
+            "responses": {
+              "200": { "description": "All assigned shards at one committed runner frontier, with per-shard channel state and digests.", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "400": { "description": "Missing network_id or orchestrator address.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "409": { "description": "The cluster cannot produce a complete common-frontier cut.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Cluster snapshot source unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -4922,6 +5153,23 @@ async fn status(
                         "node_id": k,
                         "layers": v.layers,
                         "layer_neuron_counts": v.layer_neuron_counts,
+                        "backup_layers": v.backup_layers,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let shard_movements = n
+                .shard_movements
+                .iter()
+                .map(|movement| {
+                    json!({
+                        "shard_id": movement.shard_id,
+                        "source_node": movement.source_node,
+                        "destination_node": movement.destination_node,
+                        "role": movement.role,
+                        "phase": movement.phase,
+                        "progress_milli": movement.progress_milli,
+                        "reason": movement.reason,
+                        "updated_at_ms": movement.updated_at_ms,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -4941,6 +5189,7 @@ async fn status(
                 "last_transition_reason": n.last_transition_reason,
                 "last_transition_ts_ms": n.last_transition_ts_ms,
                 "last_transition_source": n.last_transition_source,
+                "shard_movements": shard_movements,
                 "distribution": distribution,
             })
         })
@@ -5017,6 +5266,7 @@ async fn snapshot(
         match client
             .get_network_snapshot(Request::new(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
+                cut_epoch: 0,
             }))
             .await
         {
@@ -5043,6 +5293,692 @@ async fn snapshot(
         Json(json!({ "error": last_error })),
     )
         .into_response()
+}
+
+async fn cluster_snapshot(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SnapshotQuery>,
+) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
+    let Some(network_id) = query.network_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing network_id" })),
+        )
+            .into_response();
+    };
+    let Some(mut addr) = query.addr.or_else(|| state.default_orchestrator.clone()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing orchestrator address" })),
+        )
+            .into_response();
+    };
+    if !addr.starts_with("http://") && !addr.starts_with("https://") {
+        addr = format!("http://{addr}");
+    }
+
+    let mut client = match connect_cluster_client(addr.clone()).await {
+        Ok(client) => client,
+        Err(error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("connect failed: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    match client
+        .get_cluster_network_snapshot(Request::new(ClusterNetworkSnapshotRequest { network_id }))
+        .await
+    {
+        Ok(response) => (StatusCode::OK, {
+            let snapshot = response.into_inner();
+            Json(json!({
+                "source": addr,
+                "cluster_snapshot": {
+                    "network_id": snapshot.network_id,
+                    "schema_version": snapshot.schema_version,
+                    "cut_tick": snapshot.cut_tick,
+                    "cut_microstep": snapshot.cut_microstep,
+                    "cluster_digest": snapshot.cluster_digest,
+                    "shards": snapshot.shards.into_iter().map(|shard| json!({
+                        "node_id": shard.node_id,
+                        "layers": shard.layers,
+                        "snapshot_json": shard.snapshot_json,
+                        "step": shard.step,
+                        "sim_time_ms_bits": shard.sim_time_ms_bits,
+                        "state_digest": shard.state_digest,
+                        "channel_state_json": shard.channel_state_json,
+                        "channel_state_digest": shard.channel_state_digest,
+                    })).collect::<Vec<_>>(),
+                },
+            }))
+        })
+            .into_response(),
+        Err(error) => (
+            grpc_status_to_http(&error),
+            Json(json!({ "error": error.message() })),
+        )
+            .into_response(),
+    }
+}
+
+fn management_operation_kind(value: &Value) -> Option<OperationKind> {
+    if let Some(number) = value.as_u64() {
+        return match number {
+            1 => Some(OperationKind::Start),
+            2 => Some(OperationKind::Stop),
+            3 => Some(OperationKind::Reset),
+            4 => Some(OperationKind::Export),
+            _ => None,
+        };
+    }
+    match value.as_str()?.trim().to_ascii_uppercase().as_str() {
+        "START" => Some(OperationKind::Start),
+        "STOP" => Some(OperationKind::Stop),
+        "RESET" => Some(OperationKind::Reset),
+        "EXPORT" => Some(OperationKind::Export),
+        _ => None,
+    }
+}
+
+fn management_operation_state(state: &OperationState) -> (&'static str, String) {
+    match state {
+        OperationState::Pending => ("pending", String::new()),
+        OperationState::Running => ("running", String::new()),
+        OperationState::Succeeded => ("succeeded", String::new()),
+        OperationState::Cancelled => ("cancelled", String::new()),
+        OperationState::Failed { code } => ("failed", code.clone()),
+    }
+}
+
+fn management_operation_json(
+    operation: &Operation,
+    resource_version: u64,
+    leader_term: u64,
+) -> Value {
+    let (state, error_code) = management_operation_state(&operation.state);
+    json!({
+        "schema_version": 1,
+        "operation_id": operation.id.raw(),
+        "brain_id": operation.brain_id,
+        "state": state,
+        "resource_version": resource_version,
+        "leader_term": leader_term,
+        "error_code": error_code,
+    })
+}
+
+fn management_http_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": message.into() }))).into_response()
+}
+
+async fn execute_http_management_operation(
+    state: Arc<AppState>,
+    operation: Operation,
+    user: String,
+) {
+    let Some(management) = state.management.as_ref().cloned() else {
+        return;
+    };
+    let term = match management.lock() {
+        Ok(mut orchestrator) => {
+            if orchestrator.refresh().is_err() {
+                return;
+            }
+            orchestrator.state().leader_term()
+        }
+        Err(_) => return,
+    };
+    let claimed = match management.lock() {
+        Ok(mut orchestrator) => orchestrator
+            .claim_pending(operation.id, term)
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    if !claimed {
+        return;
+    }
+
+    let result = match operation.kind {
+        OperationKind::Start => state
+            .runtime
+            .control_workspace(&user, &operation.brain_id, WorkspaceControlAction::Start)
+            .await
+            .map(|_| ()),
+        OperationKind::Stop => state
+            .runtime
+            .control_workspace(&user, &operation.brain_id, WorkspaceControlAction::Stop)
+            .await
+            .map(|_| ()),
+        OperationKind::Reset => state
+            .runtime
+            .control_workspace(&user, &operation.brain_id, WorkspaceControlAction::Reset)
+            .await
+            .map(|_| ()),
+        OperationKind::Export => state
+            .runtime
+            .workspace_saved_snapshot(&user, &operation.brain_id, None)
+            .await
+            .and_then(|snapshot| {
+                snapshot
+                    .map(|_| ())
+                    .ok_or_else(|| anyhow::anyhow!("workspace has no published snapshot"))
+            }),
+    };
+    let final_state = match result {
+        Ok(()) => OperationState::Succeeded,
+        Err(error) => OperationState::Failed {
+            code: error.to_string(),
+        },
+    };
+    if let Ok(mut orchestrator) = management.lock() {
+        let _ = orchestrator.transition(operation.id, term, final_state);
+    }
+}
+
+async fn management_http_status(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ManagementHttpStatusQuery>,
+) -> Response {
+    if query.brain_id.trim().is_empty() {
+        return management_http_error(StatusCode::BAD_REQUEST, "brain_id is required");
+    }
+    let Some(management) = state.management.as_ref().cloned() else {
+        return management_http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persisted management orchestrator is not configured",
+        );
+    };
+    let Ok(mut orchestrator) = management.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "management lock poisoned",
+        );
+    };
+    if let Err(error) = orchestrator.refresh() {
+        return management_http_error(StatusCode::CONFLICT, error.to_string());
+    }
+    if !orchestrator.state().allows_for_brain(
+        &Principal {
+            id: user.username.clone(),
+        },
+        &query.brain_id,
+        &ManagementCapability::Read,
+    ) {
+        return management_http_error(StatusCode::FORBIDDEN, "principal cannot read this brain");
+    }
+    Json(json!({
+        "schema_version": 1,
+        "brain_id": query.brain_id,
+        "resource_version": orchestrator.state().resource_version(),
+        "leader_term": orchestrator.state().leader_term().raw(),
+        "execution_state": "managed",
+        "durability_state": "persisted",
+    }))
+    .into_response()
+}
+
+async fn management_http_submit(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<ManagementHttpOperationRequest>,
+) -> Response {
+    if payload.brain_id.trim().is_empty()
+        || payload.context.request_id.trim().is_empty()
+        || payload.context.idempotency_key.trim().is_empty()
+    {
+        return management_http_error(
+            StatusCode::BAD_REQUEST,
+            "brain_id, request_id and idempotency_key are required",
+        );
+    }
+    if payload.principal_id != user.username {
+        return management_http_error(
+            StatusCode::FORBIDDEN,
+            "request principal does not match the authenticated session",
+        );
+    }
+    let Some(kind) = management_operation_kind(&payload.kind) else {
+        return management_http_error(StatusCode::BAD_REQUEST, "operation kind is invalid");
+    };
+    let capability = match kind {
+        OperationKind::Reset => ManagementCapability::Reset,
+        OperationKind::Export => ManagementCapability::Export,
+        OperationKind::Start | OperationKind::Stop => ManagementCapability::Operate,
+    };
+    let Some(management) = state.management.as_ref().cloned() else {
+        return management_http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persisted management orchestrator is not configured",
+        );
+    };
+    let operation = {
+        let Ok(mut orchestrator) = management.lock() else {
+            return management_http_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "management lock poisoned",
+            );
+        };
+        let context = MutationContext {
+            observed_leader_term: match aarnn_rust::deterministic::LeaseTerm::new(
+                payload.context.observed_leader_term,
+            ) {
+                Ok(term) => term,
+                Err(error) => {
+                    return management_http_error(StatusCode::BAD_REQUEST, error.to_string());
+                }
+            },
+            expected_version: payload.context.expected_resource_version,
+            idempotency_key: payload.context.idempotency_key,
+            request_id: payload.context.request_id,
+        };
+        match orchestrator.submit_for_brain(
+            Principal {
+                id: user.username.clone(),
+            },
+            capability,
+            context,
+            kind.clone(),
+            payload.brain_id,
+        ) {
+            Ok(operation) => operation,
+            Err(PersistedAuthorityError::Management(error)) => {
+                let status = match &error {
+                    ManagementError::Forbidden { .. } => StatusCode::FORBIDDEN,
+                    ManagementError::StaleLeader { .. }
+                    | ManagementError::VersionConflict { .. }
+                    | ManagementError::IdempotencyConflict(_) => StatusCode::CONFLICT,
+                    _ => StatusCode::BAD_REQUEST,
+                };
+                return management_http_error(status, error.to_string());
+            }
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        }
+    };
+    let response = {
+        let Ok(orchestrator) = management.lock() else {
+            return management_http_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "management lock poisoned",
+            );
+        };
+        management_operation_json(
+            &operation,
+            orchestrator.state().resource_version(),
+            orchestrator.state().leader_term().raw(),
+        )
+    };
+    tokio::spawn(execute_http_management_operation(
+        state,
+        operation,
+        user.username,
+    ));
+    Json(response).into_response()
+}
+
+async fn management_http_operation(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(operation_id): Path<u64>,
+    Query(query): Query<ManagementHttpOperationQuery>,
+) -> Response {
+    if query.brain_id.trim().is_empty() {
+        return management_http_error(StatusCode::BAD_REQUEST, "brain_id is required");
+    }
+    let id = match aarnn_rust::deterministic::EventId::new(operation_id) {
+        Ok(id) => id,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    let Some(management) = state.management.as_ref().cloned() else {
+        return management_http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persisted management orchestrator is not configured",
+        );
+    };
+    let Ok(mut orchestrator) = management.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "management lock poisoned",
+        );
+    };
+    if let Err(error) = orchestrator.refresh() {
+        return management_http_error(StatusCode::CONFLICT, error.to_string());
+    }
+    let Ok(term) = aarnn_rust::deterministic::LeaseTerm::new(query.observed_leader_term) else {
+        return management_http_error(StatusCode::BAD_REQUEST, "invalid leader term");
+    };
+    if term != orchestrator.state().leader_term() {
+        return management_http_error(StatusCode::CONFLICT, "stale leader term");
+    }
+    let Some(operation) = orchestrator.operation(id).cloned() else {
+        return management_http_error(StatusCode::NOT_FOUND, "operation not found");
+    };
+    if operation.brain_id != query.brain_id || operation.principal.id != user.username {
+        return management_http_error(
+            StatusCode::FORBIDDEN,
+            "operation is outside the session scope",
+        );
+    }
+    Json(management_operation_json(
+        &operation,
+        orchestrator.state().resource_version(),
+        orchestrator.state().leader_term().raw(),
+    ))
+    .into_response()
+}
+
+const MAX_MIGRATION_HTTP_JSON_BYTES: usize = 1024 * 1024;
+
+fn migration_journal_path(brain_id: BrainId) -> Option<PathBuf> {
+    std::env::var("NM_MIGRATION_JOURNAL_DIR")
+        .ok()
+        .map(|root| PathBuf::from(root).join(format!("brain-{}.json", brain_id.raw())))
+}
+
+fn migration_authorize(
+    state: &AppState,
+    user: &AuthUser,
+    brain_id: BrainId,
+    observed_leader_term: u64,
+    capability: ManagementCapability,
+) -> Result<LeaseTerm, Response> {
+    let Some(management) = state.management.as_ref() else {
+        return Err(management_http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persisted management orchestrator is not configured",
+        ));
+    };
+    let Ok(mut orchestrator) = management.lock() else {
+        return Err(management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "management lock poisoned",
+        ));
+    };
+    if let Err(error) = orchestrator.refresh() {
+        return Err(management_http_error(
+            StatusCode::CONFLICT,
+            error.to_string(),
+        ));
+    }
+    let term = match LeaseTerm::new(observed_leader_term) {
+        Ok(term) => term,
+        Err(error) => {
+            return Err(management_http_error(
+                StatusCode::BAD_REQUEST,
+                error.to_string(),
+            ));
+        }
+    };
+    if term != orchestrator.state().leader_term() {
+        return Err(management_http_error(
+            StatusCode::CONFLICT,
+            "stale leader term",
+        ));
+    }
+    if !orchestrator.state().allows_for_brain(
+        &Principal {
+            id: user.username.clone(),
+        },
+        &brain_id.to_string(),
+        &capability,
+    ) {
+        return Err(management_http_error(
+            StatusCode::FORBIDDEN,
+            "principal is not authorised for this brain",
+        ));
+    }
+    Ok(term)
+}
+
+fn migration_http_response(operation: &MigrationOperation, journal: &MigrationJournal) -> Response {
+    Json(json!({
+        "schema_version": MIGRATION_OPERATION_SCHEMA_VERSION,
+        "operation": operation,
+        "journal": journal,
+        "error_code": ""
+    }))
+    .into_response()
+}
+
+async fn management_http_submit_migration(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<ManagementHttpMigrationCommand>,
+) -> Response {
+    if payload.principal_id != user.username {
+        return management_http_error(
+            StatusCode::FORBIDDEN,
+            "request principal does not match the authenticated session",
+        );
+    }
+    if payload.command_json.len() > MAX_MIGRATION_HTTP_JSON_BYTES {
+        return management_http_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "migration command is too large",
+        );
+    }
+    let migration: MigrationRequest = match serde_json::from_str(&payload.command_json) {
+        Ok(migration) => migration,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    if let Err(response) = migration_authorize(
+        state.as_ref(),
+        &user,
+        migration.brain_id,
+        migration.observed_leader_term.raw(),
+        ManagementCapability::Operate,
+    ) {
+        return response;
+    }
+    if let Some(path) = migration_journal_path(migration.brain_id) {
+        let mut journal = match PersistedMigrationJournal::open(
+            path,
+            migration.brain_id,
+            migration.observed_leader_term,
+        ) {
+            Ok(journal) => journal,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        let operation = match journal.submit(migration) {
+            Ok(operation) => operation,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        return migration_http_response(&operation, journal.journal());
+    }
+    let Ok(mut journals) = state.migration_journals.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "migration journal lock poisoned",
+        );
+    };
+    let journal = journals.entry(migration.brain_id).or_insert_with(|| {
+        MigrationJournal::new(migration.brain_id, migration.observed_leader_term)
+    });
+    match journal.submit(migration) {
+        Ok(operation) => migration_http_response(&operation, journal),
+        Err(error) => management_http_error(StatusCode::CONFLICT, error.to_string()),
+    }
+}
+
+async fn management_http_advance_migration(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<ManagementHttpMigrationAdvance>,
+) -> Response {
+    if payload.principal_id != user.username {
+        return management_http_error(
+            StatusCode::FORBIDDEN,
+            "request principal does not match the authenticated session",
+        );
+    }
+    if payload.transition_json.len() > MAX_MIGRATION_HTTP_JSON_BYTES {
+        return management_http_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "migration transition is too large",
+        );
+    }
+    let brain_id = match BrainId::new(payload.brain_id) {
+        Ok(brain_id) => brain_id,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    let transition: MigrationTransition = match serde_json::from_str(&payload.transition_json) {
+        Ok(transition) => transition,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    if let Err(response) = migration_authorize(
+        state.as_ref(),
+        &user,
+        brain_id,
+        transition.observed_leader_term.raw(),
+        ManagementCapability::Operate,
+    ) {
+        return response;
+    }
+    if let Some(path) = migration_journal_path(brain_id) {
+        let mut journal = match PersistedMigrationJournal::open(
+            path,
+            brain_id,
+            transition.observed_leader_term,
+        ) {
+            Ok(journal) => journal,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        let operation = match journal.transition(transition) {
+            Ok(operation) => operation,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        return migration_http_response(&operation, journal.journal());
+    }
+    let Ok(mut journals) = state.migration_journals.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "migration journal lock poisoned",
+        );
+    };
+    let Some(journal) = journals.get_mut(&brain_id) else {
+        return management_http_error(StatusCode::NOT_FOUND, "migration brain not found");
+    };
+    match journal.transition(transition) {
+        Ok(operation) => migration_http_response(&operation, journal),
+        Err(error) => management_http_error(StatusCode::CONFLICT, error.to_string()),
+    }
+}
+
+async fn management_http_cancel_migration(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<ManagementHttpMigrationCancel>,
+) -> Response {
+    if payload.principal_id != user.username {
+        return management_http_error(
+            StatusCode::FORBIDDEN,
+            "request principal does not match the authenticated session",
+        );
+    }
+    if payload.reason.trim().is_empty() || payload.reason.len() > 1024 {
+        return management_http_error(
+            StatusCode::BAD_REQUEST,
+            "cancellation reason must be present and bounded",
+        );
+    }
+    let brain_id = match BrainId::new(payload.brain_id) {
+        Ok(brain_id) => brain_id,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    let term = match migration_authorize(
+        state.as_ref(),
+        &user,
+        brain_id,
+        payload.observed_leader_term,
+        ManagementCapability::Operate,
+    ) {
+        Ok(term) => term,
+        Err(response) => return response,
+    };
+    if let Some(path) = migration_journal_path(brain_id) {
+        let mut journal = match PersistedMigrationJournal::open(path, brain_id, term) {
+            Ok(journal) => journal,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        let operation = match journal.cancel(
+            payload.operation_id,
+            term,
+            payload.expected_resource_version,
+            payload.reason,
+        ) {
+            Ok(operation) => operation,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        return migration_http_response(&operation, journal.journal());
+    }
+    let Ok(mut journals) = state.migration_journals.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "migration journal lock poisoned",
+        );
+    };
+    let Some(journal) = journals.get_mut(&brain_id) else {
+        return management_http_error(StatusCode::NOT_FOUND, "migration brain not found");
+    };
+    match journal.cancel(
+        payload.operation_id,
+        term,
+        payload.expected_resource_version,
+        payload.reason,
+    ) {
+        Ok(operation) => migration_http_response(&operation, journal),
+        Err(error) => management_http_error(StatusCode::CONFLICT, error.to_string()),
+    }
+}
+
+async fn management_http_get_migration(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(operation_id): Path<u64>,
+    Query(query): Query<ManagementHttpMigrationQuery>,
+) -> Response {
+    let brain_id = match BrainId::new(query.brain_id) {
+        Ok(brain_id) => brain_id,
+        Err(error) => return management_http_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    let term = match migration_authorize(
+        state.as_ref(),
+        &user,
+        brain_id,
+        query.observed_leader_term,
+        ManagementCapability::Read,
+    ) {
+        Ok(term) => term,
+        Err(response) => return response,
+    };
+    if let Some(path) = migration_journal_path(brain_id) {
+        let journal = match PersistedMigrationJournal::open(path, brain_id, term) {
+            Ok(journal) => journal,
+            Err(error) => return management_http_error(StatusCode::CONFLICT, error.to_string()),
+        };
+        let Some(operation) = journal.journal().operation(operation_id) else {
+            return management_http_error(StatusCode::NOT_FOUND, "migration operation not found");
+        };
+        return migration_http_response(operation, journal.journal());
+    }
+    let Ok(journals) = state.migration_journals.lock() else {
+        return management_http_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "migration journal lock poisoned",
+        );
+    };
+    let Some(journal) = journals.get(&brain_id) else {
+        return management_http_error(StatusCode::NOT_FOUND, "migration brain not found");
+    };
+    let Some(operation) = journal.operation(operation_id) else {
+        return management_http_error(StatusCode::NOT_FOUND, "migration operation not found");
+    };
+    migration_http_response(operation, journal)
 }
 
 async fn activity(
@@ -5546,6 +6482,7 @@ async fn export(
         match client
             .get_network_snapshot(Request::new(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
+                cut_epoch: 0,
             }))
             .await
         {
@@ -5832,6 +6769,7 @@ async fn fetch_network_config(
     let snapshot_json = client
         .get_network_snapshot(Request::new(NetworkSnapshotRequest {
             network_id: network_id.to_string(),
+            cut_epoch: 0,
         }))
         .await
         .map_err(|e| {
@@ -7190,6 +8128,30 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/runtime/status"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/management/status"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/management/operations"),
+            Some(AccessRequirement::aarnn_control())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/management/migrations"),
+            Some(AccessRequirement::aarnn_control())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/management/migrations/cancel"),
+            Some(AccessRequirement::aarnn_control())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/management/migrations/1"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/operations/1"),
             Some(AccessRequirement::aarnn_observe())
         );
         assert_eq!(

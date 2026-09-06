@@ -91,6 +91,169 @@ Reserve the target, transfer checkpoint/state, stream delta WAL, verify digest, 
   anti-affinity, active/backup orchestration, deterministic failover,
   quarantine, migration/export and measured RPO/RTO are not implemented.
   `replicated_durability` remains disabled and the Phase 6 gate is blocked.
+- [x] `2026-08-30 15:51Z` Added a bounded common-frontier cluster shard-cut
+  reference in `src/cluster_snapshot.rs`, wired to the distributed gRPC and
+  HTTP gateways. It validates complete assignment coverage, canonical response
+  ordering, layer provenance, equal runner frontiers, network shape, per-shard
+  state digests and captured in-memory channel buffers. Focused tests pass.
+  This is an additive diagnostic/reference seam and is not counted as the
+  Phase 6 gate: it still lacks durable shard-owned state, asynchronous GVT,
+  synchronous warm replication, immutable durable cut manifests and quorum
+  authority.
+- [x] `2026-08-30 16:00Z` Extended the reference durability boundary with
+  chained WAL records, idempotent warm-replica retransmission, durable receipt
+  deduplication and an explicit shard checkpoint payload. The implementation
+  remains opt-in/reference until causal application, warm replication,
+  quorum fencing and recovery evidence are integrated.
+- [x] `2026-08-30 16:26Z` Added WAL record-chain digests and reopen-time
+  integrity verification, exact-duplicate no-op handling in `WarmReplica`,
+  stream/event keyed `ReceiptLedger` deduplication, and sealed
+  `ShardCheckpointPayload` publication/verification for the in-memory and
+  filesystem checkpoint stores. `cargo test --locked durability --lib`,
+  `cargo test --locked causal_transport --lib` and the Phase 2–8 gate pass.
+  These are reference storage/receipt contracts; the live distributed runner
+  still does not append or apply causal records through them.
+- [x] `2026-08-30 16:20Z` Added `DurableShard`, a staged single-writer apply
+  boundary that validates a causal envelope, prepares the biological byte
+  state, appends the chained WAL, applies the synchronous warm-replica record
+  and publishes the receipt/cursor as one in-memory commit. Added verified
+  checkpoint restore of WAL, receiver progress, receipts, channel state and
+  biological bytes, plus the `DurableCausalStreamAdapter` seam. Tests cover
+  transition failure rollback, exact replay, consecutive replica records,
+  checkpoint restore and causal-wire integration. This remains a reference
+  actor seam: the live `ManagedNetwork` uses the separate compatibility-Runner
+  durable-owner adapter rather than owning this actor, and filesystem
+  WAL/receipt atomicity, quorum authority, failover and RPO/RTO evidence remain
+  open.
+- [x] `2026-08-30 16:31Z` Added `FileDurableShard`, which persists the complete
+  verified shard payload after each staged apply using an atomic replace and
+  synced directory metadata. Temporary-file allocation is create-new and
+  collision-safe for concurrent writers. Reopen and tamper tests pass; this
+  closes the repository-local current-state recovery seam but does not claim
+  cross-process warm replication or immutable checkpoint catalogue recovery.
+- [x] `2026-08-30 16:31Z` Extended `ClusterGlobalSnapshot` so channel buffers
+  contribute a canonical per-shard and cluster digest, added self-verification,
+  and added `FileClusterSnapshotStore` with content-addressed immutable
+  publication. The gRPC/HTTP projection exposes the channel digest. Cluster,
+  durability and generated-protocol focused tests pass.
+- [!] `2026-08-30 16:31Z` The Phase 6 gate remains blocked: the live
+  `ManagedNetwork`/`Runner` path does not own `DurableShard`, there is no
+  asynchronous GVT/consistent-cut protocol, no cross-process synchronous warm
+  replica, no quorum-backed promotion/fencing, and no measured RPO/RTO or
+  migration/rejoin evidence.
+- [x] `2026-08-30 16:36Z` Final verification after the persistence and digest
+  changes passed: `cargo fmt --all --check`, `git diff --check`,
+  `cargo check --locked --all-features --all-targets`,
+  `cargo test --locked --workspace`, `cargo test --locked --workspace --doc`,
+  `cargo test --locked --lib durability`, and
+  `cargo test --locked --lib cluster_snapshot`. Warnings are pre-existing or
+  unused reference seams; no migration flag was enabled.
+- [x] `2026-08-30 18:41Z` Added `FileConsistentCutStore` and
+  `PersistedConsistentCutCoordinator`. Epoch allocation is process-safe and
+  separate from biological time; accepted reports/markers survive a control
+  process restart; completed cuts are immutable and content-addressed. The
+  live RPC publishes the cut when `NM_CONSISTENT_CUT_ROOT` is configured.
+  `cargo test --locked --lib consistent_cut` (4 passed) and the complete
+  workspace suite passed.
+- [!] `2026-08-30 18:41Z` The Phase 6 gate remains blocked: the durable owner
+  still wraps the compatibility `Runner`, causal receipts are not the live
+  inter-process shard data plane, warm replication and promotion are
+  reference/file seams, authority is not mature consensus, and measured
+  multi-host RPO/RTO/rejoin evidence is unavailable.
+- [x] `2026-08-30 19:06Z` Corrected live consistent-cut evidence so participant
+  frontiers and queued-work minima are derived from the exact captured shard
+  snapshot/channel payload, including the opt-in durable-owner projection.
+  The focused regression, full workspace tests, all-feature compilation,
+  stable Clippy and available QA matrix passed. The Phase 6 gate remains
+  blocked by complete shard ownership, mature consensus and external
+  multi-host recovery evidence.
+
+## Progress update — 2026-08-31 14:22Z
+
+- [x] Revalidated durable managed-step and replacement-owner paths after the
+  management/startup changes. Workspace tests cover process-shared warm
+  recovery, newer-term promotion, stale-writer rejection, channel-state
+  restoration and machine-verifiable local RPO/RTO evidence.
+- [!] These remain deterministic local failure-boundary tests; they do not
+  substitute for networked quorum or physical multi-host chaos evidence.
+
+## Progress update — 2026-08-31
+
+- [x] Repaired the warm-replica crash window in which a WAL record had been
+  synced but active checkpoint publication had not started. Reopen now
+  truncates only a verified active-prefix suffix and preserves the last
+  acknowledged checkpoint; divergence remains a hard error.
+- [x] Added explicit replicated-authority configuration and wired the live
+  durable owner to that binding before the single-file compatibility path.
+- [!] The phase gate remains open: the live causal stream is not yet the
+  shard-owned data plane, the quorum adapter is filesystem-local, and no
+  physical multi-process chaos or production RPO/RTO evidence exists.
+
+## Progress update — 2026-08-31
+
+- [x] Added `tests/failover_rejoin.rs`, a bounded child-process fault lane.
+  It commits through the process-shared warm boundary, issues a replacement
+  quorum lease, observes the still-running old writer reject its next commit,
+  kills that process, restores the exact snapshot on the replacement owner,
+  continues under the newer term, rejects an old-node active rejoin, and
+  publishes immutable RPO/RTO evidence. `cargo test --locked --test
+  failover_rejoin` and `cargo xtask qa run --suite recovery` pass.
+- [!] This is evidence for the local filesystem adapter and process boundary
+  only. It does not close the required network consensus, physical failure
+  domains, or production multi-host RPO/RTO gate.
+
+## Progress update — 2026-08-31
+
+- [x] Live causal startup now requires durable owner and distinct warm roots,
+  an explicit three-member replicated authority, mTLS, per-node credentials
+  and certificate-fingerprint enrollment. Legacy `SpikeBatch` and MPI paths
+  are rejected in that profile, so recovery cannot mix independent ordering
+  domains.
+- [!] The filesystem replicated authority remains a local reference adapter;
+  network consensus/election and physically separated failure testing are
+  still required before this phase can pass its production gate.
+
+## Progress update — 2026-09-05
+
+- [x] The reference migration transfer now carries replay provenance and
+  channel-boundary state through the WAL, applies a digest-verified
+  post-checkpoint catch-up batch, and materialises the destination owner only
+  after checkpoint and replay parity. Corrupted or conflicting catch-up frames
+  are rejected.
+- [x] Migration cancellation is durable and fenced: the journal records
+  `Aborting` then `Aborted`, bounds the operator reason, and rejects stale
+  terms, stale resource versions and cancellation after commit.
+- [!] These tests remain reference actor/journal evidence. Quorum-backed
+  destination promotion, route/effect cursor cutover, and physical
+  multi-process fault injection are still required for the production phase
+  gate.
+
+## Progress update — 2026-09-05 (brain-wide barrier)
+
+- [x] The durable migration journal now optionally persists a versioned
+  brain-wide barrier with per-shard checkpoint, logical-cut, route-cursor and
+  effect-cursor evidence. A grouped commit cannot bypass an incomplete shard.
+- [x] Group takeover rebinds in-flight barriers to the new leader term and
+  records that term in the barrier audit chain; stale leaders remain fenced.
+- [x] Placement cutover evidence now requires route/channel and committed
+  effect cursor digests, preventing a checkpoint-only publication from being
+  mistaken for a complete live cut.
+- [!] These are reference journal and actor guarantees. A live executor must
+  still supply the cursor snapshots and a multi-process/network fault harness
+  must prove recovery before the production gate can close.
+
+## Progress update — 2026-09-05 21:40Z (activation recovery evidence)
+
+- [x] Durable placement activation records retain the verified command,
+  preserve retryable `Pending`/`Queued` states across reopen, and now retain
+  an `Active` terminal state after validated worker registration evidence.
+  Failed records remain terminal and require a new idempotency key.
+- [x] The persisted registry test verifies promotion, reopen and removal from
+  the retry set. Checkpoint-transfer, live registration, failover/rejoin and
+  all-target recovery suites pass.
+- [!] This closes the local persistence and idempotency seam only. Replicated
+  control-plane durability, remote activation, source drain/WAL catch-up and
+  physical chaos/RPO/RTO evidence remain open.
 
 ## Validation and acceptance
 
@@ -120,6 +283,12 @@ Use `replicated_durability` per brain with explicit checkpoint/WAL schema writer
 Filesystem WAL/checkpoint primitives are tested for atomic publication and
 immutability, but runtime JSON snapshots omit the complete causal cut and no
 warm replica or measured RPO/RTO harness exists.
+
+The existing `Runner::Snapshot` contains a generation-scoped layer range but
+does not contain the full causal protocol state. The new cluster contract can
+carry current remote spike buffers, yet it cannot safely infer durable log
+positions, in-flight route acknowledgements or lease terms from the legacy
+runner. Those fields remain deliberately absent rather than fabricated.
 
 ## Decision Log
 

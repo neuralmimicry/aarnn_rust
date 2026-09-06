@@ -32,15 +32,17 @@ openidconnect = { version = "4", features = ["reqwest"] }
 reqwest = { version = "0.13", features = ["blocking", "cookies", "json"] }
 fs2 = "0.4"
 hex = "0.4"
+sha2 = "0.10"
+jsonwebtoken = { version = "10.1", default-features = false, features = ["rust_crypto", "use_pem"] }
 time = "0.3"
 opencl3 = { version = ">=0.12.3", optional = true }
 cudarc = { version = ">=0.19.3", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-12000"] }
 num_cpus = { version = "1.17", optional = true }
-tonic = { version = "0.14" }
+tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }
 async-stream = "0.3"
 futures-core = "0.3"
 futures-util = "0.3"
@@ -136,6 +138,7 @@ engine_runtime = [
 standalone_workload = ["engine_runtime"]
 orchestrator_workload = ["engine_runtime"]
 node_workload = ["engine_runtime"]
+stable_runtime_workload = ["engine_runtime", "stable_executor_live", "management_v1"]
 web_ui_workload = ["engine_runtime"]
 desktop_ui_workload = [
     "engine_runtime",
@@ -152,6 +155,11 @@ virtual_partitioning = ["superdense_executor"]
 causal_transport = ["virtual_partitioning"]
 multi_brain_scheduler = ["causal_transport"]
 replicated_durability = ["multi_brain_scheduler"]
+# Feature-gated live adapter for the stable-ID shard executor.  It is kept
+# separate from replicated_durability so the reference durable Runner path
+# remains the default rollback profile until stable topology/placement and
+# network-authority gates are complete.
+stable_executor_live = ["replicated_durability"]
 management_v1 = ["replicated_durability"]
 workstation_io = ["management_v1"]
 

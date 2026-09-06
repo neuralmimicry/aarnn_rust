@@ -1,0 +1,5 @@
+name = "android-emulator"
+device_class = "managed-emulator"
+physical_hardware = false
+network_emulation = false
+required_toolchain = "Gradle + Android SDK + NDK"

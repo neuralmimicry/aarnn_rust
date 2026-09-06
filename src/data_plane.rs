@@ -229,6 +229,35 @@ impl ReliableReceiver {
         }
     }
 
+    /// Reconstruct a receiver cursor from a verified checkpoint. The caller
+    /// must validate the corresponding WAL and receipt state before using the
+    /// returned receiver.
+    pub fn from_progress(
+        brain: BrainId,
+        stream: StreamId,
+        term: LeaseTerm,
+        generation: PartitionGeneration,
+        max_payload: usize,
+        expected_sequence: u64,
+        watermark: Option<LogicalTag>,
+    ) -> Result<Self, DataPlaneError> {
+        if max_payload == 0 {
+            return Err(DataPlaneError::PayloadTooLarge {
+                actual: 1,
+                maximum: 0,
+            });
+        }
+        Ok(Self {
+            brain,
+            stream,
+            expected_sequence,
+            term,
+            generation,
+            max_payload,
+            watermark,
+        })
+    }
+
     pub fn accept(&mut self, envelope: &CausalEnvelope) -> Result<ReceiveResult, DataPlaneError> {
         if envelope.brain != self.brain {
             return Err(DataPlaneError::SequenceGap {

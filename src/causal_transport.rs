@@ -1,12 +1,14 @@
 //! Additive generated-gRPC seam for causal event transport.
 //!
-//! This module deliberately stops at wire conversion and bounded receiver
-//! validation.  It does not select shard ownership or replace the legacy
-//! `StreamSpikes` service.  Those actions require the Phase 3/6 integration
-//! and migration gates.
+//! This module owns wire conversion, bounded receiver validation and the
+//! durable authoritative-shard service. The validation-only service remains
+//! available for compatibility tests; the live node uses the authoritative
+//! service path when its explicit migration profile is enabled.
 
+use crate::authoritative_shard::AuthoritativeShard;
 use crate::data_plane::{CausalEnvelope, DataPlaneError, ReceiveResult, ReliableReceiver};
 use crate::deterministic::{EventStage, LogicalTag, NeuronId, SchemaVersion};
+use crate::durability::{DurableApplyOutcome, DurableShard, ReceiptLedger, ReceiptOutcome};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -30,6 +32,8 @@ pub enum CausalTransportError {
     InvalidIdentity(&'static str),
     #[error(transparent)]
     DataPlane(#[from] DataPlaneError),
+    #[error(transparent)]
+    Durability(#[from] crate::durability::DurabilityError),
     #[error(transparent)]
     Primitive(#[from] crate::deterministic::PrimitiveError),
 }
@@ -118,8 +122,18 @@ impl From<&CausalEnvelope> for proto::CausalEventEnvelope {
             target_id: value.target.map(NeuronId::raw).unwrap_or(0),
             payload: value.payload.clone(),
             deferred_from_nonconvergence: value.deferred_from_nonconvergence,
+            sender_node_id: String::new(),
         }
     }
+}
+
+fn response_frame(envelope: &CausalEnvelope, sender_node_id: String) -> proto::CausalEventEnvelope {
+    let mut frame = proto::CausalEventEnvelope::from(envelope);
+    // The sender identity is transport-session metadata rather than part of
+    // the biological envelope.  Preserve the authenticated wire value on an
+    // acknowledgement without making it part of the model/event schema.
+    frame.sender_node_id = sender_node_id;
+    frame
 }
 
 /// Typed boundary used by the generated gRPC validation service.
@@ -128,11 +142,15 @@ impl From<&CausalEnvelope> for proto::CausalEventEnvelope {
 #[derive(Debug)]
 pub struct CausalStreamAdapter {
     receiver: ReliableReceiver,
+    receipts: ReceiptLedger,
 }
 
 impl CausalStreamAdapter {
     pub fn new(receiver: ReliableReceiver) -> Self {
-        Self { receiver }
+        Self {
+            receiver,
+            receipts: ReceiptLedger::default(),
+        }
     }
 
     pub fn accept(
@@ -140,12 +158,145 @@ impl CausalStreamAdapter {
         frame: proto::CausalEventEnvelope,
     ) -> Result<(CausalEnvelope, ReceiveResult), CausalTransportError> {
         let envelope = CausalEnvelope::try_from(frame)?;
-        let result = self.receiver.accept(&envelope)?;
+        // Stage receiver and receipt mutations together.  If receipt
+        // validation fails, the sequence cursor must not move either.
+        let mut receiver = self.receiver.clone();
+        let result = receiver.accept(&envelope)?;
+        let mut event = crate::causal::CausalEvent::new(
+            envelope.event,
+            crate::deterministic::CanonicalEventKey::new(
+                envelope.tag,
+                envelope.stage,
+                envelope.source.map(NeuronId::raw).unwrap_or(0),
+                envelope.target.map(NeuronId::raw).unwrap_or(0),
+                envelope.event.raw(),
+            ),
+            envelope.payload.clone(),
+        );
+        event.deferred_from_nonconvergence = envelope.deferred_from_nonconvergence;
+        let mut receipts = self.receipts.clone();
+        let receipt_outcome = receipts.record_event(
+            envelope.stream,
+            envelope.sequence,
+            &event,
+            envelope.lease_term,
+            envelope.partition_generation,
+        )?;
+        if matches!(&result, ReceiveResult::Accepted { .. })
+            && !matches!(receipt_outcome, ReceiptOutcome::New)
+        {
+            return Err(CausalTransportError::DataPlane(
+                DataPlaneError::SequenceGap {
+                    expected: receiver.expected_sequence(),
+                    received: envelope.sequence,
+                },
+            ));
+        }
+        self.receiver = receiver;
+        self.receipts = receipts;
         Ok((envelope, result))
     }
 
     pub fn receiver(&self) -> &ReliableReceiver {
         &self.receiver
+    }
+
+    pub fn receipts(&self) -> &ReceiptLedger {
+        &self.receipts
+    }
+}
+
+/// Causal transport adapter for an authoritative shard commit boundary.
+/// Unlike [`CausalStreamAdapter`], this adapter does not acknowledge a frame
+/// until the supplied pure biological transition, WAL append, warm replica
+/// acknowledgement and durable receipt have all staged successfully.
+#[derive(Debug)]
+pub struct DurableCausalStreamAdapter {
+    shard: DurableShard,
+}
+
+/// Generated gRPC data-plane service backed by a durable shard owner. A
+/// response is emitted only after biological application, WAL append, warm
+/// replication and receipt publication have all committed.
+#[derive(Debug, Clone)]
+pub struct DurableCausalService {
+    adapter: Arc<Mutex<DurableCausalStreamAdapter>>,
+    output_capacity: usize,
+}
+
+impl DurableCausalService {
+    pub fn new(shard: DurableShard, output_capacity: usize) -> Self {
+        Self {
+            adapter: Arc::new(Mutex::new(DurableCausalStreamAdapter::new(shard))),
+            output_capacity: output_capacity.max(1),
+        }
+    }
+
+    pub fn adapter(&self) -> Arc<Mutex<DurableCausalStreamAdapter>> {
+        Arc::clone(&self.adapter)
+    }
+}
+
+/// Causal service backed by a single durable shard owner.  Unlike the
+/// compatibility service below, this service has no in-memory receipt ledger
+/// and no echo acknowledgement: the shard validates, applies, replicates and
+/// publishes each event before returning it to the caller.
+#[derive(Debug, Clone)]
+pub struct AuthoritativeCausalService {
+    shard: Arc<Mutex<AuthoritativeShard>>,
+    output_capacity: usize,
+    stable_biology: bool,
+}
+
+impl AuthoritativeCausalService {
+    pub fn new(shard: AuthoritativeShard, output_capacity: usize) -> Self {
+        Self {
+            shard: Arc::new(Mutex::new(shard)),
+            output_capacity: output_capacity.max(1),
+            stable_biology: false,
+        }
+    }
+
+    /// Construct an authoritative service using the stable-ID biological
+    /// kernel. The shard's biological bytes must contain an encoded
+    /// [`crate::authoritative_shard::StableBiologicalState`]; malformed state
+    /// fails before the first acknowledgement. This constructor is an
+    /// explicit migration profile and does not alter the compatibility
+    /// constructor above.
+    pub fn new_with_stable_biology(shard: AuthoritativeShard, output_capacity: usize) -> Self {
+        Self {
+            shard: Arc::new(Mutex::new(shard)),
+            output_capacity: output_capacity.max(1),
+            stable_biology: true,
+        }
+    }
+
+    pub fn shard(&self) -> Arc<Mutex<AuthoritativeShard>> {
+        Arc::clone(&self.shard)
+    }
+}
+
+impl DurableCausalStreamAdapter {
+    pub fn new(shard: DurableShard) -> Self {
+        Self { shard }
+    }
+
+    pub fn shard(&self) -> &DurableShard {
+        &self.shard
+    }
+
+    pub fn accept_and_apply<F, E>(
+        &mut self,
+        frame: proto::CausalEventEnvelope,
+        transition: F,
+    ) -> Result<(CausalEnvelope, DurableApplyOutcome), CausalTransportError>
+    where
+        F: FnOnce(&[u8], &crate::causal::CausalEvent) -> Result<Vec<u8>, E>,
+        E: std::fmt::Display,
+    {
+        let envelope = CausalEnvelope::try_from(frame)?;
+        let outcome = self.shard.apply_once(&envelope, transition)?;
+        Ok((envelope, outcome))
     }
 }
 
@@ -181,6 +332,18 @@ fn status_for(error: CausalTransportError) -> Status {
         | CausalTransportError::DataPlane(DataPlaneError::StaleGeneration { .. }) => {
             Status::failed_precondition(error.to_string())
         }
+        CausalTransportError::Durability(crate::durability::DurabilityError::StaleTerm {
+            ..
+        })
+        | CausalTransportError::Durability(crate::durability::DurabilityError::DataPlane(
+            DataPlaneError::StaleTerm { .. } | DataPlaneError::StaleGeneration { .. },
+        ))
+        | CausalTransportError::Durability(crate::durability::DurabilityError::Corrupt(_)) => {
+            Status::failed_precondition(error.to_string())
+        }
+        CausalTransportError::Durability(crate::durability::DurabilityError::Authority(_)) => {
+            Status::failed_precondition(error.to_string())
+        }
         _ => Status::invalid_argument(error.to_string()),
     }
 }
@@ -198,14 +361,16 @@ impl proto::causal_data_plane_server::CausalDataPlane for CausalValidationServic
 
         while let Some(frame) = inbound.message().await? {
             let accepted = {
+                let sender_node_id = frame.sender_node_id.clone();
                 let mut adapter = self
                     .adapter
                     .lock()
                     .map_err(|_| Status::internal("causal adapter lock poisoned"))?;
-                adapter.accept(frame).map_err(status_for)?.0
+                let envelope = adapter.accept(frame).map_err(status_for)?.0;
+                (envelope, sender_node_id)
             };
             sender
-                .send(Ok(proto::CausalEventEnvelope::from(&accepted)))
+                .send(Ok(response_frame(&accepted.0, accepted.1)))
                 .await
                 .map_err(|_| Status::cancelled("causal response stream closed"))?;
         }
@@ -214,11 +379,87 @@ impl proto::causal_data_plane_server::CausalDataPlane for CausalValidationServic
     }
 }
 
+#[tonic::async_trait]
+impl proto::causal_data_plane_server::CausalDataPlane for DurableCausalService {
+    type StreamEventsStream = ReceiverStream<Result<proto::CausalEventEnvelope, Status>>;
+
+    async fn stream_events(
+        &self,
+        request: Request<tonic::Streaming<proto::CausalEventEnvelope>>,
+    ) -> Result<Response<Self::StreamEventsStream>, Status> {
+        let mut inbound = request.into_inner();
+        let (sender, receiver) = mpsc::channel(self.output_capacity);
+        while let Some(frame) = inbound.message().await? {
+            let accepted = {
+                let sender_node_id = frame.sender_node_id.clone();
+                let mut adapter = self
+                    .adapter
+                    .lock()
+                    .map_err(|_| Status::internal("durable causal adapter lock poisoned"))?;
+                let envelope = adapter
+                    .accept_and_apply(frame, |_, event| {
+                        Ok::<Vec<u8>, crate::durability::DurabilityError>(event.payload.clone())
+                    })
+                    .map_err(status_for)?
+                    .0;
+                (envelope, sender_node_id)
+            };
+            sender
+                .send(Ok(response_frame(&accepted.0, accepted.1)))
+                .await
+                .map_err(|_| Status::cancelled("durable response stream closed"))?;
+        }
+        Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+}
+
+#[tonic::async_trait]
+impl proto::causal_data_plane_server::CausalDataPlane for AuthoritativeCausalService {
+    type StreamEventsStream = ReceiverStream<Result<proto::CausalEventEnvelope, Status>>;
+
+    async fn stream_events(
+        &self,
+        request: Request<tonic::Streaming<proto::CausalEventEnvelope>>,
+    ) -> Result<Response<Self::StreamEventsStream>, Status> {
+        let mut inbound = request.into_inner();
+        let (sender, receiver) = mpsc::channel(self.output_capacity);
+        while let Some(frame) = inbound.message().await? {
+            let accepted = {
+                let sender_node_id = frame.sender_node_id.clone();
+                let envelope = CausalEnvelope::try_from(frame).map_err(status_for)?;
+                let mut shard = self
+                    .shard
+                    .lock()
+                    .map_err(|_| Status::internal("authoritative shard lock poisoned"))?;
+                let channel_state = shard.channel_state().to_vec();
+                if self.stable_biology {
+                    shard
+                        .apply_stable_event(&envelope, channel_state)
+                        .map_err(|error| status_for(CausalTransportError::Durability(error)))?;
+                } else {
+                    shard
+                        .apply(&envelope, channel_state, |_, event| {
+                            Ok::<Vec<u8>, crate::durability::DurabilityError>(event.payload.clone())
+                        })
+                        .map_err(|error| status_for(CausalTransportError::Durability(error)))?;
+                }
+                (envelope, sender_node_id)
+            };
+            sender
+                .send(Ok(response_frame(&accepted.0, accepted.1)))
+                .await
+                .map_err(|_| Status::cancelled("authoritative response stream closed"))?;
+        }
+        Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::deterministic::{
-        BrainId, EventId, LeaseTerm, PartitionGeneration, RouteId, StreamId,
+        BrainId, EventId, LeaseTerm, PartitionGeneration, RouteId, ShardId, StreamId,
+        TopologyGeneration,
     };
 
     fn envelope() -> CausalEnvelope {
@@ -274,6 +515,9 @@ mod tests {
             .expect("frame accepted");
         assert_eq!(accepted, original);
         assert_eq!(result, ReceiveResult::Accepted { sequence: 0 });
+        let adapter_receipts = adapter.receipts();
+        assert_eq!(adapter_receipts.len(), 1);
+        assert!(adapter_receipts.contains(original.stream, original.sequence));
 
         let mut stale = proto::CausalEventEnvelope::from(&original);
         stale.lease_term = 2;
@@ -283,6 +527,29 @@ mod tests {
                 DataPlaneError::StaleTerm { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn causal_adapter_replays_exact_duplicates_without_creating_receipts() {
+        let original = envelope();
+        let receiver = ReliableReceiver::new(
+            original.brain,
+            original.stream,
+            original.lease_term,
+            original.partition_generation,
+            16,
+        );
+        let mut adapter = CausalStreamAdapter::new(receiver);
+        let wire = proto::CausalEventEnvelope::from(&original);
+        assert_eq!(
+            adapter.accept(wire.clone()).expect("first frame").1,
+            ReceiveResult::Accepted { sequence: 0 }
+        );
+        assert_eq!(
+            adapter.accept(wire).expect("replayed frame").1,
+            ReceiveResult::Duplicate { sequence: 0 }
+        );
+        assert_eq!(adapter.receipts().len(), 1);
     }
 
     #[test]
@@ -301,5 +568,47 @@ mod tests {
             CausalEnvelope::try_from(missing),
             Err(CausalTransportError::MissingTag)
         ));
+    }
+
+    #[test]
+    fn durable_causal_adapter_commits_only_after_the_staged_transition() {
+        let original = envelope();
+        let shard = DurableShard::new(
+            original.brain,
+            ShardId::new(8).unwrap(),
+            TopologyGeneration::INITIAL,
+            original.partition_generation,
+            original.lease_term,
+            original.stream,
+            16,
+            vec![0],
+            Vec::new(),
+        );
+        let mut adapter = DurableCausalStreamAdapter::new(shard);
+        let wire = proto::CausalEventEnvelope::from(&original);
+        assert!(matches!(
+            adapter.accept_and_apply(wire.clone(), |_, _| {
+                Err::<Vec<u8>, _>("biological transition rejected")
+            }),
+            Err(CausalTransportError::Durability(
+                crate::durability::DurabilityError::Transition(_)
+            ))
+        ));
+        assert_eq!(adapter.shard().durable_log_sequence(), None);
+
+        let (_, result) = adapter
+            .accept_and_apply(wire.clone(), |current, event| {
+                Ok::<_, &'static str>(vec![current[0] + event.payload[0]])
+            })
+            .expect("durable apply");
+        assert_eq!(result, DurableApplyOutcome::Applied { sequence: 0 });
+        assert_eq!(adapter.shard().biological_state(), &[9]);
+
+        let (_, result) = adapter
+            .accept_and_apply(wire, |_, _| -> Result<Vec<u8>, &'static str> {
+                panic!("duplicate must not enter the transition")
+            })
+            .expect("duplicate");
+        assert_eq!(result, DurableApplyOutcome::Duplicate { sequence: 0 });
     }
 }

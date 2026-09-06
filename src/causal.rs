@@ -8,11 +8,12 @@ use crate::deterministic::{
     CanonicalEvent, CanonicalEventKey, ComponentId, EventId, EventStage, LogicalTag,
     PrimitiveError, StateDigest, canonical_event_digest,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// A causal event with explicit provenance for later non-convergence deferral.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CausalEvent {
     pub key: CanonicalEventKey,
     pub id: EventId,

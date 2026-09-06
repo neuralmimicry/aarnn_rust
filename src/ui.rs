@@ -34,9 +34,10 @@ use crate::config::{
 use crate::distributed::{
     DistributedNode, ManagedNetwork,
     proto::{
-        ControlUpdate, NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus,
-        StatusRequest, control_update,
-        distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+        ClusterNetworkSnapshotRequest, ClusterNetworkSnapshotResponse, ControlUpdate,
+        NetworkStatus, NetworkUpdateRequest, NodeStatus, StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        distributed_neuromorphic_server::DistributedNeuromorphic, network_update_request,
     },
 };
 #[cfg(feature = "ui")]
@@ -71,7 +72,7 @@ use crate::spike_io::profiles::{
 use crate::spike_io::transport::{apply_hex_aer_payload, apply_usize_indices};
 use crate::stimuli::{AerIoConfig, AerLink};
 use rand::{RngExt, SeedableRng};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -528,6 +529,11 @@ fn stats_log_enabled() -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+#[cfg(all(feature = "ui", not(all(feature = "robot_io", unix))))]
+fn stats_log_enabled() -> bool {
+    false
 }
 
 #[cfg(all(feature = "robot_io", unix))]
@@ -1292,12 +1298,100 @@ enum ClusterSnapshotMsg {
         network_id: String,
         node_id: String,
         snap: Box<crate::runner::Snapshot>,
+        shard_count: usize,
+        cluster_digest: String,
     },
     Err {
         network_id: String,
         node_id: String,
         error: String,
     },
+}
+
+#[cfg(feature = "ui")]
+fn decode_cluster_snapshot_projection(
+    response: ClusterNetworkSnapshotResponse,
+    network_id: &str,
+    preferred_node_id: Option<&str>,
+) -> Result<(Box<crate::runner::Snapshot>, usize, String), String> {
+    if response.network_id != network_id {
+        return Err(format!(
+            "cluster snapshot returned network '{}' instead of requested network",
+            response.network_id
+        ));
+    }
+    if response.schema_version != crate::cluster_snapshot::CLUSTER_SNAPSHOT_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported cluster snapshot schema {}",
+            response.schema_version
+        ));
+    }
+    if response.cluster_digest.trim().is_empty() {
+        return Err("cluster snapshot is missing its digest".to_owned());
+    }
+    if response
+        .cluster_digest
+        .parse::<crate::deterministic::StateDigest>()
+        .is_err()
+    {
+        return Err("cluster snapshot has an invalid cluster digest".to_owned());
+    }
+    if response.shards.is_empty() {
+        return Err("cluster snapshot contains no shards".to_owned());
+    }
+
+    let mut shards = response.shards;
+    shards.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    let mut selected = None;
+    for shard in &shards {
+        if shard.node_id.is_empty() {
+            return Err("cluster snapshot contains a shard with no node id".to_owned());
+        }
+        if shard.step != response.cut_tick {
+            return Err(format!(
+                "shard '{}' is at tick {}, expected cluster cut {}",
+                shard.node_id, shard.step, response.cut_tick
+            ));
+        }
+        if shard
+            .state_digest
+            .parse::<crate::deterministic::StateDigest>()
+            .is_err()
+        {
+            return Err(format!(
+                "shard '{}' has an invalid state digest",
+                shard.node_id
+            ));
+        }
+        let snapshot = crate::runner::decode_snapshot_with_profile_backfill(&shard.snapshot_json)
+            .map_err(|error| {
+            format!("shard '{}' snapshot parse failed: {}", shard.node_id, error)
+        })?;
+        if snapshot.t as u64 != response.cut_tick {
+            return Err(format!(
+                "shard '{}' payload tick does not match cluster cut",
+                shard.node_id
+            ));
+        }
+        if preferred_node_id == Some(shard.node_id.as_str()) {
+            selected = Some(snapshot);
+        }
+    }
+    if preferred_node_id.is_some() && selected.is_none() {
+        return Err(format!(
+            "requested cluster shard '{}' is not present",
+            preferred_node_id.unwrap_or_default()
+        ));
+    }
+    let snapshot = selected.or_else(|| {
+        shards.first().and_then(|shard| {
+            crate::runner::decode_snapshot_with_profile_backfill(&shard.snapshot_json).ok()
+        })
+    });
+    let Some(snapshot) = snapshot else {
+        return Err("cluster snapshot has no usable shard projection".to_owned());
+    };
+    Ok((Box::new(snapshot), shards.len(), response.cluster_digest))
 }
 
 #[cfg(feature = "ui")]
@@ -1618,6 +1712,17 @@ struct App {
     // Dedicated read-only network graph workspace. This only changes the
     // presentation shell; it cannot issue neural or management commands.
     graph_explorer: bool,
+    /// Read-only virtual placement view. It is deliberately separate from
+    /// the biological graph so host placement cannot be mistaken for model
+    /// topology or used as an implicit control path.
+    placement_explorer: bool,
+    /// Camera and selection state for the read-only placement diagram.
+    placement_camera_zoom: f32,
+    placement_camera_rotation: f32,
+    placement_cam_pan: egui::Vec2,
+    placement_selected_shards: HashSet<String>,
+    placement_selected_layers: HashSet<u32>,
+    placement_detail_shard: Option<String>,
     #[cfg(feature = "ui_screenshot")]
     ui_capture_path: Option<String>,
     #[cfg(feature = "ui_screenshot")]
@@ -2663,7 +2768,7 @@ impl App {
                     #[allow(unused_mut)]
                     let mut spikes_source = None;
                     #[allow(unused_mut)]
-                    let mut ipc_dt = None;
+                    let mut ipc_dt: Option<f64> = None;
                     #[allow(unused_mut)]
                     let mut reward_source: Option<f32> = None;
 
@@ -3874,6 +3979,13 @@ impl App {
                     )
                 })
                 .unwrap_or(false),
+            placement_explorer: false,
+            placement_camera_zoom: 1.0,
+            placement_camera_rotation: 0.0,
+            placement_cam_pan: egui::vec2(0.0, 0.0),
+            placement_selected_shards: HashSet::new(),
+            placement_selected_layers: HashSet::new(),
+            placement_detail_shard: None,
             #[cfg(feature = "ui_screenshot")]
             ui_capture_path: std::env::var("NM_UI_CAPTURE_TO")
                 .ok()
@@ -5244,6 +5356,7 @@ impl App {
                         }
                     }
                 }
+                #[cfg(all(feature = "robot_io", unix))]
                 if resolved.is_none() {
                     if let Some(mapping) = self.ipc_mapping.as_ref() {
                         resolved = Some((
@@ -5667,42 +5780,9 @@ impl App {
             self.status = "Cluster control unavailable".into();
         }
 
-        // For ClusterGlobal views also send a direct gRPC UpdateNetwork to
-        // every worker node that manages this network.  Workers now accept
-        // ControlUpdate directly (they no longer require is_orchestrator for
-        // this RPC variant), so this gives immediate effect even when the
-        // heartbeat-queue path was temporarily busy.
-        if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-            if let Some(net_status) = self.dist_network_registry.get(network_id) {
-                let node_ids: Vec<String> = net_status.distribution.keys().cloned().collect();
-                let rt = self.runtime_handle.clone();
-                let net_id = network_id.to_string();
-                let action_i32 = action as i32;
-                for node_id in node_ids {
-                    if let Some(node_info) = self.dist_nodes.get(&node_id) {
-                        let mut addr = node_info.address.clone();
-                        if addr.is_empty() {
-                            continue;
-                        }
-                        if !addr.starts_with("http://") && !addr.starts_with("https://") {
-                            addr = format!("http://{}", addr);
-                        }
-                        let net_id_c = net_id.clone();
-                        rt.spawn(async move {
-                            if let Ok(mut client) = connect_cluster_client(addr).await {
-                                let req = NetworkUpdateRequest {
-                                    network_id: net_id_c,
-                                    update: Some(network_update_request::Update::Control(
-                                        ControlUpdate { action: action_i32 },
-                                    )),
-                                };
-                                let _ = client.update_network(Request::new(req)).await;
-                            }
-                        });
-                    }
-                }
-            }
-        }
+        // Cluster mutations are intentionally delivered only through the
+        // orchestrator's authorised command queue. The UI must not fan out
+        // direct worker mutations, even when a worker is reachable.
         if matches!(
             action,
             control_update::Action::Repeat
@@ -7864,6 +7944,621 @@ impl Drop for App {
 }
 
 #[cfg(feature = "ui")]
+impl App {
+    /// Render the physical/virtual placement projection as a distinct read-only
+    /// surface. Layer ownership comes from the orchestrator's network registry;
+    /// the activity colour is derived from the existing lock-free activity
+    /// buffers and is never used to mutate placement.
+    fn render_placement_explorer(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let network_id = match &self.view_source {
+            ViewSource::Standalone => self.brain_id.clone(),
+            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => id.clone(),
+        };
+        let Some(network) = self.dist_network_registry.get(&network_id).cloned() else {
+            if matches!(self.view_source, ViewSource::Standalone) {
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(14, 24, 31));
+                painter.text(
+                    rect.left_top() + egui::vec2(12.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("Virtual placement · {}", network_id),
+                    egui::FontId::proportional(18.0),
+                    egui::Color32::WHITE,
+                );
+                let total = self.sensory_activity.len()
+                    + self.hidden_activity.iter().map(Vec::len).sum::<usize>()
+                    + self.output_activity.len();
+                let active = self
+                    .sensory_activity
+                    .iter()
+                    .chain(self.hidden_activity.iter().flat_map(|layer| layer.iter()))
+                    .chain(self.output_activity.iter())
+                    .filter(|value| **value > 0.1)
+                    .count();
+                let score = if total > 0 {
+                    active as f32 / total as f32
+                } else {
+                    0.0
+                };
+                let node_rect = egui::Rect::from_center_size(
+                    rect.center(),
+                    egui::vec2(rect.width().min(360.0), 180.0),
+                );
+                painter.rect_filled(node_rect, 10.0, egui::Color32::from_rgb(38, 56, 70));
+                painter.rect_stroke(
+                    node_rect,
+                    10.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_white_alpha(45)),
+                    egui::StrokeKind::Outside,
+                );
+                painter.text(
+                    node_rect.left_top() + egui::vec2(14.0, 16.0),
+                    egui::Align2::LEFT_TOP,
+                    "Node laptop",
+                    egui::FontId::proportional(15.0),
+                    egui::Color32::WHITE,
+                );
+                painter.text(
+                    node_rect.left_top() + egui::vec2(14.0, 42.0),
+                    egui::Align2::LEFT_TOP,
+                    "host: local workstation",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::from_rgb(180, 198, 208),
+                );
+                let shard_rect = node_rect.shrink2(egui::vec2(12.0, 68.0));
+                let shard_color = if score >= 0.6 {
+                    egui::Color32::from_rgb(255, 121, 94)
+                } else if score >= 0.15 {
+                    egui::Color32::from_rgb(255, 211, 122)
+                } else {
+                    egui::Color32::from_rgb(102, 134, 155)
+                };
+                painter.rect_filled(shard_rect, 8.0, shard_color);
+                painter.text(
+                    shard_rect.left_top() + egui::vec2(9.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    "Shard 1 · complete local brain",
+                    egui::FontId::proportional(13.0),
+                    egui::Color32::from_rgb(16, 32, 42),
+                );
+                painter.text(
+                    shard_rect.left_top() + egui::vec2(9.0, 34.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("Activity: {:.0}% · {} / {}", score * 100.0, active, total),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(16, 32, 42),
+                );
+                return;
+            }
+            ui.allocate_ui_at_rect(rect, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(rect.height() * 0.35);
+                    ui.heading("Virtual placement");
+                    ui.label("No distributed placement is currently reported.");
+                    ui.small(
+                        "Start or connect an orchestrator-managed network to populate this view.",
+                    );
+                });
+            });
+            return;
+        };
+
+        let mut assignments: Vec<(String, crate::distributed::proto::LayerRange)> = network
+            .distribution
+            .iter()
+            .map(|(id, range)| (id.clone(), range.clone()))
+            .collect();
+        assignments.sort_by(|a, b| a.0.cmp(&b.0));
+        if assignments.is_empty() {
+            ui.allocate_ui_at_rect(rect, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(rect.height() * 0.35);
+                    ui.heading(format!("Virtual placement · {}", network_id));
+                    ui.label("The network has no assigned virtual shards yet.");
+                });
+            });
+            return;
+        }
+
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(14, 24, 31));
+        let placement_response = ui.interact(
+            rect,
+            egui::Id::new("placement_canvas"),
+            egui::Sense::click_and_drag(),
+        );
+        let zoom = self.placement_camera_zoom.clamp(0.5, 3.0);
+        let rotation = self.placement_camera_rotation;
+        let pan = self.placement_cam_pan;
+        let center = rect.center();
+        let transform = |point: egui::Pos2| {
+            let delta = point - center;
+            let (sin, cos) = rotation.sin_cos();
+            egui::pos2(
+                center.x + pan.x + (delta.x * cos - delta.y * sin) * zoom,
+                center.y + pan.y + (delta.x * sin + delta.y * cos) * zoom,
+            )
+        };
+        let transform_rect = |world: egui::Rect| {
+            let corners = [
+                transform(world.left_top()),
+                transform(world.right_top()),
+                transform(world.left_bottom()),
+                transform(world.right_bottom()),
+            ];
+            egui::Rect::from_min_max(
+                egui::pos2(
+                    corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min),
+                    corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min),
+                ),
+                egui::pos2(
+                    corners
+                        .iter()
+                        .map(|p| p.x)
+                        .fold(f32::NEG_INFINITY, f32::max),
+                    corners
+                        .iter()
+                        .map(|p| p.y)
+                        .fold(f32::NEG_INFINITY, f32::max),
+                ),
+            )
+        };
+        if placement_response.dragged() {
+            let delta = ui.input(|input| input.pointer.delta());
+            let modifiers = ui.input(|input| input.modifiers);
+            if modifiers.ctrl || modifiers.command {
+                self.placement_camera_rotation = (self.placement_camera_rotation + delta.x * 0.006)
+                    .clamp(-std::f32::consts::PI, std::f32::consts::PI);
+            } else {
+                self.placement_cam_pan += delta;
+            }
+        }
+        ui.input(|input| {
+            if placement_response.hovered() {
+                let scroll = input.smooth_scroll_delta.y;
+                if scroll.abs() > 0.1 {
+                    self.placement_camera_zoom =
+                        (self.placement_camera_zoom * (1.0 + scroll / 480.0)).clamp(0.5, 3.0);
+                }
+            }
+        });
+        // Keep the computed neuron count with each hit target.  The same
+        // value is used by selection feedback and the double-click detail
+        // card so those two surfaces cannot drift apart and accidentally
+        // report a layer count as a neuron count.
+        let mut placement_hits: Vec<(String, egui::Rect, Vec<u32>, usize, String, String)> =
+            Vec::new();
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 12.0),
+            egui::Align2::LEFT_TOP,
+            format!("Virtual placement · {}", network_id),
+            egui::FontId::proportional(18.0),
+            egui::Color32::WHITE,
+        );
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 36.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{} nodes · {} active/backup shard groups · activity is recent spike ratio",
+                assignments.len(),
+                assignments
+                    .iter()
+                    .map(|(_, range)| 1 + usize::from(!range.backup_layers.is_empty()))
+                    .sum::<usize>()
+            ),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(180, 198, 208),
+        );
+        let movement_count = network.shard_movements.len();
+        if movement_count > 0 {
+            let moving = network
+                .shard_movements
+                .iter()
+                .filter(|movement| movement.phase == "moving")
+                .count();
+            let considering = movement_count.saturating_sub(moving);
+            painter.text(
+                rect.left_top() + egui::vec2(12.0, 52.0),
+                egui::Align2::LEFT_TOP,
+                format!(
+                    "Automation: {} moving · {} considering · active/backup roles are advisory",
+                    moving, considering
+                ),
+                egui::FontId::proportional(11.0),
+                if moving > 0 {
+                    egui::Color32::from_rgb(220, 190, 255)
+                } else {
+                    egui::Color32::from_rgb(255, 220, 150)
+                },
+            );
+        }
+
+        let gap = 14.0;
+        let card_width =
+            ((rect.width() - 24.0 - gap * (assignments.len().saturating_sub(1) as f32))
+                / assignments.len() as f32)
+                .clamp(190.0, 300.0);
+        let total_width = card_width * assignments.len() as f32
+            + gap * assignments.len().saturating_sub(1) as f32;
+        let left = rect.center().x - total_width * 0.5;
+        let top = rect.top() + 64.0;
+
+        for (index, (node_id, range)) in assignments.iter().enumerate() {
+            let x = left + index as f32 * (card_width + gap);
+            let node_rect = egui::Rect::from_min_size(
+                egui::pos2(x, top),
+                egui::vec2(
+                    card_width,
+                    (rect.height() - 84.0).max(if range.backup_layers.is_empty() {
+                        180.0
+                    } else {
+                        260.0
+                    }),
+                ),
+            );
+            let world_node_rect = node_rect;
+            let node_rect = transform_rect(world_node_rect);
+            painter.rect_filled(node_rect, 10.0, egui::Color32::from_rgb(38, 56, 70));
+            painter.rect_stroke(
+                node_rect,
+                10.0,
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(45)),
+                egui::StrokeKind::Outside,
+            );
+            let host = self
+                .dist_nodes
+                .get(node_id)
+                .map(|node| node.address.as_str())
+                .filter(|address| !address.is_empty())
+                .unwrap_or("host address unavailable");
+            painter.text(
+                node_rect.left_top() + egui::vec2(12.0, 12.0),
+                egui::Align2::LEFT_TOP,
+                format!("Node {}", node_id),
+                egui::FontId::proportional(14.0),
+                egui::Color32::WHITE,
+            );
+            painter.text(
+                node_rect.left_top() + egui::vec2(12.0, 33.0),
+                egui::Align2::LEFT_TOP,
+                host,
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_rgb(180, 198, 208),
+            );
+
+            let mut layers: Vec<u32> = range.layers.clone();
+            layers.sort_unstable();
+            let mut total_neurons = 0usize;
+            let mut active_neurons = 0usize;
+            for layer in &layers {
+                let configured =
+                    range.layer_neuron_counts.get(layer).copied().unwrap_or(0) as usize;
+                let activity = if *layer == 0 {
+                    &self.sensory_activity
+                } else if (*layer as usize).saturating_sub(1) < self.hidden_activity.len() {
+                    &self.hidden_activity[*layer as usize - 1]
+                } else {
+                    &self.output_activity
+                };
+                let observed = activity.len();
+                let active = activity.iter().filter(|value| **value > 0.1).count();
+                total_neurons = total_neurons.saturating_add(configured.max(observed));
+                active_neurons =
+                    active_neurons.saturating_add(if observed > 0 && configured > observed {
+                        ((active as f32 / observed as f32) * configured as f32) as usize
+                    } else {
+                        active
+                    });
+            }
+            let score = if total_neurons > 0 {
+                (active_neurons as f32 / total_neurons as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let color = if score >= 0.6 {
+                egui::Color32::from_rgb(255, 121, 94)
+            } else if score >= 0.15 {
+                egui::Color32::from_rgb(255, 211, 122)
+            } else {
+                egui::Color32::from_rgb(102, 134, 155)
+            };
+            let shard_rect = egui::Rect::from_min_size(
+                node_rect.left_top() + egui::vec2(10.0, 62.0),
+                egui::vec2(node_rect.width() - 20.0, 100.0),
+            );
+            let shard_id = format!(
+                "{}:active:layers-{}",
+                node_id,
+                layers
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join("-")
+            );
+            let selected = self.placement_selected_shards.contains(&shard_id);
+            painter.rect_filled(shard_rect, 8.0, color);
+            painter.rect_stroke(
+                shard_rect,
+                8.0,
+                egui::Stroke::new(
+                    if selected { 3.0 } else { 1.5 },
+                    if selected {
+                        egui::Color32::from_rgb(255, 240, 168)
+                    } else {
+                        color
+                    },
+                ),
+                egui::StrokeKind::Outside,
+            );
+            painter.text(
+                shard_rect.left_top() + egui::vec2(9.0, 12.0),
+                egui::Align2::LEFT_TOP,
+                format!("Shard {}", index + 1),
+                egui::FontId::proportional(13.0),
+                egui::Color32::from_rgb(16, 32, 42),
+            );
+            painter.text(
+                shard_rect.left_top() + egui::vec2(9.0, 34.0),
+                egui::Align2::LEFT_TOP,
+                format!(
+                    "Layers: {}",
+                    if layers.is_empty() {
+                        "unreported".to_string()
+                    } else {
+                        layers
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                ),
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_rgb(16, 32, 42),
+            );
+            painter.text(
+                shard_rect.left_top() + egui::vec2(9.0, 55.0),
+                egui::Align2::LEFT_TOP,
+                format!(
+                    "Activity: {:.0}% · {} / {}",
+                    score * 100.0,
+                    active_neurons,
+                    total_neurons
+                ),
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_rgb(16, 32, 42),
+            );
+            let bar = egui::Rect::from_min_size(
+                shard_rect.left_top() + egui::vec2(9.0, 76.0),
+                egui::vec2(shard_rect.width() - 18.0, 7.0),
+            );
+            painter.rect_filled(bar, 3.0, egui::Color32::from_black_alpha(55));
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    bar.left_top(),
+                    egui::vec2(bar.width() * score, bar.height()),
+                ),
+                3.0,
+                egui::Color32::from_rgb(16, 32, 42),
+            );
+            if let Some(movement) = network.shard_movements.iter().find(|movement| {
+                movement.role == "active"
+                    && layers
+                        .iter()
+                        .any(|layer| movement.shard_id.contains(&format!(":layer-{}:", layer)))
+            }) {
+                painter.text(
+                    shard_rect.left_top() + egui::vec2(9.0, 90.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "{} · {} → {}",
+                        movement.phase,
+                        if movement.source_node.is_empty() {
+                            "?"
+                        } else {
+                            &movement.source_node
+                        },
+                        if movement.destination_node.is_empty() {
+                            "candidate"
+                        } else {
+                            &movement.destination_node
+                        }
+                    ),
+                    egui::FontId::proportional(10.0),
+                    if movement.phase == "moving" {
+                        egui::Color32::from_rgb(225, 205, 255)
+                    } else {
+                        egui::Color32::from_rgb(255, 224, 155)
+                    },
+                );
+            }
+            placement_hits.push((
+                shard_id,
+                shard_rect,
+                layers.clone(),
+                total_neurons,
+                node_id.clone(),
+                "active".to_string(),
+            ));
+
+            if !range.backup_layers.is_empty() {
+                let mut backup_layers = range.backup_layers.clone();
+                backup_layers.sort_unstable();
+                let backup_rect = egui::Rect::from_min_size(
+                    node_rect.left_top() + egui::vec2(10.0, 174.0),
+                    egui::vec2(node_rect.width() - 20.0, 76.0),
+                );
+                let backup_id = format!(
+                    "{}:backup:layers-{}",
+                    node_id,
+                    backup_layers
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join("-")
+                );
+                let backup_selected = self.placement_selected_shards.contains(&backup_id);
+                let backup_neuron_count = backup_layers
+                    .iter()
+                    .map(|layer| {
+                        range.layer_neuron_counts.get(layer).copied().unwrap_or(0) as usize
+                    })
+                    .sum::<usize>();
+                painter.rect_filled(backup_rect, 8.0, egui::Color32::from_rgb(69, 125, 143));
+                painter.rect_stroke(
+                    backup_rect,
+                    8.0,
+                    egui::Stroke::new(
+                        if backup_selected { 3.0 } else { 1.5 },
+                        if backup_selected {
+                            egui::Color32::from_rgb(255, 240, 168)
+                        } else {
+                            egui::Color32::from_rgb(145, 220, 230)
+                        },
+                    ),
+                    egui::StrokeKind::Outside,
+                );
+                painter.text(
+                    backup_rect.left_top() + egui::vec2(9.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "Backup · layers {}",
+                        backup_layers
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(225, 247, 250),
+                );
+                painter.text(
+                    backup_rect.left_top() + egui::vec2(9.0, 31.0),
+                    egui::Align2::LEFT_TOP,
+                    "Warm replica · read-only placement telemetry",
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(205, 232, 236),
+                );
+                if let Some(movement) = network.shard_movements.iter().find(|movement| {
+                    movement.role == "backup"
+                        && backup_layers
+                            .iter()
+                            .any(|layer| movement.shard_id.contains(&format!(":layer-{}:", layer)))
+                }) {
+                    painter.text(
+                        backup_rect.left_top() + egui::vec2(9.0, 50.0),
+                        egui::Align2::LEFT_TOP,
+                        format!(
+                            "{} · {} → {}",
+                            movement.phase, movement.source_node, movement.destination_node
+                        ),
+                        egui::FontId::proportional(10.0),
+                        egui::Color32::from_rgb(225, 205, 255),
+                    );
+                }
+                placement_hits.push((
+                    backup_id,
+                    backup_rect,
+                    backup_layers,
+                    backup_neuron_count,
+                    node_id.clone(),
+                    "backup".to_string(),
+                ));
+            }
+        }
+
+        if placement_response.double_clicked() || placement_response.clicked() {
+            if let Some(pointer) = placement_response.interact_pointer_pos() {
+                if let Some((shard_id, shard_rect, layers, neuron_count, _node_id, _role)) =
+                    placement_hits
+                        .iter()
+                        .rev()
+                        .find(|(_, shard_rect, _, _, _, _)| shard_rect.contains(pointer))
+                {
+                    let modifiers = ui.input(|input| input.modifiers);
+                    if placement_response.double_clicked() {
+                        self.placement_detail_shard = Some(shard_id.clone());
+                        self.placement_camera_zoom = 1.8;
+                        self.placement_cam_pan += rect.center() - shard_rect.center();
+                    }
+                    if !(modifiers.ctrl || modifiers.command) {
+                        self.placement_selected_shards.clear();
+                    }
+                    if modifiers.ctrl || modifiers.command {
+                        if !self.placement_selected_shards.insert(shard_id.clone()) {
+                            self.placement_selected_shards.remove(shard_id);
+                        }
+                    } else {
+                        self.placement_selected_shards.insert(shard_id.clone());
+                    }
+                    self.placement_selected_layers.clear();
+                    for (candidate_id, _, selected_layers, _, _, _) in &placement_hits {
+                        if self.placement_selected_shards.contains(candidate_id) {
+                            self.placement_selected_layers
+                                .extend(selected_layers.iter().copied());
+                        }
+                    }
+                    self.status = format!(
+                        "Selected placement shard {} ({} neurons); highlighted layers {}",
+                        shard_id,
+                        neuron_count,
+                        layers
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+        }
+        if let Some(detail_id) = self.placement_detail_shard.as_ref() {
+            if let Some((_, _, layers, neuron_count, node_id, role)) = placement_hits
+                .iter()
+                .find(|(id, _, _, _, _, _)| id == detail_id)
+            {
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(rect.right() - 300.0, rect.top() + 12.0),
+                        egui::vec2(286.0, 82.0),
+                    ),
+                    8.0,
+                    egui::Color32::from_rgba_unmultiplied(12, 24, 32, 235),
+                );
+                painter.text(
+                    egui::pos2(rect.right() - 288.0, rect.top() + 23.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("{} shard detail", role),
+                    egui::FontId::proportional(13.0),
+                    egui::Color32::WHITE,
+                );
+                painter.text(
+                    egui::pos2(rect.right() - 288.0, rect.top() + 45.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "node {} · layers {} · {} neurons",
+                        node_id,
+                        layers
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        neuron_count
+                    ),
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(205, 225, 232),
+                );
+                painter.text(
+                    egui::pos2(rect.right() - 288.0, rect.top() + 64.0),
+                    egui::Align2::LEFT_TOP,
+                    "Double-click focuses; Ctrl-click adds shards",
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(255, 220, 150),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ui")]
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -8122,6 +8817,8 @@ impl eframe::App for App {
                     network_id,
                     node_id,
                     snap,
+                    shard_count,
+                    cluster_digest,
                 } => {
                     self.cluster_snapshot_inflight = false;
                     self.cluster_snapshot_last_fetch = Some(std::time::Instant::now());
@@ -8166,7 +8863,11 @@ impl eframe::App for App {
                     self.pending_edge_cache = false;
 
                     self.cluster_snapshot_cache = Some(snap);
-                    self.status = "Remote snapshot updated (with connections)".to_string();
+                    self.status = format!(
+                        "Cluster snapshot updated ({} shards, digest {})",
+                        shard_count,
+                        &cluster_digest[..cluster_digest.len().min(12)]
+                    );
 
                     // Trigger a soft layout recompute without clearing cached positions.
                     self.last_rendered_panel_size = egui::Vec2::ZERO;
@@ -8194,7 +8895,13 @@ impl eframe::App for App {
                 net_status.distribution.keys().next().cloned()
             } else {
                 None
-            };
+            }
+            .filter(|candidate| {
+                self.dist_nodes
+                    .get(candidate)
+                    .map(|node| !node.address.trim().is_empty())
+                    .unwrap_or(false)
+            });
             if let Some(node_id) = target_node {
                 let addr_opt = self.dist_nodes.get(&node_id).map(|n| n.address.clone());
                 if let Some(mut addr) = addr_opt {
@@ -8220,33 +8927,44 @@ impl eframe::App for App {
                             rt.spawn(async move {
                                 match connect_cluster_client(addr.clone()).await {
                                     Ok(mut client) => {
-                                        match client.get_network_snapshot(Request::new(NetworkSnapshotRequest {
-                                            network_id: net_id_clone.clone(),
-                                        })).await {
-                                            Ok(resp) => {
-                                                let snap_resp = resp.into_inner();
-                                                match crate::runner::decode_snapshot_with_profile_backfill(&snap_resp.snapshot_json) {
-                                                    Ok(st) => {
-                                                        let _ = tx.send(ClusterSnapshotMsg::Ok {
-                                                            network_id: net_id_clone,
-                                                            node_id: node_id_clone,
-                                                            snap: Box::new(st),
-                                                        });
-                                                    }
-                                                    Err(e) => {
-                                                        let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                            network_id: net_id_clone,
-                                                            node_id: node_id_clone,
-                                                            error: format!("snapshot parse failed: {}", e),
-                                                        });
-                                                    }
+                                        match client
+                                            .get_cluster_network_snapshot(Request::new(
+                                                ClusterNetworkSnapshotRequest {
+                                                    network_id: net_id_clone.clone(),
+                                                },
+                                            ))
+                                            .await
+                                        {
+                                            Ok(resp) => match decode_cluster_snapshot_projection(
+                                                resp.into_inner(),
+                                                &net_id_clone,
+                                                Some(&node_id_clone),
+                                            ) {
+                                                Ok((snap, shard_count, cluster_digest)) => {
+                                                    let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                                        network_id: net_id_clone,
+                                                        node_id: node_id_clone,
+                                                        snap,
+                                                        shard_count,
+                                                        cluster_digest,
+                                                    });
                                                 }
-                                            }
+                                                Err(error) => {
+                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                        network_id: net_id_clone,
+                                                        node_id: node_id_clone,
+                                                        error,
+                                                    });
+                                                }
+                                            },
                                             Err(e) => {
                                                 let _ = tx.send(ClusterSnapshotMsg::Err {
                                                     network_id: net_id_clone,
                                                     node_id: node_id_clone,
-                                                    error: format!("snapshot request failed: {}", e),
+                                                    error: format!(
+                                                        "snapshot request failed: {}",
+                                                        e
+                                                    ),
                                                 });
                                             }
                                         }
@@ -8264,17 +8982,14 @@ impl eframe::App for App {
                     }
                 }
             } else if let Some(node) = self.distributed_node.clone() {
-                let (local_node_id, net_arc) = {
+                let local_node_id = {
                     if let Ok(state) = node.state.try_read() {
-                        (
-                            Some(state.node_id.clone()),
-                            state.networks.get(net_id).cloned(),
-                        )
+                        Some(state.node_id.clone())
                     } else {
-                        (None, None)
+                        None
                     }
                 };
-                if let (Some(local_node_id), Some(net_arc)) = (local_node_id, net_arc) {
+                if let Some(local_node_id) = local_node_id {
                     let now = std::time::Instant::now();
                     let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
                         now.duration_since(t) > std::time::Duration::from_secs(2)
@@ -8282,53 +8997,57 @@ impl eframe::App for App {
                     let needs_refresh = self.cluster_snapshot_network_id.as_deref() != Some(net_id)
                         || self.cluster_snapshot_node_id.as_deref() != Some(local_node_id.as_str());
                     if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
-                        if let Ok(net) = net_arc.try_read() {
-                            let snap = net.runner.snapshot();
-                            self.cluster_snapshot_inflight = false;
-                            self.cluster_snapshot_last_fetch = Some(now);
-                            self.cluster_snapshot_network_id = Some(net_id.clone());
-                            self.cluster_snapshot_node_id = Some(local_node_id.clone());
-                            #[cfg(feature = "growth3d")]
+                        self.cluster_snapshot_inflight = true;
+                        self.cluster_snapshot_network_id = Some(net_id.clone());
+                        self.cluster_snapshot_node_id = Some(local_node_id.clone());
+                        let tx = self.cluster_snapshot_tx.clone();
+                        let net_id_clone = net_id.clone();
+                        let node_id_clone = local_node_id.clone();
+                        let node_clone = node.clone();
+                        let rt = self.runtime_handle.clone();
+                        rt.spawn(async move {
+                            match node_clone
+                                .get_cluster_network_snapshot(Request::new(
+                                    ClusterNetworkSnapshotRequest {
+                                        network_id: net_id_clone.clone(),
+                                    },
+                                ))
+                                .await
                             {
-                                if let Some(topo) = snap.topo.as_ref().filter(|topo| {
-                                    !topo.layers.is_empty()
-                                        || !topo.sensory_nodes.is_empty()
-                                        || !topo.output_nodes.is_empty()
-                                        || !topo.early_cells.is_empty()
-                                }) {
-                                    self.cluster_topo_cache = Some(topo.clone());
+                                Ok(response) => match decode_cluster_snapshot_projection(
+                                    response.into_inner(),
+                                    &net_id_clone,
+                                    Some(&node_id_clone),
+                                ) {
+                                    Ok((snap, shard_count, cluster_digest)) => {
+                                        let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                            network_id: net_id_clone,
+                                            node_id: node_id_clone,
+                                            snap,
+                                            shard_count,
+                                            cluster_digest,
+                                        });
+                                    }
+                                    Err(error) => {
+                                        let _ = tx.send(ClusterSnapshotMsg::Err {
+                                            network_id: net_id_clone,
+                                            node_id: node_id_clone,
+                                            error,
+                                        });
+                                    }
+                                },
+                                Err(error) => {
+                                    let _ = tx.send(ClusterSnapshotMsg::Err {
+                                        network_id: net_id_clone,
+                                        node_id: node_id_clone,
+                                        error: format!(
+                                            "cluster snapshot request failed: {}",
+                                            error
+                                        ),
+                                    });
                                 }
                             }
-                            let density = self.overlay_density;
-                            let (edges, sizes, counts, output_count) =
-                                Self::compute_edges_from_snapshot(density, &snap);
-                            self.cached_edges = edges;
-                            self.cached_layer_sizes = sizes;
-                            self.cached_conn_counts = counts;
-                            self.cached_output_conn_count = Some(output_count);
-                            #[cfg(feature = "growth3d")]
-                            {
-                                if let Some(topo) = snap.topo.as_ref().filter(|topo| {
-                                    !topo.layers.is_empty()
-                                        || !topo.sensory_nodes.is_empty()
-                                        || !topo.output_nodes.is_empty()
-                                        || !topo.early_cells.is_empty()
-                                }) {
-                                    self.cached_edge_topo = Some(topo.clone());
-                                }
-                            }
-                            #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                            {
-                                self.cached_skull_membrane = snap.skull_membrane;
-                            }
-                            self.last_conn_stats_refresh = std::time::Instant::now();
-                            self.pending_edge_cache = false;
-                            if self.cluster_snapshot_cache.is_none() || needs_refresh {
-                                self.status = "Cluster snapshot updated (local)".to_string();
-                                self.last_rendered_panel_size = egui::Vec2::ZERO;
-                            }
-                            self.cluster_snapshot_cache = Some(Box::new(snap));
-                        }
+                        });
                     }
                 }
             }
@@ -9595,8 +10314,30 @@ impl eframe::App for App {
                 ui.horizontal_wrapped(|ui| {
                     ui.heading("Neuromorphic Network");
                     ui.separator();
-                    ui.selectable_value(&mut self.graph_explorer, false, "Dashboard");
-                    ui.selectable_value(&mut self.graph_explorer, true, "Graph Explorer");
+                    if ui
+                        .selectable_label(
+                            !self.graph_explorer && !self.placement_explorer,
+                            "Dashboard",
+                        )
+                        .clicked()
+                    {
+                        self.graph_explorer = false;
+                        self.placement_explorer = false;
+                    }
+                    if ui
+                        .selectable_label(self.graph_explorer, "Graph Explorer")
+                        .clicked()
+                    {
+                        self.graph_explorer = true;
+                        self.placement_explorer = false;
+                    }
+                    if ui
+                        .selectable_label(self.placement_explorer, "Placement")
+                        .clicked()
+                    {
+                        self.graph_explorer = false;
+                        self.placement_explorer = true;
+                    }
                     if self.graph_explorer {
                         ui.separator();
                         ui.label("Read-only connected topology");
@@ -9619,6 +10360,29 @@ impl eframe::App for App {
                             self.camera_pitch_degrees = 0.0;
                             self.cam_pan = egui::Vec2::ZERO;
                         }
+                    } else if self.placement_explorer {
+                        ui.separator();
+                        ui.label("Read-only host / shard placement");
+                        ui.add(
+                            egui::Slider::new(&mut self.placement_camera_zoom, 0.5..=3.0)
+                                .text("Zoom")
+                                .show_value(false),
+                        );
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.placement_camera_rotation,
+                                -std::f32::consts::PI..=std::f32::consts::PI,
+                            )
+                            .text("Rotate")
+                            .show_value(false),
+                        );
+                        if ui.button("Reset placement view").clicked() {
+                            self.placement_camera_zoom = 1.0;
+                            self.placement_camera_rotation = 0.0;
+                            self.placement_cam_pan = egui::Vec2::ZERO;
+                            self.placement_detail_shard = None;
+                        }
+                        ui.label("Drag to pan · Ctrl/⌘ drag to rotate · click selects · double-click details");
                     } else {
                         ui.label("AARNN operational dashboard");
                     }
@@ -9629,7 +10393,7 @@ impl eframe::App for App {
             // full width and keep operational controls on the Dashboard tab.
             // Use a distinct panel id so egui's remembered dashboard width
             // cannot reappear when switching back to the graph.
-            let controls_panel_id = if self.graph_explorer {
+            let controls_panel_id = if self.graph_explorer || self.placement_explorer {
                 "graph_explorer_controls"
             } else {
                 "controls"
@@ -9639,7 +10403,7 @@ impl eframe::App for App {
                     .size_range(0.0..=600.0)
                     .default_size(if self.graph_explorer { 0.0 } else { 260.0_f32 })
                     .show_inside(ui, |ui| {
-                    if self.graph_explorer {
+                    if self.graph_explorer || self.placement_explorer {
                         return;
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -13678,6 +14442,11 @@ impl eframe::App for App {
             let avail = ui.available_size();
             let panel_rect = ui.allocate_space(avail).1;
 
+            if self.placement_explorer {
+                self.render_placement_explorer(ui, panel_rect);
+                return;
+            }
+
             // Pre-compute Oscilloscope rect so we can gate network wheel-zoom when hovering scope
             let margin = 10.0f32;
             let scope_w = 520.0f32;
@@ -15282,6 +16051,13 @@ impl eframe::App for App {
                     let a = sensory_activity.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                     let col = col_s_base.gamma_multiply(0.35 + 0.65 * a);
                     painter.circle_filled(p0, radius_s, col);
+                    if self.placement_selected_layers.contains(&0) {
+                        painter.circle_stroke(
+                            p0,
+                            radius_s + 3.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
+                        );
+                    }
                     // tooltip area
                     let r = egui::Rect::from_center_size(p0, egui::vec2(radius_s*2.0, radius_s*2.0));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
@@ -15386,6 +16162,13 @@ impl eframe::App for App {
                         }
                     }
                     painter.circle_filled(p, r_h, col);
+                    if self.placement_selected_layers.contains(&(li as u32 + 1)) {
+                        painter.circle_stroke(
+                            p,
+                            r_h + 3.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
+                        );
+                    }
                     let r = egui::Rect::from_center_size(p, egui::vec2(radius_h*2.0, radius_h*2.0));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
                         hovered_target = Some(ContextPick::Hidden(li, j));
@@ -15760,6 +16543,13 @@ impl eframe::App for App {
                     let a = output_activity.get(k).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                     let col = col_o_base.gamma_multiply(0.30 + 0.70 * a);
                     painter.circle_filled(p, radius_o, col);
+                    if self.placement_selected_layers.contains(&(hidden_positions.len() as u32 + 1)) {
+                        painter.circle_stroke(
+                            p,
+                            radius_o + 3.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
+                        );
+                    }
                     let r = egui::Rect::from_center_size(p, egui::vec2(radius_o*2.4, radius_o*2.4));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
                         hovered_target = Some(ContextPick::Output(k));

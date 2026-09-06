@@ -114,6 +114,16 @@ const probeCountEl = document.getElementById("probe-count");
 const rasterCanvas = document.getElementById("raster-canvas");
 const rasterCtx = rasterCanvas ? rasterCanvas.getContext("2d") : null;
 const rasterFramesEl = document.getElementById("raster-frames");
+const surfaceTabs = document.querySelectorAll("[data-surface-tab]");
+const dashboardSurface = document.getElementById("dashboard-surface");
+const placementSurface = document.getElementById("placement-surface");
+const placementCanvas = document.getElementById("placement-canvas");
+const placementCtx = placementCanvas ? placementCanvas.getContext("2d") : null;
+const placementSummaryEl = document.getElementById("placement-summary");
+const placementEmptyEl = document.getElementById("placement-empty");
+const placementTableEl = document.getElementById("placement-table");
+const placementDetailEl = document.getElementById("placement-detail");
+const placementResetViewBtn = document.getElementById("placement-reset-view");
 const probeSourceInput = document.getElementById("probe-source");
 const probeLayerInput = document.getElementById("probe-layer");
 const probeIndexInput = document.getElementById("probe-index");
@@ -207,7 +217,17 @@ const state = {
     sourceKey: "",
     savedAtMs: 0
   },
-  instrumentation: loadInstrumentationState()
+  instrumentation: loadInstrumentationState(),
+  placement: {
+    visible: false,
+    model: null,
+    camera: { zoom: 1, offsetX: 0, offsetY: 0, rotation: 0 },
+    selectedShardIds: new Set(),
+    selectedLayers: new Set(),
+    detailShardId: null,
+    hitTargets: [],
+    drag: null
+  }
 };
 const serviceAccessApi = window.NMServiceAccess || {
   getServiceAccessMap: () => ({}),
@@ -830,6 +850,15 @@ function runtimeUserLabel() {
 function clusterModeAllowed() {
   return state.authMode === "none";
 }
+function generatedManagementClient() {
+  if (typeof window.AARNNGeneratedManagementClient !== "function") {
+    return null;
+  }
+  if (!window.__aarnnGeneratedManagementClient) {
+    window.__aarnnGeneratedManagementClient = new window.AARNNGeneratedManagementClient();
+  }
+  return window.__aarnnGeneratedManagementClient;
+}
 function runtimeFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (state.authMode === "none") {
@@ -838,10 +867,54 @@ function runtimeFetch(path, options = {}) {
       headers.set("x-nm-runtime-user", runtimeUser);
     }
   }
-  return fetch(path, {
+  const request = {
     ...options,
     headers
-  });
+  };
+  const client = generatedManagementClient();
+  if (client) {
+    return client.request(path, request);
+  }
+  return fetch(path, request);
+}
+function managementRequestId(prefix) {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+}
+function waitForManagementOperation() {
+  return new Promise(resolve => setTimeout(resolve, 100));
+}
+async function submitManagedWorkspaceOperation(workspace, action) {
+  const management = generatedManagementClient();
+  if (!management || !workspace) return false;
+  const brainId = workspace.network_id || workspace.workspace_id || "";
+  const principalId = authenticatedUsername() || runtimeUserLabel();
+  if (!brainId || !principalId) return false;
+  const statusResponse = await management.status(brainId);
+  if (!statusResponse.ok) return false;
+  const status = await statusResponse.json();
+  const context = {
+    request_id: managementRequestId("browser-request"),
+    idempotency_key: managementRequestId("browser-operation"),
+    expected_resource_version: Number(status.resource_version || 0),
+    observed_leader_term: Number(status.leader_term || 0)
+  };
+  const acceptedResponse = await management.submitOperation(principalId, brainId, action, context);
+  if (!acceptedResponse.ok) return false;
+  const accepted = await acceptedResponse.json();
+  const operationId = Number(accepted.operation_id || 0);
+  if (!operationId) return false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const response = await management.operation(operationId, brainId, Number(accepted.leader_term || status.leader_term || 0));
+    if (!response.ok) return false;
+    const operation = await response.json();
+    if (operation.state === "succeeded") return true;
+    if (operation.state === "failed" || operation.state === "cancelled") return false;
+    await waitForManagementOperation();
+  }
+  return false;
 }
 function saveActiveNode() {
   if (state.userConfigEnabled) {
@@ -1324,6 +1397,444 @@ function activeSource() {
     };
   }
   return null;
+}
+
+function placementActivityForLayers(layers, activity, fallbackTotal) {
+  const hidden = Array.isArray(activity && activity.hidden) ? activity.hidden : [];
+  const sensory = activity && activity.sensory ? activity.sensory : { indices: [] };
+  const output = activity && activity.output ? activity.output : { indices: [] };
+  let active = 0;
+  let observed = 0;
+  for (const layer of layers) {
+    const layerIndex = Number(layer);
+    const envelope = layerIndex === 0 ? sensory : hidden[layerIndex - 1] || output;
+    const indices = Array.isArray(envelope && envelope.indices) ? envelope.indices : [];
+    active += indices.length;
+    observed += indices.length ? Math.max(indices.length, Number(fallbackTotal || 0)) : 0;
+  }
+  const total = Math.max(0, Number(fallbackTotal || observed || 0));
+  return {
+    active: Math.min(active, total || active),
+    total,
+    score: total > 0 ? Math.max(0, Math.min(1, active / total)) : 0
+  };
+}
+
+function evenLayerShards(nodeIds, layerCount, totalNeurons) {
+  const count = Math.max(1, nodeIds.length);
+  const layers = Math.max(1, layerCount);
+  return nodeIds.map((nodeId, index) => {
+    const start = Math.floor(index * layers / count);
+    const end = Math.max(start + 1, Math.floor((index + 1) * layers / count));
+    const ownedLayers = Array.from({ length: Math.min(layers, end) - start }, (_, offset) => start + offset);
+    const neuronCount = Math.round((Number(totalNeurons || 0) * ownedLayers.length) / layers);
+    return {
+      id: `${nodeId}:virtual-${index}`,
+      layers: ownedLayers,
+      neuronCount,
+      source: "workspace projection"
+    };
+  });
+}
+
+function buildPlacementModel() {
+  const source = activeSource();
+  if (!source) return null;
+  const activity = state.activity || {};
+  if (source.kind === "workspace") {
+    const workspace = source.workspace;
+    const detail = getActiveWorkspaceDetail();
+    const meta = workspaceNetworkMeta(workspace, detail) || {};
+    const distribution = workspaceDistributedNodeMeta(workspace, detail);
+    const nodeIds = distribution.nodeIds.length ? distribution.nodeIds : ["local"];
+    const autoscaler = state.runtime.autoscaler || {};
+    const hosts = Array.isArray(autoscaler.active_remote_host_ids) ? autoscaler.active_remote_host_ids : [];
+    const nodes = nodeIds.map((nodeId, index) => {
+      const host = nodeId === "local" ? "local host" : hosts[index - 1] || nodeId;
+      return {
+        id: nodeId,
+        host,
+        address: "runtime-managed",
+        cpu: null,
+        shards: []
+      };
+    });
+    evenLayerShards(nodeIds, meta.num_layers || 1, meta.total_neurons || 0).forEach((shard, index) => {
+      const layers = shard.layers;
+      const metric = placementActivityForLayers(layers, activity, shard.neuronCount);
+      nodes[index].shards.push({
+        ...shard,
+        ...metric,
+        id: placementShardId(nodes[index].id, "active", layers),
+        role: "active",
+        movements: []
+      });
+    });
+    return {
+      networkId: meta.network_id || source.networkId,
+      nodes,
+      movements: [],
+      step: activity.sim_step,
+      sourceLabel: "workspace runtime projection",
+      reported: false
+    };
+  }
+
+  const status = state.statusByTarget.get(source.addr);
+  const network = (status && Array.isArray(status.networks) ? status.networks : []).find(item => item.network_id === source.networkId);
+  if (!network) return null;
+  const movements = (network.shard_movements || []).map(normalizePlacementMovement).filter(Boolean);
+  const nodeById = new Map((status.nodes || []).map(node => [node.node_id || node.address, node]));
+  const nodesById = new Map();
+  (network.distribution || []).forEach(distribution => {
+    const nodeId = String(distribution.node_id || "unassigned");
+    const node = nodeById.get(nodeId) || {};
+    const layerCounts = distribution.layer_neuron_counts || {};
+    const layers = (distribution.layers || Object.keys(layerCounts)).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const neuronCount = placementNeuronCount(layers, layerCounts, network.total_neurons);
+    const metric = placementActivityForLayers(layers, activity, neuronCount);
+    if (!nodesById.has(nodeId)) {
+      nodesById.set(nodeId, {
+        id: nodeId,
+        host: node.address || nodeId,
+        address: node.address || "unreported",
+        cpu: Number.isFinite(Number(node.cpu_usage)) ? Number(node.cpu_usage) : null,
+        shards: []
+      });
+    }
+    nodesById.get(nodeId).shards.push({
+      id: placementShardId(nodeId, "active", layers),
+      layers,
+      neuronCount,
+      role: "active",
+      ...metric,
+      movements: movementsForPlacementShard(movements, nodeId, "active", layers),
+      source: "orchestrator report"
+    });
+    const backupLayers = (distribution.backup_layers || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    if (backupLayers.length) {
+      const backupNeuronCount = placementNeuronCount(backupLayers, layerCounts, 0);
+      const backupMetric = placementActivityForLayers(backupLayers, activity, backupNeuronCount);
+      nodesById.get(nodeId).shards.push({
+        id: placementShardId(nodeId, "backup", backupLayers),
+        layers: backupLayers,
+        neuronCount: backupNeuronCount,
+        role: "backup",
+        ...backupMetric,
+        movements: movementsForPlacementShard(movements, nodeId, "backup", backupLayers),
+        source: "orchestrator replica report"
+      });
+    }
+  });
+  (status.nodes || []).filter(node => (node.active_networks || []).includes(source.networkId)).forEach(node => {
+    const nodeId = node.node_id || node.address;
+    if (!nodesById.has(nodeId)) nodesById.set(nodeId, {
+      id: nodeId,
+      host: node.address || nodeId,
+      address: node.address || "unreported",
+      cpu: Number.isFinite(Number(node.cpu_usage)) ? Number(node.cpu_usage) : null,
+      shards: []
+    });
+  });
+  return {
+    networkId: network.network_id,
+    nodes: Array.from(nodesById.values()).sort((a, b) => a.id.localeCompare(b.id)),
+    movements,
+    step: activity.sim_step,
+    sourceLabel: "orchestrator report",
+    reported: true
+  };
+}
+
+function placementActivityColor(score) {
+  const value = Math.max(0, Math.min(1, Number(score) || 0));
+  if (value >= 0.6) return "#ff795e";
+  if (value >= 0.15) return "#ffd37a";
+  return "#66869b";
+}
+
+function normalizePlacementMovement(movement) {
+  if (!movement || typeof movement !== "object") return null;
+  const phase = String(movement.phase || "").toLowerCase();
+  const role = String(movement.role || "active").toLowerCase() === "backup" ? "backup" : "active";
+  if (phase !== "moving" && phase !== "considering") return null;
+  return {
+    shardId: String(movement.shard_id || ""),
+    sourceNode: String(movement.source_node || ""),
+    destinationNode: String(movement.destination_node || ""),
+    role,
+    phase,
+    progress: Math.max(0, Math.min(1, Number(movement.progress_milli || 0) / 1000)),
+    reason: String(movement.reason || ""),
+    updatedAtMs: Number(movement.updated_at_ms || 0)
+  };
+}
+
+function placementShardId(nodeId, role, layers) {
+  return `${nodeId}:${role}:layers-${layers.join("-") || "unknown"}`;
+}
+
+function movementsForPlacementShard(movements, nodeId, role, layers) {
+  const layerSet = new Set(layers.map(Number));
+  return movements.filter(movement => {
+    if (movement.role !== role) return false;
+    const matchesLayer = Array.from(layerSet).some(layer => movement.shardId.indexOf(`:layer-${layer}:`) >= 0);
+    return matchesLayer && (movement.sourceNode === nodeId || movement.destinationNode === nodeId || !movement.destinationNode);
+  });
+}
+
+function placementNeuronCount(layers, layerCounts, fallback) {
+  const count = layers.reduce((sum, layer) => sum + Number(layerCounts[layer] || layerCounts[String(layer)] || 0), 0);
+  return count || Number(fallback || 0);
+}
+
+function fillPlacementRoundedRect(ctx, x, y, width, height, radius) {
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, radius);
+    return;
+  }
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function renderPlacement() {
+  if (!placementCanvas || !placementCtx || !placementSurface || placementSurface.hidden) return;
+  const model = buildPlacementModel();
+  state.placement.model = model;
+  const ctx = placementCtx;
+  const width = Math.max(720, placementCanvas.clientWidth || 720);
+  const height = 520;
+  const scale = Math.max(1, window.devicePixelRatio || 1);
+  placementCanvas.width = Math.round(width * scale);
+  placementCanvas.height = Math.round(height * scale);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(10, 19, 25, 0.56)";
+  ctx.fillRect(0, 0, width, height);
+  state.placement.hitTargets = [];
+  if (!model || !model.nodes.length) {
+    if (placementEmptyEl) placementEmptyEl.hidden = false;
+    if (placementSummaryEl) placementSummaryEl.textContent = "No placement is currently reported";
+    if (placementTableEl) placementTableEl.innerHTML = "";
+    return;
+  }
+  if (placementEmptyEl) placementEmptyEl.hidden = true;
+  const nodeWidth = Math.max(205, Math.min(280, (width - 40) / model.nodes.length - 14));
+  const gap = model.nodes.length > 1 ? (width - 40 - nodeWidth * model.nodes.length) / (model.nodes.length - 1) : 0;
+  const camera = state.placement.camera;
+  const zoom = Math.max(0.5, Math.min(3, Number(camera.zoom) || 1));
+  const rotation = Number(camera.rotation) || 0;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const nodeCenters = new Map();
+  ctx.save();
+  ctx.translate(centerX + Number(camera.offsetX || 0), centerY + Number(camera.offsetY || 0));
+  ctx.rotate(rotation);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-centerX, -centerY);
+  ctx.font = "12px system-ui, sans-serif";
+  model.nodes.forEach((node, index) => {
+    const x = 20 + index * (nodeWidth + gap);
+    const y = 28;
+    const cardHeight = Math.min(485, 105 + node.shards.length * 108);
+    nodeCenters.set(node.id, { x: x + nodeWidth / 2, y: y + cardHeight / 2 });
+    ctx.fillStyle = "rgba(38, 56, 70, 0.94)";
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1;
+    fillPlacementRoundedRect(ctx, x, y, nodeWidth, cardHeight, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`Node ${node.id}`, x + 12, y + 23);
+    ctx.fillStyle = "#bfcbd1";
+    ctx.fillText(String(node.host || node.address || "unknown host").slice(0, 34), x + 12, y + 42);
+    ctx.fillStyle = "#78d7aa";
+    ctx.fillText(node.cpu == null ? "CPU: n/a" : `CPU: ${node.cpu.toFixed(1)}%`, x + 12, y + 61);
+    node.shards.forEach((shard, shardIndex) => {
+      const sy = y + 78 + shardIndex * 108;
+      const score = Number(shard.score) || 0;
+      const selected = state.placement.selectedShardIds.has(shard.id);
+      const moving = (shard.movements || []).some(movement => movement.phase === "moving");
+      const considering = !moving && (shard.movements || []).some(movement => movement.phase === "considering");
+      ctx.fillStyle = placementActivityColor(score);
+      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, 88, 8); ctx.fill();
+      ctx.strokeStyle = selected ? "#fff0a8" : moving ? "#b889ff" : considering ? "#ffd37a" : shard.role === "backup" ? "#69b7c9" : "rgba(16,32,42,0.35)";
+      ctx.lineWidth = selected ? 3 : 2;
+      if (considering) ctx.setLineDash([6, 4]);
+      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, 88, 8); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#10202a";
+      ctx.fillText(`${shard.role === "backup" ? "Backup" : "Shard"} ${shard.id.split(":")[0]}`, x + 18, sy + 18);
+      const layers = shard.layers.length ? shard.layers.join(", ") : "unreported";
+      ctx.fillText(`layers: ${layers}`, x + 18, sy + 36);
+      ctx.fillText(`${shard.active || 0}/${shard.total || shard.neuronCount || 0} active · ${shard.neuronCount || 0} neurons`, x + 18, sy + 54);
+      ctx.fillStyle = "rgba(16,32,42,0.35)";
+      ctx.fillRect(x + 18, sy + 66, nodeWidth - 36, 6);
+      ctx.fillStyle = "#10202a";
+      ctx.fillRect(x + 18, sy + 66, (nodeWidth - 36) * score, 6);
+      const movement = (shard.movements || [])[0];
+      if (movement) {
+        ctx.fillStyle = movement.phase === "moving" ? "#eadcff" : "#fff0b3";
+        ctx.fillText(`${movement.phase === "moving" ? "Moving" : "Considering"} ${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"}`, x + 18, sy + 82);
+      }
+      state.placement.hitTargets.push({ id: shard.id, rect: { x: x + 10, y: sy, width: nodeWidth - 20, height: 88 } });
+    });
+  });
+  (model.movements || []).forEach(movement => {
+    const from = nodeCenters.get(movement.sourceNode);
+    const to = nodeCenters.get(movement.destinationNode);
+    if (!from || !to || movement.sourceNode === movement.destinationNode) return;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.strokeStyle = movement.phase === "moving" ? "rgba(184,137,255,0.9)" : "rgba(255,211,122,0.8)";
+    ctx.lineWidth = movement.phase === "moving" ? 3 : 2;
+    if (movement.phase === "considering") ctx.setLineDash([7, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+  ctx.restore();
+  if (placementSummaryEl) placementSummaryEl.textContent = `${model.networkId} · ${model.nodes.length} nodes · ${model.nodes.reduce((sum, node) => sum + node.shards.length, 0)} shards · ${model.sourceLabel}${Number.isFinite(Number(model.step)) ? ` · step ${model.step}` : ""}`;
+  if (placementTableEl) {
+    placementTableEl.innerHTML = model.nodes.flatMap(node => node.shards.map(shard => {
+      const selected = state.placement.selectedShardIds.has(shard.id) ? " selected" : "";
+      const moving = (shard.movements || []).length ? " moving" : "";
+      const phase = (shard.movements || [])[0];
+      return `<div class="placement-row${selected}${moving}"><strong>${escapeHtml(node.id)} / ${escapeHtml(shard.role || "active")}</strong><br/><small>${escapeHtml(node.host || "unknown host")} · layers ${escapeHtml(shard.layers.join(", ") || "unreported")} · ${Number(shard.neuronCount || 0)} neurons · ${Number(shard.score || 0) * 100 | 0}% activity${phase ? ` · ${escapeHtml(phase.phase)}` : ""}</small></div>`;
+    })).join("");
+  }
+  const detail = model.nodes.flatMap(node => node.shards.map(shard => ({ node, shard }))).find(item => item.shard.id === state.placement.detailShardId);
+  if (placementDetailEl) {
+    placementDetailEl.hidden = !detail;
+    if (detail) {
+      const movements = detail.shard.movements || [];
+      placementDetailEl.innerHTML = `<strong>${escapeHtml(detail.shard.id)}</strong> · ${escapeHtml(detail.shard.role || "active")}<br/>Host: ${escapeHtml(detail.node.host || "unknown")}<br/>Layers: ${escapeHtml(detail.shard.layers.join(", ") || "unreported")}<br/>Neurons: ${Number(detail.shard.neuronCount || 0)} · activity: ${Number(detail.shard.score || 0) * 100 | 0}%${movements.length ? `<br/>Automation: ${escapeHtml(movements.map(movement => `${movement.phase} (${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"})`).join("; "))}` : ""}`;
+    }
+  }
+}
+
+function placementPointerToWorld(event) {
+  const rect = placementCanvas.getBoundingClientRect();
+  const width = placementCanvas.clientWidth || 720;
+  const height = 520;
+  const camera = state.placement.camera;
+  const dx = (event.clientX - rect.left - width / 2 - Number(camera.offsetX || 0)) / Math.max(0.5, Number(camera.zoom) || 1);
+  const dy = (event.clientY - rect.top - height / 2 - Number(camera.offsetY || 0)) / Math.max(0.5, Number(camera.zoom) || 1);
+  const cos = Math.cos(Number(camera.rotation) || 0);
+  const sin = Math.sin(Number(camera.rotation) || 0);
+  return { x: width / 2 + dx * cos + dy * sin, y: height / 2 - dx * sin + dy * cos };
+}
+
+function placementHitTarget(event) {
+  const point = placementPointerToWorld(event);
+  return state.placement.hitTargets.slice().reverse().find(target => point.x >= target.rect.x && point.x <= target.rect.x + target.rect.width && point.y >= target.rect.y && point.y <= target.rect.y + target.rect.height);
+}
+
+function syncPlacementSelection() {
+  const model = state.placement.model;
+  const selectedLayers = new Set();
+  if (model) {
+    model.nodes.forEach(node => node.shards.forEach(shard => {
+      if (state.placement.selectedShardIds.has(shard.id)) shard.layers.forEach(layer => selectedLayers.add(Number(layer)));
+    }));
+  }
+  state.placement.selectedLayers = selectedLayers;
+  drawNetwork();
+}
+
+function selectPlacementShard(shardId, additive) {
+  if (!additive) state.placement.selectedShardIds.clear();
+  if (additive && state.placement.selectedShardIds.has(shardId)) state.placement.selectedShardIds.delete(shardId);
+  else state.placement.selectedShardIds.add(shardId);
+  syncPlacementSelection();
+  renderPlacement();
+}
+
+function zoomPlacementToShard(shardId) {
+  const target = state.placement.hitTargets.find(item => item.id === shardId);
+  if (!target) return;
+  const width = placementCanvas.clientWidth || 720;
+  const height = 520;
+  const nextZoom = 1.8;
+  const world = { x: target.rect.x + target.rect.width / 2, y: target.rect.y + target.rect.height / 2 };
+  const dx = (world.x - width / 2) * nextZoom;
+  const dy = (world.y - height / 2) * nextZoom;
+  const cos = Math.cos(state.placement.camera.rotation || 0);
+  const sin = Math.sin(state.placement.camera.rotation || 0);
+  state.placement.camera.zoom = nextZoom;
+  state.placement.camera.offsetX = -(dx * cos - dy * sin);
+  state.placement.camera.offsetY = -(dx * sin + dy * cos);
+}
+
+function attachPlacementControls() {
+  if (!placementCanvas) return;
+  placementCanvas.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    state.placement.drag = { x: event.clientX, y: event.clientY, moved: false, rotate: Boolean(event.ctrlKey || event.metaKey) };
+    if (typeof placementCanvas.setPointerCapture === "function") placementCanvas.setPointerCapture(event.pointerId);
+  });
+  placementCanvas.addEventListener("pointermove", event => {
+    const drag = state.placement.drag;
+    if (!drag) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) < 2) return;
+    drag.moved = true;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    if (drag.rotate) state.placement.camera.rotation += dx * 0.006;
+    else {
+      state.placement.camera.offsetX += dx;
+      state.placement.camera.offsetY += dy;
+    }
+    renderPlacement();
+  });
+  placementCanvas.addEventListener("pointerup", event => {
+    const drag = state.placement.drag;
+    state.placement.drag = null;
+    if (typeof placementCanvas.releasePointerCapture === "function") placementCanvas.releasePointerCapture(event.pointerId);
+    if (!drag || drag.moved) return;
+    const target = placementHitTarget(event);
+    if (target) selectPlacementShard(target.id, Boolean(event.ctrlKey || event.metaKey));
+  });
+  placementCanvas.addEventListener("pointercancel", () => { state.placement.drag = null; });
+  placementCanvas.addEventListener("dblclick", event => {
+    const target = placementHitTarget(event);
+    if (!target) return;
+    state.placement.detailShardId = target.id;
+    selectPlacementShard(target.id, false);
+    zoomPlacementToShard(target.id);
+    renderPlacement();
+  });
+  placementCanvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.12 : 0.89;
+    state.placement.camera.zoom = Math.max(0.5, Math.min(3, state.placement.camera.zoom * factor));
+    renderPlacement();
+  }, { passive: false });
+  if (placementResetViewBtn) placementResetViewBtn.addEventListener("click", () => {
+    state.placement.camera = { zoom: 1, offsetX: 0, offsetY: 0, rotation: 0 };
+    state.placement.detailShardId = null;
+    renderPlacement();
+  });
+}
+
+function setSurfaceTab(name) {
+  const placement = name === "placement";
+  state.placement.visible = placement;
+  surfaceTabs.forEach(tab => tab.classList.toggle("active", tab.dataset.surfaceTab === name));
+  if (dashboardSurface) dashboardSurface.hidden = placement;
+  if (placementSurface) placementSurface.hidden = !placement;
+  if (placement) renderPlacement();
 }
 function sourceRequestKey(source) {
   if (!source) return "";
@@ -1814,6 +2325,20 @@ async function controlWorkspaceAction(action) {
   const workspace = getActiveWorkspaceMeta();
   if (!workspace) return false;
   try {
+    if (action === "start" || action === "stop" || action === "reset") {
+      const managed = await submitManagedWorkspaceOperation(workspace, action);
+      if (!managed) {
+        setWorkspaceFeedback("Secured management operation was not completed.", "error");
+        setToolStatus("Secured management operation was not completed.");
+        return false;
+      }
+      await loadRuntimeStatus();
+      await loadTokenBalance();
+      await fetchSnapshotForActive();
+      await pollActivity();
+      setWorkspaceFeedback(`Workspace ${workspaceBaseLabel(workspace)} ${action}.`, "success");
+      return true;
+    }
     const resp = await runtimeFetch(buildWorkspaceApiUrl(workspace, "/control"), {
       method: "POST",
       headers: {
@@ -2458,6 +2983,7 @@ async function pollAll() {
   if (isWorkspaceMode()) {
     renderWorkspaceSidebar();
     refreshNetworkSelect();
+    renderPlacement();
     return;
   }
   if (!state.targets.length) {
@@ -2512,6 +3038,7 @@ async function pollAll() {
   const aggregate = aggregateClusterStatus();
   renderSidebar((activeStatus === null || activeStatus === void 0 ? void 0 : activeStatus.nodes) || [], (activeStatus === null || activeStatus === void 0 ? void 0 : activeStatus.networks) || [], aggregate);
   refreshNetworkSelect();
+  renderPlacement();
 }
 async function fetchSnapshotForActive() {
   if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
@@ -2653,6 +3180,7 @@ async function pollActivity() {
     state.activity = activity;
     pushInstrumentationFrame(activity);
     drawNetwork();
+    renderPlacement();
   } catch (_) {}
 }
 function buildGraph(snapshot, layout) {
@@ -3080,10 +3608,19 @@ function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, 
     const x = cx + state.view.offsetX + rotated.x * radius;
     const y = cy + state.view.offsetY + rotated.y * radius;
     const active = activeSet.has(idx);
+    const selectedLayer = node.kind === "sensory" ? 0 : node.kind === "hidden" ? Number(node.layer || 0) + 1 : state.graph && state.graph.nodes && state.graph.nodes.hidden ? state.graph.nodes.hidden.length + 1 : -1;
+    const selected = state.placement.selectedLayers.has(selectedLayer);
     ctx.fillStyle = active ? "#ffffff" : baseColor;
     ctx.beginPath();
     ctx.arc(x, y, active ? 3.4 : 2.2, 0, Math.PI * 2);
     ctx.fill();
+    if (selected) {
+      ctx.beginPath();
+      ctx.arc(x, y, active ? 6.4 : 5.2, 0, Math.PI * 2);
+      ctx.strokeStyle = "#fff0a8";
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
     if (includeInInstrumentation) {
       screenNodes.push({
         targetType: node.kind || "sensory",
@@ -3770,16 +4307,15 @@ async function applyRemoteJsonPayload(raw, label) {
       setToolStatus(`Select an orchestrator before loading ${label.toLowerCase()}.`);
       return false;
     }
-    const res = await fetch("/api/update_network", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        addr: orchestratorAddr,
-        network_id: state.activeNetwork,
-        config_json: raw
-      })
+    const management = generatedManagementClient();
+    if (!management) {
+      setToolStatus("Versioned management client is unavailable; update refused.");
+      return false;
+    }
+    const res = await management.updateNetwork({
+      addr: orchestratorAddr,
+      network_id: state.activeNetwork,
+      config_json: raw
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -4102,13 +4638,12 @@ async function updateNetworkSettings(options = {}) {
     return;
   }
   try {
-    const res = await fetch("/api/update_network", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const management = generatedManagementClient();
+    if (!management) {
+      console.error("Versioned management client unavailable; update refused");
+      return;
+    }
+    const res = await management.updateNetwork(payload);
     if (res.ok) {
       console.log("Network settings updated successfully");
     } else {
@@ -4139,13 +4674,12 @@ async function sendControlAction(action) {
     action
   };
   try {
-    const res = await fetch("/api/control_network", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const management = generatedManagementClient();
+    if (!management) {
+      console.error("Versioned management client unavailable; control refused");
+      return;
+    }
+    const res = await management.controlNetwork(payload);
     if (res.ok) {
       if (action === "start" || action === "repeat") {
         setActiveNetworkPlaying(true);
@@ -4331,13 +4865,11 @@ async function sendAerFrameToApi(frame, ctxDefaults) {
   if (!payload.aer_payload_hex && (!payload.spike_indices || payload.spike_indices.length === 0)) {
     return;
   }
-  const resp = await fetch("/api/aer/inject", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+  const management = generatedManagementClient();
+  if (!management) {
+    throw new Error("Versioned management client unavailable; AER admission refused");
+  }
+  const resp = await management.injectAer(payload);
   if (!resp.ok) {
     let message = `AER inject failed (${resp.status})`;
     try {
@@ -4895,6 +5427,7 @@ async function boot() {
   resizeCanvas();
   attachControls();
   attachCanvasControls();
+  attachPlacementControls();
   renderInstrumentation();
   refreshNetworkSelect();
   if (isWorkspaceMode()) {
@@ -4918,6 +5451,12 @@ if (resetBtn) {
 if (newBtn) {
   newBtn.addEventListener("click", () => sendControlAction("new"));
 }
+surfaceTabs.forEach(tab => {
+  tab.addEventListener("click", () => setSurfaceTab(tab.dataset.surfaceTab || "dashboard"));
+});
+window.addEventListener("resize", () => {
+  if (state.placement.visible) renderPlacement();
+});
 [modelSelector, learningSelector].forEach(selector => {
   selector.querySelectorAll("button").forEach(btn => {
     btn.addEventListener("click", () => {

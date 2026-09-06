@@ -144,6 +144,115 @@ Implement resources, grants, bindings, capability reports, actuator lease record
   consensus and fencing, OIDC/PKCE/mTLS, audit and live concurrency/security
   evidence, authenticated enrolment, and direct-worker closure. `management_v1`
   remains disabled; legacy management remains the rollback boundary.
+- [x] `2026-08-30 18:41Z` The bindings QA gate now checks a stable source-schema
+  fingerprint in the Rust, browser and Android generated outputs and verifies
+  that the browser/Android clients consume the generated path surface.
+  `cargo xtask bindings check` passed. This is freshness/drift protection for
+  the current generated adapter outputs, not proof of production OIDC/PKCE,
+  mTLS, mature consensus or live multi-client security evidence.
+- [x] `2026-08-30 19:06Z` Revalidated the generated management schema boundary
+  after the cluster-cut evidence change. Rust client/server integration,
+  browser and Android generated path consumption, schema fingerprint checks,
+  the full workspace suite and the available QA matrix pass. The remaining
+  management gate is still the production authority/security cutover:
+  mature quorum consensus, OIDC/PKCE/mTLS, durable audit, live concurrency
+  evidence, enrolment and removal of direct-worker compatibility paths.
+
+## Progress update — 2026-08-31 14:22Z
+
+- [x] Added secured-service tests proving that a principal without `Read`
+  cannot fetch status or another principal's operation while the operation
+  owner can inspect its own operation. Added a startup-role test proving
+  workers do not expose the generated management service.
+- [!] This closes the repository-local authorisation and worker-service
+  regression gap only. OIDC/PKCE, mTLS/workload identity, durable audit,
+  replicated operation state, live concurrency/tenant evidence and network
+  consensus remain required before `management_v1` promotion.
+
+## Progress update — 2026-08-31
+
+- [x] Live durable owners now parse and bind an explicit replicated authority
+  set before considering the single-file authority fallback. The local
+  adapter also has an explicit-availability reopen test that fails closed
+  below majority.
+- [!] This is not the Phase 7 consensus cutover. A mature network consensus
+  implementation, OIDC/PKCE and workload mTLS integration, durable audit
+  delivery, replicated operation state and live multi-client tenant evidence
+  are still required before `management_v1` can be promoted.
+
+## Progress update — 2026-08-31
+
+- [x] Secured generated management requests now require a non-empty brain
+  scope for status, mutation and operation lookup, and operation lookup must
+  match the persisted brain exactly. The regression suite covers empty-scope
+  denial alongside principal and read-scope checks.
+- [!] The gRPC interceptor remains a configured bearer-token reference seam;
+  OIDC/PKCE, workload mTLS, durable audit delivery and live multi-client
+  security evidence are still required for production cutover.
+
+## Progress update — 2026-08-31
+
+- [x] Internal causal node identity checks now bind the declared sender to the
+  mTLS leaf certificate fingerprint and fail closed on missing or mismatched
+  enrollment. The live profile also requires a real replicated-authority
+  configuration and disables legacy data-plane ingress.
+- [!] This does not complete user-management cutover: OIDC/PKCE, workload
+  identity lifecycle, replicated audit delivery and network consensus remain
+  deployment/integration gates.
+- [x] `NM_PRODUCTION_CUTOVER=1` now rejects static bearer authentication,
+  requires OIDC plus a durable revocation-list path, and checks revoked
+  subjects/JWT IDs on each request. PKCE issuance/refresh and replicated audit
+  delivery still require the external identity and audit services.
+- [x] Distributed and web startup now share a fail-closed production preflight:
+  production mode requires the management-v1 profile, secure gRPC/domain
+  configuration, durable management state, OIDC and secure session cookies;
+  reference mode keeps its explicit test-only authentication path.
+
+## Progress update — 2026-09-05
+
+- [x] Added the generated `CancelMigration` RPC and authenticated local/remote
+  management paths. Cancellation uses the journal's leader-term and
+  resource-version fences and cannot revoke a committed migration.
+- [x] Refreshed the browser and Android generated management contract markers
+  and exposed the cancellation method/path. `cargo xtask bindings check` and
+  the management integration suite pass.
+- [x] Added browser submit/advance/lookup/cancel gateway routes with the same
+  authenticated brain scope and durable-journal selection as the gRPC
+  service. Reference mode keeps in-memory journals explicit; configured
+  deployments use `NM_MIGRATION_JOURNAL_DIR`.
+- [!] The RPC remains a reference management adapter until replicated quorum
+  authority, operation streaming, production identity, and live worker
+  handoff are integrated.
+
+## Progress update — 2026-09-05 (grouped migration control)
+
+- [x] Management migration submission accepts an optional bounded
+  `MigrationGroupSpec`; advancement accepts a fenced `MigrationGroupUpdate`.
+  Both in-memory and file-backed journal paths use the same resource-version
+  and authorisation checks.
+- [x] Added `GetMigrationStatus` as a compatibility alias over the fenced
+  migration lookup and added local/remote CLI file options for group DTOs.
+- [x] Added explicit `MigrateBrain` and `ScaleShards` migration kinds so
+  orchestrator policy can distinguish whole-brain relocation from shard-count
+  changes while retaining one journal state machine.
+- [!] These remain reference management adapters. A replicated consensus
+  implementation, streaming watch and live worker handoff are still required
+  before production promotion.
+
+## Progress update — 2026-09-05 21:40Z (activation evidence)
+
+- [x] Stable-worker registration is now a management-side evidence callback,
+  not an authority grant. It validates the registered brain, plan, lease,
+  fencing token, complete shard inventory, target ownership and committed
+  application acknowledgements before promoting a queued activation to
+  `Active`.
+- [x] Activation state is persisted with terminal `Active` and `Failed`
+  semantics. Delayed heartbeats cannot regress or resurrect a lifecycle, and
+  persisted reopen coverage verifies that active records are not retried.
+- [x] Focused management/placement/heartbeat tests and the repository-wide
+  all-target test suite pass. The registration callback remains a reference
+  adapter until deployed executor registration and replicated authority are
+  integrated.
 
 ## Validation and acceptance
 
@@ -185,3 +294,14 @@ management client or live OIDC/PKCE/API security evidence is present.
 Reference policy and stale-term operation checks pass. Consensus, generated
 client consumption, live security/accessibility evidence and direct-worker
 closure remain open; Phase 8 governed I/O cannot be promoted before this gate.
+
+## Progress update — 2026-08-31
+
+- [x] Added the missing web-gateway route for the generated browser management
+  client and a regression assertion tying the HTML script reference to the
+  embedded Rust handler. The shipped browser contract is now loadable in a
+  deployed web-ui binary.
+- [!] This fixes asset delivery only. Operation REST forwarding, delegated
+  user identity, durable replicated audit and production OIDC/PKCE/workload
+  identity are still not implemented; the management feature remains an
+  explicit opt-in reference path.

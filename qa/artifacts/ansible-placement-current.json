@@ -1,0 +1,272 @@
+{
+  "brain_id": 42,
+  "topology_generation": 1,
+  "partition_generation": 1,
+  "lease_term": 1,
+  "fencing_token": 1,
+  "effective_tag": {
+    "tick": 0,
+    "microstep": 0
+  },
+  "demands": [
+    {
+      "shard_id": 1,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    },
+    {
+      "shard_id": 2,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    },
+    {
+      "shard_id": 3,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    },
+    {
+      "shard_id": 4,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    },
+    {
+      "shard_id": 5,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    },
+    {
+      "shard_id": 6,
+      "load_units": 1000,
+      "memory_bytes": 268435456,
+      "checkpoint_bytes": 536870912,
+      "network_bytes_per_second": 1000000,
+      "zero_delay_component": null,
+      "required_numerical_profile": "reference-cpu-v1",
+      "preferred_node": null
+    }
+  ],
+  "resources": [
+    {
+      "node_id": "localhost",
+      "device_id": "localhost-cpu",
+      "healthy": true,
+      "enrolled": false,
+      "compute_authorised": false,
+      "failure_domain": "host:localhost",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 16000,
+      "reserved_capacity_units": 2400,
+      "memory_bytes": 64868192256,
+      "reserved_memory_bytes": 36567564698,
+      "storage_bytes": 26380046336,
+      "reserved_storage_bytes": 2638004634,
+      "network_bytes_per_second": 97500000,
+      "reserved_network_bytes_per_second": 19500000,
+      "cpu_pressure_milli": 156,
+      "memory_pressure_milli": 463,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 940
+    },
+    {
+      "node_id": "qc00",
+      "device_id": "qc00-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:qc00",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 46000,
+      "reserved_capacity_units": 6900,
+      "memory_bytes": 68223565824,
+      "reserved_memory_bytes": 45871982183,
+      "storage_bytes": 86867968,
+      "reserved_storage_bytes": 8686797,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 429,
+      "memory_pressure_milli": 572,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 500
+    },
+    {
+      "node_id": "qc01",
+      "device_id": "qc01-cpu",
+      "healthy": true,
+      "enrolled": false,
+      "compute_authorised": false,
+      "failure_domain": "host:qc01",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 46000,
+      "reserved_capacity_units": 6900,
+      "memory_bytes": 68225728512,
+      "reserved_memory_bytes": 66918101812,
+      "storage_bytes": 41201303552,
+      "reserved_storage_bytes": 4120130356,
+      "network_bytes_per_second": 1250000000,
+      "reserved_network_bytes_per_second": 250000000,
+      "cpu_pressure_milli": 248,
+      "memory_pressure_milli": 880,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 497
+    },
+    {
+      "node_id": "qc02",
+      "device_id": "qc02-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:qc02",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 46000,
+      "reserved_capacity_units": 6900,
+      "memory_bytes": 68224614400,
+      "reserved_memory_bytes": 54133030912,
+      "storage_bytes": 44702265344,
+      "reserved_storage_bytes": 4470226535,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 385,
+      "memory_pressure_milli": 693,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 543
+    },
+    {
+      "node_id": "qc03",
+      "device_id": "qc03-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:qc03",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 46000,
+      "reserved_capacity_units": 6900,
+      "memory_bytes": 68224614400,
+      "reserved_memory_bytes": 50340986880,
+      "storage_bytes": 40668164096,
+      "reserved_storage_bytes": 4066816410,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 368,
+      "memory_pressure_milli": 637,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 524
+    },
+    {
+      "node_id": "qc04",
+      "device_id": "qc04-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:qc04",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 46000,
+      "reserved_capacity_units": 6900,
+      "memory_bytes": 68225662976,
+      "reserved_memory_bytes": 52038408602,
+      "storage_bytes": 31598706688,
+      "reserved_storage_bytes": 3159870669,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 201,
+      "memory_pressure_milli": 662,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 521
+    },
+    {
+      "node_id": "sm00",
+      "device_id": "sm00-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:sm00",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 32000,
+      "reserved_capacity_units": 4800,
+      "memory_bytes": 98802741248,
+      "reserved_memory_bytes": 51408954573,
+      "storage_bytes": 124973457408,
+      "reserved_storage_bytes": 12497345741,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 275,
+      "memory_pressure_milli": 420,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 500
+    },
+    {
+      "node_id": "sm01",
+      "device_id": "sm01-cpu",
+      "healthy": true,
+      "enrolled": true,
+      "compute_authorised": true,
+      "failure_domain": "host:sm01",
+      "numerical_profiles": [
+        "reference-cpu-v1"
+      ],
+      "capacity_units": 32000,
+      "reserved_capacity_units": 4800,
+      "memory_bytes": 81890885632,
+      "reserved_memory_bytes": 40581649204,
+      "storage_bytes": 185684148224,
+      "reserved_storage_bytes": 18568414823,
+      "network_bytes_per_second": 125000000,
+      "reserved_network_bytes_per_second": 25000000,
+      "cpu_pressure_milli": 252,
+      "memory_pressure_milli": 395,
+      "network_pressure_milli": 100,
+      "thermal_pressure_milli": 510
+    }
+  ],
+  "constraints": {
+    "minimum_headroom_milli": 150,
+    "maximum_cpu_pressure_milli": 850,
+    "maximum_memory_pressure_milli": 850,
+    "maximum_network_pressure_milli": 850,
+    "maximum_thermal_pressure_milli": 800,
+    "minimum_warm_replicas": 1,
+    "require_distinct_warm_failure_domain": true,
+    "allow_single_host_degraded_durability": false
+  },
+  "intent": {
+    "Automatic": null
+  }
+}

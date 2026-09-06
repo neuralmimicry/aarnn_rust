@@ -192,6 +192,16 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   migration/rollback rehearsal and legacy-path removal. `workstation_io` and
   effectful/global-HID paths remain disabled; the Android screenshot is
   reference/offline evidence and not live authorised neural I/O.
+- [x] `2026-08-30 18:41Z` Catalogued scenario manifests now record fixture
+  references, target/capability requirements, device and resource bounds,
+  reference profile, digest procedure and admission-loss policy. The xtask
+  example runner rejects missing required manifest fields before invoking a
+  test; `scripts/qa/run-examples.sh --all` passed for all five catalogued
+  host-runnable scenarios.
+- [!] `2026-08-30 18:41Z` The scenario harness does not convert host reference
+  tests into physical USB/Lightning/MFi, browser automation, native media,
+  scientific or signed mobile evidence. Those required lanes remain blocked
+  and `workstation_io` remains disabled.
 
 ## Validation and acceptance
 

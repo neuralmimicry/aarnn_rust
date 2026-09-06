@@ -23,6 +23,41 @@
 
       <div class="content">
         <main class="main">
+          <nav class="surface-tabs" aria-label="Monitoring views">
+            <button class="surface-tab active" type="button" data-surface-tab="dashboard">Dashboard</button>
+            <button class="surface-tab" type="button" data-surface-tab="placement">Placement</button>
+          </nav>
+
+          <section id="placement-surface" class="placement-surface" hidden>
+            <div class="placement-header">
+              <div>
+                <div class="panel-title">Virtual placement</div>
+                <div class="panel-hint">Read-only view of hosts, virtual nodes, shard ownership, and recent shard activity.</div>
+              </div>
+              <div class="placement-summary" id="placement-summary">Waiting for placement telemetry</div>
+            </div>
+            <div class="placement-toolbar">
+              <button id="placement-reset-view" class="secondary-btn" type="button">Reset view</button>
+              <span class="placement-hint">Drag to pan · Ctrl/⌘ drag to rotate · wheel to zoom · click selects · Ctrl/⌘ click adds · double-click opens shard detail</span>
+            </div>
+            <div class="placement-legend" aria-label="Placement legend">
+              <span><i class="placement-dot low"></i> quiet</span>
+              <span><i class="placement-dot medium"></i> active</span>
+              <span><i class="placement-dot high"></i> hot</span>
+              <span><i class="placement-state considering"></i> automation considering</span>
+              <span><i class="placement-state moving"></i> moving</span>
+              <span><i class="placement-state backup"></i> backup</span>
+              <span class="placement-note">Activity is a recent spike ratio; it does not alter scheduling.</span>
+            </div>
+            <div class="placement-canvas-wrap">
+              <canvas id="placement-canvas" width="1200" height="620" aria-label="Virtual shard placement diagram"></canvas>
+              <div id="placement-empty" class="panel-empty muted">No placement is currently reported.</div>
+            </div>
+            <div id="placement-table" class="placement-table" aria-live="polite"></div>
+            <aside id="placement-detail" class="placement-detail" hidden aria-live="polite"></aside>
+          </section>
+
+          <div id="dashboard-surface">
           <section class="network-panel">
             <div class="panel-header">
               <div class="panel-left">
@@ -116,6 +151,7 @@
               <canvas id="raster-canvas" class="mini-canvas" width="320" height="130"></canvas>
             </div>
           </section>
+          </div>
         </main>
 
         <aside class="sidebar">
@@ -425,6 +461,8 @@
     </div>
 
     <script src="/service-access.js"></script>
+    <script src="/management-client.generated.js"></script>
+    <script src="/aer-transport.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

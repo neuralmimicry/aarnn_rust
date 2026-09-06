@@ -1,0 +1,43 @@
+version = 1
+
+[[example]]
+id = "EX-001"
+title = "Deterministic reference network and canonical digest"
+scenario = "qa/scenarios/EX-001.toml"
+products = ["host", "web", "ios-simulator", "android-emulator"]
+oracle = "exact-host-digest"
+
+[[example]]
+id = "EX-002"
+title = "Zero-delay cascade and positive-delay feedback"
+scenario = "qa/scenarios/EX-002.toml"
+products = ["host", "server"]
+oracle = "exact-logical-tags"
+
+[[example]]
+id = "EX-005"
+title = "Independent brains and explicit federation link"
+scenario = "qa/scenarios/EX-005.toml"
+products = ["host", "orchestrator", "android", "ios"]
+oracle = "positive-delay-independent-identities"
+
+[[example]]
+id = "EX-007"
+title = "Synthetic duplex AER loopback with isolated channels"
+scenario = "qa/scenarios/EX-007.toml"
+products = ["host", "workstation", "android"]
+oracle = "bounded-sequence-and-effect-dedupe"
+
+[[example]]
+id = "EX-011"
+title = "Independent offline standalone brain recovery"
+scenario = "qa/scenarios/EX-011.toml"
+products = ["host", "ios-simulator", "android-emulator"]
+oracle = "host-state-digest"
+
+[[example]]
+id = "EX-012"
+title = "Cross-process durable failover and fenced rejoin"
+scenario = "qa/scenarios/EX-012.toml"
+products = ["host", "server", "orchestrator"]
+oracle = "warm-boundary-and-fencing"

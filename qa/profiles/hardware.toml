@@ -1,0 +1,5 @@
+name = "hardware"
+device_class = "registered physical device"
+physical_hardware = true
+network_emulation = false
+required_toolchain = "platform-native release toolchain"

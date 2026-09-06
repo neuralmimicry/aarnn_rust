@@ -2,17 +2,18 @@
 
 use crate::deterministic::{
     ComponentId, LogicalTag, NeuronId, PartitionGeneration, PrimitiveError, RouteId, ShardId,
-    SynapseId, TopologyGeneration,
+    StateDigest, StateDigestBuilder, SynapseId, TopologyGeneration,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeuronRecord {
     pub id: NeuronId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SynapseRecord {
     pub id: SynapseId,
     pub source: NeuronId,
@@ -131,7 +132,7 @@ pub struct ComponentGraph {
     pub edges: Vec<ComponentEdge>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteDefinition {
     pub id: RouteId,
     pub partition_generation: PartitionGeneration,
@@ -187,6 +188,31 @@ impl TopologyGenerationModel {
 
     pub fn synapses(&self) -> impl Iterator<Item = &SynapseRecord> {
         self.synapses.values()
+    }
+
+    /// Return the canonical identity of the biological topology generation.
+    ///
+    /// The digest is deliberately independent of dense runner layout and
+    /// insertion order.  Bootstrap manifests use it to prove that the
+    /// topology used to compile a stable execution plan is the topology that
+    /// was authorised for the immutable checkpoint being reopened.
+    pub fn digest(&self) -> StateDigest {
+        #[derive(Serialize)]
+        struct TopologyMaterial<'a> {
+            generation: TopologyGeneration,
+            neurons: Vec<&'a NeuronRecord>,
+            synapses: Vec<&'a SynapseRecord>,
+        }
+
+        let bytes = serde_json::to_vec(&TopologyMaterial {
+            generation: self.generation,
+            neurons: self.neurons.values().collect(),
+            synapses: self.synapses.values().collect(),
+        })
+        .expect("topology contains only serialisable primitives");
+        let mut digest = StateDigestBuilder::default();
+        digest.add_domain("topology-generation:v1", bytes);
+        digest.finish()
     }
 
     pub fn zero_delay_components(&self) -> ComponentGraph {
@@ -382,7 +408,7 @@ pub struct ShardCapacity {
     pub capacity: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VirtualShardAssignment {
     pub shard: ShardId,
     pub components: Vec<ComponentId>,
@@ -397,9 +423,11 @@ pub struct VirtualShardAssignment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledExecutionPlan {
     topology_generation: TopologyGeneration,
+    topology_digest: StateDigest,
     partition_generation: PartitionGeneration,
     assignments: Vec<VirtualShardAssignment>,
     component_owners: BTreeMap<ComponentId, ShardId>,
+    neuron_components: BTreeMap<NeuronId, ComponentId>,
     neuron_owners: BTreeMap<NeuronId, ShardId>,
     ownership: BTreeMap<SynapseId, OwnershipRecord>,
     routes: BTreeMap<RouteId, RouteDefinition>,
@@ -414,6 +442,10 @@ impl CompiledExecutionPlan {
         self.partition_generation
     }
 
+    pub fn topology_digest(&self) -> StateDigest {
+        self.topology_digest
+    }
+
     pub fn assignments(&self) -> &[VirtualShardAssignment] {
         &self.assignments
     }
@@ -426,12 +458,69 @@ impl CompiledExecutionPlan {
         self.neuron_owners.get(&neuron).copied()
     }
 
+    /// Return the zero-delay component containing a stable neuron identity.
+    /// Component membership is part of the compiled plan, so callers do not
+    /// need to reconstruct SCC state from dense runner indices.
+    pub fn component_for_neuron(&self, neuron: NeuronId) -> Option<ComponentId> {
+        self.neuron_components.get(&neuron).copied()
+    }
+
     pub fn ownership(&self, synapse: SynapseId) -> Option<&OwnershipRecord> {
         self.ownership.get(&synapse)
     }
 
+    pub fn ownership_records(&self) -> impl Iterator<Item = &OwnershipRecord> {
+        self.ownership.values()
+    }
+
     pub fn route(&self, route: RouteId) -> Option<&RouteDefinition> {
         self.routes.get(&route)
+    }
+
+    pub fn route_for_synapse(&self, synapse: SynapseId) -> Option<&RouteDefinition> {
+        self.routes.values().find(|route| route.synapse == synapse)
+    }
+
+    pub fn shard_ids(&self) -> impl Iterator<Item = ShardId> + '_ {
+        self.assignments.iter().map(|assignment| assignment.shard)
+    }
+
+    /// Return the canonical identity of the topology/partition ownership
+    /// decision. This digest intentionally excludes physical node placement;
+    /// moving a stable virtual shard must not change its biological plan.
+    pub fn digest(&self) -> StateDigest {
+        #[derive(Serialize)]
+        struct PlanMaterial<'a> {
+            topology_generation: TopologyGeneration,
+            topology_digest: StateDigest,
+            partition_generation: PartitionGeneration,
+            assignments: &'a [VirtualShardAssignment],
+            component_owners: &'a BTreeMap<ComponentId, ShardId>,
+            neuron_components: &'a BTreeMap<NeuronId, ComponentId>,
+            neuron_owners: &'a BTreeMap<NeuronId, ShardId>,
+            ownership: &'a BTreeMap<SynapseId, OwnershipRecord>,
+            routes: &'a BTreeMap<RouteId, RouteDefinition>,
+        }
+        let mut assignments = self.assignments.clone();
+        for assignment in &mut assignments {
+            assignment.components.sort_unstable();
+        }
+        assignments.sort_by_key(|assignment| assignment.shard);
+        let bytes = serde_json::to_vec(&PlanMaterial {
+            topology_generation: self.topology_generation,
+            topology_digest: self.topology_digest,
+            partition_generation: self.partition_generation,
+            assignments: &assignments,
+            component_owners: &self.component_owners,
+            neuron_components: &self.neuron_components,
+            neuron_owners: &self.neuron_owners,
+            ownership: &self.ownership,
+            routes: &self.routes,
+        })
+        .expect("compiled execution plan contains only serialisable primitives");
+        let mut digest = StateDigestBuilder::default();
+        digest.add_domain("compiled-execution-plan:v1", bytes);
+        digest.finish()
     }
 
     /// Validate an event admission against both generations and its route.
@@ -525,10 +614,12 @@ pub fn compile_execution_plan(
         }
     }
 
+    let mut neuron_components = BTreeMap::new();
     let mut neuron_owners = BTreeMap::new();
     for component in &graph.components {
         let shard = component_owners[&component.id];
         for neuron in &component.members {
+            neuron_components.insert(*neuron, component.id);
             neuron_owners.insert(*neuron, shard);
         }
     }
@@ -565,9 +656,11 @@ pub fn compile_execution_plan(
 
     Ok(CompiledExecutionPlan {
         topology_generation: topology.generation,
+        topology_digest: topology.digest(),
         partition_generation,
         assignments,
         component_owners,
+        neuron_components,
         neuron_owners,
         ownership: ownership_map,
         routes,
@@ -724,7 +817,7 @@ pub fn plan_virtual_shards(
     Ok(assignments)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnershipRecord {
     pub synapse: SynapseId,
     pub terminal_owner: ShardId,

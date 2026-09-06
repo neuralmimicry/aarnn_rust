@@ -24,6 +24,11 @@ service DistributedNeuromorphic {
   // Fetch a full network snapshot (weights/topology) as JSON
   rpc GetNetworkSnapshot(NetworkSnapshotRequest) returns (NetworkSnapshotResponse);
 
+  // Fetch a complete, common-frontier snapshot assembled from every assigned
+  // shard. This is additive to GetNetworkSnapshot, which remains a
+  // single-node compatibility path during migration.
+  rpc GetClusterNetworkSnapshot(ClusterNetworkSnapshotRequest) returns (ClusterNetworkSnapshotResponse);
+
   // Fetch latest spike activity for a network
   rpc GetNetworkActivity(NetworkActivityRequest) returns (NetworkActivityResponse);
 }
@@ -33,6 +38,89 @@ service DistributedNeuromorphic {
 // migration have been accepted.
 service CausalDataPlane {
   rpc StreamEvents(stream CausalEventEnvelope) returns (stream CausalEventEnvelope);
+}
+
+// Versioned stable-shard data plane.  This is deliberately separate from the
+// legacy SpikeBatch stream and from the generic causal envelope: a frame is a
+// sealed physical handoff record whose receiver must durably apply the shard
+// transition before acknowledging its sequence.
+service StableShardDataPlane {
+  rpc StreamShardFrames(stream StableShardFrame) returns (stream StableShardAcknowledgement);
+}
+
+// Bounded checkpoint/bootstrap transfer. This service only stages and
+// publishes an immutable verified checkpoint on the target; it never grants
+// a writer lease or changes placement authority. Activation and fencing remain
+// explicit management-plane operations.
+service StableCheckpointTransfer {
+  rpc Transfer(stream CheckpointTransferChunk) returns (stream CheckpointTransferAcknowledgement);
+}
+
+message CheckpointTransferChunk {
+  uint32 schema_version = 1;
+  string source_node_id = 2;
+  string destination_node_id = 3;
+  // The first chunk carries the bounded JSON manifest. Later chunks must leave
+  // this field empty and carry one sealed payload frame.
+  bytes manifest_json = 4;
+  uint64 transfer_id = 5;
+  bytes manifest_digest = 6;
+  uint32 frame_index = 7;
+  uint32 frame_count = 8;
+  bytes payload = 9;
+  bytes frame_digest = 10;
+}
+
+message CheckpointTransferAcknowledgement {
+  uint32 schema_version = 1;
+  uint64 transfer_id = 2;
+  bytes manifest_digest = 3;
+  bool accepted = 4;
+  bool durable = 5;
+  uint32 received_frames = 6;
+  uint64 checkpoint_id = 7;
+  uint64 brain_id = 8;
+  string error = 9;
+}
+
+message StableShardFrame {
+  enum MessageKind {
+    MESSAGE_KIND_UNKNOWN = 0;
+    CAUSAL_EVENT = 1;
+    SYNAPSE_EFFECT = 2;
+    SYNAPSE_ACTIVATION = 3;
+  }
+  uint32 schema_version = 1;
+  uint64 brain_id = 2;
+  string source_node_id = 3;
+  string destination_node_id = 4;
+  uint64 destination_shard = 5;
+  bytes plan_digest = 6;
+  uint64 lease_term = 7;
+  uint64 fencing_token = 8;
+  uint64 sequence = 9;
+  LogicalTag logical_tag = 10;
+  uint64 event_id = 11;
+  MessageKind message_kind = 12;
+  bytes payload = 13;
+  bytes record_digest = 14;
+  uint64 topology_generation = 15;
+  uint64 partition_generation = 16;
+  bytes placement_plan_digest = 17;
+}
+
+message StableShardAcknowledgement {
+  uint32 schema_version = 1;
+  uint64 brain_id = 2;
+  string destination_node_id = 3;
+  uint64 sequence = 4;
+  uint64 lease_term = 5;
+  uint64 fencing_token = 6;
+  bytes record_digest = 7;
+  bool duplicate = 8;
+  bool durable = 9;
+  LogicalTag applied_tag = 10;
+  bytes state_digest = 11;
 }
 
 message GAEvaluationRequest {
@@ -47,11 +135,51 @@ message GAEvaluationResponse {
 
 message NetworkSnapshotRequest {
   string network_id = 1;
+  // Non-zero values request a marker-captured snapshot for this asynchronous
+  // consistent-cut epoch. Zero preserves the legacy single-node projection.
+  uint64 cut_epoch = 2;
 }
 
 message NetworkSnapshotResponse {
   string network_id = 1;
   string snapshot_json = 2;
+  uint64 step = 3;
+  uint64 sim_time_ms_bits = 4;
+  string channel_state_json = 5;
+  uint64 cut_epoch = 6;
+  string participant_json = 7;
+  string channel_marker_json = 8;
+  // Complete sealed shard state when durable managed execution is enabled;
+  // empty for the explicitly compatibility-only runner projection.
+  string authoritative_state_json = 9;
+}
+
+message ClusterNetworkSnapshotRequest {
+  string network_id = 1;
+}
+
+message ClusterNetworkSnapshotResponse {
+  string network_id = 1;
+  uint32 schema_version = 2;
+  uint64 cut_tick = 3;
+  uint32 cut_microstep = 4;
+  string cluster_digest = 5;
+  repeated ClusterShardSnapshot shards = 6;
+  string consistent_cut_json = 7;
+}
+
+message ClusterShardSnapshot {
+  string node_id = 1;
+  repeated uint32 layers = 2;
+  string snapshot_json = 3;
+  uint64 step = 4;
+  uint64 sim_time_ms_bits = 5;
+  string state_digest = 6;
+  string channel_state_json = 7;
+  // Digest of the canonical in-transit/channel state included in this cut.
+  string channel_state_digest = 8;
+  string authoritative_state_json = 9;
+  string authoritative_state_digest = 10;
 }
 
 message SpikeIndices {
@@ -85,6 +213,15 @@ message JoinRequest {
   string address = 2;
   Resources resources = 3;
   map<string, NetworkResources> network_resources = 4;
+  // Capability observations for the stable-ID executor. These are control
+  // plane registration input, not an authority grant; deployment
+  // authentication must bind node identity and the orchestrator must still
+  // issue placement and fencing decisions through management/migration.
+  repeated StableExecutorRegistration stable_executors = 5;
+  // Versioned implementation capability. This is deliberately separate from
+  // stable_executors: an enrolled idle worker can advertise that it can
+  // materialise a future manifest without claiming any current shard.
+  repeated StableExecutorCapability stable_executor_capabilities = 6;
 }
 
 message JoinResponse {
@@ -152,6 +289,12 @@ message HeartbeatRequest {
   string node_id = 1;
   Resources resources = 2;
   map<string, NetworkResources> network_resources = 3;
+  repeated StableExecutorRegistration stable_executors = 4;
+  repeated StableExecutorCapability stable_executor_capabilities = 5;
+  // Bounded acknowledgements for commands delivered in an earlier heartbeat.
+  // Stable-worker activation results are digest-bound and may be replayed
+  // safely when the response carrying them is lost.
+  repeated NetworkCommandResult command_results = 6;
 }
 
 message HeartbeatResponse {
@@ -176,6 +319,10 @@ message NetworkCommand {
     START = 4;
     RESET = 5;
     REPEAT = 6;
+    // Activate a fully verified partial stable-shard worker from an
+    // orchestrator-issued, digest-bound manifest. The target node must still
+    // validate the checkpoint, placement and local authority before use.
+    ACTIVATE_STABLE_WORKER = 7;
   }
   CommandType type = 1;
   string network_id = 2;
@@ -185,6 +332,25 @@ message NetworkCommand {
   uint32 desired_aarnn_depth = 6;
   string neuron_model = 7;
   string learning_rule = 8;
+  // For ACTIVATE_STABLE_WORKER, config_json carries the bounded UTF-8
+  // StableWorkerActivationCommand JSON. Other command types retain the
+  // existing network configuration meaning of this field.
+}
+
+message NetworkCommandResult {
+  // The result currently applies to ACTIVATE_STABLE_WORKER. Keeping the
+  // command type explicit prevents a future result from being confused with
+  // a legacy load/unload command.
+  NetworkCommand.CommandType command_type = 1;
+  string network_id = 2;
+  string request_id = 3;
+  string manifest_digest = 4;
+  bool accepted = 5;
+  string error = 6;
+  uint64 brain_id = 7;
+  // Optional for commands created outside the management placement API. When
+  // present it binds the worker outcome to one persisted placement request.
+  string placement_idempotency_key = 8;
 }
 
 message SpikeBatch {
@@ -231,6 +397,10 @@ message CausalEventEnvelope {
   uint64 target_id = 12;
   bytes payload = 13;
   bool deferred_from_nonconvergence = 14;
+  // Stable sender identity established by the authenticated node session.
+  // It is not a user/brain identity and is used only to bind the producer
+  // stream namespace; transport authentication must still verify it.
+  string sender_node_id = 15;
 }
 
 message NetworkUpdateRequest {
@@ -287,6 +457,67 @@ message NodeStatus {
   string address = 2;
   Resources resources = 3;
   repeated string active_networks = 4;
+  // Last accepted stable executor capability observations for this node.
+  // Their presence never authorises a writer or makes a plan active.
+  repeated StableExecutorRegistration stable_executors = 5;
+  // Capability observations are admission evidence only. They do not make a
+  // placement active and do not grant a writer lease.
+  repeated StableExecutorCapability stable_executor_capabilities = 6;
+}
+
+message StableExecutorCapability {
+  uint32 schema_version = 1;
+  string profile = 2;
+  uint32 activation_schema_version = 3;
+  uint32 max_input_events = 4;
+  uint32 max_steps_per_poll = 5;
+}
+
+message StableExecutorRegistration {
+  uint32 schema_version = 1;
+  string profile = 2;
+  string network_id = 3;
+  uint64 brain_id = 4;
+  uint64 topology_generation = 5;
+  uint64 partition_generation = 6;
+  string topology_digest = 7;
+  string plan_digest = 8;
+  repeated uint64 shard_ids = 9;
+  uint64 lease_term = 10;
+  uint64 fencing_token = 11;
+  uint64 current_tick = 12;
+  uint32 current_microstep = 13;
+  string state_digest = 14;
+  uint32 max_input_events = 15;
+  uint32 max_steps_per_poll = 16;
+  // True only when this process currently holds the local stable executor
+  // authority lock. It is still an observation and never replaces quorum
+  // admission or orchestrator fencing.
+  bool authoritative = 17;
+  // Complete immutable plan inventory remains in shard_ids. This field is
+  // the subset currently materialised by this worker and may change only at
+  // an authorised migration boundary.
+  repeated uint64 owned_shard_ids = 18;
+  // Durable application evidence for every owned shard. These observations
+  // are required before a worker ownership subset can be considered for a
+  // migration handoff; they do not grant writer authority.
+  repeated StableShardApplicationAck application_acks = 19;
+}
+
+message StableShardApplicationAck {
+  uint64 shard_id = 1;
+  uint64 brain_id = 2;
+  uint64 topology_generation = 3;
+  uint64 partition_generation = 4;
+  string plan_digest = 5;
+  uint64 lease_term = 6;
+  uint64 fencing_token = 7;
+  uint64 applied_tick = 8;
+  uint32 applied_microstep = 9;
+  string state_digest = 10;
+  uint64 durable_wal_sequence = 11;
+  bool durable_wal_sequence_present = 12;
+  bool committed = 13;
 }
 
 message NetworkStatus {
@@ -307,9 +538,31 @@ message NetworkStatus {
   string last_transition_reason = 15;
   uint64 last_transition_ts_ms = 16;
   string last_transition_source = 17;
+  // Bounded, read-only placement telemetry. These records describe the
+  // scheduler's current consideration or queued movement; they do not grant
+  // authority and must not be used as a cutover acknowledgement.
+  repeated ShardPlacementMovement shard_movements = 18;
 }
 
 message LayerRange {
   repeated uint32 layers = 1;
   map<uint32, uint64> layer_neuron_counts = 2;
+  // Layers retained as warm/backup state on this node. They are deliberately
+  // separate from active ownership so clients cannot infer two active writers.
+  repeated uint32 backup_layers = 3;
+}
+
+message ShardPlacementMovement {
+  string shard_id = 1;
+  string source_node = 2;
+  string destination_node = 3;
+  // "active" or "backup".
+  string role = 4;
+  // "considering" or "moving".
+  string phase = 5;
+  // Integer percentage in thousandths: 0..1000. This is transfer progress
+  // telemetry only, not proof of committed authority.
+  uint32 progress_milli = 6;
+  string reason = 7;
+  uint64 updated_at_ms = 8;
 }

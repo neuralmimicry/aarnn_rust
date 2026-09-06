@@ -1,0 +1,5 @@
+name = "host"
+device_class = "linux-host"
+physical_hardware = false
+network_emulation = false
+required_toolchain = "cargo --locked"

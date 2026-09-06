@@ -29,7 +29,7 @@ use self::sysinfo_dummy::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System
 #[cfg(feature = "openmpi")]
 use prost::Message;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "sysinfo")]
@@ -81,16 +81,35 @@ mod sysinfo_dummy {
         }
     }
 }
+use crate::cluster_snapshot::{self, ShardSnapshotInput};
 use crate::config::{LIFParams, NetworkConfig, STDPParams};
+use crate::consistent_cut::{
+    AsyncConsistentCutCollector, ChannelMarker, ConsistentCutCoordinator, ConsistentCutMessage,
+    ParticipantReport,
+};
 use crate::deployment::{DeploymentConfig, ExecutionMode};
+#[cfg(feature = "replicated_durability")]
+use crate::deterministic::LeaseTerm;
+use crate::deterministic::LogicalTag;
+pub(crate) use crate::node_auth::{
+    authenticated_request, certificate_sha256_der,
+    configured_node_cert_fingerprints as configured_causal_node_cert_fingerprints,
+    configured_node_tokens as configured_causal_node_tokens, live_causal_transport_enabled,
+    validate_live_request, validate_peer_metadata as validate_causal_peer_metadata,
+};
 use crate::runner::Runner;
 use crate::sim::{Learning, NeuronModel};
 use crate::spike_io::transport::{encode_exchange, spikes_from_transport};
+use crate::stable_worker::{
+    StableExecutorCapability as StableExecutorCapabilityModel, StableShardApplicationAck,
+    StableWorkerActivationCommand, StableWorkerRegistration,
+};
 #[cfg(feature = "superdense_executor")]
 use crate::superdense::SuperdenseController;
 use anyhow::Context;
 use serde::Deserialize;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
@@ -114,8 +133,372 @@ const SPIKE_LATENCY_EWMA_ALPHA: f64 = 0.2;
 const SPIKE_FAILOVER_STREAK: u32 = 3;
 /// Cap queued control/config commands per node so heartbeat payloads remain bounded.
 const MAX_PENDING_COMMANDS_PER_NODE: usize = 64;
+/// Bound command-result error text so a failed worker cannot inflate a
+/// heartbeat indefinitely. The result is diagnostic data, never executable
+/// input.
+const MAX_COMMAND_RESULT_ERROR_BYTES: usize = 2048;
 /// Treat configs above this as "large" and avoid broadcasting to all nodes without affinity.
 const LARGE_NETWORK_CONFIG_BYTES: usize = 64 * 1024 * 1024;
+
+fn stable_registration_to_proto(
+    registration: StableWorkerRegistration,
+) -> StableExecutorRegistration {
+    let application_acks = registration
+        .application_acks
+        .into_iter()
+        .map(stable_application_ack_to_proto)
+        .collect();
+    StableExecutorRegistration {
+        schema_version: registration.schema_version,
+        profile: registration.profile,
+        network_id: registration.network_id,
+        brain_id: registration.brain_id,
+        topology_generation: registration.topology_generation,
+        partition_generation: registration.partition_generation,
+        topology_digest: registration.topology_digest,
+        plan_digest: registration.plan_digest,
+        shard_ids: registration.shard_ids,
+        owned_shard_ids: registration.owned_shard_ids,
+        application_acks,
+        lease_term: registration.lease_term,
+        fencing_token: registration.fencing_token,
+        current_tick: registration.current_tick,
+        current_microstep: registration.current_microstep,
+        state_digest: registration.state_digest,
+        max_input_events: registration.max_input_events,
+        max_steps_per_poll: registration.max_steps_per_poll,
+        authoritative: registration.authoritative,
+    }
+}
+
+/// Extract the immutable identity carried by an activation command. The
+/// manifest itself remains opaque here; the target worker is responsible for
+/// opening and validating it. The orchestrator only needs this identity to
+/// make heartbeat delivery at-least-once and acknowledgement idempotent.
+fn stable_activation_command_identity(
+    command: &NetworkCommand,
+) -> Option<(String, String, String, String)> {
+    if command.r#type != proto::network_command::CommandType::ActivateStableWorker as i32 {
+        return None;
+    }
+    let activation = serde_json::from_slice::<crate::stable_worker::StableWorkerActivationCommand>(
+        &command.config_json,
+    )
+    .ok()?;
+    Some((
+        activation.network_id,
+        activation.request_id,
+        activation.manifest_digest,
+        activation.placement_idempotency_key,
+    ))
+}
+
+fn validate_command_result(result: &proto::NetworkCommandResult) -> Result<(), Status> {
+    if result.command_type != proto::network_command::CommandType::ActivateStableWorker as i32 {
+        return Err(Status::invalid_argument(
+            "unsupported network command result type",
+        ));
+    }
+    for (field, value) in [
+        ("network_id", result.network_id.as_str()),
+        ("request_id", result.request_id.as_str()),
+        ("manifest_digest", result.manifest_digest.as_str()),
+    ] {
+        if value.trim().is_empty() || value.len() > 256 {
+            return Err(Status::invalid_argument(format!(
+                "network command result {field} is invalid"
+            )));
+        }
+    }
+    if result.placement_idempotency_key.len() > 256 {
+        return Err(Status::invalid_argument(
+            "network command result placement key is too large",
+        ));
+    }
+    if result.brain_id == 0 {
+        return Err(Status::invalid_argument(
+            "network command result brain identity is invalid",
+        ));
+    }
+    if result.manifest_digest.len() != 64
+        || !result
+            .manifest_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(Status::invalid_argument(
+            "network command result manifest digest is invalid",
+        ));
+    }
+    if result.error.len() > MAX_COMMAND_RESULT_ERROR_BYTES {
+        return Err(Status::invalid_argument(
+            "network command result error is too large",
+        ));
+    }
+    if result.accepted && !result.error.is_empty() {
+        return Err(Status::invalid_argument(
+            "accepted network command result cannot contain an error",
+        ));
+    }
+    if !result.accepted && result.error.trim().is_empty() {
+        return Err(Status::invalid_argument(
+            "rejected network command result must contain an error",
+        ));
+    }
+    Ok(())
+}
+
+fn stable_application_ack_to_proto(
+    ack: StableShardApplicationAck,
+) -> proto::StableShardApplicationAck {
+    proto::StableShardApplicationAck {
+        shard_id: ack.shard_id,
+        brain_id: ack.brain_id,
+        topology_generation: ack.topology_generation,
+        partition_generation: ack.partition_generation,
+        plan_digest: ack.plan_digest,
+        lease_term: ack.lease_term,
+        fencing_token: ack.fencing_token,
+        applied_tick: ack.applied_tick,
+        applied_microstep: ack.applied_microstep,
+        state_digest: ack.state_digest,
+        durable_wal_sequence: ack.durable_wal_sequence.unwrap_or(0),
+        durable_wal_sequence_present: ack.durable_wal_sequence.is_some(),
+        committed: ack.committed,
+    }
+}
+
+fn stable_application_ack_from_proto(
+    ack: &proto::StableShardApplicationAck,
+) -> StableShardApplicationAck {
+    StableShardApplicationAck {
+        shard_id: ack.shard_id,
+        brain_id: ack.brain_id,
+        topology_generation: ack.topology_generation,
+        partition_generation: ack.partition_generation,
+        plan_digest: ack.plan_digest.clone(),
+        lease_term: ack.lease_term,
+        fencing_token: ack.fencing_token,
+        applied_tick: ack.applied_tick,
+        applied_microstep: ack.applied_microstep,
+        state_digest: ack.state_digest.clone(),
+        durable_wal_sequence: ack
+            .durable_wal_sequence_present
+            .then_some(ack.durable_wal_sequence),
+        committed: ack.committed,
+    }
+}
+
+fn stable_registration_from_proto(
+    registration: &StableExecutorRegistration,
+) -> StableWorkerRegistration {
+    StableWorkerRegistration {
+        schema_version: registration.schema_version,
+        profile: registration.profile.clone(),
+        network_id: registration.network_id.clone(),
+        brain_id: registration.brain_id,
+        topology_generation: registration.topology_generation,
+        partition_generation: registration.partition_generation,
+        topology_digest: registration.topology_digest.clone(),
+        plan_digest: registration.plan_digest.clone(),
+        shard_ids: registration.shard_ids.clone(),
+        owned_shard_ids: registration.owned_shard_ids.clone(),
+        application_acks: registration
+            .application_acks
+            .iter()
+            .map(stable_application_ack_from_proto)
+            .collect(),
+        lease_term: registration.lease_term,
+        fencing_token: registration.fencing_token,
+        current_tick: registration.current_tick,
+        current_microstep: registration.current_microstep,
+        state_digest: registration.state_digest.clone(),
+        max_input_events: registration.max_input_events,
+        max_steps_per_poll: registration.max_steps_per_poll,
+        authoritative: registration.authoritative,
+    }
+}
+
+fn validate_stable_registration_shape(
+    registration: &StableExecutorRegistration,
+) -> Result<StableWorkerRegistration, Status> {
+    let registration = stable_registration_from_proto(registration);
+    registration.validate().map_err(|error| {
+        Status::invalid_argument(format!("invalid stable executor registration: {error}"))
+    })?;
+    Ok(registration)
+}
+
+fn validate_stable_registration_admission(
+    state: &NodeState,
+    node_id: &str,
+    network_resources: &HashMap<String, NetworkResources>,
+    registrations: &[StableExecutorRegistration],
+) -> Result<Vec<StableWorkerRegistration>, Status> {
+    let mut validated = Vec::with_capacity(registrations.len());
+    let mut network_ids = HashSet::new();
+    for wire_registration in registrations {
+        let registration = validate_stable_registration_shape(wire_registration)?;
+        if !network_resources.contains_key(&registration.network_id) {
+            return Err(Status::invalid_argument(format!(
+                "stable executor network '{}' is absent from network_resources",
+                registration.network_id
+            )));
+        }
+        if registration.brain_id
+            != crate::managed_durability::managed_brain_id(&registration.network_id).raw()
+        {
+            return Err(Status::failed_precondition(format!(
+                "stable executor network '{}' reports a brain identity inconsistent with its network",
+                registration.network_id
+            )));
+        }
+        if !network_ids.insert(registration.network_id.clone()) {
+            return Err(Status::invalid_argument(format!(
+                "stable executor network '{}' is registered more than once",
+                registration.network_id
+            )));
+        }
+
+        if let Some(network) = state.network_registry.get(&registration.network_id) {
+            if !network.distribution.is_empty()
+                && state
+                    .nodes
+                    .get(node_id)
+                    .and_then(|node| {
+                        node.stable_executors
+                            .iter()
+                            .find(|existing| existing.network_id == registration.network_id)
+                    })
+                    .is_none()
+            {
+                return Err(Status::failed_precondition(format!(
+                    "stable executor network '{}' cannot register while legacy placement exists",
+                    registration.network_id
+                )));
+            }
+        }
+
+        for (other_node_id, other_node) in &state.nodes {
+            if other_node_id == node_id {
+                continue;
+            }
+            for existing in other_node
+                .stable_executors
+                .iter()
+                .filter(|existing| existing.network_id == registration.network_id)
+            {
+                let existing = stable_registration_from_proto(existing);
+                if !registration.same_plan_identity(&existing) {
+                    return Err(Status::failed_precondition(format!(
+                        "stable executor network '{}' has incompatible plan identity on node {}",
+                        registration.network_id, other_node_id
+                    )));
+                }
+                let ownership_overlaps = registration
+                    .owned_shard_ids
+                    .iter()
+                    .any(|shard| existing.owned_shard_ids.binary_search(shard).is_ok());
+                if ownership_overlaps
+                    && (registration.lease_term <= existing.lease_term
+                        || registration.fencing_token <= existing.fencing_token)
+                {
+                    return Err(Status::failed_precondition(format!(
+                        "stable executor network '{}' has overlapping shard ownership without a newer fenced boundary",
+                        registration.network_id
+                    )));
+                }
+            }
+        }
+
+        if let Some(existing) = state.nodes.get(node_id).and_then(|node| {
+            node.stable_executors
+                .iter()
+                .find(|existing| existing.network_id == registration.network_id)
+        }) {
+            let existing = stable_registration_from_proto(existing);
+            registration
+                .validate_update_from(&existing)
+                .map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "stable executor network '{}' registration update rejected: {error}",
+                        registration.network_id
+                    ))
+                })?;
+        }
+
+        let has_pending_activation = state
+            .pending_commands
+            .get(node_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|command| {
+                serde_json::from_slice::<StableWorkerActivationCommand>(&command.config_json).ok()
+            })
+            .any(|command| {
+                command.network_id == registration.network_id
+                    && command.brain_id == registration.brain_id
+                    && command.target_node == node_id
+            });
+        if state.stable_network_ids.contains(&registration.network_id)
+            && !has_pending_activation
+            && state
+                .nodes
+                .get(node_id)
+                .and_then(|node| {
+                    node.stable_executors
+                        .iter()
+                        .find(|existing| existing.network_id == registration.network_id)
+                })
+                .is_none()
+        {
+            return Err(Status::failed_precondition(format!(
+                "stable executor network '{}' is fenced until an explicit migration transaction reopens it",
+                registration.network_id
+            )));
+        }
+        validated.push(registration);
+    }
+    Ok(validated)
+}
+
+fn stable_capability_to_proto(
+    capability: StableExecutorCapabilityModel,
+) -> proto::StableExecutorCapability {
+    proto::StableExecutorCapability {
+        schema_version: capability.schema_version,
+        profile: capability.profile,
+        activation_schema_version: capability.activation_schema_version,
+        max_input_events: capability.max_input_events,
+        max_steps_per_poll: capability.max_steps_per_poll,
+    }
+}
+
+fn validate_stable_capability_admission(
+    capabilities: &[proto::StableExecutorCapability],
+) -> Result<Vec<StableExecutorCapabilityModel>, Status> {
+    let mut validated = Vec::with_capacity(capabilities.len());
+    let mut profiles = HashSet::new();
+    for wire in capabilities {
+        let capability = StableExecutorCapabilityModel {
+            schema_version: wire.schema_version,
+            profile: wire.profile.clone(),
+            activation_schema_version: wire.activation_schema_version,
+            max_input_events: wire.max_input_events,
+            max_steps_per_poll: wire.max_steps_per_poll,
+        };
+        capability.validate().map_err(|error| {
+            Status::invalid_argument(format!("invalid stable executor capability: {error}"))
+        })?;
+        if !profiles.insert(capability.profile.clone()) {
+            return Err(Status::invalid_argument(
+                "stable executor capability profile is advertised more than once",
+            ));
+        }
+        validated.push(capability);
+    }
+    Ok(validated)
+}
 fn grpc_max_message_bytes() -> usize {
     const DEFAULT: usize = 512 * 1024 * 1024;
     const MIN: usize = 4 * 1024 * 1024;
@@ -129,6 +512,9 @@ fn grpc_max_message_bytes() -> usize {
 use proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
 use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
 use proto::*;
+
+#[cfg(feature = "replicated_durability")]
+use crate::causal_transport::proto::causal_data_plane_client::CausalDataPlaneClient;
 
 fn control_action_from_command(
     cmd_type: proto::network_command::CommandType,
@@ -587,9 +973,12 @@ async fn connect_peer_with_timeout(
     } else {
         format!("http://{}", addr)
     };
+    let endpoint = crate::management::grpc_client_endpoint(&target)?
+        .connect_timeout(timeout_budget)
+        .timeout(timeout_budget);
     match tokio::time::timeout(
         timeout_budget,
-        DistributedNeuromorphicClient::connect(target.clone()),
+        DistributedNeuromorphicClient::connect(endpoint),
     )
     .await
     {
@@ -621,6 +1010,116 @@ fn env_flag(name: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+/// Production cutover is a deployment gate, not an alias for enabling the
+/// migration features.  Keep this check in the distributed startup path so a
+/// binary cannot silently run the legacy SpikeBatch/Runner path while an
+/// operator believes production mode is active.
+pub fn validate_production_cutover_config(
+    node_id: &str,
+    is_orchestrator: bool,
+) -> Result<(), String> {
+    if !crate::management::production_cutover_enabled() {
+        return Ok(());
+    }
+    if node_id.trim().is_empty() {
+        return Err("NM_PRODUCTION_CUTOVER requires a stable node identity".to_owned());
+    }
+    if !live_causal_transport_enabled() {
+        return Err(
+            "NM_PRODUCTION_CUTOVER requires NM_CAUSAL_TRANSPORT_LIVE=1 on every node".to_owned(),
+        );
+    }
+    if !cfg!(feature = "management_v1") {
+        return Err("NM_PRODUCTION_CUTOVER requires the management_v1 feature".to_owned());
+    }
+    validate_live_causal_transport_config(node_id)?;
+    if is_orchestrator {
+        crate::management::validate_production_management_config()?;
+        validate_cluster_snapshot_root(std::env::var("NM_CLUSTER_SNAPSHOT_ROOT").ok().as_deref())?;
+    }
+    Ok(())
+}
+
+fn validate_cluster_snapshot_root(root: Option<&str>) -> Result<(), String> {
+    let root = root.ok_or_else(|| {
+        "NM_PRODUCTION_CUTOVER requires NM_CLUSTER_SNAPSHOT_ROOT for durable cluster cuts"
+            .to_owned()
+    })?;
+    if root.trim().is_empty() {
+        return Err("NM_CLUSTER_SNAPSHOT_ROOT must not be empty".to_owned());
+    }
+    Ok(())
+}
+
+/// Validate the deployment contract required by the live authoritative causal
+/// path.  The normal reference profile may use plaintext and omitted node
+/// credentials; an enabled live path may not.  `NM_CAUSAL_NODE_TOKENS` is a
+/// temporary deployment credential bridge until node identity is supplied by
+/// the production workload-mTLS provider.  It is intentionally per-node,
+/// rather than one shared gateway secret.
+pub fn validate_live_causal_transport_config(node_id: &str) -> Result<(), String> {
+    if !live_causal_transport_enabled() {
+        return Ok(());
+    }
+    if !cfg!(feature = "replicated_durability") {
+        return Err(
+            "NM_CAUSAL_TRANSPORT_LIVE requires the replicated_durability feature".to_owned(),
+        );
+    }
+    if crate::managed_durability::configured_root().is_none() {
+        return Err(
+            "live causal transport requires NM_DURABLE_SHARD_ROOT for every managed network"
+                .to_owned(),
+        );
+    }
+    let warm_root = crate::managed_durability::configured_warm_root().ok_or_else(|| {
+        "live causal transport requires NM_WARM_REPLICA_ROOT for warm recovery".to_owned()
+    })?;
+    let durable_root = crate::managed_durability::configured_root().expect("checked above");
+    if durable_root == warm_root {
+        return Err(
+            "NM_DURABLE_SHARD_ROOT and NM_WARM_REPLICA_ROOT must be distinct failure domains"
+                .to_owned(),
+        );
+    }
+    let (replicas, members) = crate::managed_durability::configured_replicated_authority()?
+        .ok_or_else(|| {
+            "live causal transport requires an explicit replicated authority; the single-file authority is reference-only".to_owned()
+        })?;
+    if members.len() < 3 {
+        return Err("live causal transport requires at least three authority members".to_owned());
+    }
+    let mut replica_paths = std::collections::BTreeSet::new();
+    for (_, path) in replicas {
+        if !replica_paths.insert(path.clone()) {
+            return Err("authority replica paths must be distinct".to_owned());
+        }
+    }
+    crate::management::configured_grpc_server_tls()?
+        .ok_or_else(|| "live causal transport requires mutual TLS configuration".to_owned())?;
+    let local_token = std::env::var("NM_CAUSAL_NODE_TOKEN")
+        .map_err(|_| "live causal transport requires NM_CAUSAL_NODE_TOKEN".to_owned())?;
+    if local_token.trim().is_empty() {
+        return Err("NM_CAUSAL_NODE_TOKEN must not be empty".to_owned());
+    }
+    let tokens = configured_causal_node_tokens()?;
+    if tokens
+        .get(node_id)
+        .is_none_or(|expected| expected != &local_token)
+    {
+        return Err(format!(
+            "NM_CAUSAL_NODE_TOKENS must contain the configured token for node {node_id}"
+        ));
+    }
+    let fingerprints = configured_causal_node_cert_fingerprints()?;
+    if !fingerprints.contains_key(node_id) {
+        return Err(format!(
+            "NM_CAUSAL_NODE_CERT_SHA256 must contain the configured node {node_id}"
+        ));
+    }
+    Ok(())
 }
 
 fn unix_timestamp_ms_now() -> u64 {
@@ -774,11 +1273,300 @@ fn total_neurons_from_distribution(distribution: &HashMap<String, LayerRange>) -
     total
 }
 
+/// Build bounded, deterministic placement telemetry from two immutable
+/// placement projections.
+///
+/// The legacy layer assignment path does not yet expose a live transfer
+/// acknowledgement. Consequently, `moving` means that the orchestrator has
+/// queued a different owner/replica assignment, while `considering` means the
+/// autonomous planner is evaluating the current assignment. The records are
+/// intentionally advisory and must never be interpreted as a lease, fencing
+/// token, cutover receipt or proof that a shard has become authoritative.
+fn build_shard_placement_movements(
+    network_id: &str,
+    previous: &HashMap<String, LayerRange>,
+    next: &HashMap<String, LayerRange>,
+    automation_enabled: bool,
+    reason: &str,
+    updated_at_ms: u64,
+) -> Vec<proto::ShardPlacementMovement> {
+    const MAX_MOVEMENT_RECORDS: usize = 128;
+
+    fn owners_by_layer(
+        distribution: &HashMap<String, LayerRange>,
+        backup: bool,
+    ) -> BTreeMap<u32, Vec<String>> {
+        let mut owners = BTreeMap::<u32, Vec<String>>::new();
+        let mut node_ids: Vec<&String> = distribution.keys().collect();
+        node_ids.sort();
+        for node_id in node_ids {
+            let Some(range) = distribution.get(node_id) else {
+                continue;
+            };
+            let layers = if backup {
+                &range.backup_layers
+            } else {
+                &range.layers
+            };
+            for layer in layers {
+                owners.entry(*layer).or_default().push(node_id.clone());
+            }
+        }
+        owners
+    }
+
+    let old_active = owners_by_layer(previous, false);
+    let new_active = owners_by_layer(next, false);
+    let old_backup = owners_by_layer(previous, true);
+    let new_backup = owners_by_layer(next, true);
+    let mut records = Vec::new();
+
+    for (role, old, new) in [
+        ("active", &old_active, &new_active),
+        ("backup", &old_backup, &new_backup),
+    ] {
+        let mut layers = BTreeMap::<u32, ()>::new();
+        old.keys().chain(new.keys()).for_each(|layer| {
+            layers.insert(*layer, ());
+        });
+
+        for layer in layers.keys().copied() {
+            let old_owners = old.get(&layer).cloned().unwrap_or_default();
+            let new_owners = new.get(&layer).cloned().unwrap_or_default();
+            let width = old_owners.len().max(new_owners.len());
+            for replica in 0..width {
+                let source = old_owners
+                    .get(replica)
+                    .cloned()
+                    .unwrap_or_else(|| "unassigned".to_string());
+                let destination = new_owners
+                    .get(replica)
+                    .cloned()
+                    .unwrap_or_else(|| "unassigned".to_string());
+                let changed = source != destination;
+                if !changed && !automation_enabled {
+                    continue;
+                }
+                if !changed && (source == "unassigned" || destination == "unassigned") {
+                    continue;
+                }
+
+                let phase = if changed { "moving" } else { "considering" };
+                let reported_destination = if changed {
+                    destination.clone()
+                } else {
+                    String::new()
+                };
+                let movement_reason = if reason.trim().is_empty() {
+                    if changed {
+                        "placement assignment changed"
+                    } else {
+                        "autonomous placement review"
+                    }
+                } else {
+                    reason
+                };
+                records.push(proto::ShardPlacementMovement {
+                    shard_id: format!(
+                        "{}:{}:layer-{}:replica-{}",
+                        network_id, role, layer, replica
+                    ),
+                    source_node: source,
+                    destination_node: reported_destination,
+                    role: role.to_string(),
+                    phase: phase.to_string(),
+                    progress_milli: 0,
+                    reason: movement_reason.to_string(),
+                    updated_at_ms,
+                });
+                if records.len() >= MAX_MOVEMENT_RECORDS {
+                    return records;
+                }
+            }
+        }
+    }
+    records
+}
+
 fn snapshot_with_network_config(snapshot_payload: &str, net_cfg: &NetworkConfig) -> Option<String> {
     let mut snapshot =
         crate::runner::decode_snapshot_with_profile_backfill(snapshot_payload).ok()?;
     snapshot.net = net_cfg.clone();
     serde_json::to_string(&snapshot).ok()
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct ManagedChannelState {
+    remote_spikes_fwd: std::collections::BTreeMap<u32, Vec<i8>>,
+    remote_spikes_bwd: std::collections::BTreeMap<u32, Vec<i8>>,
+    remote_spike_steps_fwd: std::collections::BTreeMap<u32, i64>,
+    remote_spike_steps_bwd: std::collections::BTreeMap<u32, i64>,
+    external_sensory_spikes: Option<Vec<i8>>,
+}
+
+/// Versioned payload carried by an authoritative causal envelope for a
+/// cross-process layer input.  Network identity is repeated in the payload so
+/// a receiver cannot route a valid envelope to a different local network.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CausalSpikeIngress {
+    schema_version: u32,
+    network_id: String,
+    layer_index: u32,
+    step_index: i64,
+    is_backward: bool,
+    spike_indices: Vec<u32>,
+    aer_payload: Vec<u8>,
+    aer_base: u32,
+}
+
+#[cfg(feature = "replicated_durability")]
+const CAUSAL_INGRESS_SCHEMA_VERSION: u32 = 1;
+#[cfg(feature = "replicated_durability")]
+const MAX_CAUSAL_INGRESS_SPIKES: usize = 16 * 1024 * 1024;
+
+fn capture_channel_state(net: &ManagedNetwork) -> ManagedChannelState {
+    ManagedChannelState {
+        remote_spikes_fwd: net
+            .remote_spikes_fwd
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect(),
+        remote_spikes_bwd: net
+            .remote_spikes_bwd
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect(),
+        remote_spike_steps_fwd: net
+            .remote_spike_steps_fwd
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect(),
+        remote_spike_steps_bwd: net
+            .remote_spike_steps_bwd
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect(),
+        external_sensory_spikes: net.external_sensory_spikes.clone(),
+    }
+}
+
+#[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
+fn restore_channel_state(net: &mut ManagedNetwork, state: ManagedChannelState) {
+    net.remote_spikes_fwd = state.remote_spikes_fwd.into_iter().collect();
+    net.remote_spikes_bwd = state.remote_spikes_bwd.into_iter().collect();
+    net.remote_spike_steps_fwd = state.remote_spike_steps_fwd.into_iter().collect();
+    net.remote_spike_steps_bwd = state.remote_spike_steps_bwd.into_iter().collect();
+    net.external_sensory_spikes = state.external_sensory_spikes;
+}
+
+fn local_channel_state_json(net: &ManagedNetwork) -> Result<String, String> {
+    serde_json::to_string(&capture_channel_state(net)).map_err(|error| error.to_string())
+}
+
+fn local_shard_snapshot(net: &ManagedNetwork) -> Result<(String, String, u64, u64), String> {
+    #[cfg(feature = "replicated_durability")]
+    let (snapshot_json, channel_state_json) = if let Some(owner) = net.durable_owner.as_ref() {
+        let state = owner
+            .authoritative_state()
+            .map_err(|error| error.to_string())?;
+        let snapshot = String::from_utf8(state.biological_state.clone())
+            .map_err(|error| format!("durable biological snapshot is not UTF-8: {error}"))?;
+        let channel = String::from_utf8(state.channel_state.clone())
+            .map_err(|error| format!("durable channel state is not UTF-8: {error}"))?;
+        (snapshot, channel)
+    } else {
+        (
+            net.runner
+                .export_network_json()
+                .map_err(|error| error.to_string())?,
+            local_channel_state_json(net)?,
+        )
+    };
+    #[cfg(not(feature = "replicated_durability"))]
+    let snapshot_json = net
+        .runner
+        .export_network_json()
+        .map_err(|error| error.to_string())?;
+    #[cfg(not(feature = "replicated_durability"))]
+    let channel_state_json = local_channel_state_json(net)?;
+    if snapshot_json.len().saturating_add(channel_state_json.len())
+        > cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
+    {
+        return Err(format!(
+            "shard snapshot exceeds {} bytes",
+            cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
+        ));
+    }
+    let snapshot = crate::runner::decode_snapshot_with_profile_backfill(&snapshot_json)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        snapshot_json,
+        channel_state_json,
+        snapshot.t as u64,
+        snapshot.t_ms.to_bits(),
+    ))
+}
+
+/// Return the complete sealed shard boundary for a durable managed network.
+/// Compatibility runner networks intentionally return an empty value so a
+/// caller cannot accidentally label a projection as a recoverable shard
+/// state.  Cluster snapshot assembly validates and digests a non-empty value
+/// as `authoritative_shard::ShardState`.
+fn local_authoritative_state_json(_net: &ManagedNetwork) -> Result<String, String> {
+    #[cfg(feature = "replicated_durability")]
+    if let Some(owner) = _net.durable_owner.as_ref() {
+        let state = owner
+            .authoritative_state()
+            .map_err(|error| error.to_string())?;
+        return serde_json::to_string(&state).map_err(|error| error.to_string());
+    }
+    Ok(String::new())
+}
+
+fn local_cut_evidence(
+    network_id: &str,
+    node_id: &str,
+    epoch: u64,
+    snapshot_json: &str,
+    channel_state_json: &str,
+) -> Result<(ParticipantReport, ChannelMarker), String> {
+    if epoch == 0 {
+        return Err("consistent-cut epoch must be non-zero".to_owned());
+    }
+    let snapshot = crate::runner::decode_snapshot_with_profile_backfill(snapshot_json)
+        .map_err(|error| format!("invalid captured shard snapshot: {error}"))?;
+    let channel_state: ManagedChannelState = serde_json::from_str(channel_state_json)
+        .map_err(|error| format!("invalid captured channel state: {error}"))?;
+    let queued_min = channel_state
+        .remote_spike_steps_fwd
+        .values()
+        .chain(channel_state.remote_spike_steps_bwd.values())
+        .filter_map(|step| u64::try_from(*step).ok())
+        .min()
+        .map(|tick| LogicalTag::new(tick, 0));
+    let local_frontier = LogicalTag::new(
+        u64::try_from(snapshot.t).map_err(|_| "captured shard tick exceeds u64".to_owned())?,
+        0,
+    );
+    let participant = ParticipantReport {
+        participant: node_id.to_owned(),
+        local_frontier,
+        queued_min,
+        in_flight_min: None,
+        // The runner has no biological activity epoch of its own yet; the
+        // non-zero monotonic step-derived epoch still makes stale reports
+        // distinguishable within a cut protocol.
+        activity_epoch: local_frontier.tick.saturating_add(1),
+    };
+    let marker = ChannelMarker::new(
+        format!("{network_id}/{node_id}"),
+        epoch,
+        queued_min,
+        channel_state_json.as_bytes(),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((participant, marker))
 }
 
 #[derive(Clone, Debug)]
@@ -1832,6 +2620,20 @@ fn limit_target_nodes_for_deployment(
 pub struct ManagedNetwork {
     pub id: String,
     pub runner: Runner,
+    /// Fenced stable-shard admission gate. The legacy runner is a projection
+    /// until this gate has matching durable owner evidence and an adopted
+    /// placement generation.
+    pub shard_runtime: Option<crate::managed_shard_runtime::ManagedShardRuntime>,
+    /// Explicit stable-ID durable executor registration. When present, the
+    /// compatibility Runner is a presentation projection and the legacy
+    /// managed step path is fenced off until the stable adapter is removed.
+    #[cfg(feature = "stable_executor_live")]
+    pub stable_executor: Option<crate::managed_stable_executor::ManagedStableExecutor>,
+    /// Opt-in durable owner for the live managed-network loop. The legacy
+    /// runner remains the rollback path until the production migration gate is
+    /// explicitly enabled and its storage/authority policy is configured.
+    #[cfg(feature = "replicated_durability")]
+    pub durable_owner: Option<crate::managed_durability::ManagedDurability>,
     #[cfg(feature = "superdense_executor")]
     pub(crate) superdense: SuperdenseController,
     pub assigned_layers: Vec<u32>,
@@ -1859,20 +2661,528 @@ pub struct ManagedNetwork {
     pub workspace_binding: Option<NetworkWorkspaceBinding>,
 }
 
-#[cfg(feature = "superdense_executor")]
+/// Adapter that binds one explicitly registered stable runtime to the
+/// orchestrator migration registry.
+///
+/// The registry invokes this adapter on a blocking worker. The adapter then
+/// takes the managed network's exclusive async lock, marks the network
+/// paused, and borrows the existing durable bridge for one migration. No
+/// bridge or biological state is copied, and a failed operation leaves the
+/// source paused so an operator can inspect and retry it safely.
+#[cfg(feature = "stable_executor_live")]
+pub struct ManagedStableNetworkMigrationExecutor {
+    network: Arc<RwLock<ManagedNetwork>>,
+    delegate: crate::migration_executor::StableExecutorMigrationExecutor,
+}
+
+#[cfg(feature = "stable_executor_live")]
+impl ManagedStableNetworkMigrationExecutor {
+    pub fn new(
+        network: Arc<RwLock<ManagedNetwork>>,
+        settings: crate::migration_executor::StableExecutorMigrationSettings,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            network,
+            delegate:
+                crate::migration_executor::StableExecutorMigrationExecutor::new_for_managed_runtime(
+                    settings,
+                )?,
+        })
+    }
+}
+
+#[cfg(feature = "stable_executor_live")]
+impl crate::migration_executor::MigrationExecutor for ManagedStableNetworkMigrationExecutor {
+    fn execute(
+        &self,
+        operation: crate::migration_operation::MigrationOperation,
+        group: crate::migration_group::MigrationGroupSpec,
+    ) -> Result<crate::migration_executor::MigrationDispatchReceipt, String> {
+        // MigrationExecutorRegistry always calls implementations from
+        // spawn_blocking. Holding this guard serialises migration with the
+        // simulation loop without blocking an async runtime worker thread.
+        let mut network = self.network.blocking_write();
+        network.playing = false;
+        let Some(runtime) = network.stable_executor.as_mut() else {
+            return Err("stable migration source runtime is not registered".to_owned());
+        };
+        let result = self
+            .delegate
+            .execute_with_bridge(runtime.bridge_mut(), operation, group);
+        if let Err(error) = &result {
+            nm_err!(
+                "[warn] stable migration source {} remains paused after failure: {}",
+                network.id,
+                error
+            );
+        }
+        result
+    }
+}
+
 impl ManagedNetwork {
+    /// Construct a managed network with no attached durable authority.
+    ///
+    /// Runtime owners are attached explicitly after construction so callers
+    /// cannot accidentally create two authorities by copying internal state.
+    /// The compatibility runner remains paused until the caller deliberately
+    /// starts it, or a stable executor is registered and started.
+    pub fn new(
+        id: String,
+        runner: Runner,
+        initial_config: NetworkConfig,
+        initial_model: NeuronModel,
+        initial_learning: Learning,
+        initial_lif: LIFParams,
+        initial_stdp: STDPParams,
+    ) -> Self {
+        Self {
+            id,
+            runner,
+            shard_runtime: None,
+            #[cfg(feature = "stable_executor_live")]
+            stable_executor: None,
+            #[cfg(feature = "replicated_durability")]
+            durable_owner: None,
+            #[cfg(feature = "superdense_executor")]
+            superdense: SuperdenseController::new(),
+            assigned_layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            remote_spikes_fwd: HashMap::new(),
+            remote_spikes_bwd: HashMap::new(),
+            remote_spike_steps_fwd: HashMap::new(),
+            remote_spike_steps_bwd: HashMap::new(),
+            external_sensory_spikes: None,
+            avg_step_time_ms: 0.0,
+            desired_aarnn_depth: initial_config.aarnn_layer_depth as u32,
+            playing: false,
+            initial_config,
+            initial_model,
+            initial_learning,
+            initial_lif,
+            initial_stdp,
+            last_config_fingerprint: None,
+            workspace_binding: None,
+        }
+    }
+
+    fn admit_shard_step(&self) -> Result<(), String> {
+        let Some(runtime) = self.shard_runtime.as_ref() else {
+            return Ok(());
+        };
+        let evidence = &runtime.evidence;
+        runtime
+            .admit(
+                evidence.brain_id,
+                evidence.shard_id,
+                evidence.topology_generation,
+                evidence.partition_generation,
+                evidence.lease_term,
+                evidence.fencing_token,
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "replicated_durability")]
+    fn commit_shard_step(
+        &mut self,
+        tag: LogicalTag,
+        digest: crate::deterministic::StateDigest,
+    ) -> Result<(), String> {
+        if let Some(runtime) = self.shard_runtime.as_mut() {
+            runtime
+                .commit(tag, digest)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "superdense_executor")]
     fn step_with_superdense(
         &mut self,
         sensory: Option<&[i8]>,
     ) -> Result<crate::runner::StepOut, crate::superdense::SuperdenseError> {
         self.superdense.step(&mut self.runner, sensory)
     }
+
+    #[cfg(feature = "stable_executor_live")]
+    /// Register the authoritative stable-ID executor explicitly. Discovery,
+    /// placement telemetry, and a durable legacy Runner owner never perform
+    /// this registration implicitly.
+    pub fn register_stable_executor(
+        &mut self,
+        runtime: crate::managed_stable_executor::ManagedStableExecutor,
+    ) -> Result<(), String> {
+        if self.stable_executor.is_some() {
+            return Err("stable executor is already registered".to_owned());
+        }
+        if self.playing {
+            return Err(
+                "pause the managed network before registering a stable executor".to_owned(),
+            );
+        }
+        #[cfg(feature = "replicated_durability")]
+        if self.durable_owner.is_some() {
+            return Err(
+                "legacy durable Runner owner is still attached; stable executor registration would create two authorities"
+                    .to_owned(),
+            );
+        }
+        if runtime.bridge().authority().brain_id()
+            != crate::managed_durability::managed_brain_id(&self.id)
+        {
+            return Err(
+                "stable executor brain identity does not match the managed network".to_owned(),
+            );
+        }
+        self.stable_executor = Some(runtime);
+        Ok(())
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    pub fn stable_executor_registered(&self) -> bool {
+        self.stable_executor.is_some()
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    /// Poll the explicitly registered stable executor without touching the
+    /// legacy Runner projection. The caller owns scheduling and must invoke
+    /// this from a bounded worker context rather than a UI thread.
+    pub fn poll_stable_executor(
+        &mut self,
+        observed_term: crate::deterministic::LeaseTerm,
+        observed_fencing_token: u64,
+        inputs: &[crate::shard_executor::RoutedCausalEvent],
+    ) -> Result<crate::managed_stable_executor::ManagedStablePoll, String> {
+        self.stable_executor
+            .as_mut()
+            .ok_or_else(|| "no stable executor is registered".to_owned())?
+            .poll(observed_term, observed_fencing_token, inputs)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    /// Poll the registered stable runtime with a bounded sensory vector. The
+    /// runtime's own lease/fencing evidence is supplied to the executor; a
+    /// caller cannot substitute the legacy Runner's authority values.
+    pub fn poll_stable_executor_sensory(
+        &mut self,
+        sensory: Option<&[i8]>,
+    ) -> Result<crate::managed_stable_executor::ManagedStablePoll, String> {
+        let runtime = self
+            .stable_executor
+            .as_mut()
+            .ok_or_else(|| "no stable executor is registered".to_owned())?;
+        let term = runtime.lease_term();
+        let fencing_token = runtime.fencing_token();
+        match sensory {
+            Some(values) => runtime
+                .poll_sensory(term, fencing_token, values)
+                .map_err(|error| error.to_string()),
+            None => runtime
+                .drain(term, fencing_token)
+                .map_err(|error| error.to_string()),
+        }
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    /// Admit one network causal envelope through the registered stable
+    /// executor. The worker loop supplies the runtime's own term and fence;
+    /// callers cannot substitute the legacy Runner authority.
+    pub fn poll_stable_executor_envelope(
+        &mut self,
+        envelope: &crate::data_plane::CausalEnvelope,
+    ) -> Result<crate::managed_stable_executor::ManagedStablePoll, String> {
+        let runtime = self
+            .stable_executor
+            .as_mut()
+            .ok_or_else(|| "no stable executor is registered".to_owned())?;
+        let term = runtime.lease_term();
+        let fencing_token = runtime.fencing_token();
+        runtime
+            .poll_envelope(envelope, term, fencing_token)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(feature = "replicated_durability")]
+impl ManagedNetwork {
+    /// Execute one managed-network step and publish its result through the
+    /// durable owner before the caller exposes any distributed output.  The
+    /// legacy Runner remains the biological kernel during migration, but its
+    /// mutation is treated as staged state and is restored when durability or
+    /// fencing rejects the commit.
+    #[cfg(test)]
+    fn step_and_commit_durable(
+        &mut self,
+        sensory: Option<&[i8]>,
+        previous_channel_state: ManagedChannelState,
+    ) -> Result<crate::runner::StepOut, String> {
+        self.step_and_commit_durable_with_outbox(sensory, previous_channel_state, &[])
+            .map(|(out, _)| out)
+    }
+
+    /// Step the compatibility biological kernel and publish the resulting
+    /// snapshot together with all destination-scoped causal output in one
+    /// recoverable durable transaction. The returned batches are exactly the
+    /// batches recorded in the outbox; the caller only performs network I/O
+    /// after this method succeeds.
+    fn step_and_commit_durable_with_outbox(
+        &mut self,
+        sensory: Option<&[i8]>,
+        previous_channel_state: ManagedChannelState,
+        outbox_peers: &[String],
+    ) -> Result<(crate::runner::StepOut, Vec<SpikeBatch>), String> {
+        #[cfg(feature = "stable_executor_live")]
+        if self.stable_executor.is_some() {
+            return Err(
+                "stable executor is registered; use poll_stable_executor for authoritative work"
+                    .to_owned(),
+            );
+        }
+        let mut rollback_channel_state = previous_channel_state;
+        let previous_runner = self
+            .durable_owner
+            .as_ref()
+            .map(|_| {
+                self.runner
+                    .export_network_json()
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+
+        // The Runner is only a working projection while the durable profile
+        // is enabled. Always refresh it from the shard owner before running a
+        // transition so a restart/rejoin or another authoritative apply
+        // cannot be overwritten by a stale local vector state.
+        if let Some(owner) = self.durable_owner.as_ref() {
+            if let Some(snapshot) = owner
+                .authoritative_snapshot()
+                .map_err(|error| error.to_string())?
+            {
+                self.runner
+                    .import_network_json(&snapshot)
+                    .map_err(|error| error.to_string())?;
+            }
+            let channel_state = owner
+                .authoritative_channel_state()
+                .map_err(|error| error.to_string())?;
+            rollback_channel_state = serde_json::from_str(&channel_state)
+                .map_err(|error| format!("invalid durable channel state: {error}"))?;
+            restore_channel_state(self, rollback_channel_state.clone());
+        }
+
+        #[cfg(feature = "superdense_executor")]
+        let out = self
+            .step_with_superdense(sensory)
+            .map_err(|error| error.to_string())?;
+        #[cfg(not(feature = "superdense_executor"))]
+        let out = if let Some(sensory) = sensory {
+            self.runner.step(Some(sensory))
+        } else {
+            self.runner.step(None)
+        };
+
+        let batches = managed_spike_batches(self, out.t as i64);
+        let mut durable_outbox = std::collections::BTreeMap::new();
+        if !batches.is_empty() {
+            let durable_batches = batches
+                .iter()
+                .map(|batch| crate::managed_durability::DurableCausalBatch {
+                    layer_index: batch.layer_index,
+                    step_index: batch.step_index,
+                    is_backward: batch.is_backward,
+                    spike_indices: batch.spike_indices.clone(),
+                    aer_payload: batch.aer_payload.clone(),
+                    aer_base: batch.aer_base,
+                })
+                .collect::<Vec<_>>();
+            for peer in outbox_peers {
+                durable_outbox.insert(peer.clone(), durable_batches.clone());
+            }
+        }
+
+        if self.durable_owner.is_none() {
+            return Ok((out, batches));
+        }
+        let snapshot = match self.runner.export_network_json() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if let Some(previous_runner) = previous_runner.as_ref() {
+                    let _ = self.runner.import_network_json(previous_runner);
+                }
+                restore_channel_state(self, rollback_channel_state);
+                return Err(error.to_string());
+            }
+        };
+        let channel_state = match local_channel_state_json(self) {
+            Ok(channel_state) => channel_state,
+            Err(error) => {
+                if let Some(previous_runner) = previous_runner.as_ref() {
+                    let _ = self.runner.import_network_json(previous_runner);
+                }
+                restore_channel_state(self, rollback_channel_state);
+                return Err(error);
+            }
+        };
+        let owner = self
+            .durable_owner
+            .as_mut()
+            .expect("durable owner was checked above");
+        if let Err(error) = owner.commit_snapshot_with_channel_state_and_outbox(
+            snapshot.as_bytes(),
+            self.runner.t as u64,
+            channel_state.as_bytes(),
+            durable_outbox,
+        ) {
+            if let Some(previous_runner) = previous_runner.as_ref() {
+                let _ = self.runner.import_network_json(previous_runner);
+            }
+            restore_channel_state(self, rollback_channel_state);
+            return Err(error.to_string());
+        }
+        Ok((out, batches))
+    }
+}
+
+/// Build the transport representation before durable publication. Keeping
+/// this pure with respect to the managed network lets the commit intent record
+/// the exact causal batches that correspond to the biological boundary.
+fn managed_spike_batches(net: &ManagedNetwork, step_index: i64) -> Vec<SpikeBatch> {
+    let ts_us = (net.runner.t_ms * 1000.0) as u64;
+    let num_hidden = net.runner.net.num_hidden_layers as u32;
+    let mut batches = Vec::new();
+    for &layer in &net.redundant_layers {
+        if layer >= num_hidden {
+            continue;
+        }
+        let layer_idx = layer as usize;
+        if layer_idx >= net.runner.last_spk_h.len() {
+            continue;
+        }
+        let layer_spikes: Vec<i8> = net.runner.last_spk_h[layer_idx].iter().copied().collect();
+        let exchange = encode_exchange(ts_us, 0, &layer_spikes);
+        let indices = exchange.spike_indices;
+        let mut aer_payload = exchange.aer_payload;
+        if aer_payload.is_empty() {
+            aer_payload.extend_from_slice(b"AER1");
+            aer_payload.extend_from_slice(&ts_us.to_le_bytes());
+        }
+        batches.push(SpikeBatch {
+            network_id: net.id.clone(),
+            layer_index: layer,
+            step_index,
+            spike_indices: indices,
+            is_backward: false,
+            aer_payload,
+            aer_base: 0,
+        });
+    }
+    batches
 }
 
 fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(feature = "replicated_durability")]
+pub fn open_managed_durability(
+    network_id: &str,
+    node_id: &str,
+    runner: &mut Runner,
+) -> Option<crate::managed_durability::ManagedDurability> {
+    let Some(root) = crate::managed_durability::configured_root() else {
+        return None;
+    };
+    let warm_root = crate::managed_durability::configured_warm_root();
+    let lease = match crate::managed_durability::configured_shard_lease(network_id, node_id) {
+        Ok(lease) => lease,
+        Err(error) => {
+            nm_err!(
+                "[error] Durable owner for network {} on node {} has no valid persisted lease: {}",
+                network_id,
+                node_id,
+                error
+            );
+            return None;
+        }
+    };
+    let term = lease
+        .as_ref()
+        .map(|lease| lease.term)
+        .or_else(|| {
+            std::env::var("NM_LEASE_TERM")
+                .ok()
+                .and_then(|value| value.parse().ok())
+        })
+        .unwrap_or(LeaseTerm::INITIAL);
+    let mut owner = match crate::managed_durability::ManagedDurability::open(
+        root,
+        network_id,
+        node_id,
+        runner,
+        term,
+        warm_root.as_deref(),
+    ) {
+        Ok(owner) => owner,
+        Err(error) => {
+            nm_err!(
+                "[error] Durable owner for network {} on node {} could not open: {}",
+                network_id,
+                node_id,
+                error
+            );
+            return None;
+        }
+    };
+    if let Some(lease) = lease {
+        if lease.fencing_token != lease.term.raw() {
+            nm_err!(
+                "[error] Durable owner for network {} received an invalid fencing token",
+                network_id
+            );
+            return None;
+        }
+        owner.set_fencing_token(lease.fencing_token);
+    }
+    match crate::managed_durability::configured_replicated_authority() {
+        Ok(Some((replicas, members))) => owner.bind_replicated_authority(replicas, members),
+        Ok(None) => match crate::managed_durability::configured_authority() {
+            Ok(Some((path, members))) => owner.bind_persisted_authority(path, members),
+            Ok(None) => {}
+            Err(error) => {
+                nm_err!(
+                    "[error] Durable owner for network {} has invalid authority configuration: {}",
+                    network_id,
+                    error
+                );
+                return None;
+            }
+        },
+        Err(error) => {
+            nm_err!(
+                "[error] Durable owner for network {} has invalid authority configuration: {}",
+                network_id,
+                error
+            );
+            return None;
+        }
+    }
+    {
+        if let Ok(Some(snapshot)) = owner.recovered_snapshot() {
+            if let Err(error) = runner.import_network_json(&snapshot) {
+                nm_err!(
+                    "[error] Durable owner for network {} recovered an invalid runner snapshot: {}",
+                    network_id,
+                    error
+                );
+                return None;
+            }
+        }
+        Some(owner)
+    }
 }
 
 struct SpikeStreamHandle {
@@ -1910,6 +3220,13 @@ struct SpikeTransportStats {
 pub struct NodeState {
     pub node_id: String,
     pub networks: HashMap<String, Arc<RwLock<ManagedNetwork>>>,
+    /// Explicitly registered partial stable-shard workers. Registration is
+    /// an embedding seam: discovery and placement observations never create
+    /// an executor or grant it writer authority.
+    pub partial_shard_runtimes: HashMap<
+        String,
+        Arc<tokio::sync::Mutex<crate::managed_partial_shard_runtime::ManagedPartialShardRuntime>>,
+    >,
     pub workspace_bindings: HashMap<String, NetworkWorkspaceBinding>,
     pub peers: HashMap<String, String>, // node_id -> address
     pub network_peers: HashMap<String, Vec<String>>, // network_id -> node ids
@@ -1925,6 +3242,9 @@ pub struct NodeState {
     spike_streams: HashMap<String, SpikeStreamHandle>,
     spike_stream_backoff: HashMap<String, std::time::Instant>,
     spike_drop_counts: HashMap<String, u64>,
+    /// Serialises durable outbox reservation and acknowledgement of each
+    /// causal batch. A sender must not append the same peer concurrently.
+    causal_send_guard: std::sync::Arc<tokio::sync::Mutex<()>>,
     spike_transport_stats: HashMap<String, SpikeTransportStats>,
     #[cfg(feature = "openmpi")]
     mpi_receiver_started: bool,
@@ -1932,10 +3252,22 @@ pub struct NodeState {
     // Cluster-wide status (only relevant if is_orchestrator)
     pub nodes: HashMap<String, NodeStatus>,
     pub network_registry: HashMap<String, NetworkStatus>,
+    /// Networks that have crossed into the stable-worker profile. This marker
+    /// remains after a worker disappears so the legacy layer scheduler cannot
+    /// silently reacquire the brain without an explicit migration transaction.
+    pub stable_network_ids: HashSet<String>,
     pub network_snapshots: HashMap<String, String>,
+    /// Monotonic control-plane epochs for asynchronous consistent cuts. This
+    /// is coordination metadata, not biological time.
+    pub consistent_cut_epochs: HashMap<String, u64>,
     pub network_runtime_metrics: HashMap<String, HashMap<String, NetworkResources>>,
     pub last_heartbeat: HashMap<String, std::time::Instant>,
     pub pending_commands: HashMap<String, Vec<NetworkCommand>>, // node_id -> commands
+    /// Idempotently remembered activation results. A worker may replay a
+    /// result when the heartbeat response was lost; retaining the bounded
+    /// result lets the orchestrator acknowledge that replay without making
+    /// the worker resurrect a completed command.
+    pub stable_activation_results: HashMap<(String, String), NetworkCommandResult>,
     last_deployment_transition: HashMap<String, DeploymentTransitionRecord>,
 
     // Local GA status (for reporting to orchestrator)
@@ -2154,15 +3486,49 @@ impl NodeState {
 pub struct DistributedNode {
     pub state: Arc<RwLock<NodeState>>,
     pub system: Arc<RwLock<System>>,
+    /// Node-owned management dispatch registry. Keeping this handle on the
+    /// node makes live-runtime registration explicit and prevents `main` from
+    /// accidentally creating a registry disconnected from worker state.
+    migration_executor_registry: crate::migration_executor::MigrationExecutorRegistry,
+    /// Node-scoped stable-shard data-plane receivers. The registry starts
+    /// empty and only an explicit bootstrap or migration handoff can add a
+    /// durable receiver; network discovery and placement telemetry never do.
+    stable_shard_data_plane: crate::stable_shard_transport::StableShardDataPlaneService,
+    /// Control-plane metadata for explicitly bootstrapped partial workers.
+    /// These maps do not own executor state or grant writer authority.
+    stable_worker_networks: Arc<std::sync::RwLock<BTreeMap<crate::deterministic::BrainId, String>>>,
+    stable_worker_limits:
+        Arc<std::sync::RwLock<BTreeMap<crate::deterministic::BrainId, (u32, u32)>>>,
+    /// Idempotency records for orchestrator-issued worker activation
+    /// commands. The durable receiver remains the authority after a
+    /// successful activation; this short-lived map only prevents heartbeat
+    /// retries from reopening the same worker in one process.
+    stable_worker_operations: Arc<std::sync::RwLock<BTreeMap<String, (u64, String)>>>,
     tracey_probe: Option<TraceyStatusProbe>,
+    /// Optional orchestrator-side audit hook. It is installed by the
+    /// management adapter and receives only validated worker results; the
+    /// worker never receives the callback or a registry handle.
+    stable_activation_result_handler: Arc<std::sync::RwLock<Option<StableActivationResultHandler>>>,
+    /// Optional orchestrator-side placement evidence hook. Registrations have
+    /// already passed wire-shape, identity and committed-ack validation before
+    /// this callback is scheduled outside the heartbeat lock.
+    stable_worker_registration_handler:
+        Arc<std::sync::RwLock<Option<StableWorkerRegistrationHandler>>>,
 }
+
+pub type StableActivationResultHandler = Arc<dyn Fn(NetworkCommandResult) + Send + Sync>;
+pub type StableWorkerRegistrationHandler =
+    Arc<dyn Fn(String, StableWorkerRegistration) + Send + Sync>;
 
 impl DistributedNode {
     pub fn new(node_id: String, is_orchestrator: bool) -> Self {
+        let stable_shard_data_plane =
+            crate::stable_shard_transport::StableShardDataPlaneService::empty(node_id.clone());
         Self {
             state: Arc::new(RwLock::new(NodeState {
                 node_id,
                 networks: HashMap::new(),
+                partial_shard_runtimes: HashMap::new(),
                 workspace_bindings: load_workspace_bindings_from_env(),
                 peers: HashMap::new(),
                 network_peers: HashMap::new(),
@@ -2173,15 +3539,19 @@ impl DistributedNode {
                 spike_streams: HashMap::new(),
                 spike_stream_backoff: HashMap::new(),
                 spike_drop_counts: HashMap::new(),
+                causal_send_guard: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 spike_transport_stats: HashMap::new(),
                 #[cfg(feature = "openmpi")]
                 mpi_receiver_started: false,
                 nodes: HashMap::new(),
                 network_registry: HashMap::new(),
+                stable_network_ids: HashSet::new(),
                 network_snapshots: HashMap::new(),
+                consistent_cut_epochs: HashMap::new(),
                 network_runtime_metrics: HashMap::new(),
                 last_heartbeat: HashMap::new(),
                 pending_commands: HashMap::new(),
+                stable_activation_results: HashMap::new(),
                 last_deployment_transition: HashMap::new(),
                 ga_running: false,
                 ga_generation: 0,
@@ -2198,8 +3568,1097 @@ impl DistributedNode {
                     .with_cpu(CpuRefreshKind::everything())
                     .with_memory(MemoryRefreshKind::everything()),
             ))),
+            migration_executor_registry:
+                crate::migration_executor::MigrationExecutorRegistry::default(),
+            stable_shard_data_plane,
+            stable_worker_networks: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            stable_worker_limits: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            stable_worker_operations: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
             tracey_probe: TraceyStatusProbe::from_env(),
+            stable_activation_result_handler: Arc::new(std::sync::RwLock::new(None)),
+            stable_worker_registration_handler: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    /// Return the node-owned migration registry used by the secured
+    /// orchestrator management service. Cloning the handle does not clone an
+    /// executor or grant authority; it only shares the registry's bounded
+    /// registration/in-flight state.
+    pub fn migration_executor_registry(
+        &self,
+    ) -> crate::migration_executor::MigrationExecutorRegistry {
+        self.migration_executor_registry.clone()
+    }
+
+    /// Register the stable runtime hosted by one managed network with the
+    /// node-owned migration dispatcher.
+    ///
+    /// This is intentionally an explicit, asynchronous operation. A network
+    /// name, discovery observation, placement proposal or capability report
+    /// cannot create the registration. The target plan and source node are
+    /// checked before the executor enters the registry.
+    #[cfg(feature = "stable_executor_live")]
+    pub async fn register_stable_network_migration_executor(
+        &self,
+        network_id: &str,
+        mut settings: crate::migration_executor::StableExecutorMigrationSettings,
+    ) -> Result<crate::deterministic::BrainId, String> {
+        let network = {
+            let state = self.state.read().await;
+            if !state.is_orchestrator {
+                return Err(
+                    "live migration executors may only be registered by an orchestrator node"
+                        .to_owned(),
+                );
+            }
+            if settings.source_node != state.node_id {
+                return Err(
+                    "migration source node does not match the hosting orchestrator node".to_owned(),
+                );
+            }
+            state
+                .networks
+                .get(network_id)
+                .cloned()
+                .ok_or_else(|| format!("managed network {network_id} is not registered"))?
+        };
+        let brain_id = {
+            let network = network.read().await;
+            let runtime = network
+                .stable_executor
+                .as_ref()
+                .ok_or_else(|| "managed network has no stable executor".to_owned())?;
+            let brain_id = runtime.bridge().authority().brain_id();
+            if settings.target_plan.brain_id != brain_id {
+                return Err(
+                    "migration target plan brain identity does not match the live runtime"
+                        .to_owned(),
+                );
+            }
+            brain_id
+        };
+        if !settings.destination_endpoints.is_empty() && settings.activation_gate.is_none() {
+            settings.activation_gate = Some(self.stable_migration_activation_gate(
+                Duration::from_secs(120),
+                Duration::from_millis(100),
+            ));
+        }
+        let executor = Arc::new(ManagedStableNetworkMigrationExecutor::new(
+            network, settings,
+        )?);
+        self.migration_executor_registry
+            .register(brain_id, executor)
+            .map_err(|error| error.to_string())?;
+        Ok(brain_id)
+    }
+
+    /// Build the default remote-migration activation barrier for this
+    /// orchestrator. The migration registry invokes its synchronous executor
+    /// from `spawn_blocking`; this adapter uses the node's authenticated
+    /// heartbeat/session state and never opens a worker connection itself.
+    ///
+    /// A successful return means every target command was queued through the
+    /// enrolled-node path, acknowledged by its digest-bound command result,
+    /// and followed by a validated authoritative registration whose committed
+    /// shard acknowledgements exactly cover that worker's active ownership.
+    /// Placement publication remains the caller's next step, so any timeout or
+    /// mismatch fails before destination authority is published.
+    pub fn stable_migration_activation_gate(
+        &self,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> crate::migration_executor::StableMigrationActivationGate {
+        let node = self.clone();
+        let timeout = timeout.max(Duration::from_millis(1));
+        let poll_interval = poll_interval.max(Duration::from_millis(1));
+        Arc::new(move |request| {
+            let node = node.clone();
+            let future = async move {
+                node.await_stable_migration_activation(request, timeout, poll_interval)
+                    .await
+            };
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.block_on(future)
+            } else {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| {
+                        format!("stable migration activation runtime creation failed: {error}")
+                    })?
+                    .block_on(future)
+            }
+        })
+    }
+
+    async fn await_stable_migration_activation(
+        &self,
+        request: crate::migration_executor::StableMigrationActivationRequest,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<(), String> {
+        request
+            .target_plan
+            .verify()
+            .map_err(|error| format!("stable migration target placement is invalid: {error}"))?;
+        let expected_nodes = request
+            .target_plan
+            .placements
+            .iter()
+            .map(|placement| placement.active_node.clone())
+            .collect::<BTreeSet<_>>();
+        let expected_shards = request
+            .target_plan
+            .placements
+            .iter()
+            .map(|placement| placement.shard_id.raw())
+            .collect::<Vec<_>>();
+        if expected_nodes.is_empty()
+            || request
+                .checkpoint_references
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != expected_nodes
+            || request
+                .activation_commands
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != expected_nodes
+        {
+            return Err(
+                "stable migration activation targets do not match the target placement".to_owned(),
+            );
+        }
+
+        let mut network_id: Option<String> = None;
+        for (node_id, command) in &request.activation_commands {
+            command
+                .verify()
+                .map_err(|error| format!("stable worker activation is invalid: {error}"))?;
+            if command.operation_id != request.operation_id
+                || command.brain_id != request.brain_id.raw()
+                || command.target_node != *node_id
+            {
+                return Err(format!(
+                    "stable worker activation for {node_id} is not bound to this migration"
+                ));
+            }
+            if command.checkpoint_transfer.as_ref() != request.checkpoint_references.get(node_id) {
+                return Err(format!(
+                    "stable worker activation for {node_id} is not bound to its transferred checkpoint"
+                ));
+            }
+            match &network_id {
+                Some(expected) if expected != &command.network_id => {
+                    return Err(
+                        "stable migration activation commands name different networks".to_owned(),
+                    );
+                }
+                None => network_id = Some(command.network_id.clone()),
+                _ => {}
+            }
+        }
+        let network_id = network_id
+            .ok_or_else(|| "stable migration activation command set is empty".to_owned())?;
+
+        let queue_results = futures_util::future::join_all(
+            request
+                .activation_commands
+                .values()
+                .cloned()
+                .map(|command| async move { self.queue_stable_worker_activation(command).await }),
+        )
+        .await;
+        for result in queue_results {
+            result.map_err(|error| format!("stable worker activation queue failed: {error}"))?;
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let status = {
+                let state = self.state.read().await;
+                let mut failures = Vec::new();
+                let mut complete = true;
+                for node_id in &expected_nodes {
+                    let command = &request.activation_commands[node_id];
+                    let result = state
+                        .stable_activation_results
+                        .get(&(node_id.clone(), command.request_id.clone()));
+                    match result {
+                        Some(result) if !result.accepted => failures.push(format!(
+                            "target {node_id} rejected activation: {}",
+                            result.error
+                        )),
+                        Some(result)
+                            if result.network_id == command.network_id
+                                && result.request_id == command.request_id
+                                && result.manifest_digest == command.manifest_digest
+                                && result.brain_id == request.brain_id.raw() => {}
+                        Some(_) => failures.push(format!(
+                            "target {node_id} returned an activation result with mismatched identity"
+                        )),
+                        None => complete = false,
+                    }
+
+                    let registration = state.nodes.get(node_id).and_then(|node| {
+                        node.stable_executors.iter().find(|registration| {
+                            registration.network_id == network_id
+                                && registration.brain_id == request.brain_id.raw()
+                        })
+                    });
+                    let Some(registration) = registration else {
+                        complete = false;
+                        continue;
+                    };
+                    let registration = stable_registration_from_proto(registration);
+                    if let Err(error) = registration.validate() {
+                        failures.push(format!("target {node_id} registration is invalid: {error}"));
+                        continue;
+                    }
+                    let expected_owned = request
+                        .target_plan
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.active_node == *node_id)
+                        .map(|placement| placement.shard_id.raw())
+                        .collect::<Vec<_>>();
+                    if registration.shard_ids != expected_shards
+                        || registration.owned_shard_ids != expected_owned
+                        || registration.topology_generation
+                            != request.target_plan.topology_generation.raw()
+                        || registration.partition_generation
+                            != request.target_plan.partition_generation.raw()
+                        || registration.lease_term != request.target_plan.lease_term.raw()
+                        || registration.fencing_token != request.target_plan.fencing_token
+                    {
+                        failures.push(format!(
+                            "target {node_id} registration does not match the target placement"
+                        ));
+                    }
+                }
+                if !failures.is_empty() {
+                    Err(failures.join("; "))
+                } else if complete {
+                    Ok(())
+                } else {
+                    Err(String::new())
+                }
+            };
+            match status {
+                Ok(()) => return Ok(()),
+                Err(error) if !error.is_empty() => return Err(error),
+                Err(_) if tokio::time::Instant::now() >= deadline => {
+                    return Err(
+                        "stable migration activation timed out waiting for target evidence"
+                            .to_owned(),
+                    );
+                }
+                Err(_) => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(poll_interval.min(remaining)).await;
+                }
+            }
+        }
+    }
+
+    /// Install the management-plane outcome hook without exposing any
+    /// placement-registry object to a worker or data-plane caller.
+    pub fn set_stable_activation_result_handler(
+        &self,
+        handler: Option<StableActivationResultHandler>,
+    ) -> Result<(), String> {
+        *self
+            .stable_activation_result_handler
+            .write()
+            .map_err(|_| "stable activation result handler lock is poisoned".to_owned())? = handler;
+        Ok(())
+    }
+
+    /// Install the management callback that consumes validated stable-worker
+    /// registration evidence. It is kept separate from command-result
+    /// handling because command acceptance only proves delivery, while the
+    /// registration proves durable activation and shard ownership.
+    pub fn set_stable_worker_registration_handler(
+        &self,
+        handler: Option<StableWorkerRegistrationHandler>,
+    ) -> Result<(), String> {
+        *self
+            .stable_worker_registration_handler
+            .write()
+            .map_err(|_| "stable worker registration handler lock is poisoned".to_owned())? =
+            handler;
+        Ok(())
+    }
+
+    /// Return the stable-shard service used by the node's gRPC listener.
+    /// Cloning the service only clones its registry handles; receiver state
+    /// remains shared and serialised per brain.
+    pub fn stable_shard_data_plane_service(
+        &self,
+    ) -> crate::stable_shard_transport::StableShardDataPlaneService {
+        self.stable_shard_data_plane.clone()
+    }
+
+    /// Register one durable receiver after the caller has completed the
+    /// checkpoint, placement, lease and authenticated-session checks.
+    pub fn register_stable_shard_receiver(
+        &self,
+        receiver: crate::stable_shard_transport::DurableStableShardReceiver,
+    ) -> Result<(), String> {
+        self.stable_shard_data_plane
+            .registry()
+            .register(receiver)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Register a receiver and bind its stable brain identity to the
+    /// deployment's network name and bounded heartbeat budgets. The binding
+    /// is telemetry metadata; all data-plane admission remains fenced by the
+    /// receiver's durable plan and lease.
+    pub fn register_stable_shard_receiver_for_network(
+        &self,
+        network_id: impl Into<String>,
+        max_input_events: usize,
+        max_steps_per_poll: usize,
+        receiver: crate::stable_shard_transport::DurableStableShardReceiver,
+    ) -> Result<(), String> {
+        let network_id = network_id.into();
+        let brain_id = receiver.brain_id();
+        let limits = (
+            u32::try_from(max_input_events)
+                .map_err(|_| "stable worker input budget exceeds wire bounds".to_owned())?,
+            u32::try_from(max_steps_per_poll)
+                .map_err(|_| "stable worker step budget exceeds wire bounds".to_owned())?,
+        );
+        if network_id.trim().is_empty() || limits.0 == 0 || limits.1 == 0 {
+            return Err("stable worker network identity or budgets are invalid".to_owned());
+        }
+        self.register_stable_shard_receiver(receiver)?;
+        let result = (|| {
+            let mut networks = self
+                .stable_worker_networks
+                .write()
+                .map_err(|_| "stable worker network metadata lock is poisoned".to_owned())?;
+            if networks.insert(brain_id, network_id).is_some() {
+                return Err("stable worker network identity is already registered".to_owned());
+            }
+            self.stable_worker_limits
+                .write()
+                .map_err(|_| "stable worker limit metadata lock is poisoned".to_owned())?
+                .insert(brain_id, limits);
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            let _ = self.unregister_stable_shard_receiver(brain_id);
+            if let Ok(mut networks) = self.stable_worker_networks.write() {
+                networks.remove(&brain_id);
+            }
+            if let Ok(mut limits_map) = self.stable_worker_limits.write() {
+                limits_map.remove(&brain_id);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Remove a receiver only after the migration adapter has drained and
+    /// fenced its source. A missing receiver is reported as a normal no-op so
+    /// retry cleanup remains idempotent.
+    pub fn unregister_stable_shard_receiver(
+        &self,
+        brain_id: crate::deterministic::BrainId,
+    ) -> Result<bool, String> {
+        let removed = self
+            .stable_shard_data_plane
+            .registry()
+            .unregister(brain_id)
+            .map_err(|error| error.to_string())?;
+        if removed {
+            if let Ok(mut networks) = self.stable_worker_networks.write() {
+                networks.remove(&brain_id);
+            }
+            if let Ok(mut limits) = self.stable_worker_limits.write() {
+                limits.remove(&brain_id);
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Bind the durable outbound queue used for generated work from a
+    /// registered stable receiver. This is a separate explicit operation so
+    /// receiver registration cannot accidentally grant a routing authority.
+    pub fn register_stable_shard_dispatcher(
+        &self,
+        brain_id: crate::deterministic::BrainId,
+        dispatcher: crate::stable_shard_dispatch::StableShardDispatcher,
+    ) -> Result<(), String> {
+        self.stable_shard_data_plane
+            .register_dispatcher(brain_id, dispatcher)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn unregister_stable_shard_dispatcher(
+        &self,
+        brain_id: crate::deterministic::BrainId,
+    ) -> Result<bool, String> {
+        self.stable_shard_data_plane
+            .unregister_dispatcher(brain_id)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Queue an orchestrator-authorised stable-worker activation for one
+    /// already enrolled node. Discovery, a peer address, or ordinary resource
+    /// telemetry is insufficient: the target must have reported the stable
+    /// executor capability for this network and brain, and it must have an
+    /// active authenticated peer session. Replays of the same command are
+    /// acknowledged without adding another heartbeat command; conflicting
+    /// commands for the same network remain visible and are rejected.
+    pub async fn queue_stable_worker_activation(
+        &self,
+        command: crate::stable_worker::StableWorkerActivationCommand,
+    ) -> Result<bool, String> {
+        command.verify().map_err(|error| error.to_string())?;
+        let mut state = self.state.write().await;
+        if !state.is_orchestrator {
+            return Err(
+                "stable worker activation can only be queued by an orchestrator".to_owned(),
+            );
+        }
+        let target = state
+            .nodes
+            .get(&command.target_node)
+            .ok_or_else(|| "stable worker activation target is not an enrolled node".to_owned())?;
+        let capability = target
+            .stable_executor_capabilities
+            .iter()
+            .any(|capability| {
+                capability.profile == crate::stable_worker::STABLE_EXECUTOR_PROFILE
+                    && capability.activation_schema_version
+                        == crate::stable_worker::STABLE_WORKER_ACTIVATION_SCHEMA_VERSION
+            });
+        if !capability {
+            return Err(
+                "stable worker activation target has no enrolled stable-worker activation capability"
+                    .to_owned(),
+            );
+        }
+        let session_active = state
+            .last_heartbeat
+            .get(&command.target_node)
+            .is_some_and(|last| last.elapsed() <= PEER_STALE_AFTER);
+        if !session_active {
+            return Err("stable worker activation target has no active peer session".to_owned());
+        }
+        let address = state
+            .peers
+            .get(&command.target_node)
+            .or_else(|| (!target.address.trim().is_empty()).then_some(&target.address))
+            .filter(|address| !address.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| "stable worker activation target has no peer address".to_owned())?;
+        let config_json = serde_json::to_vec(&command)
+            .map_err(|error| format!("stable worker activation encoding failed: {error}"))?;
+        let network_id = command.network_id.clone();
+        let queue = state
+            .pending_commands
+            .entry(command.target_node.clone())
+            .or_default();
+        if let Some(existing) = queue.iter().find(|existing| {
+            existing.network_id == network_id
+                && existing.r#type
+                    == proto::network_command::CommandType::ActivateStableWorker as i32
+        }) {
+            if existing.config_json == config_json {
+                return Ok(false);
+            }
+            return Err(
+                "a different stable worker activation is already queued for this network"
+                    .to_owned(),
+            );
+        }
+        let pending = NetworkCommand {
+            r#type: proto::network_command::CommandType::ActivateStableWorker as i32,
+            network_id,
+            config_json,
+            layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 0,
+            neuron_model: String::new(),
+            learning_rule: String::new(),
+        };
+        // The address is intentionally read and validated above. Keep the
+        // binding in this method so a future transport adapter cannot enqueue
+        // a command for a node that has silently lost its session.
+        if address.trim().is_empty() {
+            return Err("stable worker activation target peer address is empty".to_owned());
+        }
+        if queue.len() >= MAX_PENDING_COMMANDS_PER_NODE {
+            return Err("stable worker activation queue capacity exceeded".to_owned());
+        }
+        queue.push(pending);
+        Ok(true)
+    }
+
+    /// Activate a partial stable worker from an orchestrator-issued command.
+    ///
+    /// Manifest decoding, checkpoint verification and filesystem work run on
+    /// a blocking worker so heartbeat command handling remains responsive.
+    /// Registration happens only after the complete manifest has been
+    /// verified, and a dispatcher failure rolls the receiver registration
+    /// back. Replaying the same request is idempotent; reusing its request ID
+    /// with different content is rejected.
+    #[cfg(feature = "stable_executor_live")]
+    pub async fn activate_stable_worker(
+        &self,
+        command: crate::stable_worker::StableWorkerActivationCommand,
+    ) -> Result<(), String> {
+        let expected_node_id = self.state.read().await.node_id.clone();
+        let transfer_root = crate::checkpoint_transfer::StableCheckpointTransferService::from_env(
+            expected_node_id.clone(),
+        )?
+        .root()
+        .to_path_buf();
+        let worker_state_root =
+            crate::checkpoint_transfer::StableCheckpointTransferService::worker_state_root(
+                &expected_node_id,
+            )?;
+        self.activate_stable_worker_with_roots(command, transfer_root, worker_state_root)
+            .await
+    }
+
+    /// Activate a worker using explicit target-local durable roots.
+    ///
+    /// The normal process entry point obtains these roots from deployment
+    /// configuration. Keeping the roots injectable makes the same activation
+    /// boundary usable by embedded orchestrators and deterministic in-process
+    /// fault tests without mutating process-global environment variables.
+    #[cfg(feature = "stable_executor_live")]
+    pub async fn activate_stable_worker_with_roots(
+        &self,
+        command: crate::stable_worker::StableWorkerActivationCommand,
+        checkpoint_transfer_root: impl Into<std::path::PathBuf>,
+        worker_state_root: impl Into<std::path::PathBuf>,
+    ) -> Result<(), String> {
+        command.verify().map_err(|error| error.to_string())?;
+        let expected_node_id = self.state.read().await.node_id.clone();
+        if command.target_node != expected_node_id {
+            return Err(format!(
+                "stable worker activation targets {}, local node is {}",
+                command.target_node, expected_node_id
+            ));
+        }
+        if let Some((brain_id, digest)) = self
+            .stable_worker_operations
+            .read()
+            .map_err(|_| "stable worker operation lock is poisoned".to_owned())?
+            .get(&command.request_id)
+            .cloned()
+        {
+            if brain_id == command.brain_id && digest == command.manifest_digest {
+                return Ok(());
+            }
+            return Err(
+                "stable worker activation request ID was reused with different content".to_owned(),
+            );
+        }
+
+        let expected_node_for_bootstrap = expected_node_id.clone();
+        let manifest_json = command.manifest_json.clone();
+        let expected_brain_id = command.brain_id;
+        let checkpoint_transfer_root = checkpoint_transfer_root.into();
+        let worker_state_root = worker_state_root.into();
+        let bootstrap = tokio::task::spawn_blocking(move || {
+            let mut manifest = serde_json::from_str::<
+                crate::stable_runtime_bootstrap::StablePartialWorkerBootstrapManifest,
+            >(&manifest_json)
+            .map_err(|error| format!("stable worker manifest JSON is invalid: {error}"))?;
+            if manifest.node_id != expected_node_for_bootstrap {
+                return Err(format!(
+                    "stable worker manifest targets {}, local node is {}",
+                    manifest.node_id, expected_node_for_bootstrap
+                ));
+            }
+            if manifest.runtime.brain_id.raw() != expected_brain_id
+                || manifest.placement.brain_id.raw() != expected_brain_id
+            {
+                return Err(
+                    "stable worker activation brain identity does not match manifest".to_owned(),
+                );
+            }
+            if let Some(reference) = command.checkpoint_transfer.as_ref() {
+                let transfer_service =
+                    crate::checkpoint_transfer::StableCheckpointTransferService::new(
+                        expected_node_for_bootstrap.clone(),
+                        checkpoint_transfer_root,
+                    )
+                    .map_err(|error| {
+                        format!("checkpoint transfer service configuration failed: {error}")
+                    })?;
+                transfer_service
+                    .verify_activation_reference(reference)
+                    .map_err(|error| {
+                        format!("target-local checkpoint transfer verification failed: {error}")
+                    })?;
+                manifest
+                    .rebase_to_transferred_checkpoint(
+                        transfer_service.root().to_path_buf(),
+                        worker_state_root,
+                        reference,
+                    )
+                    .map_err(|error| {
+                        format!("target-local worker path rebasing failed: {error}")
+                    })?;
+            }
+            manifest
+                .open()
+                .map_err(|error| format!("stable worker manifest verification failed: {error}"))
+        })
+        .await
+        .map_err(|error| format!("stable worker bootstrap task failed: {error}"))??;
+
+        let brain_id = bootstrap.manifest.runtime.brain_id;
+        let network_id = command.network_id.clone();
+        let max_input_events = bootstrap.manifest.runtime.max_input_events;
+        let max_steps_per_poll = bootstrap.manifest.runtime.max_steps_per_poll;
+        self.register_stable_shard_receiver_for_network(
+            network_id,
+            max_input_events,
+            max_steps_per_poll,
+            bootstrap.receiver,
+        )?;
+        if let Err(error) = self.register_stable_shard_dispatcher(brain_id, bootstrap.dispatcher) {
+            let _ = self.unregister_stable_shard_receiver(brain_id);
+            return Err(error);
+        }
+        self.stable_worker_operations
+            .write()
+            .map_err(|_| "stable worker operation lock is poisoned".to_owned())?
+            .insert(
+                command.request_id,
+                (command.brain_id, command.manifest_digest),
+            );
+        nm_log!(
+            "[stable-worker] activated brain {} on node {} from orchestrator command {}",
+            brain_id,
+            expected_node_id,
+            command.operation_id
+        );
+        Ok(())
+    }
+
+    /// Flush sealed stable-shard outbox records in parallel by destination.
+    /// A failed destination remains durable and is retried on the next pass.
+    pub async fn flush_stable_shard_outboxes(&self) -> Result<usize, String> {
+        self.stable_shard_data_plane
+            .dispatch_pending()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Register one bounded partial-shard worker for an explicitly selected
+    /// network. The caller must have already validated placement, checkpoint
+    /// identity and authority; this method only makes the worker reachable by
+    /// the node's bounded execution adapter.
+    pub async fn register_partial_shard_runtime(
+        &self,
+        network_id: impl Into<String>,
+        runtime: crate::managed_partial_shard_runtime::ManagedPartialShardRuntime,
+    ) -> Result<(), String> {
+        let network_id = network_id.into();
+        if network_id.trim().is_empty() {
+            return Err("partial-shard runtime network identity is empty".to_owned());
+        }
+        let mut state = self.state.write().await;
+        if state.partial_shard_runtimes.contains_key(&network_id) {
+            return Err(format!(
+                "partial-shard runtime for network {network_id} is already registered"
+            ));
+        }
+        state
+            .partial_shard_runtimes
+            .insert(network_id, Arc::new(tokio::sync::Mutex::new(runtime)));
+        Ok(())
+    }
+
+    /// Add a data-plane endpoint to an already registered partial worker.
+    /// Endpoint registration is deliberately separate from runtime
+    /// registration so discovery cannot silently turn a peer address into a
+    /// routing grant.
+    pub async fn register_partial_shard_endpoint(
+        &self,
+        network_id: &str,
+        node_id: impl Into<String>,
+        address: impl Into<String>,
+    ) -> Result<(), String> {
+        let runtime = {
+            let state = self.state.read().await;
+            state.partial_shard_runtimes.get(network_id).cloned()
+        }
+        .ok_or_else(|| {
+            format!("partial-shard runtime for network {network_id} is not registered")
+        })?;
+        let runtime = runtime.lock().await;
+        runtime
+            .dispatcher()
+            .register_endpoint(node_id, address)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Remove a partial worker only after its owner has been drained by the
+    /// caller. The explicit removal boundary prevents node disappearance or
+    /// discovery expiry from silently discarding a live worker handle.
+    pub async fn unregister_partial_shard_runtime(&self, network_id: &str) -> Result<bool, String> {
+        let mut state = self.state.write().await;
+        Ok(state.partial_shard_runtimes.remove(network_id).is_some())
+    }
+
+    /// Poll a registered partial worker through its bounded asynchronous loop.
+    /// The node state lock is released before biological work or network I/O;
+    /// only the worker handle remains serialised.
+    pub async fn poll_partial_shard_runtime(
+        &self,
+        network_id: &str,
+        inputs: &[crate::shard_executor::RoutedCausalEvent],
+    ) -> Result<crate::managed_partial_shard_runtime::ManagedPartialShardPoll, String> {
+        let runtime = {
+            let state = self.state.read().await;
+            state.partial_shard_runtimes.get(network_id).cloned()
+        }
+        .ok_or_else(|| {
+            format!("partial-shard runtime for network {network_id} is not registered")
+        })?;
+        runtime
+            .lock()
+            .await
+            .poll(inputs)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Flush pending partial-worker streams without holding the node state
+    /// lock. Failed destinations remain durable and are retried by the next
+    /// explicit call or by the enclosing scheduler.
+    pub async fn dispatch_partial_shard_runtime(
+        &self,
+        network_id: &str,
+    ) -> Result<crate::stable_shard_dispatch::StableShardDispatchReport, String> {
+        let runtime = {
+            let state = self.state.read().await;
+            state.partial_shard_runtimes.get(network_id).cloned()
+        }
+        .ok_or_else(|| {
+            format!("partial-shard runtime for network {network_id} is not registered")
+        })?;
+        // The dispatcher contains its own shared outbox and endpoint handles.
+        // Snapshot it under the worker lock, then release the lock before any
+        // network await so a slow destination cannot stall local execution.
+        let dispatcher = runtime.lock().await.dispatcher();
+        dispatcher
+            .dispatch_pending()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Service every explicitly registered partial stable worker once.
+    ///
+    /// Each worker is independently serialised, while workers belonging to
+    /// different networks are polled and flushed concurrently. The biological
+    /// poll is bounded by the runtime's configured step budget. Durable
+    /// outboxes are flushed even when a poll fails, so a transient local error
+    /// cannot strand records that were committed by an earlier poll.
+    pub async fn service_partial_shard_runtimes_once(&self) -> usize {
+        let runtimes = {
+            let state = self.state.read().await;
+            state
+                .partial_shard_runtimes
+                .iter()
+                .map(|(network_id, runtime)| (network_id.clone(), runtime.clone()))
+                .collect::<Vec<_>>()
+        };
+        let results = futures_util::future::join_all(runtimes.into_iter().map(
+            |(network_id, runtime)| async move {
+                let (poll_result, dispatcher) = {
+                    let mut runtime = runtime.lock().await;
+                    let poll_result = runtime.poll(&[]).await;
+                    let dispatcher = runtime.dispatcher();
+                    (poll_result, dispatcher)
+                };
+                if let Err(error) = poll_result {
+                    nm_err!(
+                        "[warn] partial stable worker {} poll deferred: {}",
+                        network_id,
+                        error
+                    );
+                }
+                match dispatcher.dispatch_pending().await {
+                    Ok(report) => Ok(report.acknowledged_records),
+                    Err(error) => {
+                        nm_err!(
+                            "[warn] partial stable worker {} outbox flush deferred: {}",
+                            network_id,
+                            error
+                        );
+                        Err(error)
+                    }
+                }
+            },
+        ))
+        .await;
+        results.into_iter().filter_map(Result::ok).sum()
+    }
+
+    /// Run the bounded partial-worker lifecycle until the node is asked to
+    /// stop. The interval is operational scheduling metadata and never enters
+    /// biological logical time.
+    pub async fn run_partial_shard_workers(&self, mut shutdown: watch::Receiver<bool>) {
+        let interval_ms = std::env::var("NM_STABLE_PARTIAL_WORKER_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(100)
+            .clamp(10, 10_000);
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                }
+                _ = interval.tick() => {
+                    let _ = self.service_partial_shard_runtimes_once().await;
+                }
+            }
+        }
+    }
+
+    /// Execute a generated management operation through the orchestrator's
+    /// existing fenced network-update path. Workers are never addressed here;
+    /// the update path enqueues commands for assigned workers and applies the
+    /// local command only when this process is the orchestrator.
+    pub async fn execute_management_operation(
+        &self,
+        network_id: &str,
+        operation: crate::management::OperationKind,
+    ) -> Result<(), String> {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let action = match operation {
+            crate::management::OperationKind::Start => proto::control_update::Action::Start,
+            crate::management::OperationKind::Stop => proto::control_update::Action::Stop,
+            crate::management::OperationKind::Reset => proto::control_update::Action::Reset,
+            crate::management::OperationKind::Export => {
+                return Err("export requires an explicit export destination".to_owned());
+            }
+        };
+        self.update_network(Request::new(NetworkUpdateRequest {
+            network_id: network_id.to_owned(),
+            update: Some(proto::network_update_request::Update::Control(
+                proto::ControlUpdate {
+                    action: action as i32,
+                },
+            )),
+        }))
+        .await
+        .map(|_| ())
+        .map_err(|status| status.to_string())
+    }
+
+    #[cfg(feature = "replicated_durability")]
+    async fn admit_causal_spike_ingress(
+        &self,
+        envelope: &crate::causal_transport::proto::CausalEventEnvelope,
+        causal: crate::data_plane::CausalEnvelope,
+        ingress: CausalSpikeIngress,
+    ) -> Result<(), Status> {
+        if ingress.schema_version != CAUSAL_INGRESS_SCHEMA_VERSION
+            || ingress.network_id.trim().is_empty()
+            || ingress.spike_indices.len() > MAX_CAUSAL_INGRESS_SPIKES
+            || ingress.aer_payload.len() > cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
+        {
+            return Err(Status::invalid_argument("invalid causal ingress payload"));
+        }
+        if causal.brain != crate::managed_durability::managed_brain_id(&ingress.network_id) {
+            return Err(Status::failed_precondition(
+                "causal brain identity does not match ingress network",
+            ));
+        }
+
+        let network = {
+            let state = self.state.read().await;
+            state.networks.get(&ingress.network_id).cloned()
+        }
+        .ok_or_else(|| Status::not_found("causal ingress network is not loaded"))?;
+
+        let mut net = network.write().await;
+        if causal.stage != crate::deterministic::EventStage::SpikeDecision
+            || causal.kind != crate::data_plane::EnvelopeKind::Event
+        {
+            return Err(Status::invalid_argument(
+                "causal ingress must be a spike-decision event",
+            ));
+        }
+
+        let sensory_neurons = net.runner.net.num_sensory_neurons;
+        let layer = (ingress.layer_index != EXTERNAL_SENSORY_LAYER_INDEX)
+            .then_some(ingress.layer_index as usize);
+        let layer_size = layer.map(|index| net.runner.layer_size(index)).unwrap_or(0);
+        let layer_assigned = layer
+            .map(|index| net.runner.is_layer_assigned(index))
+            .unwrap_or(false);
+        let owner = net
+            .durable_owner
+            .as_mut()
+            .ok_or_else(|| Status::failed_precondition("network has no durable shard owner"))?;
+
+        let mut channel: ManagedChannelState = serde_json::from_str(
+            &owner
+                .authoritative_channel_state()
+                .map_err(|error| Status::failed_precondition(error.to_string()))?,
+        )
+        .map_err(|error| {
+            Status::failed_precondition(format!("invalid durable channel state: {error}"))
+        })?;
+
+        let expected_size = if ingress.layer_index == EXTERNAL_SENSORY_LAYER_INDEX {
+            sensory_neurons
+        } else {
+            layer_size
+        };
+        let spikes = match spikes_from_transport(
+            &ingress.aer_payload,
+            ingress.aer_base,
+            &ingress.spike_indices,
+            expected_size,
+        ) {
+            Ok(spikes) => spikes,
+            Err(_error) if ingress.spike_indices.is_empty() => vec![0i8; expected_size],
+            Err(error) => {
+                return Err(Status::invalid_argument(format!(
+                    "invalid causal AER payload: {error}"
+                )));
+            }
+        };
+
+        if ingress.layer_index == EXTERNAL_SENSORY_LAYER_INDEX {
+            if spikes.len() != sensory_neurons {
+                return Err(Status::invalid_argument(
+                    "sensory ingress shape does not match the shard",
+                ));
+            }
+            channel.external_sensory_spikes = Some(spikes);
+        } else {
+            if layer_size == 0 || layer_assigned {
+                return Err(Status::failed_precondition(
+                    "causal ingress is not addressed to a remote-owned layer",
+                ));
+            }
+            if spikes.len() != layer_size {
+                return Err(Status::invalid_argument(
+                    "causal ingress shape does not match the layer",
+                ));
+            }
+            let steps = if ingress.is_backward {
+                &mut channel.remote_spike_steps_bwd
+            } else {
+                &mut channel.remote_spike_steps_fwd
+            };
+            if steps
+                .get(&ingress.layer_index)
+                .is_some_and(|previous| ingress.step_index < *previous)
+            {
+                return Err(Status::failed_precondition(
+                    "causal ingress moves the layer frontier backwards",
+                ));
+            }
+            steps.insert(ingress.layer_index, ingress.step_index);
+            if ingress.is_backward {
+                channel
+                    .remote_spikes_bwd
+                    .insert(ingress.layer_index, spikes.clone());
+            } else {
+                channel
+                    .remote_spikes_fwd
+                    .insert(ingress.layer_index, spikes.clone());
+            }
+        }
+
+        let channel_json = serde_json::to_vec(&channel)
+            .map_err(|error| Status::internal(format!("encode causal channel state: {error}")))?;
+        let outcome = owner
+            .admit_causal_event(&causal, &channel_json)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        if matches!(
+            outcome,
+            crate::durability::DurableApplyOutcome::Applied { .. }
+        ) {
+            restore_channel_state(&mut net, channel);
+        }
+        let _ = envelope;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "replicated_durability"))]
+    async fn admit_causal_spike_ingress(
+        &self,
+        _envelope: &crate::causal_transport::proto::CausalEventEnvelope,
+        _causal: crate::data_plane::CausalEnvelope,
+        _ingress: CausalSpikeIngress,
+    ) -> Result<(), Status> {
+        Err(Status::failed_precondition(
+            "authoritative causal transport requires replicated_durability",
+        ))
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    async fn stable_network_for_causal_stream(
+        &self,
+        brain: crate::deterministic::BrainId,
+        stream: crate::deterministic::StreamId,
+        sender_node_id: &str,
+        receiver_node_id: &str,
+    ) -> Option<Arc<RwLock<ManagedNetwork>>> {
+        let networks = {
+            let state = self.state.read().await;
+            state
+                .networks
+                .iter()
+                .map(|(network_id, network)| (network_id.clone(), network.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (network_id, network) in networks {
+            let stream_matches = crate::managed_durability::managed_link_stream_id(
+                &network_id,
+                sender_node_id,
+                receiver_node_id,
+            ) == stream;
+            let brain_matches = crate::managed_durability::managed_brain_id(&network_id) == brain;
+            if !stream_matches && !brain_matches {
+                continue;
+            }
+            if network.read().await.stable_executor_registered() {
+                return Some(network);
+            }
+        }
+        None
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    async fn admit_stable_causal_event(
+        &self,
+        network: Arc<RwLock<ManagedNetwork>>,
+        causal: crate::data_plane::CausalEnvelope,
+    ) -> Result<(), Status> {
+        tokio::task::spawn_blocking(move || {
+            let mut network = network.blocking_write();
+            network
+                .poll_stable_executor_envelope(&causal)
+                .map(|_| ())
+                .map_err(|error| Status::failed_precondition(error.to_string()))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("stable causal worker failed: {error}")))?
     }
 
     async fn fetch_live_network_snapshot(&self, source: &LiveSnapshotSource) -> Option<String> {
@@ -2211,7 +4670,7 @@ impl DistributedNode {
             if let Some(net_arc) = net_arc {
                 match tokio::task::spawn_blocking(move || {
                     let net = net_arc.blocking_read();
-                    net.runner.export_network_json()
+                    local_shard_snapshot(&net).map(|(snapshot_json, _, _, _)| snapshot_json)
                 })
                 .await
                 {
@@ -2257,13 +4716,27 @@ impl DistributedNode {
         }
 
         let mut client = client?;
-        let snapshot_result = tokio::time::timeout(
-            Duration::from_secs(2),
-            client.get_network_snapshot(Request::new(NetworkSnapshotRequest {
+        let sender_node_id = self.state.read().await.node_id.clone();
+        let request = match authenticated_request(
+            NetworkSnapshotRequest {
                 network_id: source.network_id.clone(),
-            })),
-        )
-        .await;
+                cut_epoch: 0,
+            },
+            &sender_node_id,
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                nm_err!(
+                    "[warn] Cannot authenticate live snapshot request for network {}: {}",
+                    source.network_id,
+                    error
+                );
+                return None;
+            }
+        };
+        let snapshot_result =
+            tokio::time::timeout(Duration::from_secs(2), client.get_network_snapshot(request))
+                .await;
 
         match snapshot_result {
             Ok(Ok(response)) => {
@@ -2857,6 +5330,134 @@ impl DistributedNode {
         }
     }
 
+    /// Convert only authenticated, currently enrolled stable-worker sessions
+    /// into the placement planner's deterministic resource contract. The
+    /// caller supplies the explicit compute allow-list and deployment facts
+    /// that generic heartbeats cannot prove (storage, network budget and
+    /// failure domain). Discovery and an unscoped telemetry observation never
+    /// become placement authority through this method.
+    #[cfg(feature = "stable_executor_live")]
+    pub async fn get_placement_resource_observations(
+        &self,
+        allowed_nodes: &std::collections::BTreeSet<String>,
+        failure_domains: &std::collections::BTreeMap<String, String>,
+        numerical_profile: &str,
+        storage_bytes_per_node: u64,
+        network_bytes_per_second_per_node: u64,
+    ) -> Vec<crate::placement::ResourceObservation> {
+        if numerical_profile.trim().is_empty()
+            || storage_bytes_per_node == 0
+            || network_bytes_per_second_per_node == 0
+        {
+            return Vec::new();
+        }
+        let state = self.state.read().await;
+        let now = std::time::Instant::now();
+        let mut observations = Vec::new();
+        for (node_id, node) in &state.nodes {
+            if !allowed_nodes.contains(node_id)
+                || !state
+                    .last_heartbeat
+                    .get(node_id)
+                    .is_some_and(|last| now.duration_since(*last) <= PEER_STALE_AFTER)
+                || !node.stable_executor_capabilities.iter().any(|capability| {
+                    capability.profile == crate::stable_worker::STABLE_EXECUTOR_PROFILE
+                        && capability.activation_schema_version
+                            == crate::stable_worker::STABLE_WORKER_ACTIVATION_SCHEMA_VERSION
+                })
+            {
+                continue;
+            }
+            let Some(failure_domain) = failure_domains.get(node_id) else {
+                continue;
+            };
+            let resources = node.resources.clone().unwrap_or_default();
+            let total_ram = resources.total_ram;
+            let available_ram = resources.available_ram.min(total_ram);
+            let capacity_units = if resources.capacity_score.is_finite() {
+                (resources.capacity_score.max(0.001) * 1_000.0)
+                    .round()
+                    .min(u64::MAX as f32) as u64
+            } else {
+                0
+            };
+            let cpu_pct = if resources.telemetry_cpu_usage_pct.is_finite()
+                && resources.telemetry_cpu_usage_pct > 0.0
+            {
+                resources.telemetry_cpu_usage_pct
+            } else {
+                resources.cpu_usage
+            };
+            let cpu_pressure = (cpu_pct.clamp(0.0, 100.0) * 10.0).round() as u16;
+            let memory_pressure = if total_ram == 0 {
+                1_000
+            } else {
+                1_000u64
+                    .saturating_sub(available_ram.saturating_mul(1_000) / total_ram)
+                    .min(1_000) as u16
+            };
+            let thermal_pressure =
+                if resources.temperature_c.is_finite() && resources.temperature_c >= 0.0 {
+                    ((resources.temperature_c - 40.0).max(0.0) * 16.6667)
+                        .round()
+                        .clamp(0.0, 1_000.0) as u16
+                } else {
+                    0
+                };
+            observations.push(crate::placement::ResourceObservation {
+                node_id: node_id.clone(),
+                device_id: format!("{node_id}-cpu"),
+                healthy: true,
+                enrolled: true,
+                compute_authorised: true,
+                failure_domain: failure_domain.clone(),
+                numerical_profiles: vec![numerical_profile.to_owned()],
+                capacity_units,
+                reserved_capacity_units: 0,
+                memory_bytes: total_ram,
+                reserved_memory_bytes: total_ram.saturating_sub(available_ram),
+                storage_bytes: storage_bytes_per_node,
+                reserved_storage_bytes: 0,
+                network_bytes_per_second: network_bytes_per_second_per_node,
+                reserved_network_bytes_per_second: 0,
+                cpu_pressure_milli: cpu_pressure,
+                memory_pressure_milli: memory_pressure,
+                network_pressure_milli: 0,
+                thermal_pressure_milli: thermal_pressure,
+            });
+        }
+        observations.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        observations
+    }
+
+    /// Return a logical placement boundary observed from an authoritative
+    /// stable registration. Wall-clock time is intentionally never converted
+    /// into biological time. A brain without a registered stable owner starts
+    /// at the zero boundary and must publish its initial plan before any
+    /// movement can be considered.
+    #[cfg(feature = "stable_executor_live")]
+    pub async fn get_authoritative_placement_tag(
+        &self,
+        network_id: &str,
+        brain_id: crate::deterministic::BrainId,
+    ) -> LogicalTag {
+        let state = self.state.read().await;
+        state
+            .nodes
+            .values()
+            .flat_map(|node| node.stable_executors.iter())
+            .filter(|registration| {
+                registration.network_id == network_id
+                    && registration.brain_id == brain_id.raw()
+                    && registration.authoritative
+            })
+            .map(|registration| {
+                LogicalTag::new(registration.current_tick, registration.current_microstep)
+            })
+            .max()
+            .unwrap_or(LogicalTag::ZERO)
+    }
+
     pub async fn get_network_resources(&self) -> HashMap<String, NetworkResources> {
         let state = self.state.read().await;
         let mut res = HashMap::new();
@@ -2887,6 +5488,124 @@ impl DistributedNode {
             );
         }
         res
+    }
+
+    /// Report the local stable executor capabilities for authenticated
+    /// orchestrator observation. A non-stable build reports no capability and
+    /// therefore cannot accidentally present a compatibility Runner as a
+    /// stable shard owner.
+    pub async fn get_stable_executor_registrations(&self) -> Vec<StableExecutorRegistration> {
+        let mut registrations = Vec::new();
+        #[cfg(feature = "stable_executor_live")]
+        {
+            let state = self.state.read().await;
+            for (network_id, network) in &state.networks {
+                let network = network.read().await;
+                if let Some(executor) = network.stable_executor.as_ref() {
+                    registrations.push(stable_registration_to_proto(
+                        executor.registration_identity(network_id.clone()),
+                    ));
+                }
+            }
+        }
+
+        // Partial workers are registered in the stable data plane rather than
+        // in `ManagedNetwork`. Publish only durable receiver observations and
+        // never infer an executor from a resource or discovery report.
+        let network_names = self
+            .stable_worker_networks
+            .read()
+            .ok()
+            .map(|map| map.clone());
+        let limits = self.stable_worker_limits.read().ok().map(|map| map.clone());
+        if let (Some(network_names), Some(limits)) = (network_names, limits) {
+            if let Ok(snapshots) = self.stable_shard_data_plane.registry().snapshots() {
+                for snapshot in snapshots {
+                    let Some(network_id) = network_names.get(&snapshot.brain_id) else {
+                        continue;
+                    };
+                    let Some((max_input_events, max_steps_per_poll)) =
+                        limits.get(&snapshot.brain_id)
+                    else {
+                        continue;
+                    };
+                    let application_acks = snapshot
+                        .checkpoints
+                        .iter()
+                        .map(|checkpoint| StableShardApplicationAck {
+                            shard_id: checkpoint.shard_id.raw(),
+                            brain_id: snapshot.brain_id.raw(),
+                            topology_generation: snapshot.topology_generation.raw(),
+                            partition_generation: snapshot.partition_generation.raw(),
+                            plan_digest: snapshot.plan_digest.to_string(),
+                            lease_term: snapshot.lease_term.raw(),
+                            fencing_token: snapshot.fencing_token,
+                            applied_tick: checkpoint.current_tag.tick,
+                            applied_microstep: checkpoint.current_tag.microstep,
+                            state_digest: checkpoint.checkpoint_digest.to_string(),
+                            durable_wal_sequence: None,
+                            committed: true,
+                        })
+                        .collect::<Vec<_>>();
+                    let registration = StableWorkerRegistration {
+                        schema_version:
+                            crate::stable_worker::STABLE_WORKER_REGISTRATION_SCHEMA_VERSION,
+                        profile: crate::stable_worker::STABLE_EXECUTOR_PROFILE.to_owned(),
+                        network_id: network_id.clone(),
+                        brain_id: snapshot.brain_id.raw(),
+                        topology_generation: snapshot.topology_generation.raw(),
+                        partition_generation: snapshot.partition_generation.raw(),
+                        topology_digest: snapshot.topology_digest.to_string(),
+                        plan_digest: snapshot.plan_digest.to_string(),
+                        shard_ids: snapshot.shard_ids.iter().map(|id| id.raw()).collect(),
+                        owned_shard_ids: snapshot
+                            .owned_shard_ids
+                            .iter()
+                            .map(|id| id.raw())
+                            .collect(),
+                        application_acks,
+                        lease_term: snapshot.lease_term.raw(),
+                        fencing_token: snapshot.fencing_token,
+                        current_tick: snapshot.current_tag.tick,
+                        current_microstep: snapshot.current_tag.microstep,
+                        state_digest: snapshot.state_digest.to_string(),
+                        max_input_events: *max_input_events,
+                        max_steps_per_poll: *max_steps_per_poll,
+                        authoritative: true,
+                    };
+                    if registration.validate().is_ok() {
+                        registrations.push(stable_registration_to_proto(registration));
+                    }
+                }
+            }
+        }
+        registrations.sort_by(|left, right| left.network_id.cmp(&right.network_id));
+        registrations
+    }
+
+    /// Report an idle worker's ability to accept a future, digest-bound
+    /// stable-worker manifest. The capability is deliberately not inferred
+    /// from resources or discovery and never grants placement authority.
+    pub async fn get_stable_executor_capabilities(&self) -> Vec<proto::StableExecutorCapability> {
+        #[cfg(feature = "stable_executor_live")]
+        {
+            let capability = StableExecutorCapabilityModel {
+                schema_version: crate::stable_worker::STABLE_EXECUTOR_CAPABILITY_SCHEMA_VERSION,
+                profile: crate::stable_worker::STABLE_EXECUTOR_PROFILE.to_owned(),
+                activation_schema_version:
+                    crate::stable_worker::STABLE_WORKER_ACTIVATION_SCHEMA_VERSION,
+                max_input_events: crate::stable_worker::DEFAULT_STABLE_WORKER_MAX_INPUT_EVENTS,
+                max_steps_per_poll: crate::stable_worker::DEFAULT_STABLE_WORKER_MAX_STEPS_PER_POLL,
+            };
+            return capability
+                .validate()
+                .map(|_| vec![stable_capability_to_proto(capability)])
+                .unwrap_or_default();
+        }
+        #[cfg(not(feature = "stable_executor_live"))]
+        {
+            Vec::new()
+        }
     }
 
     async fn spike_targets_for_network(
@@ -2953,8 +5672,10 @@ impl DistributedNode {
 
         let (tx, rx) = mpsc::channel::<SpikeBatch>(batches.len().clamp(1, 256));
         let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let sender_node_id = self.state.read().await.node_id.clone();
+        let request = authenticated_request(outbound, &sender_node_id)?;
         let response = client
-            .stream_spikes(Request::new(outbound))
+            .stream_spikes(request)
             .await
             .map_err(|e| format!("burst stream start {} failed: {}", key, e))?;
         let mut inbound = response.into_inner();
@@ -3000,7 +5721,19 @@ impl DistributedNode {
 
             let (tx, rx) = mpsc::channel::<SpikeBatch>(256);
             let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-            let response = client.stream_spikes(Request::new(outbound)).await;
+            let sender_node_id = node.state.read().await.node_id.clone();
+            let request = match authenticated_request(outbound, &sender_node_id) {
+                Ok(request) => request,
+                Err(error) => {
+                    nm_err!(
+                        "[warn] spike stream authentication {} failed: {}",
+                        addr,
+                        error
+                    );
+                    return;
+                }
+            };
+            let response = client.stream_spikes(request).await;
 
             let mut inbound = match response {
                 Ok(resp) => {
@@ -3092,6 +5825,232 @@ impl DistributedNode {
         }
     }
 
+    /// Send the inter-node boundary through the authoritative causal service.
+    /// This path intentionally has no legacy fallback: once selected, an
+    /// admission failure is visible and the event remains unsent for retry.
+    #[cfg(feature = "replicated_durability")]
+    async fn send_causal_batches(
+        &self,
+        network_id: &str,
+        peer_id: &str,
+        addr: &str,
+        batches: &[SpikeBatch],
+    ) -> Result<(), String> {
+        // Keep durable outbox reservation and acknowledgement serialised from
+        // the sender's point of view. If the stream fails, entries remain on
+        // disk and the next attempt retransmits the same bounded prefix.
+        let send_guard = {
+            let state = self.state.read().await;
+            state.causal_send_guard.clone()
+        };
+        let _send_guard = send_guard.lock().await;
+        let (lease_term, partition_generation, entries) = {
+            let network = {
+                let state = self.state.read().await;
+                state.networks.get(network_id).cloned()
+            }
+            .ok_or_else(|| format!("causal network {network_id} is not loaded"))?;
+            let mut network = network.write().await;
+            let owner = network
+                .durable_owner
+                .as_mut()
+                .ok_or_else(|| "live causal transport requires a durable shard owner".to_owned())?;
+            let durable_batches = batches
+                .iter()
+                .map(|batch| crate::managed_durability::DurableCausalBatch {
+                    layer_index: batch.layer_index,
+                    step_index: batch.step_index,
+                    is_backward: batch.is_backward,
+                    spike_indices: batch.spike_indices.clone(),
+                    aer_payload: batch.aer_payload.clone(),
+                    aer_base: batch.aer_base,
+                })
+                .collect::<Vec<_>>();
+            // The managed step reserves the exact destination suffix in the
+            // same durable commit as the biological state. Transmission may
+            // only read that reservation; appending here would duplicate a
+            // committed event every time the sender retries or forwards it.
+            let entries = owner
+                .pending_causal_outbox(peer_id)
+                .map_err(|error| format!("causal outbox read failed: {error}"))?;
+            if !durable_batches.is_empty() {
+                let suffix_matches = entries.len() >= durable_batches.len()
+                    && entries[entries.len() - durable_batches.len()..]
+                        .iter()
+                        .map(|entry| &entry.batch)
+                        .eq(durable_batches.iter());
+                if !suffix_matches {
+                    return Err(
+                        "causal batches were not present in the committed outbox suffix".to_owned(),
+                    );
+                }
+            }
+            (owner.lease_term(), owner.partition_generation(), entries)
+        };
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let brain = crate::managed_durability::managed_brain_id(network_id);
+        let sender_node_id = {
+            let state = self.state.read().await;
+            state.node_id.clone()
+        };
+        let stream =
+            crate::managed_durability::managed_link_stream_id(network_id, &sender_node_id, peer_id);
+        let route = crate::managed_durability::managed_route_id(network_id);
+        let mut frames = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            let event = crate::managed_durability::managed_link_event_id(
+                network_id,
+                &sender_node_id,
+                peer_id,
+                entry.sequence,
+            );
+            let batch = &entry.batch;
+            let ingress = CausalSpikeIngress {
+                schema_version: CAUSAL_INGRESS_SCHEMA_VERSION,
+                network_id: network_id.to_owned(),
+                layer_index: batch.layer_index,
+                step_index: batch.step_index,
+                is_backward: batch.is_backward,
+                spike_indices: batch.spike_indices.clone(),
+                aer_payload: batch.aer_payload.clone(),
+                aer_base: batch.aer_base,
+            };
+            let payload = serde_json::to_vec(&ingress)
+                .map_err(|error| format!("encode causal ingress: {error}"))?;
+            let envelope = crate::data_plane::CausalEnvelope {
+                schema_version: crate::deterministic::SchemaVersion::CURRENT,
+                brain,
+                stream,
+                sequence: entry.sequence,
+                lease_term,
+                route,
+                partition_generation,
+                source: None,
+                target: None,
+                tag: crate::deterministic::LogicalTag::new(
+                    u64::try_from(batch.step_index.max(0)).unwrap_or(0),
+                    0,
+                ),
+                event,
+                stage: crate::deterministic::EventStage::SpikeDecision,
+                kind: crate::data_plane::EnvelopeKind::Event,
+                payload,
+                deferred_from_nonconvergence: false,
+            };
+            frames.push(crate::causal_transport::proto::CausalEventEnvelope::from(
+                &envelope,
+            ));
+            if let Some(frame) = frames.last_mut() {
+                frame.sender_node_id = sender_node_id.clone();
+            }
+        }
+
+        let target = if addr.starts_with("http://") || addr.starts_with("https://") {
+            addr.to_owned()
+        } else {
+            format!("http://{addr}")
+        };
+        let endpoint = crate::management::grpc_client_endpoint(&target)
+            .map_err(|error| format!("causal endpoint configuration failed: {error}"))?;
+        let mut client = CausalDataPlaneClient::connect(endpoint)
+            .await
+            .map_err(|error| format!("causal connect to {target} failed: {error}"))?
+            .max_decoding_message_size(grpc_max_message_bytes())
+            .max_encoding_message_size(grpc_max_message_bytes());
+        let (sender, receiver) = mpsc::channel::<crate::causal_transport::proto::CausalEventEnvelope>(
+            entries.len().clamp(1, 256),
+        );
+        let mut stream_request =
+            Request::new(tokio_stream::wrappers::ReceiverStream::new(receiver));
+        if live_causal_transport_enabled() {
+            let token = std::env::var("NM_CAUSAL_NODE_TOKEN")
+                .map_err(|_| "live causal transport requires NM_CAUSAL_NODE_TOKEN".to_owned())?;
+            let node_header = tonic::metadata::MetadataValue::try_from(sender_node_id.as_str())
+                .map_err(|_| "causal sender node identity is not valid metadata".to_owned())?;
+            let token_header = tonic::metadata::MetadataValue::try_from(token.as_str())
+                .map_err(|_| "causal sender credential is not valid metadata".to_owned())?;
+            stream_request
+                .metadata_mut()
+                .insert("x-aarnn-node-id", node_header);
+            stream_request
+                .metadata_mut()
+                .insert("x-aarnn-node-token", token_header);
+        }
+        let response =
+            tokio::time::timeout(spike_burst_timeout(), client.stream_events(stream_request))
+                .await
+                .map_err(|_| "causal stream start timed out".to_owned())?
+                .map_err(|error| format!("causal stream start failed: {error}"))?;
+        let mut inbound = response.into_inner();
+        for frame in &frames {
+            sender
+                .send(frame.clone())
+                .await
+                .map_err(|_| "causal stream request channel closed".to_owned())?;
+        }
+        drop(sender);
+        let mut acknowledged = 0usize;
+        while let Some(frame) = inbound
+            .message()
+            .await
+            .map_err(|error| format!("causal acknowledgement failed: {error}"))?
+        {
+            let expected_frame = frames
+                .get(acknowledged)
+                .ok_or_else(|| "causal acknowledgement exceeded the sent batch".to_owned())?;
+            if &frame != expected_frame {
+                return Err(format!(
+                    "causal acknowledgement mismatch at batch position {acknowledged}"
+                ));
+            }
+            let sequence = frame.sequence;
+            let expected = entries[acknowledged].sequence;
+            if sequence != expected {
+                return Err(format!(
+                    "causal acknowledgement sequence mismatch: expected {expected}, received {sequence}"
+                ));
+            }
+            acknowledged += 1;
+        }
+        if acknowledged != entries.len() {
+            return Err(format!(
+                "causal stream closed after {acknowledged}/{} acknowledgements",
+                entries.len()
+            ));
+        }
+        let last_sequence = entries
+            .last()
+            .map(|entry| entry.sequence)
+            .ok_or_else(|| "causal outbox returned no entries".to_owned())?;
+        let network = {
+            let state = self.state.read().await;
+            state.networks.get(network_id).cloned()
+        }
+        .ok_or_else(|| format!("causal network {network_id} is not loaded"))?;
+        let mut network = network.write().await;
+        let owner = network
+            .durable_owner
+            .as_mut()
+            .ok_or_else(|| "live causal transport requires a durable shard owner".to_owned())?;
+        owner
+            .acknowledge_causal_outbox(peer_id, last_sequence)
+            .map_err(|error| format!("causal outbox acknowledgement failed: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "replicated_durability"))]
+    async fn send_causal_batches(
+        &self,
+        _network_id: &str,
+        _peer_id: &str,
+        _addr: &str,
+        _batches: &[SpikeBatch],
+    ) -> Result<(), String> {
+        Err("live causal transport requires replicated_durability".to_owned())
+    }
+
     #[cfg(feature = "openmpi")]
     async fn send_spike_batches_mpi(
         &self,
@@ -3125,6 +6084,13 @@ impl DistributedNode {
     }
 
     pub async fn start_optional_mpi_spike_receiver(&self) {
+        // MPI carries the legacy SpikeBatch contract and therefore cannot be
+        // active beside the authoritative causal profile. A transport
+        // fallback here would allow one committed boundary to arrive through
+        // two independent sequence/deduplication domains.
+        if live_causal_transport_enabled() {
+            return;
+        }
         #[cfg(not(feature = "openmpi"))]
         {
             return;
@@ -3185,13 +6151,35 @@ impl DistributedNode {
         batches: &[SpikeBatch],
         exclude_node: Option<&str>,
     ) {
-        if batches.is_empty() {
+        if batches.is_empty() && !live_causal_transport_enabled() {
             return;
         }
         let targets = self
             .spike_targets_for_network(network_id, exclude_node)
             .await;
         if targets.is_empty() {
+            return;
+        }
+
+        // The live causal profile is an exclusive transport selection. It
+        // must never send a legacy batch as a fallback after an authoritative
+        // causal admission has been attempted, otherwise a retry could apply
+        // the same neural boundary through two independent paths.
+        if live_causal_transport_enabled() {
+            for (key, addr) in targets {
+                if let Err(error) = self
+                    .send_causal_batches(network_id, &key, &addr, batches)
+                    .await
+                {
+                    nm_err!(
+                        "[warn] authoritative causal forwarding to {} failed: {}",
+                        key,
+                        error
+                    );
+                    let mut state = self.state.write().await;
+                    state.record_spike_drop(&key, batches.len() as u64);
+                }
+            }
             return;
         }
 
@@ -3366,7 +6354,7 @@ impl DistributedNode {
 
     pub async fn rebalance_networks(&self) {
         let transition_now = std::time::Instant::now();
-        let autonomous_transition_plans = {
+        let autonomous_transition_plans: Vec<_> = {
             let state = self.state.read().await;
             if !state.is_orchestrator {
                 return;
@@ -3375,6 +6363,9 @@ impl DistributedNode {
                 return;
             }
             collect_autonomous_transition_plans(&state, transition_now)
+                .into_iter()
+                .filter(|plan| !state.stable_network_ids.contains(&plan.network_id))
+                .collect()
         };
         let autonomous_transition_payloads = if autonomous_transition_plans.is_empty() {
             HashMap::new()
@@ -3487,6 +6478,7 @@ impl DistributedNode {
                 (net_id.clone(), deployment)
             })
             .collect();
+        let stable_network_ids = state.stable_network_ids.clone();
 
         let mut all_pending = Vec::new();
         let (network_registry, network_snapshots) = {
@@ -3495,6 +6487,22 @@ impl DistributedNode {
         };
 
         for (net_id, net_status) in network_registry.iter_mut() {
+            if stable_network_ids.contains(net_id) {
+                // Stable workers own a complete virtual-shard fabric. The
+                // compatibility layer scheduler must leave its placement and
+                // commands untouched until an explicit migration transaction
+                // changes the authority profile.
+                if !net_status
+                    .deployment_modes
+                    .iter()
+                    .any(|mode| mode == "stable-executor")
+                {
+                    net_status
+                        .deployment_modes
+                        .push("stable-executor".to_owned());
+                }
+                continue;
+            }
             let mut snapshot_layers: Option<u32> = None;
             let mut config_payload: Option<String> = None;
 
@@ -3613,6 +6621,7 @@ impl DistributedNode {
 
             // Preserve existing layer neuron counts to avoid UI flicker during rebalance
             let previous_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
+            let previous_distribution = net_status.distribution.clone();
             let mut old_counts = HashMap::new();
             for (nid, range) in &net_status.distribution {
                 old_counts.insert(nid.clone(), range.layer_neuron_counts.clone());
@@ -3637,6 +6646,7 @@ impl DistributedNode {
                     LayerRange {
                         layers: layers.clone(),
                         layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                        backup_layers: Vec::new(),
                     },
                 );
 
@@ -3675,6 +6685,7 @@ impl DistributedNode {
                         LayerRange {
                             layers: layers.clone(),
                             layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                            backup_layers: redundant.clone(),
                         },
                     );
 
@@ -3724,6 +6735,14 @@ impl DistributedNode {
             // A network total must only contain that network's reports. Layers can be
             // repeated on redundant shards, so count each global layer once.
             net_status.total_neurons = total_neurons_from_distribution(&net_status.distribution);
+            net_status.shard_movements = build_shard_placement_movements(
+                net_id,
+                &previous_distribution,
+                &net_status.distribution,
+                net_status.autonomous_transition_enabled,
+                &net_status.last_transition_reason,
+                unix_timestamp_ms_now(),
+            );
         }
 
         for (node_id, cmd) in all_pending {
@@ -3733,13 +6752,52 @@ impl DistributedNode {
 
     pub async fn handle_command(&self, cmd: NetworkCommand) {
         use proto::network_command::CommandType;
-        let mut state = self.state.write().await;
-
         let cmd_type = CommandType::try_from(cmd.r#type).unwrap_or(CommandType::Stop);
+        if cmd_type == CommandType::ActivateStableWorker {
+            #[cfg(feature = "stable_executor_live")]
+            {
+                let command = match serde_json::from_str::<
+                    crate::stable_worker::StableWorkerActivationCommand,
+                >(&String::from_utf8_lossy(&cmd.config_json))
+                {
+                    Ok(command) => command,
+                    Err(error) => {
+                        nm_err!(
+                            "[error] rejecting stable worker activation command for {}: invalid command JSON: {}",
+                            cmd.network_id,
+                            error
+                        );
+                        return;
+                    }
+                };
+                if let Err(error) = self.activate_stable_worker(command).await {
+                    nm_err!(
+                        "[error] stable worker activation failed for {}: {}",
+                        cmd.network_id,
+                        error
+                    );
+                }
+            }
+            #[cfg(not(feature = "stable_executor_live"))]
+            nm_err!(
+                "[error] stable worker activation requested for {} but this node binary lacks stable_executor_live",
+                cmd.network_id
+            );
+            return;
+        }
+        let mut state = self.state.write().await;
         match cmd_type {
             CommandType::LoadNetwork => {
                 if let Some(net_arc) = state.networks.get(&cmd.network_id) {
                     let mut net = net_arc.write().await;
+                    #[cfg(feature = "stable_executor_live")]
+                    if net.stable_executor_registered() {
+                        nm_err!(
+                            "[warn] Ignoring legacy layer load for stable network {}",
+                            cmd.network_id
+                        );
+                        return;
+                    }
                     let layers_changed = net.assigned_layers != cmd.layers
                         || net.redundant_layers != cmd.redundant_layers;
                     let depth_changed = net.desired_aarnn_depth != cmd.desired_aarnn_depth;
@@ -3945,21 +7003,118 @@ impl DistributedNode {
 
                     let network_id = cmd.network_id.clone();
                     let workspace_binding = state.workspace_bindings.get(&network_id).cloned();
+                    #[cfg(feature = "replicated_durability")]
+                    let durable_owner =
+                        open_managed_durability(&network_id, &state.node_id, &mut runner);
+                    #[cfg(feature = "replicated_durability")]
+                    if crate::managed_durability::configured_root().is_some()
+                        && durable_owner.is_none()
+                    {
+                        // Once the durable profile is explicitly configured,
+                        // falling back to the mutable Runner would turn a
+                        // storage, lease or recovery failure into an
+                        // unadvertised loss of the commit boundary.
+                        nm_err!(
+                            "[error] Refusing to load network {} without its configured durable owner",
+                            network_id
+                        );
+                        return;
+                    }
+
+                    let recovered_channel = {
+                        #[cfg(feature = "replicated_durability")]
+                        let recovered_channel = if let Some(owner) = durable_owner.as_ref() {
+                            match owner.authoritative_channel_state().and_then(|state| {
+                                serde_json::from_str::<ManagedChannelState>(&state).map_err(
+                                    |error| {
+                                        crate::durability::DurabilityError::Corrupt(
+                                            error.to_string(),
+                                        )
+                                    },
+                                )
+                            }) {
+                                Ok(channel) => channel,
+                                Err(error) => {
+                                    nm_err!(
+                                        "[error] Refusing to load network {} with invalid durable channel state: {}",
+                                        network_id,
+                                        error
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
+                            ManagedChannelState::default()
+                        };
+                        #[cfg(not(feature = "replicated_durability"))]
+                        let recovered_channel = ManagedChannelState::default();
+                        recovered_channel
+                    };
+
+                    // A durable managed owner can enter the stable-shard
+                    // runtime gate immediately. The compatibility Runner is
+                    // still only a projection until this evidence and its
+                    // single-owner placement generation have been adopted.
+                    #[cfg(feature = "replicated_durability")]
+                    let shard_runtime = durable_owner.as_ref().and_then(|owner| {
+                        let shard_state = owner.authoritative_state().ok()?;
+                        let evidence = crate::managed_shard_runtime::RuntimeShardEvidence {
+                            shard_id: crate::managed_durability::managed_shard_id(&network_id),
+                            brain_id: crate::managed_durability::managed_brain_id(&network_id),
+                            node_id: state.node_id.clone(),
+                            device_id: "cpu".to_owned(),
+                            topology_generation: owner.topology_generation(),
+                            partition_generation: owner.partition_generation(),
+                            lease_term: owner.lease_term(),
+                            fencing_token: owner.fencing_token(),
+                            authoritative_state_digest: shard_state.state_digest,
+                        };
+                        let mut runtime =
+                            crate::managed_shard_runtime::ManagedShardRuntime::new(evidence)
+                                .ok()?;
+                        let plan =
+                            crate::managed_shard_runtime::ManagedShardRuntime::single_owner_plan(
+                                &runtime.evidence,
+                                shard_state.committed_tag,
+                            )
+                            .ok()?;
+                        runtime.adopt_generation(&plan, 0).ok()?;
+                        Some(runtime)
+                    });
+                    #[cfg(not(feature = "replicated_durability"))]
+                    let shard_runtime = None;
 
                     state.networks.insert(
                         network_id.clone(),
                         Arc::new(RwLock::new(ManagedNetwork {
                             id: network_id,
                             runner,
+                            shard_runtime,
+                            #[cfg(feature = "stable_executor_live")]
+                            stable_executor: None,
+                            #[cfg(feature = "replicated_durability")]
+                            durable_owner,
                             #[cfg(feature = "superdense_executor")]
                             superdense: SuperdenseController::new(),
                             assigned_layers: cmd.layers,
                             redundant_layers: cmd.redundant_layers,
-                            remote_spikes_fwd: HashMap::new(),
-                            remote_spikes_bwd: HashMap::new(),
-                            remote_spike_steps_fwd: HashMap::new(),
-                            remote_spike_steps_bwd: HashMap::new(),
-                            external_sensory_spikes: None,
+                            remote_spikes_fwd: recovered_channel
+                                .remote_spikes_fwd
+                                .into_iter()
+                                .collect(),
+                            remote_spikes_bwd: recovered_channel
+                                .remote_spikes_bwd
+                                .into_iter()
+                                .collect(),
+                            remote_spike_steps_fwd: recovered_channel
+                                .remote_spike_steps_fwd
+                                .into_iter()
+                                .collect(),
+                            remote_spike_steps_bwd: recovered_channel
+                                .remote_spike_steps_bwd
+                                .into_iter()
+                                .collect(),
+                            external_sensory_spikes: recovered_channel.external_sensory_spikes,
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
                             playing: true,
@@ -3976,6 +7131,16 @@ impl DistributedNode {
                 }
             }
             CommandType::UnloadNetwork => {
+                #[cfg(feature = "stable_executor_live")]
+                if let Some(net_arc) = state.networks.get(&cmd.network_id) {
+                    if net_arc.read().await.stable_executor_registered() {
+                        nm_err!(
+                            "[warn] Ignoring legacy unload for stable network {}",
+                            cmd.network_id
+                        );
+                        return;
+                    }
+                }
                 if state.networks.remove(&cmd.network_id).is_some() {
                     nm_log!("[info] Unloaded network {} from local node", cmd.network_id);
                 }
@@ -3990,6 +7155,59 @@ impl DistributedNode {
             }
             _ => {}
         }
+    }
+
+    /// Apply one command and, for stable-worker activation, return a bounded
+    /// digest-bound result suitable for the next orchestrator heartbeat.
+    /// Legacy commands retain their historical fire-and-forget contract until
+    /// their own versioned acknowledgement protocol exists.
+    pub async fn handle_command_with_result(
+        &self,
+        cmd: NetworkCommand,
+    ) -> Option<NetworkCommandResult> {
+        use proto::network_command::CommandType;
+        if CommandType::try_from(cmd.r#type).ok() != Some(CommandType::ActivateStableWorker) {
+            self.handle_command(cmd).await;
+            return None;
+        }
+
+        let activation = match serde_json::from_slice::<
+            crate::stable_worker::StableWorkerActivationCommand,
+        >(&cmd.config_json)
+        {
+            Ok(command) => command,
+            Err(error) => {
+                nm_err!(
+                    "[error] cannot acknowledge malformed stable activation for {}: {}",
+                    cmd.network_id,
+                    error
+                );
+                return None;
+            }
+        };
+        let mut result = NetworkCommandResult {
+            command_type: CommandType::ActivateStableWorker as i32,
+            network_id: activation.network_id.clone(),
+            request_id: activation.request_id.clone(),
+            manifest_digest: activation.manifest_digest.clone(),
+            accepted: false,
+            error: String::new(),
+            brain_id: activation.brain_id,
+            placement_idempotency_key: activation.placement_idempotency_key.clone(),
+        };
+
+        #[cfg(feature = "stable_executor_live")]
+        {
+            match self.activate_stable_worker(activation).await {
+                Ok(()) => result.accepted = true,
+                Err(error) => result.error = error,
+            }
+        }
+        #[cfg(not(feature = "stable_executor_live"))]
+        {
+            result.error = "stable worker activation requires stable_executor_live".to_owned();
+        }
+        Some(result)
     }
 
     pub async fn run_simulation(&self, mut shutdown: watch::Receiver<bool>) {
@@ -4017,11 +7235,88 @@ impl DistributedNode {
                 }
                 observe_time!("distributed/node_step");
                 let step_start = std::time::Instant::now();
+                #[cfg(feature = "replicated_durability")]
+                let live_outbox_peers = if live_causal_transport_enabled() {
+                    let network_id = net_arc.read().await.id.clone();
+                    self.spike_targets_for_network(&network_id, None)
+                        .await
+                        .into_iter()
+                        .map(|(node_id, _)| node_id)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 let mut net = net_arc.write().await;
                 if !net.playing {
                     continue;
                 }
+                if let Err(error) = net.admit_shard_step() {
+                    nm_err!(
+                        "[warn] Refusing network {} step because shard ownership evidence is stale: {}",
+                        net.id,
+                        error
+                    );
+                    continue;
+                }
                 any_playing = true;
+
+                #[cfg(feature = "stable_executor_live")]
+                if net.stable_executor_registered() {
+                    // The stable manifest profile currently owns every virtual
+                    // shard in this process. Receiving a legacy layer batch
+                    // would otherwise be silently ignored, so stop at the
+                    // safety boundary until physical stable-shard routing is
+                    // available.
+                    if !net.remote_spikes_fwd.is_empty() || !net.remote_spikes_bwd.is_empty() {
+                        net.playing = false;
+                        nm_err!(
+                            "[error] Pausing stable network {} because it received work outside its local stable-shard profile",
+                            net.id
+                        );
+                        continue;
+                    }
+                    let external_sensory = net.external_sensory_spikes.take();
+                    let stable_start = std::time::Instant::now();
+                    let poll = match net.poll_stable_executor_sensory(external_sensory.as_deref()) {
+                        Ok(poll) => poll,
+                        Err(error) => {
+                            net.playing = false;
+                            nm_err!(
+                                "[error] Pausing stable network {} after authoritative poll failure: {}",
+                                net.id,
+                                error
+                            );
+                            continue;
+                        }
+                    };
+                    let elapsed = stable_start.elapsed().as_secs_f32() * 1000.0;
+                    if net.avg_step_time_ms == 0.0 {
+                        net.avg_step_time_ms = elapsed;
+                    } else {
+                        net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
+                    }
+                    if poll.budget_exhausted {
+                        nm_log!(
+                            "[info] Stable network {} retained {} bounded causal events for the next poll",
+                            net.id,
+                            poll.pending_after
+                        );
+                    }
+                    // All shards in this explicitly local profile share the
+                    // same durable executor. Emitted events are either
+                    // consumed by the bounded drain or retained in its
+                    // immutable pending checkpoint; no transport output is
+                    // fabricated or discarded here.
+                    drop(net);
+                    continue;
+                }
+
+                // The input queues are drained into the compatibility kernel
+                // before the step. Keep an owned pre-step image so a failed
+                // durable publication can retry the exact same admission
+                // without silently losing queued causal input.
+                #[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
+                let previous_channel_state = capture_channel_state(&net);
 
                 // Sync remote spikes into runner before stepping.
                 // Use copy_from_slice instead of Array1::from_vec to reuse the existing
@@ -4069,13 +7364,28 @@ impl DistributedNode {
                 }
 
                 let external_sensory = net.external_sensory_spikes.take();
+                #[cfg(feature = "replicated_durability")]
+                let (_out, durable_batches) = match net.step_and_commit_durable_with_outbox(
+                    external_sensory.as_deref(),
+                    previous_channel_state.clone(),
+                    &live_outbox_peers,
+                ) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        nm_err!(
+                            "[warn] Durable managed step for network {} deferred for retry: {}",
+                            net.id,
+                            error
+                        );
+                        continue;
+                    }
+                };
+                #[cfg(not(feature = "replicated_durability"))]
                 #[cfg(feature = "superdense_executor")]
                 let out = match net.step_with_superdense(external_sensory.as_deref()) {
                     Ok(out) => out,
                     Err(error) => {
-                        if external_sensory.is_some() {
-                            net.external_sensory_spikes = external_sensory;
-                        }
+                        restore_channel_state(&mut net, previous_channel_state.clone());
                         nm_err!(
                             "[warn] Superdense step for network {} deferred for retry: {}",
                             net.id,
@@ -4084,44 +7394,48 @@ impl DistributedNode {
                         continue;
                     }
                 };
-                #[cfg(not(feature = "superdense_executor"))]
+                #[cfg(all(
+                    not(feature = "replicated_durability"),
+                    not(feature = "superdense_executor")
+                ))]
                 let out = if let Some(ref sensory) = external_sensory {
                     net.runner.step(Some(sensory.as_slice()))
                 } else {
                     net.runner.step(None)
                 };
 
+                #[cfg(not(feature = "replicated_durability"))]
                 let step_index = out.t as i64;
-                let ts_us = (net.runner.t_ms * 1000.0) as u64;
                 let net_id = net.id.clone();
-                let num_hidden = net.runner.net.num_hidden_layers as u32;
-                let mut batches = Vec::new();
-                for &l in &net.redundant_layers {
-                    if l >= num_hidden {
-                        continue;
+                #[cfg(feature = "replicated_durability")]
+                let batches = durable_batches;
+                #[cfg(not(feature = "replicated_durability"))]
+                let batches = managed_spike_batches(&net, step_index);
+
+                #[cfg(feature = "replicated_durability")]
+                if let Some(owner) = net.durable_owner.as_ref() {
+                    match owner.authoritative_state() {
+                        Ok(state) => {
+                            if let Err(error) =
+                                net.commit_shard_step(state.committed_tag, state.state_digest)
+                            {
+                                nm_err!(
+                                    "[error] Refusing network {} output after shard commit evidence failed: {}",
+                                    net.id,
+                                    error
+                                );
+                                continue;
+                            }
+                        }
+                        Err(error) => {
+                            nm_err!(
+                                "[error] Refusing network {} output because durable shard state cannot be read: {}",
+                                net.id,
+                                error
+                            );
+                            continue;
+                        }
                     }
-                    let layer_idx = l as usize;
-                    if layer_idx >= net.runner.last_spk_h.len() {
-                        continue;
-                    }
-                    let layer_spikes: Vec<i8> =
-                        net.runner.last_spk_h[layer_idx].iter().copied().collect();
-                    let exchange = encode_exchange(ts_us, 0, &layer_spikes);
-                    let indices = exchange.spike_indices;
-                    let mut aer_payload = exchange.aer_payload;
-                    if aer_payload.is_empty() {
-                        aer_payload.extend_from_slice(b"AER1");
-                        aer_payload.extend_from_slice(&ts_us.to_le_bytes());
-                    }
-                    batches.push(SpikeBatch {
-                        network_id: net_id.clone(),
-                        layer_index: l,
-                        step_index,
-                        spike_indices: indices,
-                        is_backward: false,
-                        aer_payload,
-                        aer_base: 0,
-                    });
                 }
 
                 let elapsed = step_start.elapsed().as_secs_f32() * 1000.0;
@@ -4134,8 +7448,8 @@ impl DistributedNode {
                 if let Some(binding) = net.workspace_binding.as_ref() {
                     let autosave_steps = binding.autosave_steps.max(1) as usize;
                     if autosave_steps == 1 || net.runner.t % autosave_steps == 0 {
-                        match net.runner.export_network_json() {
-                            Ok(snapshot_json) => {
+                        match local_shard_snapshot(&net) {
+                            Ok((snapshot_json, _, _, _)) => {
                                 if let Err(err) =
                                     persist_workspace_snapshot(binding, &snapshot_json)
                                 {
@@ -4217,10 +7531,125 @@ impl DistributedNode {
 }
 
 #[tonic::async_trait]
+impl crate::causal_transport::proto::causal_data_plane_server::CausalDataPlane for DistributedNode {
+    type StreamEventsStream = tokio_stream::wrappers::ReceiverStream<
+        Result<crate::causal_transport::proto::CausalEventEnvelope, Status>,
+    >;
+
+    async fn stream_events(
+        &self,
+        request: Request<tonic::Streaming<crate::causal_transport::proto::CausalEventEnvelope>>,
+    ) -> Result<Response<Self::StreamEventsStream>, Status> {
+        let live_authentication = live_causal_transport_enabled();
+        let request_metadata = request.metadata().clone();
+        let peer_certificate_sha256 = request.peer_certs().and_then(|certificates| {
+            certificates
+                .first()
+                .map(|certificate| certificate_sha256_der(certificate.as_ref()))
+        });
+        let mut inbound = request.into_inner();
+        let (sender, receiver) = mpsc::channel(128);
+        while let Some(frame) = inbound.message().await? {
+            let causal =
+                crate::data_plane::CausalEnvelope::try_from(frame.clone()).map_err(|error| {
+                    Status::invalid_argument(format!("invalid authoritative causal frame: {error}"))
+                })?;
+            let sender_node_id = frame.sender_node_id.trim();
+            if sender_node_id.is_empty() {
+                return Err(Status::unauthenticated(
+                    "causal transport sender identity is required",
+                ));
+            }
+            if live_authentication {
+                validate_causal_peer_metadata(
+                    &request_metadata,
+                    sender_node_id,
+                    peer_certificate_sha256.as_deref(),
+                )?;
+            }
+            let receiver_node_id = {
+                let state = self.state.read().await;
+                state.node_id.clone()
+            };
+            let known_sender = {
+                let state = self.state.read().await;
+                state.node_id == sender_node_id
+                    || state.peers.contains_key(sender_node_id)
+                    || state.nodes.contains_key(sender_node_id)
+            };
+            if !known_sender {
+                return Err(Status::permission_denied(
+                    "causal sender is not enrolled with this node",
+                ));
+            }
+            // Keep the stable executor adapter entirely behind its feature
+            // gate.  The local/reference profile must compile and retain its
+            // established JSON ingress path without linking or naming the
+            // durable stable executor methods.
+            #[cfg(feature = "stable_executor_live")]
+            {
+                if let Some(network) = self
+                    .stable_network_for_causal_stream(
+                        causal.brain,
+                        causal.stream,
+                        sender_node_id,
+                        &receiver_node_id,
+                    )
+                    .await
+                {
+                    self.admit_stable_causal_event(network, causal).await?;
+                    sender
+                        .send(Ok(frame))
+                        .await
+                        .map_err(|_| Status::cancelled("causal response stream closed"))?;
+                    continue;
+                }
+            }
+            let ingress: CausalSpikeIngress =
+                serde_json::from_slice(&causal.payload).map_err(|error| {
+                    Status::invalid_argument(format!("invalid causal ingress: {error}"))
+                })?;
+            let expected_stream = crate::managed_durability::managed_link_stream_id(
+                &ingress.network_id,
+                sender_node_id,
+                &receiver_node_id,
+            );
+            if causal.stream != expected_stream {
+                return Err(Status::permission_denied(
+                    "causal stream is not bound to the declared sender",
+                ));
+            }
+            self.admit_causal_spike_ingress(&frame, causal, ingress)
+                .await?;
+            sender
+                .send(Ok(frame))
+                .await
+                .map_err(|_| Status::cancelled("causal response stream closed"))?;
+        }
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            receiver,
+        )))
+    }
+}
+
+#[tonic::async_trait]
 impl DistributedNeuromorphic for DistributedNode {
     async fn join(&self, request: Request<JoinRequest>) -> Result<Response<JoinResponse>, Status> {
         let remote_addr = request.remote_addr();
+        let request_metadata = request.metadata().clone();
+        let peer_certificate_sha256 = request.peer_certs().and_then(|certificates| {
+            certificates
+                .first()
+                .map(|certificate| certificate_sha256_der(certificate.as_ref()))
+        });
         let req = request.into_inner();
+        if live_causal_transport_enabled() {
+            validate_causal_peer_metadata(
+                &request_metadata,
+                &req.node_id,
+                peer_certificate_sha256.as_deref(),
+            )?;
+        }
         let (display_addr, connect_addr) = normalize_peer_address(&req.address, remote_addr);
         let node_id = req.node_id.clone();
 
@@ -4229,15 +7658,41 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::permission_denied("Not an orchestrator"));
         }
 
+        let stable_registrations = validate_stable_registration_admission(
+            &state,
+            &node_id,
+            &req.network_resources,
+            &req.stable_executors,
+        )?;
+        let stable_capabilities =
+            validate_stable_capability_admission(&req.stable_executor_capabilities)?;
+        let stable_executors = stable_registrations
+            .iter()
+            .cloned()
+            .map(stable_registration_to_proto)
+            .collect::<Vec<_>>();
+        let stable_executor_capabilities = stable_capabilities
+            .iter()
+            .cloned()
+            .map(stable_capability_to_proto)
+            .collect::<Vec<_>>();
+
         let active_networks: Vec<String> = req.network_resources.keys().cloned().collect();
         let node_status = NodeStatus {
             node_id: node_id.clone(),
             address: display_addr.clone(),
             resources: req.resources,
             active_networks,
+            stable_executors: stable_executors.clone(),
+            stable_executor_capabilities: stable_executor_capabilities.clone(),
         };
 
         state.nodes.insert(node_id.clone(), node_status);
+        for registration in &stable_registrations {
+            state
+                .stable_network_ids
+                .insert(registration.network_id.clone());
+        }
         state.peers.insert(node_id.clone(), connect_addr.clone());
         // A process may rejoin with the same stable node id after a restart.
         // Refresh its heartbeat here so another node's concurrent heartbeat
@@ -4270,8 +7725,23 @@ impl DistributedNeuromorphic for DistributedNode {
                 .insert(node_id.clone(), net_res);
         }
 
-        // Trigger rebalance when new node joins
+        // Trigger rebalance when new node joins. Registration callbacks run
+        // after releasing the state lock because they may persist management
+        // evidence and must never delay another heartbeat.
+        let registration_observations = stable_registrations.clone();
+        let registration_handler = self
+            .stable_worker_registration_handler
+            .read()
+            .ok()
+            .and_then(|handler| handler.clone());
         drop(state);
+        if let Some(handler) = registration_handler {
+            for registration in registration_observations {
+                let handler = Arc::clone(&handler);
+                let node_id = node_id.clone();
+                tokio::task::spawn_blocking(move || handler(node_id, registration));
+            }
+        }
         let node_clone = self.clone();
         let node_id_clone = node_id.clone();
         tokio::spawn(async move {
@@ -4305,8 +7775,21 @@ impl DistributedNeuromorphic for DistributedNode {
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
         let remote_addr = request.remote_addr();
+        let request_metadata = request.metadata().clone();
+        let peer_certificate_sha256 = request.peer_certs().and_then(|certificates| {
+            certificates
+                .first()
+                .map(|certificate| certificate_sha256_der(certificate.as_ref()))
+        });
         let mut state = self.state.write().await;
         let req = request.into_inner();
+        if live_causal_transport_enabled() {
+            validate_causal_peer_metadata(
+                &request_metadata,
+                &req.node_id,
+                peer_certificate_sha256.as_deref(),
+            )?;
+        }
         let now = std::time::Instant::now();
 
         // A worker can outlive its orchestrator membership record when a slow
@@ -4320,6 +7803,30 @@ impl DistributedNeuromorphic for DistributedNode {
             )));
         }
 
+        let stable_registrations = validate_stable_registration_admission(
+            &state,
+            &req.node_id,
+            &req.network_resources,
+            &req.stable_executors,
+        )?;
+        let stable_capabilities =
+            validate_stable_capability_admission(&req.stable_executor_capabilities)?;
+        let stable_executors = stable_registrations
+            .iter()
+            .cloned()
+            .map(stable_registration_to_proto)
+            .collect::<Vec<_>>();
+        let stable_executor_capabilities = stable_capabilities
+            .iter()
+            .cloned()
+            .map(stable_capability_to_proto)
+            .collect::<Vec<_>>();
+        for registration in &stable_registrations {
+            state
+                .stable_network_ids
+                .insert(registration.network_id.clone());
+        }
+
         state.last_heartbeat.insert(req.node_id.clone(), now);
 
         let mut commands = Vec::new();
@@ -4327,7 +7834,56 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut peer_map = HashMap::new();
         let mut network_peers = HashMap::new();
         let mut needs_rebalance = false;
+        let mut new_activation_results = Vec::new();
         if state.is_orchestrator {
+            // Stable activation commands use an at-least-once delivery
+            // contract. Validate and consume only a matching result; a
+            // worker cannot acknowledge another network, request or manifest
+            // digest by guessing a request ID. Replayed identical results are
+            // harmless after the command has already been consumed.
+            for result in &req.command_results {
+                validate_command_result(result)?;
+                let result_key = (req.node_id.clone(), result.request_id.clone());
+                if let Some(previous) = state.stable_activation_results.get(&result_key) {
+                    if previous != result {
+                        return Err(Status::failed_precondition(
+                            "stable activation result conflicts with a previous acknowledgement",
+                        ));
+                    }
+                    continue;
+                }
+                let Some(queue) = state.pending_commands.get_mut(&req.node_id) else {
+                    return Err(Status::failed_precondition(
+                        "stable activation result has no pending command",
+                    ));
+                };
+                let matching = queue.iter().position(|command| {
+                    stable_activation_command_identity(command).is_some_and(
+                        |(network_id, request_id, manifest_digest, placement_idempotency_key)| {
+                            network_id == result.network_id
+                                && request_id == result.request_id
+                                && manifest_digest == result.manifest_digest
+                                && placement_idempotency_key == result.placement_idempotency_key
+                        },
+                    )
+                });
+                let Some(index) = matching else {
+                    return Err(Status::failed_precondition(
+                        "stable activation result does not match a pending command",
+                    ));
+                };
+                queue.remove(index);
+                if state.stable_activation_results.len() >= MAX_PENDING_COMMANDS_PER_NODE {
+                    if let Some(oldest) = state.stable_activation_results.keys().next().cloned() {
+                        state.stable_activation_results.remove(&oldest);
+                    }
+                }
+                state
+                    .stable_activation_results
+                    .insert(result_key, result.clone());
+                new_activation_results.push(result.clone());
+            }
+
             let stale_nodes: Vec<String> = state
                 .last_heartbeat
                 .iter()
@@ -4343,6 +7899,9 @@ impl DistributedNeuromorphic for DistributedNode {
                     state.peers.remove(&node_id);
                     state.clients.remove(&node_id);
                     state.pending_commands.remove(&node_id);
+                    state
+                        .stable_activation_results
+                        .retain(|(worker, _), _| worker != &node_id);
                     state.ga_inflight_by_peer.remove(&node_id);
                     for metrics in state.network_runtime_metrics.values_mut() {
                         metrics.remove(&node_id);
@@ -4361,6 +7920,8 @@ impl DistributedNeuromorphic for DistributedNode {
             if let Some(node) = state.nodes.get_mut(&req.node_id) {
                 node.resources = req.resources;
                 node.active_networks = req.network_resources.keys().cloned().collect();
+                node.stable_executors = stable_executors;
+                node.stable_executor_capabilities = stable_executor_capabilities;
 
                 let (display_addr, connect_addr) =
                     normalize_peer_address(&node.address, remote_addr);
@@ -4416,7 +7977,20 @@ impl DistributedNeuromorphic for DistributedNode {
                 .retain(|_, metrics| !metrics.is_empty());
 
             if let Some(pending) = state.pending_commands.get_mut(&req.node_id) {
-                commands = std::mem::take(pending);
+                // Legacy commands retain their existing one-shot heartbeat
+                // behaviour. Activation commands remain queued until a
+                // digest-bound result arrives, so a worker crash between
+                // receipt and bootstrap is retried after it rejoins.
+                let mut retained = Vec::new();
+                for command in std::mem::take(pending) {
+                    if stable_activation_command_identity(&command).is_some() {
+                        commands.push(command.clone());
+                        retained.push(command);
+                    } else {
+                        commands.push(command);
+                    }
+                }
+                *pending = retained;
             }
 
             for (node_id, addr) in &state.peers {
@@ -4456,6 +8030,13 @@ impl DistributedNeuromorphic for DistributedNode {
             });
         }
 
+        let registration_observations = stable_registrations.clone();
+        let registration_handler = self
+            .stable_worker_registration_handler
+            .read()
+            .ok()
+            .and_then(|handler| handler.clone());
+        let registration_node_id = req.node_id.clone();
         let response = Ok(Response::new(HeartbeatResponse {
             acknowledged: true,
             commands,
@@ -4463,6 +8044,32 @@ impl DistributedNeuromorphic for DistributedNode {
             network_peers,
         }));
         drop(state);
+        if let Some(handler) = registration_handler {
+            for registration in registration_observations {
+                let handler = Arc::clone(&handler);
+                let node_id = registration_node_id.clone();
+                // Management persistence is intentionally outside the
+                // heartbeat lock and response path. A slow disk must not
+                // block unrelated node heartbeats.
+                tokio::task::spawn_blocking(move || handler(node_id, registration));
+            }
+        }
+        if !new_activation_results.is_empty() {
+            let handler = self
+                .stable_activation_result_handler
+                .read()
+                .ok()
+                .and_then(|handler| handler.clone());
+            if let Some(handler) = handler {
+                for result in new_activation_results {
+                    let handler = Arc::clone(&handler);
+                    // Registry persistence may involve filesystem I/O. Keep
+                    // it outside the heartbeat state lock and RPC response
+                    // path so a slow disk cannot block another node's join.
+                    tokio::task::spawn_blocking(move || handler(result));
+                }
+            }
+        }
         if needs_rebalance {
             self.rebalance_networks().await;
         }
@@ -4475,6 +8082,11 @@ impl DistributedNeuromorphic for DistributedNode {
         &self,
         request: Request<tonic::Streaming<SpikeBatch>>,
     ) -> Result<Response<Self::StreamSpikesStream>, Status> {
+        if live_causal_transport_enabled() {
+            return Err(Status::failed_precondition(
+                "legacy SpikeBatch transport is disabled by the authoritative causal profile",
+            ));
+        }
         let remote_addr = request.remote_addr();
         let mut stream = request.into_inner();
         let node = self.clone();
@@ -4531,24 +8143,15 @@ impl DistributedNeuromorphic for DistributedNode {
         let mut state = self.state.write().await;
 
         if !state.is_orchestrator {
-            // Worker nodes accept ControlUpdate for locally managed networks.
-            // This lets the orchestrator (or any authorised caller) push
-            // start/stop/reset commands directly without waiting for the next
-            // heartbeat cycle.
-            if let Some(proto::network_update_request::Update::Control(c)) = req.update.as_ref() {
-                let action = proto::control_update::Action::try_from(c.action)
-                    .map_err(|_| Status::invalid_argument("invalid control action"))?;
-                let net_arc = state.networks.get(&network_id).cloned();
-                drop(state);
-                if let Some(net_arc) = net_arc {
-                    let mut net = net_arc.write().await;
-                    apply_control_to_managed_network(&mut net, action);
-                    return Ok(Response::new(proto::NetworkUpdateResponse {
-                        success: true,
-                    }));
-                }
-            }
-            return Err(Status::permission_denied("Not an orchestrator"));
+            // Workers have no management authority. Commands must be
+            // authorised and recorded by the orchestrator, then delivered
+            // through the existing fenced heartbeat command queue. This
+            // closes the direct worker mutation bypass during management
+            // cutover and prevents a forged worker address from controlling a
+            // local shard.
+            return Err(Status::permission_denied(
+                "management mutations are orchestrator-only",
+            ));
         }
 
         let mut commands_to_send = Vec::new();
@@ -4798,6 +8401,9 @@ impl DistributedNeuromorphic for DistributedNode {
         &self,
         request: Request<GaEvaluationRequest>,
     ) -> Result<Response<GaEvaluationResponse>, Status> {
+        if live_causal_transport_enabled() {
+            validate_live_request(&request)?;
+        }
         let req = request.into_inner();
         let req_json = req.config_json;
         let config: crate::config::NetworkConfig = serde_json::from_str(&req_json)
@@ -4876,6 +8482,12 @@ impl DistributedNeuromorphic for DistributedNode {
                 sim_time_ms,
                 seed,
             };
+            let sender_node_id = self.state.read().await.node_id.clone();
+            let req_fwd = authenticated_request(req_fwd, &sender_node_id).map_err(|error| {
+                Status::failed_precondition(format!(
+                    "cannot authenticate GA evaluation forwarding request: {error}"
+                ))
+            })?;
             let resp = tokio::time::timeout(eval_timeout, client.run_ga_evaluation(req_fwd)).await;
             {
                 let mut state = self.state.write().await;
@@ -4940,8 +8552,13 @@ impl DistributedNeuromorphic for DistributedNode {
         &self,
         request: Request<NetworkSnapshotRequest>,
     ) -> Result<Response<NetworkSnapshotResponse>, Status> {
+        if live_causal_transport_enabled() {
+            validate_live_request(&request)?;
+        }
         let req = request.into_inner();
         let net_id = req.network_id.clone();
+        let cut_epoch = req.cut_epoch;
+        let net_id_for_cut = net_id.clone();
         let net_arc = {
             let state = self.state.read().await;
             state.networks.get(&req.network_id).cloned()
@@ -4950,18 +8567,416 @@ impl DistributedNeuromorphic for DistributedNode {
         let Some(net_arc) = net_arc else {
             return Err(Status::not_found("network not hosted on this node"));
         };
+        let local_node_id = self.state.read().await.node_id.clone();
 
-        let snapshot_json = tokio::task::spawn_blocking(move || {
+        let (
+            snapshot_json,
+            channel_state_json,
+            authoritative_state_json,
+            step,
+            sim_time_ms_bits,
+            cut_evidence,
+        ) = tokio::task::spawn_blocking(move || {
             let net = net_arc.blocking_read();
-            net.runner.export_network_json()
+            let (snapshot_json, channel_state_json, step, sim_time_ms_bits) =
+                local_shard_snapshot(&net)?;
+            let authoritative_state_json = local_authoritative_state_json(&net)?;
+            let cut_evidence = if cut_epoch == 0 {
+                None
+            } else {
+                Some(local_cut_evidence(
+                    &net_id_for_cut,
+                    &local_node_id,
+                    cut_epoch,
+                    &snapshot_json,
+                    &channel_state_json,
+                )?)
+            };
+            Ok::<_, String>((
+                snapshot_json,
+                channel_state_json,
+                authoritative_state_json,
+                step,
+                sim_time_ms_bits,
+                cut_evidence,
+            ))
         })
         .await
         .map_err(|e| Status::internal(format!("snapshot task failed: {}", e)))?
         .map_err(|e| Status::internal(format!("snapshot export failed: {}", e)))?;
 
+        let (participant_json, channel_marker_json) = match cut_evidence {
+            Some((participant, marker)) => (
+                serde_json::to_string(&participant)
+                    .map_err(|error| Status::internal(error.to_string()))?,
+                serde_json::to_string(&marker)
+                    .map_err(|error| Status::internal(error.to_string()))?,
+            ),
+            None => (String::new(), String::new()),
+        };
         Ok(Response::new(NetworkSnapshotResponse {
             network_id: net_id,
             snapshot_json,
+            step,
+            sim_time_ms_bits,
+            channel_state_json,
+            authoritative_state_json,
+            cut_epoch,
+            participant_json,
+            channel_marker_json,
+        }))
+    }
+
+    async fn get_cluster_network_snapshot(
+        &self,
+        request: Request<ClusterNetworkSnapshotRequest>,
+    ) -> Result<Response<ClusterNetworkSnapshotResponse>, Status> {
+        if live_causal_transport_enabled() {
+            validate_live_request(&request)?;
+        }
+        let network_id = request.into_inner().network_id;
+        let (node_id, expected_assignment, local_network, clients, addresses, is_orchestrator) = {
+            let state = self.state.read().await;
+            let Some(status) = state.network_registry.get(&network_id) else {
+                return Err(Status::not_found(
+                    "network is not registered on the orchestrator",
+                ));
+            };
+            let expected_assignment = status
+                .distribution
+                .iter()
+                .map(|(node_id, range)| (node_id.clone(), range.layers.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let addresses = expected_assignment
+                .keys()
+                .filter(|candidate| candidate.as_str() != state.node_id)
+                .map(|candidate| (candidate.clone(), connect_addr_for_node(&state, candidate)))
+                .collect::<HashMap<_, _>>();
+            (
+                state.node_id.clone(),
+                expected_assignment,
+                state.networks.get(&network_id).cloned(),
+                state.clients.clone(),
+                addresses,
+                state.is_orchestrator,
+            )
+        };
+        if !is_orchestrator {
+            return Err(Status::permission_denied(
+                "cluster snapshots may only be assembled by the orchestrator",
+            ));
+        }
+
+        // A configured evidence root makes the control-plane epoch survive a
+        // restart. Without it, retain the in-memory compatibility counter;
+        // neither mode uses wall-clock time as biological time.
+        let cut_store = match std::env::var_os("NM_CONSISTENT_CUT_ROOT") {
+            Some(root) => Some(
+                tokio::task::spawn_blocking(move || {
+                    crate::consistent_cut::FileConsistentCutStore::new(PathBuf::from(root))
+                })
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("consistent-cut store task failed: {error}"))
+                })?
+                .map_err(|error| Status::failed_precondition(error.to_string()))?,
+            ),
+            None => None,
+        };
+        let snapshot_store = match std::env::var_os("NM_CLUSTER_SNAPSHOT_ROOT") {
+            Some(root) => Some(
+                tokio::task::spawn_blocking(move || {
+                    crate::cluster_snapshot::FileClusterSnapshotStore::new(PathBuf::from(root))
+                })
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("cluster snapshot store task failed: {error}"))
+                })?
+                .map_err(|error| Status::failed_precondition(error.to_string()))?,
+            ),
+            None => None,
+        };
+        let cut_epoch = if let Some(store) = cut_store.as_ref() {
+            let store = store.clone();
+            tokio::task::spawn_blocking(move || store.next_epoch())
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("consistent-cut epoch task failed: {error}"))
+                })?
+                .map_err(|error| Status::failed_precondition(error.to_string()))?
+        } else {
+            let mut state = self.state.write().await;
+            let epoch = state
+                .consistent_cut_epochs
+                .entry(network_id.clone())
+                .or_insert(0);
+            *epoch = epoch
+                .checked_add(1)
+                .ok_or_else(|| Status::failed_precondition("consistent-cut epoch exhausted"))?;
+            *epoch
+        };
+        if cut_store.is_some() {
+            self.state
+                .write()
+                .await
+                .consistent_cut_epochs
+                .insert(network_id.clone(), cut_epoch);
+        }
+
+        let (cut_sender, cut_receiver) =
+            tokio::sync::mpsc::channel(expected_assignment.len().saturating_mul(2).max(1));
+        let cut_participants = expected_assignment.keys().cloned().collect::<Vec<_>>();
+        let cut_channels = expected_assignment
+            .keys()
+            .map(|node_id| format!("{network_id}/{node_id}"))
+            .collect::<Vec<_>>();
+        // Start the collector before any shard request. Evidence is consumed
+        // as independent RPCs finish, so a slow shard does not make the
+        // control path pretend that all markers arrived together.
+        let cut_task = if let Some(store) = cut_store.as_ref() {
+            let store = store.clone();
+            let participants = cut_participants.clone();
+            let channels = cut_channels.clone();
+            let coordinator =
+                tokio::task::spawn_blocking(move || store.begin(cut_epoch, participants, channels))
+                    .await
+                    .map_err(|error| {
+                        Status::internal(format!("consistent-cut coordinator task failed: {error}"))
+                    })?
+                    .map_err(|error| Status::failed_precondition(error.to_string()))?;
+            tokio::spawn(async move {
+                AsyncConsistentCutCollector::new_persisted(coordinator, cut_receiver)
+                    .finalise()
+                    .await
+            })
+        } else {
+            let coordinator =
+                ConsistentCutCoordinator::begin(cut_epoch, cut_participants, cut_channels)
+                    .map_err(|error| Status::failed_precondition(error.to_string()))?;
+            tokio::spawn(async move {
+                AsyncConsistentCutCollector::new(coordinator, cut_receiver)
+                    .finalise()
+                    .await
+            })
+        };
+        let mut tasks = tokio::task::JoinSet::new();
+        for (shard_node_id, layers) in expected_assignment.iter() {
+            if shard_node_id == &node_id {
+                let Some(network) = local_network.clone() else {
+                    continue;
+                };
+                let shard_node_id = shard_node_id.clone();
+                let layers = layers.clone();
+                let network_id_for_task = network_id.clone();
+                let cut_sender = cut_sender.clone();
+                tasks.spawn(async move {
+                    let (input, evidence) = tokio::task::spawn_blocking(move || {
+                        let network = network.blocking_read();
+                        let (snapshot_json, channel_state_json, _step, _sim_time_ms_bits) =
+                            local_shard_snapshot(&network)?;
+                        let authoritative_state_json = local_authoritative_state_json(&network)?;
+                        let (participant, marker) = local_cut_evidence(
+                            &network_id_for_task,
+                            &shard_node_id,
+                            cut_epoch,
+                            &snapshot_json,
+                            &channel_state_json,
+                        )?;
+                        Ok::<_, String>((
+                            ShardSnapshotInput {
+                                node_id: shard_node_id,
+                                layers,
+                                snapshot_json,
+                                channel_state_json,
+                                authoritative_state_json,
+                            },
+                            cluster_snapshot::LiveCutEvidence {
+                                participant,
+                                marker,
+                            },
+                        ))
+                    })
+                    .await
+                    .map_err(|error| error.to_string())??;
+                    cut_sender
+                        .send(ConsistentCutMessage::Participant(
+                            evidence.participant.clone(),
+                        ))
+                        .await
+                        .map_err(|_| "consistent-cut collector closed".to_owned())?;
+                    cut_sender
+                        .send(ConsistentCutMessage::Marker(evidence.marker.clone()))
+                        .await
+                        .map_err(|_| "consistent-cut collector closed".to_owned())?;
+                    Ok::<_, String>((input, evidence))
+                });
+                continue;
+            }
+
+            let Some(address) = addresses.get(shard_node_id).and_then(Clone::clone) else {
+                continue;
+            };
+            let client = clients.get(shard_node_id).cloned();
+            let network_id_for_task = network_id.clone();
+            let shard_node_id = shard_node_id.clone();
+            let layers = layers.clone();
+            let cut_sender = cut_sender.clone();
+            let sender_node_id = node_id.clone();
+            tasks.spawn(async move {
+                let mut client = match client {
+                    Some(client) => client,
+                    None => connect_peer_with_timeout(&address, Duration::from_secs(2))
+                        .await
+                        .map_err(|error| error.to_string())?,
+                };
+                let request = authenticated_request(
+                    NetworkSnapshotRequest {
+                        network_id: network_id_for_task.clone(),
+                        cut_epoch,
+                    },
+                    &sender_node_id,
+                )
+                .map_err(|error| error.to_string())?;
+                let response = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    client.get_network_snapshot(request),
+                )
+                .await
+                .map_err(|_| "shard snapshot request timed out".to_owned())?
+                .map_err(|error| error.to_string())?
+                .into_inner();
+                if response.network_id != network_id_for_task {
+                    return Err(format!(
+                        "shard returned network '{}' instead of requested network",
+                        response.network_id
+                    ));
+                }
+                if response.cut_epoch != cut_epoch
+                    || response.participant_json.is_empty()
+                    || response.channel_marker_json.is_empty()
+                {
+                    return Err("shard did not return matching consistent-cut evidence".to_owned());
+                }
+                let participant = serde_json::from_str(&response.participant_json)
+                    .map_err(|error| format!("invalid participant evidence: {error}"))?;
+                let marker = serde_json::from_str(&response.channel_marker_json)
+                    .map_err(|error| format!("invalid channel marker evidence: {error}"))?;
+                let evidence = cluster_snapshot::LiveCutEvidence {
+                    participant,
+                    marker,
+                };
+                cut_sender
+                    .send(ConsistentCutMessage::Participant(
+                        evidence.participant.clone(),
+                    ))
+                    .await
+                    .map_err(|_| "consistent-cut collector closed".to_owned())?;
+                cut_sender
+                    .send(ConsistentCutMessage::Marker(evidence.marker.clone()))
+                    .await
+                    .map_err(|_| "consistent-cut collector closed".to_owned())?;
+                Ok::<_, String>((
+                    ShardSnapshotInput {
+                        node_id: shard_node_id,
+                        layers,
+                        snapshot_json: response.snapshot_json,
+                        channel_state_json: response.channel_state_json,
+                        authoritative_state_json: response.authoritative_state_json,
+                    },
+                    evidence,
+                ))
+            });
+        }
+        drop(cut_sender);
+
+        let mut inputs = Vec::with_capacity(expected_assignment.len());
+        let mut evidence = Vec::with_capacity(expected_assignment.len());
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok((input, cut_evidence))) => {
+                    inputs.push(input);
+                    evidence.push(cut_evidence);
+                }
+                Ok(Err(error)) => {
+                    return Err(Status::failed_precondition(format!(
+                        "cluster snapshot shard unavailable: {}",
+                        error
+                    )));
+                }
+                Err(error) => {
+                    return Err(Status::internal(format!(
+                        "cluster snapshot task failed: {}",
+                        error
+                    )));
+                }
+            }
+        }
+
+        let cut = cut_task
+            .await
+            .map_err(|error| Status::internal(format!("consistent-cut task failed: {error}")))?
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        let snapshot = cluster_snapshot::assemble_live(
+            network_id,
+            &expected_assignment,
+            inputs,
+            evidence,
+            cut,
+        )
+        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        if let Some(store) = snapshot_store {
+            let snapshot_to_publish = snapshot.clone();
+            tokio::task::spawn_blocking(move || store.publish_idempotent(&snapshot_to_publish))
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("cluster snapshot publish task failed: {error}"))
+                })?
+                .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        }
+        if let Some(store) = cut_store {
+            let cut = snapshot
+                .consistent_cut
+                .clone()
+                .ok_or_else(|| Status::internal("live cluster snapshot omitted cut evidence"))?;
+            tokio::task::spawn_blocking(move || store.publish(&cut))
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("consistent-cut publish task failed: {error}"))
+                })?
+                .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        }
+        Ok(Response::new(ClusterNetworkSnapshotResponse {
+            network_id: snapshot.network_id,
+            schema_version: snapshot.schema_version,
+            cut_tick: snapshot.cut_tag.tick,
+            cut_microstep: snapshot.cut_tag.microstep,
+            cluster_digest: snapshot.cluster_digest.to_string(),
+            shards: snapshot
+                .shards
+                .into_iter()
+                .map(|shard| ClusterShardSnapshot {
+                    node_id: shard.node_id,
+                    layers: shard.layers,
+                    snapshot_json: shard.snapshot_json,
+                    step: shard.step,
+                    sim_time_ms_bits: shard.sim_time_ms_bits,
+                    state_digest: shard.state_digest.to_string(),
+                    channel_state_json: shard.channel_state_json,
+                    channel_state_digest: shard.channel_state_digest.to_string(),
+                    authoritative_state_json: shard.authoritative_state_json,
+                    authoritative_state_digest: shard
+                        .authoritative_state_digest
+                        .map(|digest| digest.to_string())
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            consistent_cut_json: snapshot
+                .consistent_cut
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| Status::internal(error.to_string()))?
+                .unwrap_or_default(),
         }))
     }
 
@@ -5045,6 +9060,22 @@ impl DistributedNeuromorphic for DistributedNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn production_cutover_requires_a_durable_cluster_snapshot_catalogue() {
+        assert!(validate_cluster_snapshot_root(Some("/var/lib/aarnn/cuts")).is_ok());
+        assert!(
+            validate_cluster_snapshot_root(None)
+                .expect_err("production needs a snapshot catalogue")
+                .contains("NM_CLUSTER_SNAPSHOT_ROOT")
+        );
+        assert!(
+            validate_cluster_snapshot_root(Some("  "))
+                .expect_err("an empty snapshot root is invalid")
+                .contains("must not be empty")
+        );
+    }
 
     #[tokio::test]
     async fn rejoin_refreshes_a_stale_heartbeat_before_rebalancing() {
@@ -5065,6 +9096,8 @@ mod tests {
             address: "127.0.0.1:65534".to_string(),
             resources: None,
             network_resources: HashMap::new(),
+            stable_executors: Vec::new(),
+            stable_executor_capabilities: Vec::new(),
         }))
         .await
         .expect("rejoin succeeds");
@@ -5089,6 +9122,9 @@ mod tests {
                 node_id: "pruned-worker".to_string(),
                 resources: None,
                 network_resources: HashMap::new(),
+                stable_executors: Vec::new(),
+                stable_executor_capabilities: Vec::new(),
+                command_results: Vec::new(),
             }))
             .await
             .expect_err("an unknown worker must rejoin");
@@ -5104,6 +9140,989 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "stable_executor_live")]
+    fn stable_registration_wire(
+        network_id: &str,
+        shard_ids: Vec<u64>,
+    ) -> StableExecutorRegistration {
+        StableExecutorRegistration {
+            schema_version: crate::stable_worker::STABLE_WORKER_REGISTRATION_SCHEMA_VERSION,
+            profile: crate::stable_worker::STABLE_EXECUTOR_PROFILE.to_owned(),
+            network_id: network_id.to_owned(),
+            brain_id: crate::managed_durability::managed_brain_id(network_id).raw(),
+            topology_generation: 1,
+            partition_generation: 1,
+            topology_digest: "00".repeat(16),
+            plan_digest: "11".repeat(16),
+            owned_shard_ids: shard_ids.clone(),
+            shard_ids: shard_ids.clone(),
+            lease_term: 1,
+            fencing_token: 7,
+            current_tick: 0,
+            current_microstep: 0,
+            state_digest: "22".repeat(16),
+            max_input_events: 8,
+            max_steps_per_poll: 8,
+            authoritative: true,
+            application_acks: shard_ids
+                .iter()
+                .map(|shard_id| proto::StableShardApplicationAck {
+                    shard_id: *shard_id,
+                    brain_id: crate::managed_durability::managed_brain_id(network_id).raw(),
+                    topology_generation: 1,
+                    partition_generation: 1,
+                    plan_digest: "11".repeat(16),
+                    lease_term: 1,
+                    fencing_token: 7,
+                    applied_tick: 0,
+                    applied_microstep: 0,
+                    state_digest: "33".repeat(16),
+                    durable_wal_sequence: 0,
+                    durable_wal_sequence_present: true,
+                    committed: true,
+                })
+                .collect(),
+        }
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    fn stable_capability_wire() -> proto::StableExecutorCapability {
+        proto::StableExecutorCapability {
+            schema_version: crate::stable_worker::STABLE_EXECUTOR_CAPABILITY_SCHEMA_VERSION,
+            profile: crate::stable_worker::STABLE_EXECUTOR_PROFILE.to_owned(),
+            activation_schema_version:
+                crate::stable_worker::STABLE_WORKER_ACTIVATION_SCHEMA_VERSION,
+            max_input_events: crate::stable_worker::DEFAULT_STABLE_WORKER_MAX_INPUT_EVENTS,
+            max_steps_per_poll: crate::stable_worker::DEFAULT_STABLE_WORKER_MAX_STEPS_PER_POLL,
+        }
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_worker_join_is_registered_and_legacy_rebalance_is_fenced() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1, 2])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("stable worker join");
+
+        let state = node.state.read().await;
+        let worker = state.nodes.get("stable-worker").expect("worker status");
+        assert_eq!(worker.stable_executors.len(), 1);
+        assert_eq!(worker.stable_executors[0].shard_ids, vec![1, 2]);
+        assert_eq!(worker.stable_executors[0].owned_shard_ids, vec![1, 2]);
+        assert!(state.stable_network_ids.contains("alpha"));
+        let network = state.network_registry.get("alpha").expect("network status");
+        assert!(network.distribution.is_empty());
+        assert!(
+            network
+                .deployment_modes
+                .iter()
+                .any(|mode| mode == "stable-executor")
+        );
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_worker_activation_queue_requires_capability_and_is_idempotent() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1, 2])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("stable worker join");
+
+        let brain_id = crate::managed_durability::managed_brain_id("alpha");
+        let command = crate::stable_worker::StableWorkerActivationCommand::new(
+            "activation-request-1",
+            1,
+            brain_id.raw(),
+            "alpha",
+            "stable-worker",
+            "{}",
+        )
+        .expect("activation command");
+        assert!(
+            node.queue_stable_worker_activation(command.clone())
+                .await
+                .expect("activation queued")
+        );
+        assert!(
+            !node
+                .queue_stable_worker_activation(command)
+                .await
+                .expect("activation replay is idempotent")
+        );
+
+        let state = node.state.read().await;
+        let queued = state
+            .pending_commands
+            .get("stable-worker")
+            .expect("pending worker commands");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(
+            queued[0].r#type,
+            proto::network_command::CommandType::ActivateStableWorker as i32
+        );
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_activation_delivery_replays_until_digest_bound_result_arrives() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1, 2])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("stable worker join");
+
+        let brain_id = crate::managed_durability::managed_brain_id("alpha");
+        let activation = crate::stable_worker::StableWorkerActivationCommand::new(
+            "activation-at-least-once",
+            19,
+            brain_id.raw(),
+            "alpha",
+            "stable-worker",
+            "{}",
+        )
+        .expect("activation command");
+        let manifest_digest = activation.manifest_digest.clone();
+        node.queue_stable_worker_activation(activation)
+            .await
+            .expect("activation queued");
+
+        let heartbeat = |command_results| HeartbeatRequest {
+            node_id: "stable-worker".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1, 2])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+            command_results,
+        };
+
+        let first = node
+            .heartbeat(Request::new(heartbeat(Vec::new())))
+            .await
+            .expect("first heartbeat")
+            .into_inner();
+        assert_eq!(first.commands.len(), 1);
+        let delivered = first.commands[0].clone();
+
+        // A lost response must not lose the activation command.
+        let retry = node
+            .heartbeat(Request::new(heartbeat(Vec::new())))
+            .await
+            .expect("retry heartbeat")
+            .into_inner();
+        assert_eq!(retry.commands, vec![delivered.clone()]);
+
+        let forged_result = NetworkCommandResult {
+            command_type: proto::network_command::CommandType::ActivateStableWorker as i32,
+            network_id: "alpha".to_owned(),
+            request_id: "activation-at-least-once".to_owned(),
+            manifest_digest: "00".repeat(32),
+            accepted: true,
+            error: String::new(),
+            brain_id: brain_id.raw(),
+            placement_idempotency_key: String::new(),
+        };
+        let forged_error = node
+            .heartbeat(Request::new(heartbeat(vec![forged_result])))
+            .await
+            .expect_err("a mismatched manifest digest must not acknowledge delivery");
+        assert_eq!(forged_error.code(), tonic::Code::FailedPrecondition);
+
+        let result = NetworkCommandResult {
+            command_type: proto::network_command::CommandType::ActivateStableWorker as i32,
+            network_id: "alpha".to_owned(),
+            request_id: "activation-at-least-once".to_owned(),
+            manifest_digest,
+            accepted: true,
+            error: String::new(),
+            brain_id: brain_id.raw(),
+            placement_idempotency_key: String::new(),
+        };
+        let acknowledged = node
+            .heartbeat(Request::new(heartbeat(vec![result.clone()])))
+            .await
+            .expect("acknowledgement heartbeat")
+            .into_inner();
+        assert!(acknowledged.commands.is_empty());
+
+        // Replaying the same result after a lost acknowledgement is
+        // idempotent and does not resurrect the command.
+        let replay = node
+            .heartbeat(Request::new(heartbeat(vec![result])))
+            .await
+            .expect("replayed acknowledgement heartbeat")
+            .into_inner();
+        assert!(replay.commands.is_empty());
+
+        // A terminal worker rejection is also consumed, while its bounded
+        // diagnostic remains available for the orchestrator's audit hook.
+        let failed_activation = crate::stable_worker::StableWorkerActivationCommand::new(
+            "activation-terminal-failure",
+            20,
+            brain_id.raw(),
+            "alpha",
+            "stable-worker",
+            "{}",
+        )
+        .expect("second activation command");
+        let failed_digest = failed_activation.manifest_digest.clone();
+        node.queue_stable_worker_activation(failed_activation)
+            .await
+            .expect("second activation queued");
+        let second_delivery = node
+            .heartbeat(Request::new(heartbeat(Vec::new())))
+            .await
+            .expect("second delivery heartbeat")
+            .into_inner();
+        assert_eq!(second_delivery.commands.len(), 1);
+        let failed_result = NetworkCommandResult {
+            command_type: proto::network_command::CommandType::ActivateStableWorker as i32,
+            network_id: "alpha".to_owned(),
+            request_id: "activation-terminal-failure".to_owned(),
+            manifest_digest: failed_digest,
+            accepted: false,
+            error: "checkpoint no longer available".to_owned(),
+            brain_id: brain_id.raw(),
+            placement_idempotency_key: String::new(),
+        };
+        let failed_ack = node
+            .heartbeat(Request::new(heartbeat(vec![failed_result])))
+            .await
+            .expect("terminal failure heartbeat")
+            .into_inner();
+        assert!(failed_ack.commands.is_empty());
+        let state = node.state.read().await;
+        assert!(
+            state
+                .pending_commands
+                .get("stable-worker")
+                .map(Vec::is_empty)
+                .unwrap_or(true)
+        );
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn idle_enrolled_worker_can_receive_its_first_stable_activation() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.join(Request::new(JoinRequest {
+            node_id: "idle-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: Vec::new(),
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("idle worker enrollment");
+
+        let state = node.state.read().await;
+        let worker = state.nodes.get("idle-worker").expect("worker status");
+        assert!(worker.stable_executors.is_empty());
+        assert_eq!(worker.stable_executor_capabilities.len(), 1);
+        drop(state);
+
+        let brain_id = crate::managed_durability::managed_brain_id("alpha");
+        let command = crate::stable_worker::StableWorkerActivationCommand::new(
+            "idle-activation-request",
+            2,
+            brain_id.raw(),
+            "alpha",
+            "idle-worker",
+            "{}",
+        )
+        .expect("activation command");
+        assert!(
+            node.queue_stable_worker_activation(command)
+                .await
+                .expect("idle worker activation queued")
+        );
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_registration_allows_disjoint_workers_after_queued_activation() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        let mut first = stable_registration_wire("alpha", vec![1, 2]);
+        first.owned_shard_ids = vec![1];
+        first.application_acks.truncate(1);
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker-a".to_owned(),
+            address: "127.0.0.1:65531".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![first],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("first stable worker join");
+
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker-b".to_owned(),
+            address: "127.0.0.1:65532".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: Vec::new(),
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("second stable worker enrollment");
+
+        let brain_id = crate::managed_durability::managed_brain_id("alpha");
+        let activation = crate::stable_worker::StableWorkerActivationCommand::new(
+            "disjoint-worker-b-activation",
+            88,
+            brain_id.raw(),
+            "alpha",
+            "stable-worker-b",
+            "{}",
+        )
+        .expect("activation command");
+        let manifest_digest = activation.manifest_digest.clone();
+        node.queue_stable_worker_activation(activation)
+            .await
+            .expect("second worker activation queued");
+
+        let mut second = stable_registration_wire("alpha", vec![1, 2]);
+        second.owned_shard_ids = vec![2];
+        second.application_acks = vec![second.application_acks.remove(1)];
+        let result = NetworkCommandResult {
+            command_type: proto::network_command::CommandType::ActivateStableWorker as i32,
+            network_id: "alpha".to_owned(),
+            request_id: "disjoint-worker-b-activation".to_owned(),
+            manifest_digest,
+            accepted: true,
+            error: String::new(),
+            brain_id: brain_id.raw(),
+            placement_idempotency_key: String::new(),
+        };
+        node.heartbeat(Request::new(HeartbeatRequest {
+            node_id: "stable-worker-b".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![second],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+            command_results: vec![result],
+        }))
+        .await
+        .expect("disjoint stable registration");
+
+        let state = node.state.read().await;
+        assert_eq!(
+            state.nodes["stable-worker-a"].stable_executors[0].owned_shard_ids,
+            vec![1]
+        );
+        assert_eq!(
+            state.nodes["stable-worker-b"].stable_executors[0].owned_shard_ids,
+            vec![2]
+        );
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn resource_or_network_observation_without_activation_capability_is_denied() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.join(Request::new(JoinRequest {
+            node_id: "unqualified-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: Vec::new(),
+            stable_executor_capabilities: Vec::new(),
+        }))
+        .await
+        .expect("worker enrollment");
+
+        let brain_id = crate::managed_durability::managed_brain_id("alpha");
+        let command = crate::stable_worker::StableWorkerActivationCommand::new(
+            "denied-activation-request",
+            3,
+            brain_id.raw(),
+            "alpha",
+            "unqualified-worker",
+            "{}",
+        )
+        .expect("activation command");
+        let error = node
+            .queue_stable_worker_activation(command)
+            .await
+            .expect_err("resource telemetry must not grant activation capability");
+        assert!(error.contains("activation capability"));
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_worker_registration_rejects_duplicate_owner_and_bad_shape() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        let resources = HashMap::from([(
+            "alpha".to_owned(),
+            NetworkResources {
+                num_neurons: 2,
+                layer_neuron_counts: HashMap::from([(0, 2)]),
+                avg_step_time_ms: 1.0,
+            },
+        )]);
+        let first = JoinRequest {
+            node_id: "stable-a".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: resources.clone(),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        };
+        node.join(Request::new(first)).await.expect("first join");
+
+        let duplicate = node
+            .join(Request::new(JoinRequest {
+                node_id: "stable-b".to_owned(),
+                address: "127.0.0.1:65535".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: resources.clone(),
+                stable_executors: vec![stable_registration_wire("alpha", vec![1])],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+            }))
+            .await
+            .expect_err("one stable writer per network");
+        assert_eq!(duplicate.code(), tonic::Code::FailedPrecondition);
+
+        let mut invalid = stable_registration_wire("beta", vec![2, 1]);
+        invalid.authoritative = false;
+        let error = node
+            .join(Request::new(JoinRequest {
+                node_id: "invalid".to_owned(),
+                address: "127.0.0.1:65536".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: HashMap::from([(
+                    "beta".to_owned(),
+                    NetworkResources::default(),
+                )]),
+                stable_executors: vec![invalid],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+            }))
+            .await
+            .expect_err("invalid stable registration");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_worker_registration_rejects_missing_or_stale_application_evidence() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        let resources = |network_id: &str| {
+            HashMap::from([(
+                network_id.to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )])
+        };
+
+        let mut missing = stable_registration_wire("missing-acks", vec![1]);
+        missing.application_acks.clear();
+        let error = node
+            .join(Request::new(JoinRequest {
+                node_id: "missing-acks-worker".to_owned(),
+                address: "127.0.0.1:65536".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: resources("missing-acks"),
+                stable_executors: vec![missing],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+            }))
+            .await
+            .expect_err("a worker without a durable ack set must not join");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+
+        let mut stale_plan = stable_registration_wire("stale-plan", vec![1]);
+        stale_plan.application_acks[0].plan_digest = "44".repeat(16);
+        let error = node
+            .join(Request::new(JoinRequest {
+                node_id: "stale-plan-worker".to_owned(),
+                address: "127.0.0.1:65537".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: resources("stale-plan"),
+                stable_executors: vec![stale_plan],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+            }))
+            .await
+            .expect_err("a durable ack for another plan must not join");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+
+        let mut stale_fence = stable_registration_wire("stale-fence", vec![1]);
+        stale_fence.application_acks[0].fencing_token = 6;
+        let error = node
+            .join(Request::new(JoinRequest {
+                node_id: "stale-fence-worker".to_owned(),
+                address: "127.0.0.1:65538".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: resources("stale-fence"),
+                stable_executors: vec![stale_fence],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+            }))
+            .await
+            .expect_err("a durable ack from an older fence must not join");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[cfg(feature = "stable_executor_live")]
+    #[tokio::test]
+    async fn stable_worker_ownership_subset_can_change_without_plan_identity_change() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_owned(), true);
+        let resources = HashMap::from([(
+            "alpha".to_owned(),
+            NetworkResources {
+                num_neurons: 2,
+                layer_neuron_counts: HashMap::from([(0, 2)]),
+                avg_step_time_ms: 1.0,
+            },
+        )]);
+        node.join(Request::new(JoinRequest {
+            node_id: "stable-worker".to_owned(),
+            address: "127.0.0.1:65534".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: resources.clone(),
+            stable_executors: vec![stable_registration_wire("alpha", vec![1, 2])],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+        }))
+        .await
+        .expect("initial stable worker join");
+
+        let mut update = stable_registration_wire("alpha", vec![1, 2]);
+        update.owned_shard_ids = vec![2];
+        update.application_acks.retain(|ack| ack.shard_id == 2);
+        let rejected = update.clone();
+        let error = node
+            .heartbeat(Request::new(HeartbeatRequest {
+                node_id: "stable-worker".to_owned(),
+                resources: Some(Resources::default()),
+                network_resources: resources.clone(),
+                stable_executors: vec![rejected],
+                stable_executor_capabilities: vec![stable_capability_wire()],
+                command_results: Vec::new(),
+            }))
+            .await
+            .expect_err("ownership cannot change without a fenced boundary");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        update.lease_term = 2;
+        update.fencing_token = 8;
+        update.application_acks[0].lease_term = 2;
+        update.application_acks[0].fencing_token = 8;
+        node.heartbeat(Request::new(HeartbeatRequest {
+            node_id: "stable-worker".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: resources,
+            stable_executors: vec![update.clone()],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+            command_results: Vec::new(),
+        }))
+        .await
+        .expect("ownership telemetry update");
+
+        let state = node.state.read().await;
+        let registration = &state.nodes["stable-worker"].stable_executors[0];
+        assert_eq!(registration.shard_ids, vec![1, 2]);
+        assert_eq!(registration.owned_shard_ids, vec![2]);
+        drop(state);
+
+        // A completed source-side drain is represented by an empty owned set
+        // and no acknowledgements. It still requires a newer fenced boundary
+        // so a stale worker cannot silently reclaim the source shard.
+        update.owned_shard_ids.clear();
+        update.application_acks.clear();
+        update.lease_term = 3;
+        update.fencing_token = 9;
+        node.heartbeat(Request::new(HeartbeatRequest {
+            node_id: "stable-worker".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "alpha".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                },
+            )]),
+            stable_executors: vec![update],
+            stable_executor_capabilities: vec![stable_capability_wire()],
+            command_results: Vec::new(),
+        }))
+        .await
+        .expect("a fenced source drain must be accepted");
+
+        let state = node.state.read().await;
+        assert!(
+            state.nodes["stable-worker"].stable_executors[0]
+                .owned_shard_ids
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn consistent_cut_evidence_binds_to_captured_payloads() {
+        let (_, snapshot_json) = fresh_single_neuron_snapshot(1, NeuronModel::Lif, Learning::Stdp)
+            .expect("fresh snapshot");
+        let channel_state = serde_json::to_string(&ManagedChannelState {
+            remote_spike_steps_fwd: BTreeMap::from([(2, 6)]),
+            ..ManagedChannelState::default()
+        })
+        .expect("channel state");
+
+        let (participant, marker) =
+            local_cut_evidence("alpha", "node-a", 3, &snapshot_json, &channel_state)
+                .expect("captured evidence");
+
+        assert_eq!(participant.local_frontier, LogicalTag::new(0, 0));
+        assert_eq!(participant.queued_min, Some(LogicalTag::new(6, 0)));
+        assert_eq!(participant.activity_epoch, 1);
+        assert_eq!(marker.epoch, 3);
+        assert_eq!(marker.first_in_transit, participant.queued_min);
+    }
+
+    #[tokio::test]
+    async fn cluster_snapshot_rpc_returns_a_complete_common_frontier() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        let (_, snapshot_json) = fresh_single_neuron_snapshot(1, NeuronModel::Lif, Learning::Stdp)
+            .expect("fresh snapshot");
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: snapshot_json.clone().into_bytes(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+        node.state.write().await.network_registry.insert(
+            "alpha".to_string(),
+            NetworkStatus {
+                network_id: "alpha".to_string(),
+                distribution: HashMap::from([(
+                    "orch".to_string(),
+                    LayerRange {
+                        layers: vec![0],
+                        layer_neuron_counts: HashMap::new(),
+                        backup_layers: Vec::new(),
+                    },
+                )]),
+                config_json: snapshot_json,
+                num_layers: 1,
+                desired_aarnn_depth: 1,
+                neuron_model: "lif".to_string(),
+                learning_rule: "stdp".to_string(),
+                ..Default::default()
+            },
+        );
+
+        let response = node
+            .get_cluster_network_snapshot(Request::new(ClusterNetworkSnapshotRequest {
+                network_id: "alpha".to_string(),
+            }))
+            .await
+            .expect("cluster snapshot")
+            .into_inner();
+        assert_eq!(
+            response.schema_version,
+            cluster_snapshot::CLUSTER_SNAPSHOT_SCHEMA_VERSION
+        );
+        assert_eq!(response.cut_tick, 0);
+        assert_eq!(response.cut_microstep, 0);
+        assert!(!response.cluster_digest.is_empty());
+        assert_eq!(response.shards.len(), 1);
+        assert_eq!(response.shards[0].node_id, "orch");
+        assert_eq!(response.shards[0].step, 0);
+        assert!(!response.shards[0].state_digest.is_empty());
+        assert!(!response.shards[0].channel_state_json.is_empty());
+        assert!(!response.shards[0].channel_state_digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cluster_snapshot_rpc_fails_closed_when_a_shard_is_unavailable() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        node.state.write().await.network_registry.insert(
+            "alpha".to_string(),
+            NetworkStatus {
+                network_id: "alpha".to_string(),
+                distribution: HashMap::from([
+                    (
+                        "orch".to_string(),
+                        LayerRange {
+                            layers: vec![0],
+                            layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
+                        },
+                    ),
+                    (
+                        "missing-worker".to_string(),
+                        LayerRange {
+                            layers: vec![1],
+                            layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            },
+        );
+
+        let error = node
+            .get_cluster_network_snapshot(Request::new(ClusterNetworkSnapshotRequest {
+                network_id: "alpha".to_string(),
+            }))
+            .await
+            .expect_err("incomplete cluster cuts must not be published");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[cfg(feature = "replicated_durability")]
+    #[test]
+    fn live_managed_step_publishes_runner_state_only_after_durable_commit() {
+        let root =
+            std::env::temp_dir().join(format!("aarnn-live-managed-step-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = NetworkConfig::default();
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let model = NeuronModel::Lif;
+        let learning = Learning::Stdp;
+        let runner = Runner::new(lif.clone(), stdp.clone(), config.clone(), model, learning);
+        let owner = crate::managed_durability::ManagedDurability::open(
+            &root,
+            "live-managed",
+            "node-a",
+            &runner,
+            LeaseTerm::INITIAL,
+            Some(&root.join("warm")),
+        )
+        .expect("durable live owner");
+        let mut network = ManagedNetwork {
+            id: "live-managed".to_owned(),
+            runner,
+            shard_runtime: None,
+            #[cfg(feature = "stable_executor_live")]
+            stable_executor: None,
+            durable_owner: Some(owner),
+            #[cfg(feature = "superdense_executor")]
+            superdense: SuperdenseController::new(),
+            assigned_layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            remote_spikes_fwd: HashMap::new(),
+            remote_spikes_bwd: HashMap::new(),
+            remote_spike_steps_fwd: HashMap::new(),
+            remote_spike_steps_bwd: HashMap::new(),
+            external_sensory_spikes: None,
+            avg_step_time_ms: 0.0,
+            desired_aarnn_depth: 0,
+            playing: true,
+            initial_config: config,
+            initial_model: model,
+            initial_learning: learning,
+            initial_lif: lif,
+            initial_stdp: stdp,
+            last_config_fingerprint: None,
+            workspace_binding: None,
+        };
+        let before = network
+            .runner
+            .export_network_json()
+            .expect("before snapshot");
+        let previous_channel_state = capture_channel_state(&network);
+        let out = network
+            .step_and_commit_durable(None, previous_channel_state)
+            .expect("durable managed step");
+        assert!(out.t > 0);
+        let committed = network
+            .durable_owner
+            .as_ref()
+            .expect("owner")
+            .authoritative_snapshot()
+            .expect("authoritative read")
+            .expect("committed snapshot");
+        assert_ne!(committed, before);
+        assert_eq!(committed, network.runner.export_network_json().unwrap());
+        assert_eq!(
+            network.durable_owner.as_ref().unwrap().durable_sequence(),
+            Some(0)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "replicated_durability")]
+    #[test]
+    fn durable_snapshot_projection_does_not_read_ahead_of_the_authoritative_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-authoritative-snapshot-projection-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = NetworkConfig::default();
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut runner = Runner::new(
+            lif.clone(),
+            stdp.clone(),
+            config.clone(),
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+        let owner = crate::managed_durability::ManagedDurability::open(
+            &root,
+            "projection",
+            "node-a",
+            &runner,
+            LeaseTerm::INITIAL,
+            Some(&root.join("warm")),
+        )
+        .expect("durable owner");
+        runner.step(None);
+        let net = ManagedNetwork {
+            id: "projection".to_owned(),
+            runner,
+            shard_runtime: None,
+            #[cfg(feature = "stable_executor_live")]
+            stable_executor: None,
+            durable_owner: Some(owner),
+            #[cfg(feature = "superdense_executor")]
+            superdense: SuperdenseController::new(),
+            assigned_layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            remote_spikes_fwd: HashMap::new(),
+            remote_spikes_bwd: HashMap::new(),
+            remote_spike_steps_fwd: HashMap::new(),
+            remote_spike_steps_bwd: HashMap::new(),
+            external_sensory_spikes: None,
+            avg_step_time_ms: 0.0,
+            desired_aarnn_depth: 0,
+            playing: false,
+            initial_config: config,
+            initial_model: NeuronModel::Lif,
+            initial_learning: Learning::Stdp,
+            initial_lif: lif,
+            initial_stdp: stdp,
+            last_config_fingerprint: None,
+            workspace_binding: None,
+        };
+        let (snapshot, _, step, _) = local_shard_snapshot(&net).expect("authoritative snapshot");
+        assert_eq!(step, 0);
+        let owner_snapshot = net
+            .durable_owner
+            .as_ref()
+            .unwrap()
+            .authoritative_snapshot()
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot, owner_snapshot);
+        assert_ne!(snapshot, net.runner.export_network_json().unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn network_total_only_counts_its_own_unique_layers() {
         let distribution = HashMap::from([
@@ -5112,6 +10131,7 @@ mod tests {
                 LayerRange {
                     layers: vec![0, 1],
                     layer_neuron_counts: HashMap::from([(0, 32), (1, 64)]),
+                    backup_layers: Vec::new(),
                 },
             ),
             (
@@ -5119,12 +10139,103 @@ mod tests {
                 LayerRange {
                     layers: vec![1, 2],
                     layer_neuron_counts: HashMap::from([(1, 64), (2, 16)]),
+                    backup_layers: Vec::new(),
                 },
             ),
         ]);
 
         assert_eq!(total_neurons_from_distribution(&distribution), 112);
         assert_eq!(total_neurons_from_distribution(&HashMap::new()), 0);
+    }
+
+    #[test]
+    fn placement_telemetry_distinguishes_active_and_backup_moves() {
+        let previous = HashMap::from([
+            (
+                "node-a".to_string(),
+                LayerRange {
+                    layers: vec![0],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![1],
+                },
+            ),
+            (
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![1],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![0],
+                },
+            ),
+        ]);
+        let next = HashMap::from([
+            (
+                "node-a".to_string(),
+                LayerRange {
+                    layers: vec![1],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![0],
+                },
+            ),
+            (
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![0],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![1],
+                },
+            ),
+        ]);
+        let movements = build_shard_placement_movements(
+            "brain",
+            &previous,
+            &next,
+            false,
+            "capacity rebalance",
+            42,
+        );
+        assert_eq!(movements.len(), 4);
+        assert!(movements.iter().all(|movement| movement.phase == "moving"));
+        assert!(movements.iter().any(|movement| movement.role == "active"));
+        assert!(movements.iter().any(|movement| movement.role == "backup"));
+        assert!(
+            movements
+                .iter()
+                .all(|movement| movement.progress_milli <= 1000)
+        );
+        assert!(
+            movements
+                .windows(2)
+                .all(|pair| pair[0].shard_id <= pair[1].shard_id)
+        );
+    }
+
+    #[test]
+    fn placement_telemetry_only_reports_consideration_when_automation_is_enabled() {
+        let current = HashMap::from([(
+            "node-a".to_string(),
+            LayerRange {
+                layers: vec![0, 1],
+                layer_neuron_counts: HashMap::new(),
+                backup_layers: vec![1],
+            },
+        )]);
+        assert!(
+            build_shard_placement_movements("brain", &current, &current, false, "", 42,).is_empty()
+        );
+        let considering =
+            build_shard_placement_movements("brain", &current, &current, true, "", 42);
+        assert_eq!(considering.len(), 3);
+        assert!(
+            considering
+                .iter()
+                .all(|movement| movement.phase == "considering")
+        );
+        assert!(
+            considering
+                .iter()
+                .all(|movement| movement.updated_at_ms == 42)
+        );
     }
 
     #[test]
@@ -5279,6 +10390,8 @@ mod tests {
                         active_networks: (node_id == "node-a")
                             .then(|| vec!["shared".to_string()])
                             .unwrap_or_default(),
+                        stable_executors: Vec::new(),
+                        stable_executor_capabilities: Vec::new(),
                     },
                 );
             }
@@ -5292,6 +10405,7 @@ mod tests {
                         LayerRange {
                             layers: vec![0, 1, 2],
                             layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
                         },
                     )]),
                     ..Default::default()
@@ -5484,6 +10598,7 @@ mod tests {
                         LayerRange {
                             layers: vec![0],
                             layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
                         },
                     )]),
                     num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
@@ -5570,6 +10685,7 @@ mod tests {
                         LayerRange {
                             layers: vec![0],
                             layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
                         },
                     )]),
                     num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
@@ -5633,6 +10749,7 @@ mod tests {
                     LayerRange {
                         layers: vec![0],
                         layer_neuron_counts: HashMap::new(),
+                        backup_layers: Vec::new(),
                     },
                 )]),
                 num_layers: (current_cfg.num_hidden_layers + 1) as u32,
@@ -5710,6 +10827,7 @@ mod tests {
                     LayerRange {
                         layers: vec![0],
                         layer_neuron_counts: HashMap::new(),
+                        backup_layers: Vec::new(),
                     },
                 )]),
                 num_layers: (current_cfg.num_hidden_layers + 1) as u32,
@@ -5911,6 +11029,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn causal_certificate_binding_is_exact_and_uses_der_sha256() {
+        let certificate = b"synthetic-mtls-leaf";
+        let fingerprint = certificate_sha256_der(certificate);
+        let enrolled =
+            std::collections::BTreeMap::from([("node-a".to_owned(), fingerprint.clone())]);
+        assert_eq!(fingerprint.len(), 64);
+        assert!(
+            enrolled
+                .get("node-a")
+                .is_some_and(|expected| expected == &fingerprint)
+        );
+        assert!(
+            !enrolled
+                .get("node-a")
+                .is_some_and(|expected| expected == &certificate_sha256_der(b"other-leaf"))
+        );
+        assert!(!enrolled.contains_key("node-b"));
+    }
+
     #[tokio::test]
     async fn phase0_seven_node_capture_matches_current_compatibility_behaviour() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -5972,5 +11110,176 @@ mod tests {
             }),
             fixture["transport_observation"]
         );
+    }
+
+    #[cfg(feature = "replicated_durability")]
+    #[tokio::test]
+    async fn live_causal_ingress_is_durable_before_channel_projection() {
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-live-causal-ingress-{}-{}",
+            std::process::id(),
+            unix_timestamp_ms_now()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create causal test root");
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 2;
+        config.num_hidden_per_layer_initial = 2;
+        config.num_output_neurons = 1;
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut runner = Runner::new(lif, stdp, config.clone(), NeuronModel::Lif, Learning::Stdp);
+        runner.layer_range = Some(0..1);
+        let pre_ingress_biological_snapshot =
+            serde_json::to_vec(&runner.snapshot()).expect("encode pre-ingress biological snapshot");
+        let owner = crate::managed_durability::ManagedDurability::open(
+            &root,
+            "causal-live",
+            "node-a",
+            &runner,
+            LeaseTerm::INITIAL,
+            None,
+        )
+        .expect("open durable owner");
+        let brain = crate::managed_durability::managed_brain_id("causal-live");
+        let stream = crate::managed_durability::managed_stream_id("causal-live");
+        let route = crate::managed_durability::managed_route_id("causal-live");
+        let exchange = encode_exchange(0, 0, &[1, 0]);
+        let ingress = CausalSpikeIngress {
+            schema_version: CAUSAL_INGRESS_SCHEMA_VERSION,
+            network_id: "causal-live".to_owned(),
+            layer_index: 1,
+            step_index: 0,
+            is_backward: false,
+            spike_indices: exchange.spike_indices,
+            aer_payload: exchange.aer_payload,
+            aer_base: exchange.aer_base,
+        };
+        let frame = crate::causal_transport::proto::CausalEventEnvelope {
+            schema_version: u32::from(crate::deterministic::SchemaVersion::CURRENT.raw()),
+            brain_id: brain.raw(),
+            stream_id: stream.raw(),
+            sequence: 0,
+            lease_term: LeaseTerm::INITIAL.raw(),
+            route_id: route.raw(),
+            partition_generation: crate::deterministic::PartitionGeneration::INITIAL.raw(),
+            tag: Some(crate::causal_transport::proto::LogicalTag {
+                tick: 0,
+                microstep: 0,
+            }),
+            event_id: 1,
+            stage: 1,
+            source_id: 0,
+            target_id: 0,
+            payload: serde_json::to_vec(&ingress).expect("encode ingress"),
+            deferred_from_nonconvergence: false,
+            sender_node_id: String::new(),
+        };
+        let network = ManagedNetwork {
+            id: "causal-live".to_owned(),
+            runner,
+            shard_runtime: None,
+            #[cfg(feature = "stable_executor_live")]
+            stable_executor: None,
+            durable_owner: Some(owner),
+            superdense: SuperdenseController::new(),
+            assigned_layers: vec![0],
+            redundant_layers: Vec::new(),
+            remote_spikes_fwd: HashMap::new(),
+            remote_spikes_bwd: HashMap::new(),
+            remote_spike_steps_fwd: HashMap::new(),
+            remote_spike_steps_bwd: HashMap::new(),
+            external_sensory_spikes: None,
+            avg_step_time_ms: 0.0,
+            desired_aarnn_depth: 1,
+            playing: true,
+            initial_config: config,
+            initial_model: NeuronModel::Lif,
+            initial_learning: Learning::Stdp,
+            initial_lif: LIFParams::default(),
+            initial_stdp: STDPParams::default(),
+            last_config_fingerprint: None,
+            workspace_binding: None,
+        };
+        let node = DistributedNode::new("node-b".to_owned(), false);
+        node.state
+            .write()
+            .await
+            .networks
+            .insert("causal-live".to_owned(), Arc::new(RwLock::new(network)));
+        let causal = crate::data_plane::CausalEnvelope::try_from(frame.clone())
+            .expect("wire frame converts");
+        let ingress: CausalSpikeIngress =
+            serde_json::from_slice(&causal.payload).expect("decode ingress");
+        node.admit_causal_spike_ingress(&frame, causal, ingress)
+            .await
+            .expect("causal ingress commits");
+        let network = node
+            .state
+            .read()
+            .await
+            .networks
+            .get("causal-live")
+            .cloned()
+            .expect("network remains loaded");
+        let network = network.read().await;
+        let post_ingress_biological_snapshot = serde_json::to_vec(&network.runner.snapshot())
+            .expect("encode post-ingress biological snapshot");
+        assert_eq!(
+            post_ingress_biological_snapshot, pre_ingress_biological_snapshot,
+            "causal ingress must not mutate biological bytes before a shard step commits"
+        );
+        assert_eq!(network.remote_spikes_fwd.get(&1), Some(&vec![1, 0]));
+        assert_eq!(
+            network
+                .durable_owner
+                .as_ref()
+                .expect("owner")
+                .durable_sequence(),
+            Some(0)
+        );
+        let owner = network.durable_owner.as_ref().expect("owner");
+        let first_checkpoint = owner.checkpoint_payload().expect("checkpoint");
+        assert_eq!(first_checkpoint.receipts.len(), 1);
+        let first_channel_state = owner
+            .authoritative_channel_state()
+            .expect("durable channel state after first ingress");
+        drop(network);
+
+        let retry_causal = crate::data_plane::CausalEnvelope::try_from(frame.clone())
+            .expect("retry wire frame converts");
+        let retry_ingress: CausalSpikeIngress =
+            serde_json::from_slice(&retry_causal.payload).expect("decode retry ingress");
+        node.admit_causal_spike_ingress(&frame, retry_causal, retry_ingress)
+            .await
+            .expect("duplicate causal ingress is idempotent");
+
+        let network = node
+            .state
+            .read()
+            .await
+            .networks
+            .get("causal-live")
+            .cloned()
+            .expect("network remains loaded");
+        let network = network.read().await;
+        let owner = network.durable_owner.as_ref().expect("owner");
+        let retry_checkpoint = owner.checkpoint_payload().expect("retry checkpoint");
+        assert_eq!(retry_checkpoint.receipts.len(), 1);
+        assert_eq!(
+            owner
+                .authoritative_channel_state()
+                .expect("durable channel state after retry"),
+            first_channel_state,
+            "retry must not rewrite the durable channel projection"
+        );
+        assert_eq!(
+            serde_json::to_vec(&network.runner.snapshot())
+                .expect("encode retry biological snapshot"),
+            pre_ingress_biological_snapshot,
+            "retry must not mutate biological bytes"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

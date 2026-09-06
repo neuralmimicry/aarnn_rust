@@ -1,0 +1,5 @@
+name = "ios-simulator"
+device_class = "Apple simulator"
+physical_hardware = false
+network_emulation = false
+required_toolchain = "Xcode"
