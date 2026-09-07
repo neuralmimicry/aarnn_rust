@@ -225,6 +225,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Run lint checks
+        # Keep the full lint gate on the hosted runner. ARM verification
+        # still performs the build, test, release, and smoke-test gates below
+        # without duplicating this disk and CPU heavy dependency compile.
+        if: matrix.runner_arch != 'ARM64'
         # Examples and benchmarks are compile-checked by their dedicated
         # packaging/build jobs; avoid duplicating every test harness here.
         run: cargo clippy --workspace --all-features --lib --bins
