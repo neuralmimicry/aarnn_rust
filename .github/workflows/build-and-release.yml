@@ -740,6 +740,9 @@ jobs:
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
     if: github.event_name == 'push'
+    # Verify jobs and ARM container jobs share the self-hosted runner and
+    # checkout/Cargo state. Wait for verification to finish before packaging.
+    needs: verify
     strategy:
       fail-fast: false
       max-parallel: 1
