@@ -817,6 +817,11 @@ jobs:
             variant: arm64-64k-hwe
             page_size: 64k-hwe
     runs-on: ${{ fromJSON(matrix.runs_on) }}
+    env:
+      # The ARM self-hosted runner also serves live cluster workloads. Keep
+      # container package compilation single-threaded so the runner remains
+      # responsive to GitHub and does not starve the product network stack.
+      CARGO_BUILD_JOBS: "1"
     permissions:
       contents: read
       packages: write
