@@ -264,12 +264,20 @@ jobs:
           cargo test --locked --test phase0_baseline
 
       - name: Build release binaries
+        # Hosted x64 provides the full release-link gate.  ARM packaging
+        # jobs compile and install the ARM release binaries in the target
+        # Ubuntu images immediately afterwards; repeating both release links
+        # on the live ARM runner consumes several GiB and can evict the
+        # runner before the package/container matrix starts.
+        if: matrix.runner_arch != 'ARM64'
         run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
 
       - name: Smoke test CLI help
+        if: matrix.runner_arch != 'ARM64'
         run: cargo run --locked --release --all-features --bin aarnn_rust -- --help
 
       - name: Smoke test web UI help
+        if: matrix.runner_arch != 'ARM64'
         run: cargo run --locked --release --all-features --bin web_ui -- --help
 
       - name: Validate release script

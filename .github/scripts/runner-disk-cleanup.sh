@@ -73,6 +73,27 @@ cleanup_stale_temp() {
   done < <(find "$runner_temp" -mindepth 1 -maxdepth 1 -type d -mmin +180 -print0)
 }
 
+cleanup_stale_buildah() {
+  # Buildah creates temporary layer trees outside the runner workspace.  A
+  # killed Podman build can leave several GiB there, so clean only old trees
+  # and only while no build tool is running on this serialized runner.
+  command -v sudo >/dev/null 2>&1 || return 0
+  command -v find >/dev/null 2>&1 || return 0
+  if ps -eo comm= | awk '$1 == "buildah" || $1 == "podman" || $1 == "cargo" || $1 == "rustc" { found=1 } END { exit found ? 0 : 1 }'; then
+    echo "Active build process detected; retaining stale Buildah directories"
+    return 0
+  fi
+  while IFS= read -r -d '' candidate; do
+    echo "Removing stale Buildah temporary directory: $candidate"
+    sudo -n rm -rf -- "$candidate" || true
+  done < <(find /var/tmp -mindepth 1 -maxdepth 1 -type d -name 'buildah*' -mmin +180 -print0 2>/dev/null)
+}
+
+cleanup_system_caches() {
+  command -v sudo >/dev/null 2>&1 || return 0
+  sudo -n apt-get clean >/dev/null 2>&1 || true
+}
+
 remove_repo_build_outputs() {
   local repo="$workspace/repo-build-release"
   [[ -d "$repo" ]] || return 0
@@ -133,6 +154,8 @@ case "$mode" in
   prepare)
     cleanup_stale_workspaces
     cleanup_stale_temp
+    cleanup_stale_buildah
+    cleanup_system_caches
     remove_repo_build_outputs
     report_disks
     enforce_free_space
@@ -140,6 +163,8 @@ case "$mode" in
   prepare-container)
     cleanup_stale_workspaces
     cleanup_stale_temp
+    cleanup_stale_buildah
+    cleanup_system_caches
     remove_repo_build_outputs
     remove_job_temp_outputs
     prune_job_podman
@@ -148,6 +173,8 @@ case "$mode" in
     ;;
   finish)
     prune_job_podman
+    cleanup_stale_buildah
+    cleanup_system_caches
     remove_repo_build_outputs
     remove_job_temp_outputs
     report_disks
