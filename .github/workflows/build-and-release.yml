@@ -84,6 +84,11 @@ env:
   # linkers bounded so the ARM64 verification job cannot starve PostgreSQL,
   # Gail, and the other tenant workloads while compiling large test binaries.
   CARGO_BUILD_JOBS: "2"
+  # qc00 carries a large product/model dataset. Keep verification artifacts
+  # bounded so debug symbols and incremental objects cannot fill its root FS.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   # Keep every JavaScript action on the Node 24 runtime, including actions
   # whose metadata still declares an older runtime during the transition.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
