@@ -212,13 +212,15 @@ jobs:
         run: cargo fmt --check
 
       - name: Run lint checks
-        run: cargo clippy --workspace --all-targets --all-features
+        # Examples and benchmarks are compile-checked by their dedicated
+        # packaging/build jobs; avoid duplicating every test harness here.
+        run: cargo clippy --workspace --all-features --lib --bins
 
       - name: Enforce Gail image tag policy
         run: bash scripts/check_gail_image_tags.sh .
 
       - name: Check build
-        run: cargo check --locked --all-features --all-targets
+        run: cargo check --locked --all-features --lib --bins
 
       - name: Run tests
         env:
