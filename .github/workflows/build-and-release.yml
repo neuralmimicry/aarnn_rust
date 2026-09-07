@@ -137,6 +137,11 @@ jobs:
           clean: false
           path: repo-build-release
 
+      - name: Prepare self-hosted verification runner disk
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare
+
       - name: Use large runner-backed temporary directory
         shell: bash
         run: |
