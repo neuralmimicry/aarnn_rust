@@ -66,11 +66,11 @@ on:
         description: "Branch to bump and tag (defaults to triggering ref branch)"
         required: false
         default: ""
-  sync_wiki:
-    description: "Sync .github/wiki/Home.md to the GitHub wiki"
+      sync_wiki:
+        description: "Sync .github/wiki/Home.md to the GitHub wiki"
         required: false
         type: boolean
-    default: false
+        default: false
 
 # Push-triggered container jobs publish the immutable SHA manifests used by
 # the deployment roles; manual dispatch remains verification/release-only.
