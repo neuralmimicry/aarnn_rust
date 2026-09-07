@@ -42,6 +42,7 @@ const tempEl = document.getElementById("temp");
 const gpuEl = document.getElementById("gpu");
 const gpuStatusEl = document.getElementById("gpu-status");
 const neuronsEl = document.getElementById("neurons");
+const hostNeuronsEl = document.getElementById("host-neurons");
 const depthStatusEl = document.getElementById("aarnn-depth-status");
 const capacityScoreEl = document.getElementById("capacity-score");
 const gaRunningEl = document.getElementById("ga-running");
@@ -1270,9 +1271,29 @@ function mergeDistributions(base, incoming) {
       merged.set(entry.node_id, entry);
       return;
     }
-    const currentLayers = Array.isArray(current.layers) ? current.layers.length : 0;
-    const nextLayers = Array.isArray(entry.layers) ? entry.layers.length : 0;
-    if (nextLayers > currentLayers) {
+    const currentLayers = Array.isArray(current.layers) ? current.layers : [];
+    const nextLayers = Array.isArray(entry.layers) ? entry.layers : [];
+    const currentCounts = current.layer_neuron_counts && typeof current.layer_neuron_counts === "object" ? current.layer_neuron_counts : {};
+    const nextCounts = entry.layer_neuron_counts && typeof entry.layer_neuron_counts === "object" ? entry.layer_neuron_counts : {};
+    const currentCountTotal = currentLayers.reduce((sum, layer) => sum + Number(currentCounts[layer] || 0), 0);
+    const nextCountTotal = nextLayers.reduce((sum, layer) => sum + Number(nextCounts[layer] || 0), 0);
+    const sameLayers = currentLayers.length === nextLayers.length && currentLayers.every(layer => nextLayers.indexOf(layer) >= 0);
+
+    // Heartbeat and orchestrator polls can arrive in either order.  Preserve a
+    // known count when a rebuilding distribution briefly reports an empty map,
+    // while allowing a real reassignment or growth observation to replace it.
+    if (sameLayers) {
+      const counts = { ...currentCounts };
+      Object.keys(nextCounts).forEach(layer => {
+        counts[layer] = Math.max(Number(counts[layer] || 0), Number(nextCounts[layer] || 0));
+      });
+      merged.set(entry.node_id, {
+        ...current,
+        ...entry,
+        layers: nextLayers.length ? nextLayers : currentLayers,
+        layer_neuron_counts: counts
+      });
+    } else if (nextLayers.length > 0 && (nextCountTotal > 0 || currentCountTotal === 0)) {
       merged.set(entry.node_id, entry);
     }
   });
@@ -1465,6 +1486,8 @@ function buildPlacementModel() {
       nodes[index].shards.push({
         ...shard,
         ...metric,
+        neuronCountKnown: nodeIds.length === 1,
+        neuronCountEstimated: nodeIds.length > 1,
         id: placementShardId(nodes[index].id, "active", layers),
         role: "active",
         movements: []
@@ -1484,6 +1507,7 @@ function buildPlacementModel() {
   const network = (status && Array.isArray(status.networks) ? status.networks : []).find(item => item.network_id === source.networkId);
   if (!network) return null;
   const movements = (network.shard_movements || []).map(normalizePlacementMovement).filter(Boolean);
+  const totals = placementNeuronTotals(network.distribution);
   const nodeById = new Map((status.nodes || []).map(node => [node.node_id || node.address, node]));
   const nodesById = new Map();
   (network.distribution || []).forEach(distribution => {
@@ -1506,6 +1530,7 @@ function buildPlacementModel() {
       id: placementShardId(nodeId, "active", layers),
       layers,
       neuronCount,
+      neuronCountKnown: placementNeuronCountKnown(layers, layerCounts),
       role: "active",
       ...metric,
       movements: movementsForPlacementShard(movements, nodeId, "active", layers),
@@ -1519,6 +1544,7 @@ function buildPlacementModel() {
         id: placementShardId(nodeId, "backup", backupLayers),
         layers: backupLayers,
         neuronCount: backupNeuronCount,
+        neuronCountKnown: placementNeuronCountKnown(backupLayers, layerCounts),
         role: "backup",
         ...backupMetric,
         movements: movementsForPlacementShard(movements, nodeId, "backup", backupLayers),
@@ -1540,6 +1566,11 @@ function buildPlacementModel() {
     networkId: network.network_id,
     nodes: Array.from(nodesById.values()).sort((a, b) => a.id.localeCompare(b.id)),
     movements,
+    activeNeuronTotal: totals.active,
+    backupNeuronTotal: totals.backup,
+    activeNeuronTotalKnown: totals.activeKnown,
+    backupNeuronTotalKnown: totals.backupKnown,
+    configuredNeuronTotal: Number(network.total_neurons || 0),
     step: activity.sim_step,
     sourceLabel: "orchestrator report",
     reported: true
@@ -1584,8 +1615,39 @@ function movementsForPlacementShard(movements, nodeId, role, layers) {
 }
 
 function placementNeuronCount(layers, layerCounts, fallback) {
-  const count = layers.reduce((sum, layer) => sum + Number(layerCounts[layer] || layerCounts[String(layer)] || 0), 0);
-  return count || Number(fallback || 0);
+  if (!layers.length) return Number(fallback || 0);
+  const known = layers.every(layer => Object.prototype.hasOwnProperty.call(layerCounts, layer) || Object.prototype.hasOwnProperty.call(layerCounts, String(layer)));
+  if (!known) return 0;
+  return layers.reduce((sum, layer) => sum + Number(layerCounts[layer] || layerCounts[String(layer)] || 0), 0);
+}
+
+function placementNeuronCountKnown(layers, layerCounts) {
+  if (!layers.length) return false;
+  return layers.every(layer => Object.prototype.hasOwnProperty.call(layerCounts, layer) || Object.prototype.hasOwnProperty.call(layerCounts, String(layer)));
+}
+
+function placementNeuronTotals(distribution) {
+  const activeCounts = new Map();
+  const backupCounts = new Map();
+  (Array.isArray(distribution) ? distribution : []).forEach(entry => {
+    const counts = entry && entry.layer_neuron_counts && typeof entry.layer_neuron_counts === "object"
+      ? entry.layer_neuron_counts
+      : {};
+    (Array.isArray(entry && entry.layers) ? entry.layers : []).forEach(layer => {
+      const value = Number(Object.prototype.hasOwnProperty.call(counts, layer) ? counts[layer] : counts[String(layer)]);
+      if (Number.isFinite(value) && value >= 0) activeCounts.set(Number(layer), Math.max(activeCounts.get(Number(layer)) || 0, value));
+    });
+    (Array.isArray(entry && entry.backup_layers) ? entry.backup_layers : []).forEach(layer => {
+      const value = Number(Object.prototype.hasOwnProperty.call(counts, layer) ? counts[layer] : counts[String(layer)]);
+      if (Number.isFinite(value) && value >= 0) backupCounts.set(Number(layer), Math.max(backupCounts.get(Number(layer)) || 0, value));
+    });
+  });
+  return {
+    active: Array.from(activeCounts.values()).reduce((sum, value) => sum + value, 0),
+    backup: Array.from(backupCounts.values()).reduce((sum, value) => sum + value, 0),
+    activeKnown: activeCounts.size > 0,
+    backupKnown: backupCounts.size > 0 || (Array.isArray(distribution) && distribution.every(entry => !(entry && entry.backup_layers && entry.backup_layers.length)))
+  };
 }
 
 function fillPlacementRoundedRect(ctx, x, y, width, height, radius) {
@@ -1676,7 +1738,10 @@ function renderPlacement() {
       ctx.fillText(`${shard.role === "backup" ? "Backup" : "Shard"} ${shard.id.split(":")[0]}`, x + 18, sy + 18);
       const layers = shard.layers.length ? shard.layers.join(", ") : "unreported";
       ctx.fillText(`layers: ${layers}`, x + 18, sy + 36);
-      ctx.fillText(`${shard.active || 0}/${shard.total || shard.neuronCount || 0} active · ${shard.neuronCount || 0} neurons`, x + 18, sy + 54);
+      const neuronLabel = shard.neuronCountKnown === false
+        ? (shard.neuronCountEstimated ? `~${shard.neuronCount || 0} estimated` : "unreported")
+        : `${shard.neuronCount || 0}`;
+      ctx.fillText(`${shard.active || 0}/${shard.total || shard.neuronCount || 0} active · ${neuronLabel} neurons`, x + 18, sy + 54);
       ctx.fillStyle = "rgba(16,32,42,0.35)";
       ctx.fillRect(x + 18, sy + 66, nodeWidth - 36, 6);
       ctx.fillStyle = "#10202a";
@@ -1703,13 +1768,19 @@ function renderPlacement() {
     ctx.setLineDash([]);
   });
   ctx.restore();
-  if (placementSummaryEl) placementSummaryEl.textContent = `${model.networkId} · ${model.nodes.length} nodes · ${model.nodes.reduce((sum, node) => sum + node.shards.length, 0)} shards · ${model.sourceLabel}${Number.isFinite(Number(model.step)) ? ` · step ${model.step}` : ""}`;
+  const activeTotalLabel = model.activeNeuronTotalKnown ? `${Number(model.activeNeuronTotal || 0)} active` : "active unreported";
+  const backupTotalLabel = model.backupNeuronTotalKnown ? `${Number(model.backupNeuronTotal || 0)} redundant` : "redundant unreported";
+  const configuredTotalLabel = Number(model.configuredNeuronTotal || 0) > 0 ? ` / configured ${Number(model.configuredNeuronTotal)}` : "";
+  if (placementSummaryEl) placementSummaryEl.textContent = `${model.networkId} · ${model.nodes.length} nodes · ${model.nodes.reduce((sum, node) => sum + node.shards.length, 0)} shards · ${activeTotalLabel}${configuredTotalLabel} · ${backupTotalLabel} · ${model.sourceLabel}${Number.isFinite(Number(model.step)) ? ` · step ${model.step}` : ""}`;
   if (placementTableEl) {
     placementTableEl.innerHTML = model.nodes.flatMap(node => node.shards.map(shard => {
       const selected = state.placement.selectedShardIds.has(shard.id) ? " selected" : "";
       const moving = (shard.movements || []).length ? " moving" : "";
       const phase = (shard.movements || [])[0];
-      return `<div class="placement-row${selected}${moving}"><strong>${escapeHtml(node.id)} / ${escapeHtml(shard.role || "active")}</strong><br/><small>${escapeHtml(node.host || "unknown host")} · layers ${escapeHtml(shard.layers.join(", ") || "unreported")} · ${Number(shard.neuronCount || 0)} neurons · ${Number(shard.score || 0) * 100 | 0}% activity${phase ? ` · ${escapeHtml(phase.phase)}` : ""}</small></div>`;
+      const neuronLabel = shard.neuronCountKnown === false
+        ? (shard.neuronCountEstimated ? `~${Number(shard.neuronCount || 0)} estimated` : "unreported")
+        : `${Number(shard.neuronCount || 0)}`;
+      return `<div class="placement-row${selected}${moving}"><strong>${escapeHtml(node.id)} / ${escapeHtml(shard.role || "active")}</strong><br/><small>${escapeHtml(node.host || "unknown host")} · layers ${escapeHtml(shard.layers.join(", ") || "unreported")} · ${neuronLabel} neurons · ${Number(shard.score || 0) * 100 | 0}% activity${phase ? ` · ${escapeHtml(phase.phase)}` : ""}</small></div>`;
     })).join("");
   }
   const detail = model.nodes.flatMap(node => node.shards.map(shard => ({ node, shard }))).find(item => item.shard.id === state.placement.detailShardId);
@@ -1717,7 +1788,10 @@ function renderPlacement() {
     placementDetailEl.hidden = !detail;
     if (detail) {
       const movements = detail.shard.movements || [];
-      placementDetailEl.innerHTML = `<strong>${escapeHtml(detail.shard.id)}</strong> · ${escapeHtml(detail.shard.role || "active")}<br/>Host: ${escapeHtml(detail.node.host || "unknown")}<br/>Layers: ${escapeHtml(detail.shard.layers.join(", ") || "unreported")}<br/>Neurons: ${Number(detail.shard.neuronCount || 0)} · activity: ${Number(detail.shard.score || 0) * 100 | 0}%${movements.length ? `<br/>Automation: ${escapeHtml(movements.map(movement => `${movement.phase} (${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"})`).join("; "))}` : ""}`;
+      const neuronLabel = detail.shard.neuronCountKnown === false
+        ? (detail.shard.neuronCountEstimated ? `~${Number(detail.shard.neuronCount || 0)} estimated` : "unreported")
+        : `${Number(detail.shard.neuronCount || 0)}`;
+      placementDetailEl.innerHTML = `<strong>${escapeHtml(detail.shard.id)}</strong> · ${escapeHtml(detail.shard.role || "active")}<br/>Host: ${escapeHtml(detail.node.host || "unknown")}<br/>Layers: ${escapeHtml(detail.shard.layers.join(", ") || "unreported")}<br/>Neurons: ${neuronLabel} · activity: ${Number(detail.shard.score || 0) * 100 | 0}%${movements.length ? `<br/>Automation: ${escapeHtml(movements.map(movement => `${movement.phase} (${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"})`).join("; "))}` : ""}`;
     }
   }
 }
@@ -2669,8 +2743,16 @@ function renderSidebar(nodes, networks, aggregate = null) {
     const ramTotal = formatBytes(primary.total_ram);
     const ramAvail = formatBytes(primary.available_ram);
     const gpuCount = Number(primary.num_gpus || 0);
-    const neuronCount = Number(primary.num_neurons || 0);
-    const redundant = Number(primary.redundant_neurons || 0);
+    const hostNeuronCount = Number(primary.num_neurons || 0);
+    const hostRedundant = Number(primary.redundant_neurons || 0);
+    const selectedNetwork = networks.find(network => network.network_id === state.activeNetwork) || null;
+    const selectedTotals = selectedNetwork ? placementNeuronTotals(selectedNetwork.distribution) : null;
+    const selectedNeuronCount = selectedTotals && selectedTotals.activeKnown
+      ? Number(selectedTotals.active || 0)
+      : Number(selectedNetwork && selectedNetwork.total_neurons || 0);
+    const selectedRedundant = selectedTotals && selectedTotals.backupKnown
+      ? Number(selectedTotals.backup || 0)
+      : null;
     const curDepth = Number(primary.current_aarnn_depth || 0);
     const wantDepth = Number(primary.desired_aarnn_depth || 0);
     const stepMs = Number(primary.avg_step_time_ms || 0);
@@ -2679,7 +2761,16 @@ function renderSidebar(nodes, networks, aggregate = null) {
     tempEl.textContent = Number(primary.temperature_c || 0) > 0 ? `${Number(primary.temperature_c).toFixed(1)} C` : "n/a";
     gpuEl.textContent = gpuCount > 0 ? `${gpuCount} detected (OpenCL)` : "Not detected";
     gpuStatusEl.textContent = gpuCount > 0 ? getActivePlaying() ? "Active" : "Idle" : "Inactive";
-    neuronsEl.textContent = redundant > 0 ? `${neuronCount} (+${redundant} redundant)` : `${neuronCount}`;
+    neuronsEl.textContent = selectedNetwork
+      ? selectedRedundant === null
+        ? `${selectedNeuronCount} (redundant unreported)`
+        : `${selectedNeuronCount} (+${selectedRedundant} redundant)`
+      : "unreported";
+    if (hostNeuronsEl) {
+      hostNeuronsEl.textContent = hostRedundant > 0
+        ? `${hostNeuronCount} (+${hostRedundant} redundant)`
+        : `${hostNeuronCount}`;
+    }
     depthStatusEl.textContent = `${curDepth}/${wantDepth}`;
     capacityScoreEl.textContent = Number(primary.capacity_score || 0).toFixed(2);
     gaRunningEl.textContent = primary.ga_running ? "Yes" : "No";
@@ -2766,6 +2857,7 @@ function renderWorkspaceSidebar() {
   gpuEl.textContent = "Engine-managed";
   gpuStatusEl.textContent = running ? "Active" : "Idle";
   neuronsEl.textContent = `${totalNeurons}`;
+  if (hostNeuronsEl) hostNeuronsEl.textContent = `${totalNeurons} (sandbox)`;
   depthStatusEl.textContent = depth > 0 ? `${depth}/${depth}` : "0/0";
   capacityScoreEl.textContent = "n/a";
   gaRunningEl.textContent = "No";
@@ -4481,6 +4573,7 @@ function setPlaceholder() {
   gpuEl.textContent = "Not detected";
   gpuStatusEl.textContent = "Inactive";
   neuronsEl.textContent = "0";
+  if (hostNeuronsEl) hostNeuronsEl.textContent = "0";
   depthStatusEl.textContent = "0/0";
   capacityScoreEl.textContent = "0.00";
   gaRunningEl.textContent = "No";

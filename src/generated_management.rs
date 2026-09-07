@@ -3,7 +3,7 @@
 //! The source of truth is `proto/management.proto`; `build.rs` regenerates
 //! Rust clients and servers on every build. No generated output is edited by
 //! hand or committed as a second schema.
-// management-schema-source-digest:bd43399d784f092c
+// management-schema-source-digest:cc4bd877a876500d
 
 pub const MANAGEMENT_SCHEMA_VERSION: u32 = 2;
 

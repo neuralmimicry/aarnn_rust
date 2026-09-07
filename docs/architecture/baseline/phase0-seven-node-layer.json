@@ -1,5 +1,5 @@
 {
-  "scenario": "current-layer-sharding-compatibility",
+  "scenario": "current-layer-sharding-with-distinct-backups",
   "code_revision": "92b525d",
   "toolchain": "1.92.0-x86_64-unknown-linux-gnu",
   "fixture_command": "cargo test phase0_seven_node_capture_matches_current_compatibility_behaviour",
@@ -19,13 +19,10 @@
   "assignment_observation": {
     "anchor_node": "node-01",
     "assignments": [
-      {"node_id": "node-01", "layers": [0, 1, 2], "redundant_layers": [0, 1, 2]},
-      {"node_id": "node-02", "layers": [0], "redundant_layers": [0]},
-      {"node_id": "node-03", "layers": [1], "redundant_layers": [1]},
-      {"node_id": "node-04", "layers": [2], "redundant_layers": [2]},
-      {"node_id": "node-05", "layers": [0], "redundant_layers": [0]},
-      {"node_id": "node-06", "layers": [1], "redundant_layers": [1]},
-      {"node_id": "node-07", "layers": [2], "redundant_layers": [2]}
+      {"node_id": "node-01", "layers": [0], "redundant_layers": [1]},
+      {"node_id": "node-02", "layers": [1], "redundant_layers": [0]},
+      {"node_id": "node-03", "layers": [2], "redundant_layers": []},
+      {"node_id": "node-04", "layers": [], "redundant_layers": [2]}
     ]
   },
   "transport_observation": {
@@ -33,5 +30,5 @@
     "initial_preference_with_persistent_stream": "persistent-grpc-stream",
     "preference_after_three_persistent_failures": "burst-grpc-stream"
   },
-  "interpretation": "Compatibility evidence only; overlapping layer/vector views are not certified as causally coherent distributed execution."
+  "interpretation": "Compatibility evidence only; active ownership and distinct-node warm backups are placement telemetry, not certified causally coherent distributed execution."
 }

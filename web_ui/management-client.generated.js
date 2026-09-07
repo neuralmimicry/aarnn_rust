@@ -1,5 +1,5 @@
 /* Generated from proto/management.proto by the management contract build.
- * management-schema-source-digest:bd43399d784f092c
+ * management-schema-source-digest:cc4bd877a876500d
  * Do not add policy or direct-worker calls here; the gateway remains the
  * authorisation and fencing boundary. */
 (function (global) {

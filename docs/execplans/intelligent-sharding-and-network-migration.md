@@ -2618,3 +2618,270 @@ executor-selection path.
   four tests. This closes the command/schema seam while leaving the actual
   physical transfer, credential provisioning and cutover authority behind
   their documented production gates.
+
+## Verification update — 2026-09-07: placement neuron-count continuity
+
+- [x] Traced neuron counts from `ManagedNetwork::assigned_layers` and worker
+  heartbeat `NetworkResources` through `NetworkStatus.distribution`, the HTTP
+  status gateway, web aggregation and both placement renderers. The previous
+  implementation could clear the distribution during rebalance, publish empty
+  per-layer maps before the next worker report, and leave `total_neurons` at
+  zero. The web cluster merge also retained the first same-layer entry even
+  when a later heartbeat contained valid counts.
+- [x] Fixed the authoritative projection in `src/distributed.rs`: per-layer
+  observations merge monotonically, duplicate/replica entries use the greatest
+  valid count per global layer, rebalance hydrates new assignments from the
+  last distribution/runtime metrics/config snapshot, and a partial rebuild
+  cannot lower the published total. Empty heartbeat maps are treated as
+  unknown during command handoff rather than as a zero-neuron resize.
+- [x] Fixed the web projection in `web_ui/app.js`: same-layer observations merge
+  count maps instead of dropping later telemetry; missing shard counts are
+  shown as `unreported`; workspace-only virtual placement is explicitly marked
+  estimated when no authoritative shard distribution exists.
+- [x] Fixed the native placement renderer in `src/ui.rs` to use only
+  authoritative per-layer counts for shard totals. During the telemetry gap it
+  reports that the count is awaiting authoritative telemetry instead of using
+  local activity-vector length as a remote shard size.
+- [x] Added regression tests for replica-order/zero-count handling, empty
+  rebalance observations and config-seeded initial placement. Focused tests,
+  `cargo check --locked --features ui`, `node --check web_ui/app.js`,
+  `tests/web_ui_browser_compat.rs`, formatting and `git diff --check` passed.
+- [x] Rebuilt and ran the local release profile with
+  `AARNN_NATIVE_UI=0 AARNN_SKIP_BUILD=1 ./run_examples.sh` under a bounded
+  timeout. The launcher reached the dashboard, printed the selected gRPC and
+  web URL/port, and cleaned up its processes. Repeated `/api/status` samples
+  showed the distributed example networks at 211 neurons with stable per-layer
+  counts; the independently auto-registered orchestrator network had no first
+  heartbeat yet and was rendered as unreported in the placement surface.
+- [x] Read-only SSH probes using `pbisaacs@192.168.1.60`–`.66` and `.68`, plus
+  the existing Ansible inventory, found `qc00`–`qc04`, `sm00` and `sm01` online
+  with `aarnn-node` active and listening on TCP 50051. `qc05` (`.65`) was
+  unreachable. Ansible `ping` exposed an unrelated host condition: `qc00` is
+  at 100% root filesystem usage, which prevents temporary module execution;
+  an Ansible `raw` read-only probe still confirmed its AARNN service is active.
+- [!] A startup metadata gap remains for networks auto-registered solely from
+  a worker heartbeat with no config/snapshot and no first non-empty telemetry:
+  the orchestrator cannot truthfully invent a count, so the UI reports
+  `unreported` until an authoritative observation arrives. The default local
+  launcher now avoids the old bearer-token failure when rebuilt with its
+  documented profile. Configured startup networks now seed their published
+  total from validated config/snapshot dimensions; only metadata-free
+  auto-registered networks remain `unreported` until authoritative telemetry
+  arrives. An explicit `count_state`/readiness field is still appropriate in a
+  later management/API revision rather than overloading numeric zero.
+  Production sharding/migration gates remain as documented above.
+
+## Verification update — 2026-09-07: host and deployment probe closure
+
+- [x] Repeated the rebuilt localized multinode run with
+  `AARNN_NATIVE_UI=0 AARNN_SKIP_BUILD=1 ./run_examples.sh` under a bounded
+  timeout. The launcher served `/api/config`, started the orchestrator, both
+  nodes and the web dashboard, and left no example processes after shutdown.
+- [x] Corrected `scripts/qa/ansible_placement_smoke.py` to use Ansible's
+  read-only `raw` transport. This permits fact collection from reachable hosts
+  that cannot stage a temporary Ansible Python module. The probe now clamps
+  memory reservation to physical capacity and excludes hosts reporting zero
+  root storage from the planner input rather than fabricating usable capacity.
+- [x] The Ansible placement probe passed with reachable hosts `localhost`,
+  `qc00`–`qc04`, `sm00` and `sm01`. `qc05` remained unreachable (`No route to
+  host`); `qc00` was reachable but excluded from active placement because its
+  root filesystem has no free bytes. Active enrolled placements were
+  `qc02`, `qc03`, `qc04`, `sm00` and `sm01`; durability was not degraded and
+  the request was not applied.
+- [x] Refreshed the three generated management-client source digest markers to
+  the current `proto/management.proto` fingerprint. `cargo xtask bindings
+  check` now passes for Rust, web and Android consumers.
+- [x] Passed `cargo test --locked --all-targets --quiet`,
+  `cargo check --locked --all-features --all-targets --quiet`,
+  `cargo test --locked --test web_ui_browser_compat --quiet`,
+  `cargo fmt --all -- --check`, `node --check` for the web clients and
+  `git diff --check`. Existing compiler warnings remain; no test failed.
+
+## Verification update — 2026-09-07: distinct-node backup placement
+
+- [x] Replaced legacy same-node overlap marking in
+  `build_sharded_node_assignments` with capacity-weighted primary ranges and
+  distinct-node warm backup placement. Each backup chooses the least-loaded
+  eligible node relative to capacity, excludes its active owner whenever an
+  alternative exists, and uses deterministic tie-breaks.
+- [x] `LayerRange.layers` now represents active ownership and
+  `LayerRange.backup_layers` represents copies hosted on that node. Worker
+  commands load the union of both sets and mark only the backup set redundant;
+  control/update paths use the same rule. The browser and native placement
+  views therefore render the backup card under the node that actually stores
+  the backup.
+- [x] Added regression coverage proving two-node assignments place layer 0's
+  and layer 1's backups on opposite nodes, and updated the phase-0 placement
+  fixture to record distinct-node backup observations.
+- [x] Rebuilt and reran `run_examples.sh`. The localized `cluster_master`
+  run assigned one worker `[0,1]` with redundant `[1]` and the other `[0,1]`
+  with redundant `[0]`, proving active layer 0 and its backup are separated
+  from active layer 0's owner. The dashboard readiness check and bounded
+  cleanup still passed.
+- [x] Passed all-target tests, all-features checking, browser compatibility,
+  binding freshness, formatting, JavaScript syntax and diff checks. Existing
+  compiler warnings remain.
+
+## Verification update — 2026-09-07 06:46Z: configured startup count seed
+
+- [x] Closed the remaining configured-startup zero window in `src/main.rs`.
+  Orchestrator startup status now derives the initial distributed layer total
+  through the validated `configured_layer_neuron_counts` helper before the
+  first worker heartbeat and before the first rebalance publication. The
+  sensory input layer remains excluded because it is not an assigned shard.
+- [x] Rebuilt the exact release profile used by `run_examples.sh` and reran
+  `AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0 timeout --signal=INT
+  --kill-after=10 35 ./run_examples.sh`. It reached readiness and printed
+  `Orchestrator gRPC: http://127.0.0.1:50051` and
+  `Web dashboard URL (port 8080): http://127.0.0.1:8080`; no management bearer
+  token startup failure was emitted, and shutdown completed.
+- [x] The complete `cargo test --locked --all-targets` run passed 285 library
+  tests plus all integration, launcher, placement, migration and browser
+  suites. `cargo check --locked --features ui`, binding freshness, formatting,
+  JavaScript syntax and diff checks also passed.
+- [x] A live `/api/status` sample from the rebuilt launcher reported
+  `node_1` and `node_2` at `211` neurons and the configured `cluster_master`
+  network at `396` neurons with populated layer maps before shutdown. The
+  launcher left zero example processes after the read-only sample.
+
+## Verification update — 2026-09-07 07:57Z: continuous staged migration
+
+- [x] Reworked `ManagedStableNetworkMigrationExecutor` so live migration first
+  captures an immutable warm-copy preparation, releases the managed network
+  lock during checkpoint transfer and target activation/registration, then
+  reacquires exclusive access only for the bounded final frontier drain and
+  fenced cutover. The source is never set to `playing = false` by migration;
+  a failed transfer or target registration therefore leaves the original
+  authority serving.
+- [x] Preserved the durable safety boundary at cutover. Already-admitted work
+  is drained with the explicit non-convergence limit, the post-checkpoint WAL
+  suffix is replayed and digest-checked on the destination, the placement is
+  published under the new term, and only then is the old bridge fenced.
+- [x] Updated compatibility rebalance so a removed legacy source receives an
+  unload only after every newly selected replacement has reported the network
+  after its load command. Until then the source remains available while the
+  replacement warms; heartbeat processing schedules the follow-up rebalance.
+- [x] Passed `cargo check --locked --features stable_executor_live --tests`,
+  `cargo test --locked --features stable_executor_live --test
+  live_migration_registration -- --nocapture` (5 tests), and
+  `cargo test --locked --features stable_executor_live --test
+  brain_migration_session --quiet` (2 tests). The live registration tests now
+  assert that both successful and failed staged migrations leave the source
+  operational; target checkpoint transfer, activation acknowledgement and
+  failed activation rollback all pass.
+- [x] Re-ran the release `run_examples.sh` localized multinode smoke with
+  `AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0 timeout --signal=INT
+  --kill-after=10 35 ./run_examples.sh`; the dashboard and both nodes reached
+  readiness, the run shut down cleanly, and no launcher processes remained.
+  `cargo test --locked --all-targets --quiet`,
+  `cargo check --locked --all-features --all-targets --quiet`, release build,
+  formatting and `git diff --check` also passed. Remote production migration
+  remains gated on real credentials, quorum authority, physical causal routing
+  and measured failure/RPO/RTO evidence.
+
+## Verification update — 2026-09-07: count reset and single-node durability guard
+
+- [x] Explicit `New` network replacement now resets the published neuron total
+  from the fresh validated snapshot in both distributed control paths. The
+  monotonic count retention used during ordinary handoff therefore cannot
+  carry the previous brain's count into a newly created network. Added a
+  regression test covering replacement of a stale published total.
+- [x] Legacy sharding no longer creates a same-node backup when only one
+  eligible node exists. It publishes the active assignment without claiming a
+  warm replica; when another eligible node exists, every backup is placed on a
+  different node using capacity-weighted load and deterministic tie-breaks.
+  Added the single-node regression alongside the distinct-node backup test.
+- [x] Revalidated the focused distributed tests, live migration registration
+  suite (5 passed), formatting and diff checks. Re-ran the canonical localized
+  `AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0 timeout --signal=INT --kill-after=10
+  35 ./run_examples.sh`; the orchestrator, both nodes and dashboard reached
+  readiness and launcher cleanup completed with no remaining example process.
+  The failed activation regression now blocks inside the target gate and
+  proves the source network lock remains available while the source stays
+  marked operational.
+- [!] The stable remote migration adapter still has a documented production
+  gate: the warm checkpoint and activation barrier run while the source keeps
+  serving, while the final bounded drain/cutover fences the old writer. The
+  target must be a real authenticated worker with durable registration and
+  post-checkpoint catch-up evidence before physical production migration is
+  enabled; the localized launcher is a placement/continuity smoke, not that
+  evidence.
+
+## Verification update — 2026-09-07: configured snapshot dimensions and total crosscheck
+
+- [x] Reproduced the reported placement mismatch with the release
+  `run_examples.sh` launcher. `cluster_master.total_neurons` was 396, but its
+  live layer map was 300 + 1. The reset path was `src/main.rs`: when both
+  `--config config.json` and `--network network.json` were supplied, the
+  zero-valued config I/O dimensions were clamped to one and applied over the
+  explicit snapshot. Rebalance then selected that altered config shape.
+- [x] Changed `apply_io_contract` so zero dimensions mean unspecified and do
+  not resize an explicit snapshot. Positive sensory/output dimensions remain
+  valid explicit contract overrides. Added regression tests for both cases.
+- [x] Added a placement summary crosscheck in `web_ui/app.js`. It sums unique
+  active layer counts and unique backup layer counts and displays them beside
+  the configured total, while preserving per-shard unreported/estimated
+  states during telemetry gaps.
+- [x] Added a backend regression asserting a two-node 396-neuron network has
+  396 active neurons and 396 redundant neurons, with each backup on a node
+  different from its active owner. The localized live API crosscheck produced:
+  active layer 0 = 300 on one node, active layer 1 = 96 on the other, backup
+  layer 0 = 300 on the second node, backup layer 1 = 96 on the first node;
+  active total = 396 and backup total = 396.
+- [x] `cargo test --locked --lib --quiet`, `cargo fmt --all -- --check`,
+  `node --check web_ui/app.js` and `git diff --check` passed. The rebuilt
+  localized launcher reached orchestrator, both workers and dashboard
+  readiness, and repeated `/api/status` samples retained the corrected
+  300/96 layer map.
+- [x] Read-only SSH validation of `pbisaacs@192.168.1.6{0-6,8}` found
+  `qc00`, `qc01`, `qc02`, `qc03`, `qc04`, `sm00` and `sm01` reachable;
+  `qc05` (`192.168.1.65`) timed out. The remote checkout probe found
+  neuralmimicry source on `qc01`; no remote files were changed. Host resource
+  neuron counters remain aggregate across each host's separate example
+  networks, so they are not a valid direct comparison to the single
+  `cluster_master` total; the network-scoped distribution is the authoritative
+  comparison.
+
+## Verification update — 2026-09-07: resource-panel scope alignment
+
+- [x] Traced the remaining dashboard difference from the screenshot. The
+  Placement surface was network-scoped (`node_1`: 611 active and 611
+  redundant), while Resources & Performance displayed the selected host's
+  `Resources.num_neurons` and `redundant_neurons`, which aggregate every
+  network hosted by that process. With `node_1`, `node_2` and
+  `cluster_master` running together, those values are expected to differ.
+- [x] Updated the web dashboard to show `Neurons (selected network)` beside
+  `Host stored neurons (all networks)`. The first value is calculated from the
+  same unique active/backup layer projection used by Placement; the second
+  remains the host resource counter and is explicitly labelled as aggregate.
+- [x] Added the corresponding workspace/empty-state handling and retained
+  browser compatibility. `node --check web_ui/app.js` and
+  `cargo test --locked --test web_ui_browser_compat --quiet` pass.
+
+## Verification update — 2026-09-07: fresh localized count crosscheck
+
+- [x] Rebuilt and ran the documented localized launcher with
+  `AARNN_NATIVE_UI=0 ./run_examples.sh`. The orchestrator, both worker
+  processes and the web dashboard reached readiness; Ctrl-C cleanup left no
+  launcher or example processes behind.
+- [x] Repeated live `/api/status` samples showed stable authoritative totals:
+  `cluster_master` reported 396 active and 396 redundant neurons with active
+  layers `0=300, 1=96` and backup ownership reversed between the two workers;
+  `node_1` and `node_2` each reported 213 active and 213 redundant neurons.
+  The selected-network resource value is therefore the same projection as the
+  Placement tab, while the separate host value remains an aggregate process
+  counter across hosted networks and local redundant copies.
+- [x] The rebuilt dashboard served both `Neurons (selected network)` and
+  `Host stored neurons (all networks)` labels. `node --check web_ui/app.js`,
+  the six-test `web_ui_browser_compat` suite, formatting and `git diff --check`
+  passed.
+- [x] Read-only SSH checks against `pbisaacs@192.168.1.6{0-6,8}` found
+  `qc00`–`qc04`, `sm00` and `sm01` online with `aarnn-node` active and a
+  listening AARNN service. `qc05` (`192.168.1.65`) remained unreachable with
+  `No route to host`; no remote files were changed.
+- [!] The host `Resources` counters are intentionally not a network-placement
+  invariant: `get_resources` sums each process's locally hosted layer copies
+  across every network, while Placement sums unique layers for the selected
+  network. Comparing those numbers directly will continue to show a numeric
+  difference; the UI now labels both scopes explicitly and uses the
+  network-scoped projection for the selected-network value.

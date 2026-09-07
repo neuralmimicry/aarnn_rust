@@ -2,7 +2,7 @@ package com.neuralmimicry.aarnn
 
 /**
  * Generated from proto/management.proto; policy stays on the gateway.
- * management-schema-source-digest:bd43399d784f092c
+ * management-schema-source-digest:cc4bd877a876500d
  */
 object GeneratedManagementClient {
     const val SCHEMA_VERSION: Int = 2

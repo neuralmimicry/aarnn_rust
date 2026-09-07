@@ -8,6 +8,10 @@ included in the compute set only when it is named explicitly with
 ``--grant-compute``. Reachability, discovery or a GPU report never grants
 authority.
 
+The fact command uses Ansible's ``raw`` transport because it only needs the
+remote shell and must remain usable when a host cannot create Ansible's
+temporary Python module (for example, when its root filesystem is full).
+
 The probe does not install packages, change services, write remote files,
 restart hosts or call an orchestrator mutation API. It is suitable for
 repeated hardware QA against the SwarmHPC inventory.
@@ -91,7 +95,7 @@ def probe(ansible_dir: Path, inventory: Path, selected: str, timeout: int) -> tu
             str(inventory),
             selected,
             "-m",
-            "shell",
+            "raw",
             "-a",
             FACT_COMMAND,
             "-o",
@@ -142,16 +146,24 @@ def build_request(
     minimum_warm_replicas: int,
     allow_single_host_degraded_durability: bool,
     consolidate_to: str | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str]]:
     resources: list[dict[str, Any]] = []
+    ineligible_hosts: list[str] = []
     for node_id in sorted(facts):
         values = facts[node_id]
         total_memory = integer(values, "memory_bytes", 1)
         available_memory = min(integer(values, "memory_available_bytes"), total_memory)
         capacity = integer(values, "capacity_units", 1)
-        storage = integer(values, "root_available_bytes", 1)
+        storage = integer(values, "root_available_bytes")
+        if storage == 0:
+            ineligible_hosts.append(node_id)
+            continue
         network_mbps = integer(values, "network_speed_mbps")
         network_bps = network_mbps * 125_000
+        reserved_memory = min(
+            total_memory,
+            total_memory - available_memory + math.ceil(total_memory * 0.10),
+        )
         resources.append(
             {
                 "node_id": node_id,
@@ -166,7 +178,7 @@ def build_request(
                 "capacity_units": capacity,
                 "reserved_capacity_units": math.ceil(capacity * 0.15),
                 "memory_bytes": total_memory,
-                "reserved_memory_bytes": total_memory - available_memory + math.ceil(total_memory * 0.10),
+                "reserved_memory_bytes": reserved_memory,
                 "storage_bytes": storage,
                 "reserved_storage_bytes": math.ceil(storage * 0.10),
                 "network_bytes_per_second": network_bps,
@@ -217,7 +229,7 @@ def build_request(
             "allow_single_host_degraded_durability": allow_single_host_degraded_durability,
         },
         "intent": intent,
-    }
+    }, ineligible_hosts
 
 
 def main() -> int:
@@ -257,7 +269,7 @@ def main() -> int:
         parser.error("--consolidate-to must also appear in --grant-compute")
 
     facts, excluded = probe(args.ansible_dir, args.inventory, args.hosts, args.timeout)
-    request = build_request(
+    request, ineligible_hosts = build_request(
         facts,
         granted,
         args.shards,
@@ -303,7 +315,7 @@ def main() -> int:
                 {
                     "status": "passed",
                     "reachable_hosts": sorted(facts),
-                    "excluded_hosts": excluded,
+                    "excluded_hosts": sorted(set(excluded) | set(ineligible_hosts)),
                     "explicit_compute_grants": sorted(granted),
                     "active_nodes": active_nodes,
                     "active_enrolled_nodes": enrolled_nodes,

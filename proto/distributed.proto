@@ -545,10 +545,13 @@ message NetworkStatus {
 }
 
 message LayerRange {
+  // Layers for which this node is the active owner.
   repeated uint32 layers = 1;
   map<uint32, uint64> layer_neuron_counts = 2;
-  // Layers retained as warm/backup state on this node. They are deliberately
-  // separate from active ownership so clients cannot infer two active writers.
+  // Layers retained as warm/backup state on this node. The scheduler places
+  // these on a different eligible node from their active owner whenever one
+  // exists; they are deliberately separate from active ownership so clients
+  // cannot infer two active writers.
   repeated uint32 backup_layers = 3;
 }
 

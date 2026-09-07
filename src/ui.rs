@@ -8126,7 +8126,7 @@ impl App {
         // value is used by selection feedback and the double-click detail
         // card so those two surfaces cannot drift apart and accidentally
         // report a layer count as a neuron count.
-        let mut placement_hits: Vec<(String, egui::Rect, Vec<u32>, usize, String, String)> =
+        let mut placement_hits: Vec<(String, egui::Rect, Vec<u32>, Option<usize>, String, String)> =
             Vec::new();
         painter.text(
             rect.left_top() + egui::vec2(12.0, 12.0),
@@ -8230,6 +8230,9 @@ impl App {
             layers.sort_unstable();
             let mut total_neurons = 0usize;
             let mut active_neurons = 0usize;
+            let neuron_count_known = layers
+                .iter()
+                .all(|layer| range.layer_neuron_counts.contains_key(layer));
             for layer in &layers {
                 let configured =
                     range.layer_neuron_counts.get(layer).copied().unwrap_or(0) as usize;
@@ -8242,13 +8245,15 @@ impl App {
                 };
                 let observed = activity.len();
                 let active = activity.iter().filter(|value| **value > 0.1).count();
-                total_neurons = total_neurons.saturating_add(configured.max(observed));
-                active_neurons =
-                    active_neurons.saturating_add(if observed > 0 && configured > observed {
-                        ((active as f32 / observed as f32) * configured as f32) as usize
-                    } else {
-                        active
-                    });
+                if neuron_count_known {
+                    total_neurons = total_neurons.saturating_add(configured);
+                    active_neurons =
+                        active_neurons.saturating_add(if observed > 0 && configured > observed {
+                            ((active as f32 / observed as f32) * configured as f32) as usize
+                        } else {
+                            active.min(configured)
+                        });
+                }
             }
             let score = if total_neurons > 0 {
                 (active_neurons as f32 / total_neurons as f32).clamp(0.0, 1.0)
@@ -8319,10 +8324,17 @@ impl App {
                 shard_rect.left_top() + egui::vec2(9.0, 55.0),
                 egui::Align2::LEFT_TOP,
                 format!(
-                    "Activity: {:.0}% · {} / {}",
-                    score * 100.0,
-                    active_neurons,
-                    total_neurons
+                    "{}",
+                    if neuron_count_known {
+                        format!(
+                            "Activity: {:.0}% · {} / {}",
+                            score * 100.0,
+                            active_neurons,
+                            total_neurons
+                        )
+                    } else {
+                        "Activity: awaiting authoritative neuron telemetry".to_string()
+                    }
                 ),
                 egui::FontId::proportional(11.0),
                 egui::Color32::from_rgb(16, 32, 42),
@@ -8375,7 +8387,7 @@ impl App {
                 shard_id,
                 shard_rect,
                 layers.clone(),
-                total_neurons,
+                neuron_count_known.then_some(total_neurons),
                 node_id.clone(),
                 "active".to_string(),
             ));
@@ -8397,6 +8409,9 @@ impl App {
                         .join("-")
                 );
                 let backup_selected = self.placement_selected_shards.contains(&backup_id);
+                let backup_neuron_count_known = backup_layers
+                    .iter()
+                    .all(|layer| range.layer_neuron_counts.contains_key(layer));
                 let backup_neuron_count = backup_layers
                     .iter()
                     .map(|layer| {
@@ -8459,7 +8474,7 @@ impl App {
                     backup_id,
                     backup_rect,
                     backup_layers,
-                    backup_neuron_count,
+                    backup_neuron_count_known.then_some(backup_neuron_count),
                     node_id.clone(),
                     "backup".to_string(),
                 ));
@@ -8498,9 +8513,11 @@ impl App {
                         }
                     }
                     self.status = format!(
-                        "Selected placement shard {} ({} neurons); highlighted layers {}",
+                        "Selected placement shard {} ({}); highlighted layers {}",
                         shard_id,
-                        neuron_count,
+                        neuron_count
+                            .map(|count| format!("{} neurons", count))
+                            .unwrap_or_else(|| "neuron count awaiting telemetry".to_string()),
                         layers
                             .iter()
                             .map(u32::to_string)
@@ -8542,6 +8559,8 @@ impl App {
                             .collect::<Vec<_>>()
                             .join(", "),
                         neuron_count
+                            .map(|count| format!("{} neurons", count))
+                            .unwrap_or_else(|| "neuron count unreported".to_string())
                     ),
                     egui::FontId::proportional(10.0),
                     egui::Color32::from_rgb(205, 225, 232),

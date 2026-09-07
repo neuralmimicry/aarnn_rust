@@ -15,7 +15,7 @@
 //! this registry is only the live execution adapter.
 
 use crate::brain_migration_session::BrainMigrationSession;
-use crate::checkpoint_transfer::send_checkpoint_transfer;
+use crate::checkpoint_transfer::{CheckpointTransferSource, send_checkpoint_transfer};
 use crate::consistent_cut::ConsistentCut;
 use crate::deterministic::{BrainId, EventId, LogicalTag, ShardId, StreamId};
 use crate::management::ReplicatedQuorumLeaseAuthority;
@@ -403,6 +403,24 @@ pub struct StableExecutorMigrationConfig {
     pub settings: StableExecutorMigrationSettings,
 }
 
+/// The immutable warm-copy work captured from a live source.  Preparing this
+/// value only reads the last published source boundary; it does not drain,
+/// fence, or change placement authority.  The managed runtime deliberately
+/// releases its network lock after this stage so the source keeps serving
+/// while checkpoint bytes are transferred and the target registers.
+pub struct StableMigrationPreparation {
+    operation: MigrationOperation,
+    group: MigrationGroup,
+    sources: Vec<crate::migration_transfer::ShardTransferSource>,
+    checkpoint_sources: BTreeMap<String, CheckpointTransferSource>,
+    total_bytes: u64,
+}
+
+/// Evidence returned after every remote target has received and validated its
+/// immutable warm checkpoint.  It still does not grant a writer lease; that
+/// happens only in [`StableExecutorMigrationExecutor::finalize_live_transfer`].
+pub struct StableMigrationTransfer {}
+
 /// Bridge-backed executor that performs the complete bounded reference
 /// migration session.  It transfers verified shard state, requests one
 /// brain-wide destination lease transaction, publishes the placement registry
@@ -498,6 +516,186 @@ impl StableExecutorMigrationExecutor {
     ) -> Result<MigrationDispatchReceipt, String> {
         self.execute_inner(bridge, operation, group_spec)
     }
+
+    /// Capture a warm-copy transfer from a source without stopping admission.
+    /// The caller must hold only a read/exclusive runtime borrow long enough to
+    /// read the immutable checkpoint and shard states; network I/O belongs to
+    /// [`Self::transfer_live_copy`].
+    pub fn prepare_live_transfer(
+        &self,
+        bridge: &StableExecutorDurableBridge,
+        operation: MigrationOperation,
+        group_spec: MigrationGroupSpec,
+    ) -> Result<StableMigrationPreparation, String> {
+        self.validate_operation(&operation, &group_spec)?;
+        let group = group_spec
+            .build(operation.operation_id)
+            .map_err(|error| format!("migration group is invalid: {error}"))?;
+        let first_transfer_id = EventId::new(operation.operation_id)
+            .map_err(|error| format!("invalid migration operation identity: {error}"))?;
+        let sources = bridge
+            .prepare_transfer_sources(
+                first_transfer_id,
+                self.settings.source_node.clone(),
+                &self.settings.consistent_cut,
+                operation.source_plan_digest,
+                self.settings.frame_bytes,
+            )
+            .map_err(|error| format!("source transfer preparation failed: {error}"))?;
+        let total_bytes = sources
+            .iter()
+            .map(|source| source.manifest().total_bytes)
+            .try_fold(0u64, u64::checked_add)
+            .ok_or_else(|| "source transfer byte count overflowed".to_owned())?;
+        if total_bytes != operation.progress.total_bytes
+            || sources.len() != operation.progress.total_shards as usize
+        {
+            return Err("source transfer does not match the migration operation bounds".to_owned());
+        }
+
+        let checkpoint_sources = if self.settings.destination_endpoints.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.settings
+                .destination_nodes
+                .values()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .enumerate()
+                .map(|(index, destination_node)| {
+                    let transfer_id = operation
+                        .operation_id
+                        .checked_add(u64::try_from(index).map_err(|_| {
+                            "checkpoint transfer target index overflowed".to_owned()
+                        })?)
+                        .and_then(|raw| EventId::new(raw).ok())
+                        .ok_or_else(|| "checkpoint transfer ID space is exhausted".to_owned())?;
+                    let source = bridge
+                        .prepare_checkpoint_transfer_source(
+                            transfer_id,
+                            self.settings.source_node.clone(),
+                            bridge.executor().plan().digest(),
+                            self.settings.frame_bytes,
+                        )
+                        .map_err(|error| {
+                            format!("checkpoint transfer source preparation failed: {error}")
+                        })?;
+                    Ok::<_, String>((destination_node, source))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?
+        };
+
+        Ok(StableMigrationPreparation {
+            operation,
+            group,
+            sources,
+            checkpoint_sources,
+            total_bytes,
+        })
+    }
+
+    /// Transfer and validate the warm copy while the source remains available.
+    pub fn transfer_live_copy(
+        &self,
+        preparation: &StableMigrationPreparation,
+    ) -> Result<StableMigrationTransfer, String> {
+        if preparation.checkpoint_sources.is_empty() {
+            return Ok(StableMigrationTransfer {});
+        }
+        let checkpoint_references =
+            transfer_checkpoint_to_targets(&preparation.checkpoint_sources, &self.settings)?;
+        let activation_commands = bind_activation_commands(
+            &self.settings.target_activation_commands,
+            &checkpoint_references,
+            &preparation.operation,
+        )?;
+        let activation_gate = self.settings.activation_gate.as_ref().ok_or_else(|| {
+            "remote migration requires a target activation and registration gate".to_owned()
+        })?;
+        activation_gate(StableMigrationActivationRequest {
+            operation_id: preparation.operation.operation_id,
+            brain_id: preparation.operation.brain_id,
+            target_plan: self.settings.target_plan.clone(),
+            checkpoint_references: checkpoint_references.clone(),
+            activation_commands,
+        })?;
+        Ok(StableMigrationTransfer {})
+    }
+
+    /// Drain only the final admitted frontier, publish the fenced destination,
+    /// and retire the source.  This is the short logical cutover boundary;
+    /// long checkpoint and registration work has already completed while the
+    /// source continued serving.
+    pub fn finalize_live_transfer(
+        &self,
+        bridge: &mut StableExecutorDurableBridge,
+        preparation: StableMigrationPreparation,
+        _transfer: StableMigrationTransfer,
+    ) -> Result<MigrationDispatchReceipt, String> {
+        let result = (|| {
+            let observed_term = bridge.authority().term();
+            let observed_fencing_token = bridge.authority().fencing_token();
+            let checkpoint_start = bridge.next_checkpoint_id().map_err(|error| {
+                format!("migration cutover checkpoint allocation failed: {error}")
+            })?;
+            let latest_states = bridge
+                .drain_for_migration(
+                    observed_term,
+                    observed_fencing_token,
+                    checkpoint_start,
+                    DEFAULT_MIGRATION_DRAIN_STEP_LIMIT,
+                )
+                .map_err(|error| format!("migration cutover drain failed: {error}"))?;
+            let latest_by_shard = latest_states
+                .into_iter()
+                .map(|state| (state.shard_id, state))
+                .collect::<BTreeMap<_, _>>();
+            let mut catch_up = BTreeMap::new();
+            for source in &preparation.sources {
+                let shard_id = source.manifest().shard_id;
+                let latest = latest_by_shard
+                    .get(&shard_id)
+                    .ok_or_else(|| format!("source cutover omitted shard {}", shard_id.raw()))?;
+                let batch = source
+                    .imported_state()
+                    .map_err(|error| format!("source checkpoint reconstruction failed: {error}"))?
+                    .catch_up_from(latest)
+                    .map_err(|error| format!("source WAL catch-up failed: {error}"))?;
+                catch_up.insert(shard_id, (batch, latest.clone()));
+            }
+            self.execute_after_source_boundary(
+                bridge,
+                preparation.operation,
+                preparation.group,
+                preparation.sources,
+                catch_up,
+                preparation.total_bytes,
+            )
+        })();
+        if result.is_err() {
+            bridge.abort_migration_drain();
+        }
+        result
+    }
+
+    fn validate_operation(
+        &self,
+        operation: &MigrationOperation,
+        group_spec: &MigrationGroupSpec,
+    ) -> Result<(), String> {
+        if group_spec.brain_id != operation.brain_id
+            || group_spec.shard_ids.len() != operation.progress.total_shards as usize
+            || self.settings.target_plan.brain_id != operation.brain_id
+            || self.settings.target_plan.digest() != operation.target_plan_digest
+        {
+            return Err("stable migration registration does not match operation".to_owned());
+        }
+        if operation.progress.total_bytes == 0 {
+            return Err("stable migration operation must declare a non-zero byte bound".to_owned());
+        }
+        Ok(())
+    }
 }
 
 impl MigrationExecutor for StableExecutorMigrationExecutor {
@@ -532,95 +730,12 @@ impl StableExecutorMigrationExecutor {
         {
             return Err("stable executor source has already been fenced".to_owned());
         }
-        if group_spec.brain_id != operation.brain_id
-            || group_spec.shard_ids.len() != operation.progress.total_shards as usize
-            || self.settings.target_plan.brain_id != operation.brain_id
-            || self.settings.target_plan.digest() != operation.target_plan_digest
-        {
-            return Err("stable migration registration does not match operation".to_owned());
-        }
-        if operation.progress.total_bytes == 0 {
-            return Err("stable migration operation must declare a non-zero byte bound".to_owned());
-        }
-        let group = group_spec
-            .build(operation.operation_id)
-            .map_err(|error| format!("migration group is invalid: {error}"))?;
-        let first_transfer_id = EventId::new(operation.operation_id)
-            .map_err(|error| format!("invalid migration operation identity: {error}"))?;
-        let sources = bridge
-            .prepare_transfer_sources(
-                first_transfer_id,
-                self.settings.source_node.clone(),
-                &self.settings.consistent_cut,
-                operation.source_plan_digest,
-                self.settings.frame_bytes,
-            )
-            .map_err(|error| format!("source transfer preparation failed: {error}"))?;
-        let total_bytes = sources
-            .iter()
-            .map(|source| source.manifest().total_bytes)
-            .try_fold(0u64, u64::checked_add)
-            .ok_or_else(|| "source transfer byte count overflowed".to_owned())?;
-        if total_bytes != operation.progress.total_bytes {
-            return Err("source transfer byte count does not match operation".to_owned());
-        }
-        if sources.len() != operation.progress.total_shards as usize {
-            return Err("source transfer shard count does not match operation".to_owned());
-        }
-        // Everything after this point is one source-drain transaction. The
-        // bridge is held exclusively by the managed runtime adapter, so the
-        // returned latest states and WAL tails describe the exact boundary
-        // that the destination must replay before cutover.
-        let result = (|| {
-            let observed_term = bridge.authority().term();
-            let observed_fencing_token = bridge.authority().fencing_token();
-            let checkpoint_start = bridge.next_checkpoint_id().map_err(|error| {
-                format!("migration drain checkpoint allocation failed: {error}")
-            })?;
-            let latest_states = bridge
-                .drain_for_migration(
-                    observed_term,
-                    observed_fencing_token,
-                    checkpoint_start,
-                    DEFAULT_MIGRATION_DRAIN_STEP_LIMIT,
-                )
-                .map_err(|error| format!("source drain failed: {error}"))?;
-            let latest_by_shard = latest_states
-                .into_iter()
-                .map(|state| (state.shard_id, state))
-                .collect::<BTreeMap<_, _>>();
-            if latest_by_shard.len() != sources.len() {
-                return Err("source drain returned an incomplete shard state set".to_owned());
-            }
-            let mut catch_up = BTreeMap::new();
-            for source in &sources {
-                let shard_id = source.manifest().shard_id;
-                let latest = latest_by_shard
-                    .get(&shard_id)
-                    .ok_or_else(|| format!("source drain omitted shard {}", shard_id.raw()))?;
-                let batch = source
-                    .imported_state()
-                    .map_err(|error| format!("source checkpoint reconstruction failed: {error}"))?
-                    .catch_up_from(latest)
-                    .map_err(|error| format!("source WAL catch-up failed: {error}"))?;
-                catch_up.insert(shard_id, (batch, latest.clone()));
-            }
-            self.execute_after_source_drain(
-                bridge,
-                operation,
-                group,
-                sources,
-                catch_up,
-                total_bytes,
-            )
-        })();
-        if result.is_err() {
-            bridge.abort_migration_drain();
-        }
-        result
+        let preparation = self.prepare_live_transfer(bridge, operation, group_spec)?;
+        let transfer = self.transfer_live_copy(&preparation)?;
+        self.finalize_live_transfer(bridge, preparation, transfer)
     }
 
-    fn execute_after_source_drain(
+    fn execute_after_source_boundary(
         &self,
         bridge: &mut StableExecutorDurableBridge,
         operation: MigrationOperation,
@@ -635,25 +750,6 @@ impl StableExecutorMigrationExecutor {
         >,
         total_bytes: u64,
     ) -> Result<MigrationDispatchReceipt, String> {
-        if !self.settings.destination_endpoints.is_empty() {
-            let checkpoint_references =
-                transfer_checkpoint_to_targets(&sources, bridge, &self.settings, &operation)?;
-            let activation_commands = bind_activation_commands(
-                &self.settings.target_activation_commands,
-                &checkpoint_references,
-                &operation,
-            )?;
-            let activation_gate = self.settings.activation_gate.as_ref().ok_or_else(|| {
-                "remote migration requires a target activation and registration gate".to_owned()
-            })?;
-            activation_gate(StableMigrationActivationRequest {
-                operation_id: operation.operation_id,
-                brain_id: operation.brain_id,
-                target_plan: self.settings.target_plan.clone(),
-                checkpoint_references,
-                activation_commands,
-            })?;
-        }
         let mut authority = self
             .settings
             .authority
@@ -787,34 +883,25 @@ fn bind_activation_commands(
 /// migration registry already executes it on `spawn_blocking`; no async
 /// control-plane mutex is held while a target applies backpressure.
 fn transfer_checkpoint_to_targets(
-    _sources: &[crate::migration_transfer::ShardTransferSource],
-    bridge: &StableExecutorDurableBridge,
+    checkpoint_sources: &BTreeMap<String, CheckpointTransferSource>,
     settings: &StableExecutorMigrationSettings,
-    operation: &MigrationOperation,
 ) -> Result<BTreeMap<String, StableWorkerCheckpointTransferReference>, String> {
     let target_nodes = settings
         .destination_nodes
         .values()
         .cloned()
         .collect::<BTreeSet<_>>();
+    if checkpoint_sources.keys().collect::<BTreeSet<_>>()
+        != target_nodes.iter().collect::<BTreeSet<_>>()
+    {
+        return Err("checkpoint transfer sources do not cover target nodes".to_owned());
+    }
     let mut transfers = Vec::with_capacity(target_nodes.len());
-    for (index, destination_node) in target_nodes.into_iter().enumerate() {
-        let transfer_id = operation
-            .operation_id
-            .checked_add(
-                u64::try_from(index)
-                    .map_err(|_| "checkpoint transfer target index overflowed".to_owned())?,
-            )
-            .and_then(|raw| EventId::new(raw).ok())
-            .ok_or_else(|| "checkpoint transfer ID space is exhausted".to_owned())?;
-        let source = bridge
-            .prepare_checkpoint_transfer_source(
-                transfer_id,
-                settings.source_node.clone(),
-                bridge.executor().plan().digest(),
-                settings.frame_bytes,
-            )
-            .map_err(|error| format!("checkpoint transfer source preparation failed: {error}"))?;
+    for destination_node in target_nodes {
+        let source = checkpoint_sources
+            .get(&destination_node)
+            .cloned()
+            .ok_or_else(|| format!("checkpoint transfer source missing for {destination_node}"))?;
         let address = settings
             .destination_endpoints
             .get(&destination_node)

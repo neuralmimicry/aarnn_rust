@@ -1117,14 +1117,20 @@ fn load_io_contract_from_path(path: &str) -> Option<NetworkConfig> {
 
 fn apply_io_contract(target: &mut NetworkConfig, contract: &NetworkConfig) -> bool {
     let mut changed = false;
-    let desired_s = contract.num_sensory_neurons.max(1);
-    let desired_o = contract.num_output_neurons.max(1);
-    if target.num_sensory_neurons != desired_s {
-        target.num_sensory_neurons = desired_s;
+    // A config file is also used as the optional I/O contract when an
+    // explicit network snapshot is supplied. Zero means "unspecified" in
+    // that role; clamping it to one silently changed snapshot dimensions
+    // (for example, a 96-neuron output became one neuron during rebalance).
+    // Only positive contract dimensions may override the authoritative
+    // snapshot shape.
+    if contract.num_sensory_neurons > 0
+        && target.num_sensory_neurons != contract.num_sensory_neurons
+    {
+        target.num_sensory_neurons = contract.num_sensory_neurons;
         changed = true;
     }
-    if target.num_output_neurons != desired_o {
-        target.num_output_neurons = desired_o;
+    if contract.num_output_neurons > 0 && target.num_output_neurons != contract.num_output_neurons {
+        target.num_output_neurons = contract.num_output_neurons;
         changed = true;
     }
     if target.sensory_target_layer != contract.sensory_target_layer {
@@ -2768,11 +2774,25 @@ fn main() -> anyhow::Result<()> {
                         state.network_snapshots.clear();
                         for startup in startup_networks {
                             let network_id = startup.network_id.clone();
+                            let startup_payload = startup
+                                .snapshot_json
+                                .as_deref()
+                                .unwrap_or(startup.config_json.as_str());
+                            let startup_neurons =
+                                crate::distributed::configured_layer_neuron_counts(startup_payload)
+                                    .values()
+                                    .copied()
+                                    .fold(0u64, u64::saturating_add);
                             let mut status = crate::distributed::proto::NetworkStatus {
                                 network_id: network_id.clone(),
                                 distribution: std::collections::HashMap::new(),
                                 current_dt: args.dt_ms,
-                                total_neurons: 0,
+                                // Publish validated startup dimensions before
+                                // the first worker heartbeat. Rebalance may
+                                // still refine this from runtime telemetry,
+                                // but the placement UI must not display a
+                                // known configured network as zero meanwhile.
+                                total_neurons: startup_neurons,
                                 num_layers: startup.num_layers,
                                 desired_aarnn_depth: startup.desired_aarnn_depth,
                                 config_json: startup.config_json,
@@ -4690,12 +4710,45 @@ const fn exposes_management_service(is_orchestrator: bool) -> bool {
 
 #[cfg(test)]
 mod management_startup_tests {
-    use super::exposes_management_service;
+    use super::{apply_io_contract, exposes_management_service};
+    use crate::config::NetworkConfig;
 
     #[test]
     fn workers_do_not_expose_management_service() {
         assert!(!exposes_management_service(false));
         assert!(exposes_management_service(true));
+    }
+
+    #[test]
+    fn zero_io_contract_dimensions_do_not_resize_an_explicit_snapshot() {
+        let mut snapshot_cfg = NetworkConfig {
+            num_sensory_neurons: 8,
+            num_output_neurons: 96,
+            ..NetworkConfig::default()
+        };
+        let contract = NetworkConfig::default();
+
+        assert!(!apply_io_contract(&mut snapshot_cfg, &contract));
+        assert_eq!(snapshot_cfg.num_sensory_neurons, 8);
+        assert_eq!(snapshot_cfg.num_output_neurons, 96);
+    }
+
+    #[test]
+    fn positive_io_contract_dimensions_can_override_snapshot_shape() {
+        let mut snapshot_cfg = NetworkConfig {
+            num_sensory_neurons: 8,
+            num_output_neurons: 96,
+            ..NetworkConfig::default()
+        };
+        let contract = NetworkConfig {
+            num_sensory_neurons: 4,
+            num_output_neurons: 12,
+            ..NetworkConfig::default()
+        };
+
+        assert!(apply_io_contract(&mut snapshot_cfg, &contract));
+        assert_eq!(snapshot_cfg.num_sensory_neurons, 4);
+        assert_eq!(snapshot_cfg.num_output_neurons, 12);
     }
 }
 

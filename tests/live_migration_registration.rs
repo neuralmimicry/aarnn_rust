@@ -694,8 +694,8 @@ async fn node_owned_registry_dispatches_against_hosted_stable_runtime() {
     assert_eq!(receipt.transferred_bytes, total_bytes);
     let network = network.read().await;
     assert!(
-        !network.playing,
-        "successful migration must leave source paused"
+        network.playing,
+        "successful staged migration must keep the source operational through cutover"
     );
     assert_eq!(
         network.stable_executor.as_ref().unwrap().lease_term(),
@@ -722,6 +722,7 @@ async fn failed_remote_activation_gate_preserves_source_authority_and_placement(
     let gate_called_by_executor = gate_called.clone();
     let fixture = remote_migration_fixture(Arc::new(move |_request| {
         gate_called_by_executor.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(100));
         Err("target registration was rejected".to_owned())
     }))
     .await;
@@ -775,11 +776,32 @@ async fn failed_remote_activation_gate_preserves_source_authority_and_placement(
         partition_generation: PartitionGeneration::INITIAL,
         shard_ids: vec![ShardId::new(10).unwrap(), ShardId::new(20).unwrap()],
     };
-    let error = fixture
-        .node
-        .migration_executor_registry()
-        .dispatch(operation, group)
+    let dispatch_node = fixture.node.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_node
+            .migration_executor_registry()
+            .dispatch(operation, group)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !gate_called.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("migration should reach the activation gate");
+    let network = fixture
+        .network
+        .try_read()
+        .expect("source network lock must be released during target activation");
+    assert!(
+        network.playing,
+        "source must remain operational while target activation is in flight"
+    );
+    drop(network);
+    let error = dispatch
         .await
+        .expect("migration dispatch task should finish")
         .expect_err("a rejected target activation must abort migration");
     assert!(error.contains("target registration was rejected"));
     assert!(gate_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -808,7 +830,10 @@ async fn failed_remote_activation_gate_preserves_source_authority_and_placement(
         "target activation failure must not publish a destination placement"
     );
     let network = fixture.network.read().await;
-    assert!(!network.playing, "a failed migration remains safely paused");
+    assert!(
+        network.playing,
+        "a failed warm transfer must leave the source operational"
+    );
     assert_eq!(
         network.stable_executor.as_ref().unwrap().lease_term(),
         source_term_before,

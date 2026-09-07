@@ -1261,16 +1261,126 @@ fn network_config_shape_compatible(
 }
 
 fn total_neurons_from_distribution(distribution: &HashMap<String, LayerRange>) -> u64 {
-    let mut total = 0u64;
-    let mut seen_layers = HashSet::new();
+    // A layer may be present on both its active owner and a warm replica.  Keep
+    // the largest observed value for each layer rather than the first value we
+    // happen to encounter.  HashMap iteration order is deliberately unstable,
+    // and a transient zero-valued report must never make the network appear to
+    // lose neurons.
+    let mut layer_counts = HashMap::<u32, u64>::new();
     for range in distribution.values() {
         for (&layer, &count) in &range.layer_neuron_counts {
-            if seen_layers.insert(layer) {
-                total = total.saturating_add(count);
+            layer_counts
+                .entry(layer)
+                .and_modify(|known| *known = (*known).max(count))
+                .or_insert(count);
+        }
+    }
+    layer_counts
+        .values()
+        .copied()
+        .fold(0u64, u64::saturating_add)
+}
+
+#[cfg(test)]
+fn redundant_neurons_from_distribution(distribution: &HashMap<String, LayerRange>) -> u64 {
+    let mut backup_counts = HashMap::<u32, u64>::new();
+    for range in distribution.values() {
+        for &layer in &range.backup_layers {
+            if let Some(&count) = range.layer_neuron_counts.get(&layer) {
+                backup_counts
+                    .entry(layer)
+                    .and_modify(|known| *known = (*known).max(count))
+                    .or_insert(count);
             }
         }
     }
-    total
+    backup_counts
+        .values()
+        .copied()
+        .fold(0u64, u64::saturating_add)
+}
+
+fn merge_layer_neuron_counts(destination: &mut HashMap<u32, u64>, incoming: &HashMap<u32, u64>) {
+    for (&layer, &count) in incoming {
+        destination
+            .entry(layer)
+            .and_modify(|known| *known = (*known).max(count))
+            .or_insert(count);
+    }
+}
+
+fn known_layer_neuron_counts(
+    distribution: &HashMap<String, LayerRange>,
+    runtime_metrics: Option<&HashMap<String, NetworkResources>>,
+) -> HashMap<u32, u64> {
+    let mut counts = HashMap::new();
+    for range in distribution.values() {
+        merge_layer_neuron_counts(&mut counts, &range.layer_neuron_counts);
+    }
+    if let Some(runtime_metrics) = runtime_metrics {
+        for resources in runtime_metrics.values() {
+            merge_layer_neuron_counts(&mut counts, &resources.layer_neuron_counts);
+        }
+    }
+    counts
+}
+
+fn counts_for_layers(layers: &[u32], known: &HashMap<u32, u64>) -> HashMap<u32, u64> {
+    layers
+        .iter()
+        .filter_map(|layer| known.get(layer).copied().map(|count| (*layer, count)))
+        .collect()
+}
+
+/// Derive the authoritative layer dimensions available in a startup payload.
+///
+/// This is used only to seed placement telemetry before a worker has returned
+/// its first heartbeat. It intentionally excludes the sensory input layer,
+/// which is not an assigned distributed shard, and returns an empty map when
+/// the payload does not contain enough validated topology information.
+pub(crate) fn configured_layer_neuron_counts(payload: &str) -> HashMap<u32, u64> {
+    if payload.trim().is_empty() {
+        return HashMap::new();
+    }
+
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+        let hidden_layers = snapshot.w_hh_fwd.len().saturating_add(1);
+        let mut counts = HashMap::new();
+        for layer in 0..hidden_layers {
+            let size = if snapshot.w_hh_fwd.is_empty() {
+                snapshot.w_in.rows
+            } else if layer < snapshot.w_hh_fwd.len() {
+                snapshot.w_hh_fwd[layer].cols
+            } else {
+                snapshot.w_hh_fwd[layer - 1].rows
+            };
+            counts.insert(layer as u32, size as u64);
+        }
+        counts.insert(hidden_layers as u32, snapshot.w_out.rows as u64);
+        return counts;
+    }
+
+    serde_json::from_str::<NetworkConfig>(payload)
+        .ok()
+        .map(|config| {
+            let mut counts = HashMap::new();
+            for layer in 0..config.num_hidden_layers {
+                counts.insert(layer as u32, config.num_hidden_per_layer_initial as u64);
+            }
+            counts.insert(
+                config.num_hidden_layers as u32,
+                config.num_output_neurons as u64,
+            );
+            counts
+        })
+        .unwrap_or_default()
+}
+
+fn configured_total_neurons(payload: &str) -> u64 {
+    configured_layer_neuron_counts(payload)
+        .values()
+        .copied()
+        .fold(0u64, u64::saturating_add)
 }
 
 /// Build bounded, deterministic placement telemetry from two immutable
@@ -2449,77 +2559,91 @@ fn build_sharded_node_assignments(
     let mut sorted_targets = target_node_capacities.to_vec();
     sorted_targets.sort_by(|lhs, rhs| rhs.1.total_cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
 
-    let all_layers: Vec<u32> = (0..total_layers).collect();
-
-    // Very small networks (for example Celegans snapshots with one hidden layer
-    // plus output) cannot be split into more unique contiguous ranges than there
-    // are layers. If we apply the normal ±1 overlap expansion here, every node
-    // ends up with the full network and the per-node views become useless.
-    //
-    // Keep the strongest node as an anchor that hosts the full end-to-end path
-    // for UI/Webots and assign single-layer partial ranges to the remaining
-    // nodes so local managed views still reflect actual per-node ownership.
-    if (total_layers as usize) <= sorted_targets.len() {
-        let mut assignments = Vec::with_capacity(sorted_targets.len());
-        assignments.push((
-            sorted_targets[0].0.clone(),
-            all_layers.clone(),
-            all_layers.clone(),
-        ));
-        for (idx, (node_id, _)) in sorted_targets.iter().enumerate().skip(1) {
-            let layer = ((idx - 1) % total_layers as usize) as u32;
-            assignments.push((node_id.clone(), vec![layer], vec![layer]));
-        }
-        return assignments;
-    }
-
-    let mut layer_counts = vec![0u32; total_layers as usize];
-    let mut node_assignments = Vec::with_capacity(sorted_targets.len());
-    let mut target_capacity_sum: f32 = sorted_targets.iter().map(|(_, cap)| *cap).sum();
+    // First give each layer exactly one active owner.  The old implementation
+    // expanded every range by one layer on both sides and then marked that
+    // overlap as redundant on the same node.  That was a local duplicate, not
+    // a failure-tolerant backup.  Primary ranges remain contiguous, but their
+    // copies are assigned to a different eligible node below.
+    let primary_count = (total_layers as usize).min(sorted_targets.len());
+    let primary_targets = &sorted_targets[..primary_count];
+    let mut active_by_node = HashMap::<String, Vec<u32>>::new();
+    let mut target_capacity_sum: f32 = primary_targets.iter().map(|(_, cap)| *cap).sum();
     if target_capacity_sum <= 0.0 {
-        target_capacity_sum = sorted_targets.len() as f32;
+        target_capacity_sum = primary_targets.len() as f32;
     }
 
-    let mut current_cap_sum = 0.0;
-    for (node_id, cap) in &sorted_targets {
-        let start_ratio = current_cap_sum / target_capacity_sum;
-        current_cap_sum += cap;
-        let end_ratio = current_cap_sum / target_capacity_sum;
-
-        let start = (start_ratio * total_layers as f32).round() as u32;
-        let end = (end_ratio * total_layers as f32).round() as u32;
-
-        // Ensure at least one layer if there's any remaining capacity.
-        let end = if start == end && end < total_layers {
-            end + 1
+    let mut current_cap_sum = 0.0f32;
+    let mut start = 0u32;
+    for (index, (node_id, cap)) in primary_targets.iter().enumerate() {
+        current_cap_sum += cap.max(0.0);
+        let remaining_nodes = (primary_count - index - 1) as u32;
+        let end = if index + 1 == primary_count {
+            total_layers
         } else {
-            end
+            ((current_cap_sum / target_capacity_sum) * total_layers as f32)
+                .round()
+                .max((start + 1) as f32)
+                .min((total_layers - remaining_nodes) as f32) as u32
         };
-
-        // Add overlap for boundary synchronization/redundancy.
-        let r_start = start.saturating_sub(1);
-        let r_end = (end + 1).min(total_layers);
-
-        let layers: Vec<u32> = (r_start..r_end).collect();
-        for &l in &layers {
-            if (l as usize) < layer_counts.len() {
-                layer_counts[l as usize] += 1;
-            }
-        }
-        node_assignments.push((node_id.clone(), layers));
+        active_by_node.insert(node_id.clone(), (start..end).collect());
+        start = end;
     }
 
-    node_assignments
-        .into_iter()
-        .map(|(node_id, layers)| {
-            let redundant: Vec<u32> = layers
-                .iter()
-                .filter(|&&l| (l as usize) < layer_counts.len() && layer_counts[l as usize] > 1)
-                .copied()
-                .collect();
-            (node_id, layers, redundant)
+    // Place each primary range on a different node.  Minimise the projected
+    // backup load relative to capacity, with deterministic capacity/node-id
+    // tie-breaks.  This gives a strong node the work when it has room, while
+    // never placing a backup beside its active owner if another node exists.
+    let mut backup_by_node = HashMap::<String, Vec<u32>>::new();
+    let mut backup_load = HashMap::<String, usize>::new();
+    for (source_node, layers) in primary_targets.iter().filter_map(|(node_id, _)| {
+        active_by_node
+            .get(node_id)
+            .filter(|layers| !layers.is_empty())
+            .map(|layers| (node_id, layers))
+    }) {
+        let destination = sorted_targets
+            .iter()
+            .filter(|(node_id, _)| node_id != source_node)
+            .min_by(|lhs, rhs| {
+                let lhs_load = *backup_load.get(&lhs.0).unwrap_or(&0) as f32 / lhs.1.max(1.0);
+                let rhs_load = *backup_load.get(&rhs.0).unwrap_or(&0) as f32 / rhs.1.max(1.0);
+                lhs_load
+                    .total_cmp(&rhs_load)
+                    .then_with(|| rhs.1.total_cmp(&lhs.1))
+                    .then_with(|| lhs.0.cmp(&rhs.0))
+            })
+            .map(|(node_id, _)| node_id.clone());
+        if let Some(destination) = destination {
+            backup_by_node
+                .entry(destination.clone())
+                .or_default()
+                .extend(layers.iter().copied());
+            *backup_load.entry(destination).or_default() += layers.len();
+        }
+    }
+
+    sorted_targets
+        .iter()
+        .filter_map(|(node_id, _)| {
+            let active = active_by_node.remove(node_id).unwrap_or_default();
+            let mut backups = backup_by_node.remove(node_id).unwrap_or_default();
+            backups.sort_unstable();
+            backups.dedup();
+            if active.is_empty() && backups.is_empty() {
+                None
+            } else {
+                Some((node_id.clone(), active, backups))
+            }
         })
         .collect()
+}
+
+fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) -> Vec<u32> {
+    let mut layers = active_layers.to_vec();
+    layers.extend(backup_layers.iter().copied());
+    layers.sort_unstable();
+    layers.dedup();
+    layers
 }
 
 fn deployment_prefers_combined(deployment: &DeploymentConfig) -> bool {
@@ -2664,11 +2788,11 @@ pub struct ManagedNetwork {
 /// Adapter that binds one explicitly registered stable runtime to the
 /// orchestrator migration registry.
 ///
-/// The registry invokes this adapter on a blocking worker. The adapter then
-/// takes the managed network's exclusive async lock, marks the network
-/// paused, and borrows the existing durable bridge for one migration. No
-/// bridge or biological state is copied, and a failed operation leaves the
-/// source paused so an operator can inspect and retry it safely.
+/// The registry invokes this adapter on a blocking worker. Migration is split
+/// into a warm-copy phase and a short fenced cutover: the source network lock
+/// is released while checkpoint bytes and target registration are in flight.
+/// No bridge or biological state is copied, and a failed warm transfer leaves
+/// the source serving from its original authority.
 #[cfg(feature = "stable_executor_live")]
 pub struct ManagedStableNetworkMigrationExecutor {
     network: Arc<RwLock<ManagedNetwork>>,
@@ -2699,19 +2823,32 @@ impl crate::migration_executor::MigrationExecutor for ManagedStableNetworkMigrat
         group: crate::migration_group::MigrationGroupSpec,
     ) -> Result<crate::migration_executor::MigrationDispatchReceipt, String> {
         // MigrationExecutorRegistry always calls implementations from
-        // spawn_blocking. Holding this guard serialises migration with the
-        // simulation loop without blocking an async runtime worker thread.
+        // spawn_blocking. Capture only immutable source material while holding
+        // the read lock, then release it so the simulation loop continues to
+        // admit and commit work during the potentially slow transfer.
+        let preparation = {
+            let network = self.network.blocking_read();
+            let Some(runtime) = network.stable_executor.as_ref() else {
+                return Err("stable migration source runtime is not registered".to_owned());
+            };
+            self.delegate
+                .prepare_live_transfer(runtime.bridge(), operation, group)?
+        };
+        let transfer = self.delegate.transfer_live_copy(&preparation)?;
+
+        // Only the final bounded drain and lease publication need exclusive
+        // source access. The source remains marked playing; this is an atomic
+        // authority boundary, not an operational pause.
         let mut network = self.network.blocking_write();
-        network.playing = false;
         let Some(runtime) = network.stable_executor.as_mut() else {
             return Err("stable migration source runtime is not registered".to_owned());
         };
-        let result = self
-            .delegate
-            .execute_with_bridge(runtime.bridge_mut(), operation, group);
+        let result =
+            self.delegate
+                .finalize_live_transfer(runtime.bridge_mut(), preparation, transfer);
         if let Err(error) = &result {
             nm_err!(
-                "[warn] stable migration source {} remains paused after failure: {}",
+                "[warn] stable migration source {} retained its authority after failed cutover: {}",
                 network.id,
                 error
             );
@@ -3082,8 +3219,28 @@ fn managed_spike_batches(net: &ManagedNetwork, step_index: i64) -> Vec<SpikeBatc
 }
 
 fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
+    // Placement and deployment policy are control-plane metadata.  They may be
+    // rewritten while a worker is being moved, but changing them must not make
+    // the worker re-import a snapshot and clear its live biological state.
+    // Likewise, runtime values and a partial layer range belong to the current
+    // owner, not to the biological configuration being compared here.
+    let fingerprint_bytes = if let Ok(mut snapshot) =
+        crate::runner::decode_snapshot_with_profile_backfill(&String::from_utf8_lossy(bytes))
+    {
+        snapshot.net.deployment = DeploymentConfig::default();
+        snapshot.t = 0;
+        snapshot.t_ms = 0.0;
+        snapshot.layer_range = None;
+        snapshot.runtime_state = None;
+        serde_json::to_vec(&snapshot).unwrap_or_else(|_| bytes.to_vec())
+    } else if let Ok(mut config) = serde_json::from_slice::<NetworkConfig>(bytes) {
+        config.deployment = DeploymentConfig::default();
+        serde_json::to_vec(&config).unwrap_or_else(|_| bytes.to_vec())
+    } else {
+        bytes.to_vec()
+    };
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    fingerprint_bytes.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -4913,6 +5070,10 @@ impl DistributedNode {
                     fresh_single_neuron_snapshot(net_status.desired_aarnn_depth, model, learning)?;
                 net_status.config_json = fresh_json.clone();
                 net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
+                // `New` is an explicit biological replacement.  The monotonic
+                // count retention used during ordinary placement handoff must
+                // not carry the previous network's size into this new brain.
+                net_status.total_neurons = configured_total_neurons(&fresh_json);
                 if net_status.neuron_model.is_empty() {
                     net_status.neuron_model = model.to_str().to_string();
                 }
@@ -6481,6 +6642,10 @@ impl DistributedNode {
         let stable_network_ids = state.stable_network_ids.clone();
 
         let mut all_pending = Vec::new();
+        // The registry is mutably rebuilt below.  Take a consistent snapshot of
+        // the latest worker observations first so count hydration does not
+        // borrow the state through two incompatible paths.
+        let runtime_metrics_snapshot = state.network_runtime_metrics.clone();
         let (network_registry, network_snapshots) = {
             let state = &mut *state;
             (&mut state.network_registry, &mut state.network_snapshots)
@@ -6619,13 +6784,26 @@ impl DistributedNode {
                 target_capacity_sum = target_node_capacities.len() as f32;
             }
 
-            // Preserve existing layer neuron counts to avoid UI flicker during rebalance
+            // Preserve the last known per-layer counts to avoid a false zero while
+            // commands are in flight.  Counts may be available from either the
+            // published distribution or a worker heartbeat; both are observations
+            // of the same layer and are merged by taking the greatest valid value.
             let previous_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
             let previous_distribution = net_status.distribution.clone();
-            let mut old_counts = HashMap::new();
-            for (nid, range) in &net_status.distribution {
-                old_counts.insert(nid.clone(), range.layer_neuron_counts.clone());
-            }
+            let previous_total_neurons = net_status.total_neurons;
+            let mut known_counts = known_layer_neuron_counts(
+                &previous_distribution,
+                runtime_metrics_snapshot.get(net_id),
+            );
+            // Startup status is intentionally published before workers have
+            // reported their first heartbeat.  Seed the projection from the
+            // immutable config/snapshot dimensions so that interval cannot be
+            // rendered as a zero-neuron network.  Later runtime observations
+            // may increase these values as biological growth occurs.
+            merge_layer_neuron_counts(
+                &mut known_counts,
+                &configured_layer_neuron_counts(&config_json),
+            );
 
             net_status.distribution.clear();
 
@@ -6645,7 +6823,7 @@ impl DistributedNode {
                     node_id.clone(),
                     LayerRange {
                         layers: layers.clone(),
-                        layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                        layer_neuron_counts: counts_for_layers(&layers, &known_counts),
                         backup_layers: Vec::new(),
                     },
                 );
@@ -6680,11 +6858,19 @@ impl DistributedNode {
                     build_sharded_node_assignments(&target_node_capacities, total_layers);
 
                 for (node_id, layers, redundant) in node_assignments {
+                    let hosted_layers = hosted_layers_for_assignment(&layers, &redundant);
                     net_status.distribution.insert(
                         node_id.clone(),
                         LayerRange {
                             layers: layers.clone(),
-                            layer_neuron_counts: old_counts.remove(&node_id).unwrap_or_default(),
+                            layer_neuron_counts: {
+                                let mut counts = counts_for_layers(&layers, &known_counts);
+                                merge_layer_neuron_counts(
+                                    &mut counts,
+                                    &counts_for_layers(&redundant, &known_counts),
+                                );
+                                counts
+                            },
                             backup_layers: redundant.clone(),
                         },
                     );
@@ -6693,7 +6879,7 @@ impl DistributedNode {
                         r#type: proto::network_command::CommandType::LoadNetwork as i32,
                         network_id: net_id.clone(),
                         config_json: config_json.as_bytes().to_vec(),
-                        layers: layers.clone(),
+                        layers: hosted_layers,
                         redundant_layers: redundant,
                         desired_aarnn_depth: net_status.desired_aarnn_depth,
                         neuron_model: net_status.neuron_model.clone(),
@@ -6718,23 +6904,49 @@ impl DistributedNode {
             }
 
             let new_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
-            for removed_node in previous_nodes.difference(&new_nodes) {
-                let unload_cmd = NetworkCommand {
-                    r#type: proto::network_command::CommandType::UnloadNetwork as i32,
-                    network_id: net_id.clone(),
-                    config_json: Vec::new(),
-                    layers: Vec::new(),
-                    redundant_layers: Vec::new(),
-                    desired_aarnn_depth: net_status.desired_aarnn_depth,
-                    neuron_model: String::new(),
-                    learning_rule: String::new(),
-                };
-                all_pending.push((removed_node.clone(), unload_cmd));
+            // A legacy LoadNetwork command is deliberately at-least-once and
+            // has no writer lease of its own. Keep the previous source serving
+            // until every newly selected replacement has appeared in a
+            // heartbeat. This creates a warm-copy handoff: a lost or rejected
+            // load cannot make the only serving copy disappear.
+            let not_ready_replacements = new_nodes
+                .difference(&previous_nodes)
+                .filter(|node_id| {
+                    !runtime_metrics_snapshot
+                        .get(net_id)
+                        .is_some_and(|metrics| metrics.contains_key(*node_id))
+                })
+                .collect::<Vec<_>>();
+            if not_ready_replacements.is_empty() {
+                for removed_node in previous_nodes.difference(&new_nodes) {
+                    let unload_cmd = NetworkCommand {
+                        r#type: proto::network_command::CommandType::UnloadNetwork as i32,
+                        network_id: net_id.clone(),
+                        config_json: Vec::new(),
+                        layers: Vec::new(),
+                        redundant_layers: Vec::new(),
+                        desired_aarnn_depth: net_status.desired_aarnn_depth,
+                        neuron_model: String::new(),
+                        learning_rule: String::new(),
+                    };
+                    all_pending.push((removed_node.clone(), unload_cmd));
+                }
+            } else {
+                nm_log!(
+                    "[info] Keeping legacy source nodes for {} serving while replacements report readiness: {:?}",
+                    net_id,
+                    not_ready_replacements
+                );
             }
 
             // A network total must only contain that network's reports. Layers can be
             // repeated on redundant shards, so count each global layer once.
-            net_status.total_neurons = total_neurons_from_distribution(&net_status.distribution);
+            // A newly selected node has no telemetry until it receives and
+            // applies its LoadNetwork command.  Keep the previous authoritative
+            // total through that interval; a partial/empty rebuild is not a
+            // biological resize and must not be published as one.
+            let rebuilt_total = total_neurons_from_distribution(&net_status.distribution);
+            net_status.total_neurons = previous_total_neurons.max(rebuilt_total);
             net_status.shard_movements = build_shard_placement_movements(
                 net_id,
                 &previous_distribution,
@@ -7965,7 +8177,24 @@ impl DistributedNeuromorphic for DistributedNode {
                     .insert(req.node_id.clone(), net_res.clone());
                 if let Some(net_status) = state.network_registry.get_mut(&net_id) {
                     if let Some(range) = net_status.distribution.get_mut(&req.node_id) {
-                        range.layer_neuron_counts = net_res.layer_neuron_counts;
+                        // Re-run placement after a replacement heartbeat so a
+                        // previously deferred source unload can be released
+                        // only after the replacement has reported its loaded
+                        // network.
+                        needs_rebalance = true;
+                        // Heartbeats can briefly observe a worker between an
+                        // unload and its replacement LoadNetwork command.  An
+                        // empty report is therefore an unknown observation,
+                        // not evidence that the assigned shard has zero
+                        // neurons.  Valid reports merge monotonically so a
+                        // later heartbeat cannot erase a known count.
+                        merge_layer_neuron_counts(
+                            &mut range.layer_neuron_counts,
+                            &net_res.layer_neuron_counts,
+                        );
+                        let reported_total =
+                            total_neurons_from_distribution(&net_status.distribution);
+                        net_status.total_neurons = net_status.total_neurons.max(reported_total);
                     }
                 }
             }
@@ -8265,13 +8494,13 @@ impl DistributedNeuromorphic for DistributedNode {
 
                             // Prepare commands for all nodes in the distribution
                             for (node_id, range) in &net_status.distribution {
-                                let redundant: Vec<u32> = range.layers.iter().copied().collect();
+                                let redundant = range.backup_layers.clone();
 
                                 let cmd = NetworkCommand {
                                     r#type: proto::network_command::CommandType::LoadNetwork as i32,
                                     network_id: network_id.clone(),
                                     config_json: effective_cfg_bytes.clone(),
-                                    layers: range.layers.clone(),
+                                    layers: hosted_layers_for_assignment(&range.layers, &redundant),
                                     redundant_layers: redundant,
                                     desired_aarnn_depth: net_status.desired_aarnn_depth,
                                     neuron_model: c.neuron_model.clone(),
@@ -8315,6 +8544,12 @@ impl DistributedNeuromorphic for DistributedNode {
                                 })?;
                                 net_status.config_json = fresh_json.clone();
                                 net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
+                                // `New` replaces the biological state, so
+                                // reset its published dimension together with
+                                // the fresh snapshot. Rebalance will preserve
+                                // this value across the subsequent worker
+                                // command/heartbeat interval.
+                                net_status.total_neurons = configured_total_neurons(&fresh_json);
                                 if net_status.neuron_model.is_empty() {
                                     net_status.neuron_model = model.to_str().to_string();
                                 }
@@ -10149,6 +10384,152 @@ mod tests {
     }
 
     #[test]
+    fn network_total_ignores_replica_order_and_transient_zero_counts() {
+        let distribution = HashMap::from([
+            (
+                "replica-without-telemetry".to_string(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    layer_neuron_counts: HashMap::from([(0, 0), (1, 0)]),
+                    backup_layers: vec![0, 1],
+                },
+            ),
+            (
+                "authoritative-owner".to_string(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    layer_neuron_counts: HashMap::from([(0, 32), (1, 64)]),
+                    backup_layers: Vec::new(),
+                },
+            ),
+        ]);
+
+        assert_eq!(total_neurons_from_distribution(&distribution), 96);
+    }
+
+    #[test]
+    fn active_and_backup_totals_match_configured_and_redundant_neurons() {
+        let distribution = HashMap::from([
+            (
+                "node-a".to_string(),
+                LayerRange {
+                    layers: vec![0],
+                    layer_neuron_counts: HashMap::from([(0, 300), (1, 96)]),
+                    backup_layers: vec![1],
+                },
+            ),
+            (
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![1],
+                    layer_neuron_counts: HashMap::from([(0, 300), (1, 96)]),
+                    backup_layers: vec![0],
+                },
+            ),
+        ]);
+
+        assert_eq!(total_neurons_from_distribution(&distribution), 396);
+        assert_eq!(redundant_neurons_from_distribution(&distribution), 396);
+    }
+
+    #[test]
+    fn layer_counts_survive_empty_rebalance_observations() {
+        let previous = HashMap::from([(
+            "node-a".to_string(),
+            LayerRange {
+                layers: vec![0, 1],
+                layer_neuron_counts: HashMap::from([(0, 32), (1, 64)]),
+                backup_layers: Vec::new(),
+            },
+        )]);
+        let known = known_layer_neuron_counts(&previous, None);
+        let reassigned = counts_for_layers(&[0, 1], &known);
+        let mut observed = reassigned.clone();
+        merge_layer_neuron_counts(&mut observed, &HashMap::new());
+
+        assert_eq!(observed, HashMap::from([(0, 32), (1, 64)]));
+        assert_eq!(
+            total_neurons_from_distribution(&HashMap::from([(
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    layer_neuron_counts: observed,
+                    backup_layers: Vec::new(),
+                },
+            )])),
+            96
+        );
+    }
+
+    #[test]
+    fn configured_counts_seed_initial_placement_before_first_heartbeat() {
+        let counts = configured_layer_neuron_counts(
+            r#"{"num_hidden_layers":2,"num_hidden_per_layer_initial":11,"num_output_neurons":3}"#,
+        );
+
+        assert_eq!(counts.get(&0), Some(&11));
+        assert_eq!(counts.get(&1), Some(&11));
+        assert_eq!(counts.get(&2), Some(&3));
+        assert_eq!(
+            configured_total_neurons(
+                r#"{"num_hidden_layers":2,"num_hidden_per_layer_initial":11,"num_output_neurons":3}"#
+            ),
+            25
+        );
+    }
+
+    #[tokio::test]
+    async fn new_network_replaces_the_published_neuron_total() {
+        let node = DistributedNode::new("orch".to_owned(), true);
+        node.state.write().await.network_registry.insert(
+            "alpha".to_owned(),
+            NetworkStatus {
+                network_id: "alpha".to_owned(),
+                total_neurons: 9_999,
+                desired_aarnn_depth: 1,
+                neuron_model: "lif".to_owned(),
+                learning_rule: "stdp".to_owned(),
+                ..Default::default()
+            },
+        );
+
+        node.apply_network_control("alpha", proto::control_update::Action::New)
+            .expect("new network control should succeed");
+
+        let state = node.state.read().await;
+        let status = state.network_registry.get("alpha").expect("network status");
+        let (_, fresh_json) = fresh_single_neuron_snapshot(1, NeuronModel::Lif, Learning::Stdp)
+            .expect("fresh snapshot");
+        assert_eq!(status.total_neurons, configured_total_neurons(&fresh_json));
+        assert!(status.total_neurons < 9_999);
+    }
+
+    #[test]
+    fn deployment_only_snapshot_changes_do_not_reimport_live_biology() {
+        let (_, original) =
+            fresh_single_neuron_snapshot(1, NeuronModel::Aarnn, Learning::Aarnn).unwrap();
+        let mut deployment = DeploymentConfig::default();
+        deployment.add_mode(ExecutionMode::Sharded);
+        let transitioned = payload_with_updated_deployment(&original, &deployment).unwrap();
+
+        assert_ne!(original, transitioned);
+        assert_eq!(
+            config_payload_fingerprint(original.as_bytes()),
+            config_payload_fingerprint(transitioned.as_bytes())
+        );
+
+        let mut biological_change =
+            crate::runner::decode_snapshot_with_profile_backfill(&original).unwrap();
+        biological_change.net.num_output_neurons =
+            biological_change.net.num_output_neurons.saturating_add(1);
+        let biological_payload = serde_json::to_string(&biological_change).unwrap();
+        assert_ne!(
+            config_payload_fingerprint(original.as_bytes()),
+            config_payload_fingerprint(biological_payload.as_bytes())
+        );
+    }
+
+    #[test]
     fn placement_telemetry_distinguishes_active_and_backup_moves() {
         let previous = HashMap::from([
             (
@@ -10441,10 +10822,42 @@ mod tests {
         assert_eq!(
             assignments,
             vec![
-                ("node-a".to_string(), vec![0, 1], vec![0, 1],),
-                ("node-b".to_string(), vec![0], vec![0]),
-                ("node-c".to_string(), vec![1], vec![1]),
+                ("node-a".to_string(), vec![0], vec![1]),
+                ("node-b".to_string(), vec![1], vec![0]),
             ]
+        );
+    }
+
+    #[test]
+    fn backup_ranges_use_a_distinct_node_when_one_is_available() {
+        let assignments = build_sharded_node_assignments(
+            &[("node-a".to_string(), 4.0), ("node-b".to_string(), 2.0)],
+            2,
+        );
+
+        let active_owner_by_layer: HashMap<u32, &str> = assignments
+            .iter()
+            .flat_map(|(node, active, _)| active.iter().map(move |layer| (*layer, node.as_str())))
+            .collect();
+        for (node, _, backups) in &assignments {
+            for layer in backups {
+                assert_ne!(
+                    active_owner_by_layer.get(layer).copied(),
+                    Some(node.as_str()),
+                    "backup layer {layer} must not share its active node"
+                );
+            }
+        }
+        assert_eq!(hosted_layers_for_assignment(&[0], &[1]), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_single_eligible_node_does_not_get_a_fake_local_backup() {
+        let assignments = build_sharded_node_assignments(&[("node-a".to_string(), 4.0)], 2);
+
+        assert_eq!(
+            assignments,
+            vec![("node-a".to_string(), vec![0, 1], Vec::new())]
         );
     }
 
