@@ -644,7 +644,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -e "$GITHUB_WORKSPACE/repo-build-release" ]]; then
-            chown -R 1000:1000 "$GITHUB_WORKSPACE/repo-build-release"
+            # Podman package builds may create root-owned files on the bind
+            # mount. Use the runner's actual uid/gid so cleanup itself cannot
+            # fail after a successful package build.
+            sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/repo-build-release"
           fi
 
   publish-release:
