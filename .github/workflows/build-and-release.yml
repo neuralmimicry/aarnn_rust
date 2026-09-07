@@ -243,6 +243,10 @@ jobs:
       - name: Run tests
         env:
           NM_DISABLE_OPENCL: "1"
+        # The hosted x64 job runs the complete test and integration matrix.
+        # Building every ARM test harness on qc00 duplicates several GiB of
+        # objects while the same host is serving training and inference.
+        if: matrix.runner_arch != 'ARM64'
         # `--all-targets` takes precedence over `--lib` and makes Cargo build
         # test harnesses for every example and benchmark. Those targets are
         # already compiled by the preceding `cargo check`; linking all of them
