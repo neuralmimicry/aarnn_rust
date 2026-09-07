@@ -475,9 +475,8 @@ jobs:
 
           runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
           storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          podman_tmp="${runtime_dir}/libpod/tmp"
           rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${podman_tmp}" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${storage_root}"
           chmod 0700 "${runtime_dir}" "${storage_root}"
           echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
@@ -926,14 +925,15 @@ jobs:
           uid="$(id -u)"
           conf_dir="${HOME}/.config/containers"
           mkdir -p "${conf_dir}"
-          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          podman_tmp="${runtime_dir}/libpod/tmp"
+          runtime_dir="/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          storage_root="/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          podman_tmp="/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
           rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${podman_tmp}" "${storage_root}"
+          rm -rf "${podman_tmp}"
+          mkdir -p "${runtime_dir}" "${podman_tmp}" "${storage_root}"
           chmod 0700 "${runtime_dir}" "${storage_root}"
           echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s"\ngraphroot = "%s"\n' \
             "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
@@ -950,13 +950,13 @@ jobs:
           #!/usr/bin/env bash
           exec "${podman_path}" \\
             --root "${storage_root}" \\
-            --runroot "${runtime_dir}/containers" \\
+            --runroot "${runtime_dir}" \\
             --tmpdir "${podman_tmp}" \\
             "\$@"
           EOF
           chmod 0755 "${podman_wrapper}"
           echo "AARNN_PODMAN_ROOT=${storage_root}" >> "${GITHUB_ENV}"
-          echo "AARNN_PODMAN_RUNROOT=${runtime_dir}/containers" >> "${GITHUB_ENV}"
+          echo "AARNN_PODMAN_RUNROOT=${runtime_dir}" >> "${GITHUB_ENV}"
           echo "AARNN_PODMAN_TMPDIR=${podman_tmp}" >> "${GITHUB_ENV}"
           echo "PATH=${podman_wrapper_dir}:$PATH" >> "${GITHUB_ENV}"
 

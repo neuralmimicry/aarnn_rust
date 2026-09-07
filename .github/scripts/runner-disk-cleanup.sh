@@ -105,11 +105,12 @@ remove_repo_build_outputs() {
 
 remove_job_temp_outputs() {
   local variable value
-  for variable in PACKAGE_OUTPUT_DIR CARGO_TARGET_DIR CONTAINER_CARGO_HOME CONTAINER_RUSTUP_HOME; do
+  for variable in PACKAGE_OUTPUT_DIR CARGO_TARGET_DIR CONTAINER_CARGO_HOME CONTAINER_RUSTUP_HOME \
+    AARNN_PODMAN_ROOT AARNN_PODMAN_RUNROOT AARNN_PODMAN_TMPDIR; do
     value="${!variable:-}"
     [[ -n "$value" ]] || continue
     case "$value" in
-      "$runner_temp"/*) rm -rf -- "$value" ;;
+      "$runner_temp"/*|/tmp/aarnn-p*) rm -rf -- "$value" ;;
     esac
   done
 
