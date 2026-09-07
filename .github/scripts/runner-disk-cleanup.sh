@@ -71,6 +71,14 @@ cleanup_stale_temp() {
     echo "Removing stale runner temporary directory: $candidate"
     rm -rf -- "$candidate"
   done < <(find "$runner_temp" -mindepth 1 -maxdepth 1 -type d -mmin +180 -print0)
+
+  while IFS= read -r -d '' candidate; do
+    if [[ "$candidate" == *"${GITHUB_RUN_ID:-}"* ]]; then
+      continue
+    fi
+    echo "Removing stale temporary Podman directory: $candidate"
+    rm -rf -- "$candidate"
+  done < <(find /tmp -mindepth 1 -maxdepth 1 -type d -name 'aarnn-p*' -mmin +180 -print0 2>/dev/null)
 }
 
 cleanup_stale_buildah() {
@@ -132,7 +140,7 @@ prune_job_podman() {
   local graphroot
   graphroot="$(podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || true)"
   case "$graphroot" in
-    "$runner_temp"/*)
+    "$runner_temp"/*|/tmp/aarnn-ps-*)
       echo "Pruning isolated rootless Podman storage: $graphroot"
       timeout 120 podman system prune --all --force --volumes || true
       ;;

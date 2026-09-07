@@ -467,54 +467,7 @@ jobs:
 
       - name: Configure rootless podman runtime environment
         shell: bash
-        run: |
-          set -euo pipefail
-          uid="$(id -u)"
-          conf_dir="${HOME}/.config/containers"
-          mkdir -p "${conf_dir}"
-
-          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${storage_root}"
-          chmod 0700 "${runtime_dir}" "${storage_root}"
-          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-
-          # A self-hosted ARM64 runner may receive multiple packaging matrix
-          # jobs over its lifetime. Keep each job's rootless Podman storage
-          # and runtime namespace isolated so stale layers/keyrings from one
-          # job cannot exhaust the next job's per-user quotas.
-          storage_suffix="$(basename "${PACKAGE_OUTPUT_DIR}")"
-          job_storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${storage_suffix}"
-          job_run_root="${runtime_dir}/containers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${storage_suffix}"
-          mkdir -p "${job_storage_root}" "${job_run_root}"
-          chmod 0700 "${job_storage_root}" "${job_run_root}"
-
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s"\ngraphroot = "%s"\n' \
-            "${job_run_root}" "${job_storage_root}" > "${conf_dir}/storage.conf"
-          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
-
-          # Hosted Ubuntu runners currently ship a crun build that can fail
-          # before the first container starts with "unknown version
-          # specified". Prefer runc when available and retain crun as the
-          # fallback used by ARM self-hosted runners.
-          if command -v runc >/dev/null 2>&1; then
-            oci_runtime="$(command -v runc)"
-          elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="$(command -v crun)"
-          else
-            echo "Neither crun nor runc found on PATH." >&2
-            exit 1
-          fi
-
-          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
-          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
-
-          export XDG_RUNTIME_DIR="${runtime_dir}"
-          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
-          export CONTAINERS_CONF="${conf_dir}/containers.conf"
-
-          podman info >/dev/null
+        run: bash .github/scripts/configure-rootless-podman.sh
 
       - name: Prepare packaging directories
         shell: bash
@@ -920,62 +873,7 @@ jobs:
 
       - name: Configure rootless podman runtime environment
         shell: bash
-        run: |
-          set -euo pipefail
-          uid="$(id -u)"
-          conf_dir="${HOME}/.config/containers"
-          mkdir -p "${conf_dir}"
-          runtime_dir="/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          storage_root="/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          podman_tmp="/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          rm -rf "${runtime_dir}" "${storage_root}"
-          rm -rf "${podman_tmp}"
-          mkdir -p "${runtime_dir}" "${podman_tmp}" "${storage_root}"
-          chmod 0700 "${runtime_dir}" "${storage_root}"
-          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s"\ngraphroot = "%s"\n' \
-            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
-          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
-
-          # Rootless Podman can reuse the user's existing libpod database
-          # when only storage.conf is changed. That silently redirects the
-          # build back to ~/.local/share/containers, which is also used by
-          # long lived runner workloads. Force every subsequent invocation to
-          # use this job's disposable root, runroot, and tmpdir.
-          podman_path="$(command -v podman)"
-          podman_wrapper_dir="${RUNNER_TEMP}/podman-bin"
-          podman_wrapper="${podman_wrapper_dir}/podman"
-          mkdir -p "${podman_wrapper_dir}"
-          cat > "${podman_wrapper}" <<EOF
-          #!/usr/bin/env bash
-          exec "${podman_path}" \\
-            --root "${storage_root}" \\
-            --runroot "${runtime_dir}" \\
-            --tmpdir "${podman_tmp}" \\
-            "\$@"
-          EOF
-          chmod 0755 "${podman_wrapper}"
-          echo "AARNN_PODMAN_ROOT=${storage_root}" >> "${GITHUB_ENV}"
-          echo "AARNN_PODMAN_RUNROOT=${runtime_dir}" >> "${GITHUB_ENV}"
-          echo "AARNN_PODMAN_TMPDIR=${podman_tmp}" >> "${GITHUB_ENV}"
-          echo "PATH=${podman_wrapper_dir}:$PATH" >> "${GITHUB_ENV}"
-
-          if command -v runc >/dev/null 2>&1; then
-            oci_runtime="$(command -v runc)"
-          elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="$(command -v crun)"
-          else
-            echo "Neither crun nor runc found on PATH." >&2
-            exit 1
-          fi
-          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
-          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
-
-          export XDG_RUNTIME_DIR="${runtime_dir}"
-          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
-          export CONTAINERS_CONF="${conf_dir}/containers.conf"
-
-          podman info >/dev/null
+        run: bash .github/scripts/configure-rootless-podman.sh
 
       - name: Verify runner architecture matches matrix
         shell: bash
@@ -1165,36 +1063,7 @@ jobs:
 
       - name: Configure rootless podman runtime environment
         shell: bash
-        run: |
-          set -euo pipefail
-          uid="$(id -u)"
-          conf_dir="${HOME}/.config/containers"
-          mkdir -p "${conf_dir}"
-          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${storage_root}"
-          chmod 0700 "${runtime_dir}" "${storage_root}"
-          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
-            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
-          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
-          if command -v runc >/dev/null 2>&1; then
-            oci_runtime="$(command -v runc)"
-          elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="$(command -v crun)"
-          else
-            echo "Neither crun nor runc found on PATH." >&2
-            exit 1
-          fi
-          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
-          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
-
-          export XDG_RUNTIME_DIR="${runtime_dir}"
-          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
-          export CONTAINERS_CONF="${conf_dir}/containers.conf"
-
-          podman info >/dev/null
+        run: bash .github/scripts/configure-rootless-podman.sh
 
       - name: Log in to GHCR
         env:
@@ -1322,36 +1191,7 @@ jobs:
 
       - name: Configure rootless podman runtime environment
         shell: bash
-        run: |
-          set -euo pipefail
-          uid="$(id -u)"
-          conf_dir="${HOME}/.config/containers"
-          mkdir -p "${conf_dir}"
-          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-          rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${storage_root}"
-          chmod 0700 "${runtime_dir}" "${storage_root}"
-          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
-            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
-          echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
-          if command -v crun >/dev/null 2>&1; then
-            oci_runtime="$(command -v crun)"
-          elif command -v runc >/dev/null 2>&1; then
-            oci_runtime="$(command -v runc)"
-          else
-            echo "Neither crun nor runc found on PATH." >&2
-            exit 1
-          fi
-          printf '[engine]\nruntime = "%s"\ncgroup_manager = "cgroupfs"\n' "${oci_runtime}" > "${conf_dir}/containers.conf"
-          echo "CONTAINERS_CONF=${conf_dir}/containers.conf" >> "${GITHUB_ENV}"
-
-          export XDG_RUNTIME_DIR="${runtime_dir}"
-          export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
-          export CONTAINERS_CONF="${conf_dir}/containers.conf"
-
-          podman info >/dev/null
+        run: bash .github/scripts/configure-rootless-podman.sh
 
       - name: Log in to GHCR
         env:
