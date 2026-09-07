@@ -448,9 +448,9 @@ jobs:
           # specified". Prefer runc when available and retain crun as the
           # fallback used by ARM self-hosted runners.
           if command -v runc >/dev/null 2>&1; then
-            oci_runtime="runc"
+            oci_runtime="$(command -v runc)"
           elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
+            oci_runtime="$(command -v crun)"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
@@ -871,9 +871,9 @@ jobs:
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
           if command -v runc >/dev/null 2>&1; then
-            oci_runtime="runc"
+            oci_runtime="$(command -v runc)"
           elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
+            oci_runtime="$(command -v crun)"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
@@ -1092,9 +1092,9 @@ jobs:
             "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
           if command -v runc >/dev/null 2>&1; then
-            oci_runtime="runc"
+            oci_runtime="$(command -v runc)"
           elif command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
+            oci_runtime="$(command -v crun)"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
@@ -1256,9 +1256,9 @@ jobs:
             "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
           if command -v crun >/dev/null 2>&1; then
-            oci_runtime="crun"
+            oci_runtime="$(command -v crun)"
           elif command -v runc >/dev/null 2>&1; then
-            oci_runtime="runc"
+            oci_runtime="$(command -v runc)"
           else
             echo "Neither crun nor runc found on PATH." >&2
             exit 1
