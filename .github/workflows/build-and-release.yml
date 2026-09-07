@@ -419,15 +419,12 @@ jobs:
           conf_dir="${HOME}/.config/containers"
           mkdir -p "${conf_dir}"
 
-          runtime_dir="/run/user/${uid}"
-          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            runtime_dir="/tmp/podman-run-${uid}"
-            mkdir -p "${runtime_dir}/containers"
-            chmod 0700 "${runtime_dir}"
-            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
-            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
-          fi
+          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          rm -rf "${runtime_dir}" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          chmod 0700 "${runtime_dir}" "${storage_root}"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
           # A self-hosted ARM64 runner may receive multiple packaging matrix
           # jobs over its lifetime. Keep each job's rootless Podman storage
@@ -463,10 +460,6 @@ jobs:
           export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
           export CONTAINERS_CONF="${conf_dir}/containers.conf"
 
-          if ! podman info >/dev/null 2>&1; then
-            echo "Detected stale Podman state; running podman system migrate."
-            podman system migrate
-          fi
           podman info >/dev/null
 
       - name: Prepare packaging directories
@@ -857,17 +850,14 @@ jobs:
           uid="$(id -u)"
           conf_dir="${HOME}/.config/containers"
           mkdir -p "${conf_dir}"
-          runtime_dir="/run/user/${uid}"
-          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            runtime_dir="/tmp/podman-run-${uid}"
-            mkdir -p "${runtime_dir}/containers"
-            chmod 0700 "${runtime_dir}"
-            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
-            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
-          fi
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
-            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          rm -rf "${runtime_dir}" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          chmod 0700 "${runtime_dir}" "${storage_root}"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
+            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
 
           if command -v runc >/dev/null 2>&1; then
@@ -885,10 +875,6 @@ jobs:
           export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
           export CONTAINERS_CONF="${conf_dir}/containers.conf"
 
-          if ! podman info >/dev/null 2>&1; then
-            echo "Detected stale Podman state; running podman system migrate."
-            podman system migrate
-          fi
           podman info >/dev/null
 
       - name: Verify runner architecture matches matrix
@@ -1079,17 +1065,14 @@ jobs:
           uid="$(id -u)"
           conf_dir="${HOME}/.config/containers"
           mkdir -p "${conf_dir}"
-          runtime_dir="/run/user/${uid}"
-          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            runtime_dir="/tmp/podman-run-${uid}"
-            mkdir -p "${runtime_dir}/containers"
-            chmod 0700 "${runtime_dir}"
-            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
-            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
-          fi
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
-            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          rm -rf "${runtime_dir}" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          chmod 0700 "${runtime_dir}" "${storage_root}"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
+            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
           if command -v runc >/dev/null 2>&1; then
             oci_runtime="$(command -v runc)"
@@ -1106,10 +1089,6 @@ jobs:
           export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
           export CONTAINERS_CONF="${conf_dir}/containers.conf"
 
-          if ! podman info >/dev/null 2>&1; then
-            echo "Detected stale Podman state; running podman system migrate."
-            podman system migrate
-          fi
           podman info >/dev/null
 
       - name: Log in to GHCR
@@ -1243,17 +1222,14 @@ jobs:
           uid="$(id -u)"
           conf_dir="${HOME}/.config/containers"
           mkdir -p "${conf_dir}"
-          runtime_dir="/run/user/${uid}"
-          if [[ ! -d "${runtime_dir}" ]] || [[ ! -w "${runtime_dir}" ]]; then
-            runtime_dir="/tmp/podman-run-${uid}"
-            mkdir -p "${runtime_dir}/containers"
-            chmod 0700 "${runtime_dir}"
-            echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
-            rm -rf "${HOME}/.local/share/containers/storage" 2>/dev/null || true
-            echo "Redirected XDG_RUNTIME_DIR -> ${runtime_dir}"
-          fi
-          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s/.local/share/containers/storage"\n' \
-            "${runtime_dir}" "${HOME}" > "${conf_dir}/storage.conf"
+          runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          rm -rf "${runtime_dir}" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          chmod 0700 "${runtime_dir}" "${storage_root}"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
+          printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
+            "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
           if command -v crun >/dev/null 2>&1; then
             oci_runtime="$(command -v crun)"
@@ -1270,10 +1246,6 @@ jobs:
           export CONTAINERS_STORAGE_CONF="${conf_dir}/storage.conf"
           export CONTAINERS_CONF="${conf_dir}/containers.conf"
 
-          if ! podman info >/dev/null 2>&1; then
-            echo "Detected stale Podman state; running podman system migrate."
-            podman system migrate
-          fi
           podman info >/dev/null
 
       - name: Log in to GHCR
