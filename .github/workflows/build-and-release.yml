@@ -120,9 +120,10 @@ jobs:
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 90
     env:
-      # The ARM runner also serves cluster workloads. Keep verification
-      # compilation serialized so rustc cannot starve the runner heartbeat.
-      CARGO_BUILD_JOBS: "1"
+      # The ARM runner also serves cluster workloads. Bound verification
+      # compilation while leaving release linking enough parallelism to finish
+      # before the runner heartbeat is starved.
+      CARGO_BUILD_JOBS: "2"
     strategy:
       fail-fast: false
       matrix:

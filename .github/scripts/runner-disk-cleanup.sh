@@ -133,6 +133,7 @@ case "$mode" in
   prepare)
     cleanup_stale_workspaces
     cleanup_stale_temp
+    remove_repo_build_outputs
     report_disks
     enforce_free_space
     ;;
