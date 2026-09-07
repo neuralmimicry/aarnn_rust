@@ -184,52 +184,85 @@ DEB_ARCH="$4"
 CARGO_FEATURES="$5"
 CARGO_BUILD_TARGETS="$6"
 
-aarnn_apt_install_with_retry -y --no-install-recommends \
-  ca-certificates \
-  curl \
-  xz-utils \
-  build-essential \
-  pkg-config \
-  libssl-dev \
-  protobuf-compiler \
-  dpkg-dev \
-  clang \
-  libclang-dev \
-  cmake \
-  git \
-  perl \
-  python3 \
-  libnl-3-dev \
-  libnl-route-3-dev \
-  libudev-dev \
-  ocl-icd-opencl-dev \
-  libopenmpi-dev \
-  libopencv-dev \
-  libgtk-3-dev \
-  libasound2-dev \
-  libv4l-dev \
-  libgl1-mesa-dev \
-  libegl1-mesa-dev \
-  libx11-dev \
-  libxext-dev \
-  libxrender-dev \
-  libice-dev \
-  libsm-dev \
-  libxcursor-dev \
-  libxi-dev \
-  libxrandr-dev \
-  libxcomposite-dev \
-  libxdamage-dev \
-  libxfixes-dev \
-  libxkbcommon-dev \
-  libxkbcommon-x11-dev \
-  libwayland-dev \
-  libx11-xcb-dev \
-  libxcb-randr0-dev \
-  libxcb-shape0-dev \
-  libxcb-xfixes0-dev \
-  libfontconfig1-dev \
-  libfreetype6-dev
+packages=(
+  ca-certificates
+  curl
+  xz-utils
+  build-essential
+  pkg-config
+  libssl-dev
+  protobuf-compiler
+  dpkg-dev
+  clang
+  cmake
+  git
+  perl
+  python3
+  libnl-3-dev
+  libnl-route-3-dev
+)
+
+feature_enabled() {
+  local feature="$1"
+  [[ ",${CARGO_FEATURES}," == *,all-features,* \
+    || ",${CARGO_FEATURES}," == *,all,* \
+    || ",${CARGO_FEATURES}," == *,${feature},* ]]
+}
+
+# Keep native package preparation small on constrained ARM builders. The
+# engine workloads use OpenCL; desktop/video/OpenMPI libraries are installed
+# only when their selected Cargo feature set needs them.
+if feature_enabled engine_runtime || feature_enabled opencl \
+  || feature_enabled standalone_workload || feature_enabled orchestrator_workload \
+  || feature_enabled node_workload || feature_enabled web_ui_workload; then
+  packages+=(ocl-icd-opencl-dev)
+fi
+
+if feature_enabled openmpi; then
+  packages+=(libopenmpi-dev)
+fi
+
+if feature_enabled video_input; then
+  packages+=(libclang-dev libopencv-dev)
+fi
+
+if feature_enabled webcam_input; then
+  packages+=(libv4l-dev)
+fi
+
+if feature_enabled ui || feature_enabled image_input || feature_enabled desktop_ui_workload \
+  || feature_enabled container; then
+  packages+=(
+    libclang-dev
+    libudev-dev
+    libasound2-dev
+    libgl1-mesa-dev
+    libegl1-mesa-dev
+    libgtk-3-dev
+    libx11-dev
+    libxext-dev
+    libxrender-dev
+    libice-dev
+    libsm-dev
+    libxcursor-dev
+    libxi-dev
+    libxrandr-dev
+    libxcomposite-dev
+    libxdamage-dev
+    libxfixes-dev
+    libxkbcommon-dev
+    libxkbcommon-x11-dev
+    libwayland-dev
+    libx11-xcb-dev
+    libxcb-randr0-dev
+    libxcb-shape0-dev
+    libxcb-xfixes0-dev
+    libfontconfig1-dev
+    libfreetype6-dev
+  )
+fi
+
+aarnn_apt_install_with_retry -y --no-install-recommends "${packages[@]}"
 
 . /workspace/scripts/ensure_container_rustup.sh "$RUST_TARGET"
 

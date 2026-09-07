@@ -926,6 +926,21 @@ jobs:
         id: buildmeta
         run: echo "build_id=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Derive workload feature set
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Container images use their role-specific feature set. The verify
+          # jobs remain responsible for the all-features build and test gate.
+          source scripts/container_workloads.sh
+          requested_features="${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || '' }}"
+          if [[ -n "${requested_features}" ]]; then
+            workload_features="${requested_features}"
+          else
+            workload_features="$(aarnn_container_workload_features "${{ matrix.workload }}")"
+          fi
+          echo "AARNN_WORKLOAD_FEATURES=${workload_features}" >> "$GITHUB_ENV"
+
       - name: Prepare Debian package for container build
         shell: bash
         run: |
@@ -937,7 +952,7 @@ jobs:
             --output-dir ./dist/container \
             --cache-dir ./.container-cache/debs-ci \
             --force \
-            --cargo-features "${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}" \
+            --cargo-features "$AARNN_WORKLOAD_FEATURES" \
             --cargo-build-targets "aarnn_rust web_ui"
 
       - name: Smoke install container Debian package in Ubuntu 24.04
@@ -981,7 +996,7 @@ jobs:
             --network host
             --tag "${arch_tag}"
             --build-arg "CONTAINER_WORKLOAD=${{ matrix.workload }}"
-            --build-arg "CARGO_FEATURES=${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || env.CARGO_FEATURES }}"
+            --build-arg "CARGO_FEATURES=${AARNN_WORKLOAD_FEATURES}"
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
             --build-arg "TARGET_PAGE_SIZE=${{ matrix.page_size }}"
