@@ -263,6 +263,10 @@ jobs:
       - name: Run doctests and Phase 0 fixture
         env:
           NM_DISABLE_OPENCL: "1"
+        # The hosted x64 job carries the complete doctest/fixture gate.  The
+        # ARM runner keeps its architecture compile check and package builds
+        # without creating another large documentation test target tree.
+        if: matrix.runner_arch != 'ARM64'
         run: |
           cargo test --locked --all-features --doc
           cargo test --locked --test phase0_baseline
