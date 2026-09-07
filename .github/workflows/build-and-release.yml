@@ -475,8 +475,9 @@ jobs:
 
           runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
           storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          podman_tmp="${runtime_dir}/libpod/tmp"
           rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${podman_tmp}" "${storage_root}"
           chmod 0700 "${runtime_dir}" "${storage_root}"
           echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
 
@@ -934,6 +935,29 @@ jobs:
           printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
             "${runtime_dir}" "${storage_root}" > "${conf_dir}/storage.conf"
           echo "CONTAINERS_STORAGE_CONF=${conf_dir}/storage.conf" >> "${GITHUB_ENV}"
+
+          # Rootless Podman can reuse the user's existing libpod database
+          # when only storage.conf is changed. That silently redirects the
+          # build back to ~/.local/share/containers, which is also used by
+          # long lived runner workloads. Force every subsequent invocation to
+          # use this job's disposable root, runroot, and tmpdir.
+          podman_path="$(command -v podman)"
+          podman_wrapper_dir="${RUNNER_TEMP}/podman-bin"
+          podman_wrapper="${podman_wrapper_dir}/podman"
+          mkdir -p "${podman_wrapper_dir}"
+          cat > "${podman_wrapper}" <<EOF
+#!/usr/bin/env bash
+exec "${podman_path}" \\
+  --root "${storage_root}" \\
+  --runroot "${runtime_dir}/containers" \\
+  --tmpdir "${podman_tmp}" \\
+  "\$@"
+EOF
+          chmod 0755 "${podman_wrapper}"
+          echo "AARNN_PODMAN_ROOT=${storage_root}" >> "${GITHUB_ENV}"
+          echo "AARNN_PODMAN_RUNROOT=${runtime_dir}/containers" >> "${GITHUB_ENV}"
+          echo "AARNN_PODMAN_TMPDIR=${podman_tmp}" >> "${GITHUB_ENV}"
+          echo "PATH=${podman_wrapper_dir}:$PATH" >> "${GITHUB_ENV}"
 
           if command -v runc >/dev/null 2>&1; then
             oci_runtime="$(command -v runc)"

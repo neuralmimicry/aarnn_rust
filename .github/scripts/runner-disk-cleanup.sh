@@ -116,6 +116,7 @@ remove_job_temp_outputs() {
   find "$runner_temp" -mindepth 1 -maxdepth 1 -type d \
     \( -name "podman-runtime-${GITHUB_RUN_ID:-}-*" \
     -o -name "podman-storage-${GITHUB_RUN_ID:-}-*" \
+    -o -name "podman-bin" \
     -o -name "cargo-target-*" \
     -o -name "cargo-home-*" \
     -o -name "rustup-home-*" \
