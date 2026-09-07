@@ -44,6 +44,12 @@ fn wait_for(path: &Path) {
     }
 }
 
+fn publish_marker(path: &Path, contents: impl AsRef<[u8]>) {
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, contents).expect("write marker");
+    fs::rename(temporary, path).expect("publish marker");
+}
+
 fn child_config(root: &Path) -> (Vec<(String, PathBuf)>, Vec<String>) {
     let authority_root = root.join("authority");
     let replicas = replica_paths(&authority_root);
@@ -90,12 +96,12 @@ fn child_process_owner() {
         .authoritative_snapshot()
         .expect("snapshot")
         .expect("committed snapshot");
-    fs::write(root.join("committed.snapshot"), committed).expect("publish child marker");
+    publish_marker(&root.join("committed.snapshot"), committed);
 
     wait_for_child_release(&root.join("release.stale"));
     biological.step(None);
     let stale_rejected = owner.commit_runner_step(&biological).is_err();
-    fs::write(root.join("stale.result"), stale_rejected.to_string()).expect("publish fence result");
+    publish_marker(&root.join("stale.result"), stale_rejected.to_string());
 
     // The parent kills this process to model loss of the active node after
     // the authority has fenced it.  Keeping the loop here makes the kill
@@ -156,7 +162,7 @@ fn cross_process_failover_fences_killed_owner_and_rejoins_as_warm() {
     let replacement = authority
         .issue_lease(shard, REPLACEMENT_NODE)
         .expect("issue replacement lease");
-    fs::write(root.join("release.stale"), b"release").expect("release stale attempt");
+    publish_marker(&root.join("release.stale"), b"release");
     wait_for(&root.join("stale.result"));
     assert_eq!(
         fs::read_to_string(root.join("stale.result")).expect("read fence result"),
