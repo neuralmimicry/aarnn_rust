@@ -119,6 +119,10 @@ jobs:
       (!inputs.run_version_bump && !inputs.sync_wiki && inputs.environment == '')
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 90
+    env:
+      # The ARM runner also serves cluster workloads. Keep verification
+      # compilation serialized so rustc cannot starve the runner heartbeat.
+      CARGO_BUILD_JOBS: "1"
     strategy:
       fail-fast: false
       matrix:
