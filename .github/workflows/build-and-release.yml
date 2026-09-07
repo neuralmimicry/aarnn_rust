@@ -207,6 +207,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "repo-build-release -> target"
+          # Self-hosted ARM runners restore existing caches, but do not spend
+          # the post-job phase archiving multi-gigabyte target trees on the
+          # same hosts that run the product workloads.
+          save-if: ${{ runner.environment == 'github-hosted' }}
 
       - name: Check formatting
         run: cargo fmt --check
