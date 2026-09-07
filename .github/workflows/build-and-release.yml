@@ -928,8 +928,9 @@ jobs:
           mkdir -p "${conf_dir}"
           runtime_dir="${RUNNER_TEMP}/podman-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
           storage_root="${RUNNER_TEMP}/podman-storage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+          podman_tmp="${runtime_dir}/libpod/tmp"
           rm -rf "${runtime_dir}" "${storage_root}"
-          mkdir -p "${runtime_dir}/containers" "${storage_root}"
+          mkdir -p "${runtime_dir}/containers" "${podman_tmp}" "${storage_root}"
           chmod 0700 "${runtime_dir}" "${storage_root}"
           echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "${GITHUB_ENV}"
           printf '[storage]\ndriver = "overlay"\nrunroot = "%s/containers"\ngraphroot = "%s"\n' \
@@ -946,13 +947,13 @@ jobs:
           podman_wrapper="${podman_wrapper_dir}/podman"
           mkdir -p "${podman_wrapper_dir}"
           cat > "${podman_wrapper}" <<EOF
-#!/usr/bin/env bash
-exec "${podman_path}" \\
-  --root "${storage_root}" \\
-  --runroot "${runtime_dir}/containers" \\
-  --tmpdir "${podman_tmp}" \\
-  "\$@"
-EOF
+          #!/usr/bin/env bash
+          exec "${podman_path}" \\
+            --root "${storage_root}" \\
+            --runroot "${runtime_dir}/containers" \\
+            --tmpdir "${podman_tmp}" \\
+            "\$@"
+          EOF
           chmod 0755 "${podman_wrapper}"
           echo "AARNN_PODMAN_ROOT=${storage_root}" >> "${GITHUB_ENV}"
           echo "AARNN_PODMAN_RUNROOT=${runtime_dir}/containers" >> "${GITHUB_ENV}"
