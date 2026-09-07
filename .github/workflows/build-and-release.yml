@@ -261,6 +261,11 @@ jobs:
       - name: Validate release script
         run: bash -n scripts/package-release.sh
 
+      - name: Clean self-hosted verification artifacts
+        if: always() && runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
+
   release-meta:
     name: Release Metadata
     needs: verify
@@ -394,6 +399,11 @@ jobs:
         with:
           clean: false
           path: repo-build-release
+
+      - name: Prepare self-hosted package runner disk
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare
 
       - name: Move package artifacts to runner temp storage
         shell: bash
@@ -650,6 +660,11 @@ jobs:
             sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/repo-build-release"
           fi
 
+      - name: Clean self-hosted package artifacts
+        if: always() && runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
+
   publish-release:
     name: Publish Release
     needs:
@@ -834,6 +849,11 @@ jobs:
         with:
           clean: false
           path: repo-build-release
+
+      - name: Prepare self-hosted container runner disk
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
 
       - name: Ensure 64K HWE NVIDIA host package when required
         shell: bash
@@ -1049,6 +1069,11 @@ jobs:
                 --password-stdin
             sleep $((push_attempt * 5))
           done
+
+      - name: Clean self-hosted container artifacts
+        if: always() && runner.environment == 'self-hosted'
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
 
   container-manifest:
     name: Container Manifest (${{ matrix.workload }})
