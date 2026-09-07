@@ -18,7 +18,10 @@ async fn wait_for_workspace_step(
     workspace_id: &str,
     min_step: u64,
 ) -> WorkspaceDetailResponse {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // CI runs this readiness check after the full library suite.  Keep the
+    // assertion bounded, but allow a loaded runner time to schedule the
+    // runtime worker before treating a healthy startup as a failure.
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let detail = runtime
             .workspace_detail(user_id, workspace_id)
