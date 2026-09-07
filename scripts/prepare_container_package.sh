@@ -155,6 +155,8 @@ build_package_in_container() {
     -e CARGO_HOME=/cargo \
     -e RUSTUP_HOME=/rustup \
     -e CARGO_TARGET_DIR=/target \
+    -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" \
+    -e CARGO_INCREMENTAL=0 \
     -e CARGO_NET_RETRY="$cargo_net_retry" \
     -e CARGO_HTTP_TIMEOUT="$cargo_http_timeout" \
     -e CARGO_HTTP_MULTIPLEXING="$cargo_http_multiplexing" \
