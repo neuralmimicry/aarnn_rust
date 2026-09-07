@@ -193,13 +193,9 @@ packages=(
   libssl-dev
   protobuf-compiler
   dpkg-dev
-  clang
-  cmake
   git
   perl
   python3
-  libnl-3-dev
-  libnl-route-3-dev
 )
 
 feature_enabled() {
@@ -222,8 +218,12 @@ if feature_enabled openmpi; then
   packages+=(libopenmpi-dev)
 fi
 
+if feature_enabled rdma; then
+  packages+=(clang cmake libclang-dev libnl-3-dev libnl-route-3-dev)
+fi
+
 if feature_enabled video_input; then
-  packages+=(libclang-dev libopencv-dev)
+  packages+=(clang cmake libclang-dev libopencv-dev)
 fi
 
 if feature_enabled webcam_input; then
@@ -234,6 +234,8 @@ if feature_enabled ui || feature_enabled image_input || feature_enabled desktop_
   || feature_enabled container; then
   packages+=(
     libclang-dev
+    clang
+    cmake
     libudev-dev
     libasound2-dev
     libgl1-mesa-dev
