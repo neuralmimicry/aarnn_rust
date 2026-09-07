@@ -921,10 +921,15 @@ mod ipc_service_tests {
             .duration_since(UNIX_EPOCH)
             .expect("system clock before epoch")
             .as_nanos();
-        std::env::temp_dir()
-            .join(format!("aarnn-{label}-{}-{nonce}.sock", std::process::id()))
-            .to_string_lossy()
-            .into_owned()
+        // Unix-domain socket paths have a small platform-defined limit
+        // (SUN_LEN). CI temporary directories can already consume most of
+        // that budget, especially on the ARM runner, so keep the test path
+        // rooted at /tmp and bound the generated filename length.
+        format!(
+            "/tmp/aarnn-{label}-{}-{}.sock",
+            std::process::id(),
+            nonce % 1_000_000_000
+        )
     }
 
     fn next_event(service: &IpcUdsService) -> IpcEvent {
