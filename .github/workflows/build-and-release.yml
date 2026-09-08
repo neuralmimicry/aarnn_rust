@@ -371,6 +371,13 @@ jobs:
       - release-meta
     if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
     runs-on: ${{ fromJSON(matrix.runs_on) }}
+    # Package and container matrix jobs share the single ARM64 self-hosted
+    # runner.  A workflow-level concurrency group does not serialize jobs
+    # within one workflow, so use the runner architecture as the resource
+    # lock to prevent two rootless Podman/Rust jobs filling qc00/qc01 at once.
+    concurrency:
+      group: aarnn-build-runner-${{ matrix.runner_arch }}-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -755,6 +762,12 @@ jobs:
     # Verify jobs and ARM container jobs share the self-hosted runner and
     # checkout/Cargo state. Wait for verification to finish before packaging.
     needs: verify
+    # Keep ARM package and container compilation mutually exclusive on the
+    # self-hosted fleet.  This protects the runner's disk and memory while
+    # retaining parallelism for the hosted X64 jobs.
+    concurrency:
+      group: aarnn-build-runner-${{ matrix.runner_arch }}-${{ github.ref }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       max-parallel: 1
