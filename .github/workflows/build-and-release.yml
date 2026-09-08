@@ -1089,6 +1089,17 @@ jobs:
           podman manifest add "${manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
           podman manifest push --all "${manifest}" "docker://${manifest}"
 
+          # A 64K-page ARM host cannot use the normal arm64 image. Publish a
+          # separate manifest tag because OCI platform metadata cannot express
+          # the kernel page-size requirement alongside linux/arm64.
+          hwe_manifest="${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest rm "${hwe_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${hwe_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${hwe_manifest}"
+          podman manifest add "${hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest push --all "${hwe_manifest}" "docker://${hwe_manifest}"
+
       - name: Publish branch alias for developer flow
         if: startsWith(github.ref, 'refs/heads/')
         shell: bash
@@ -1105,6 +1116,14 @@ jobs:
           podman manifest add "${branch_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
           podman manifest push --all "${branch_manifest}" "docker://${branch_manifest}"
 
+          branch_hwe_manifest="${image}:${branch_tag}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest rm "${branch_hwe_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${branch_hwe_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${branch_hwe_manifest}"
+          podman manifest add "${branch_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${branch_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest push --all "${branch_hwe_manifest}" "docker://${branch_hwe_manifest}"
+
           # Keep the deployment-facing alias aligned with the newest fully
           # successful push.  The manifest job runs only after every
           # architecture image build has succeeded.
@@ -1115,6 +1134,14 @@ jobs:
           podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
           podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
           podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
+
+          latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${latest_hwe_manifest}"
+          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
 
       - name: Publish version and latest tags on release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -1132,6 +1159,14 @@ jobs:
           podman manifest add "${version_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
           podman manifest push --all "${version_manifest}" "docker://${version_manifest}"
 
+          version_hwe_manifest="${image}:${version_tag}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest rm "${version_hwe_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${version_hwe_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${version_hwe_manifest}"
+          podman manifest add "${version_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${version_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest push --all "${version_hwe_manifest}" "docker://${version_hwe_manifest}"
+
           latest_manifest="${image}:latest-${{ matrix.workload }}"
           podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
           podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
@@ -1139,6 +1174,13 @@ jobs:
           podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
           podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
           podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
+          latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+          podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${latest_hwe_manifest}"
+          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+          podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
           echo "Published ${image}:${version_tag} and ${image}:latest"
 
       - name: Verify published manifests include amd64 and arm64
@@ -1165,14 +1207,18 @@ jobs:
             verify_ref "${image}:${branch_tag}-${{ matrix.workload }}" "linux/arm64"
             verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
-          fi
-
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            verify_ref "${image}:${branch_tag}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64"
+            verify_ref "${image}:latest-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/arm64"
             verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
+            verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64"
+            verify_ref "${image}:latest-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64"
           fi
+
+          verify_ref "${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64"
 
   container-promote:
     name: Container Promote
