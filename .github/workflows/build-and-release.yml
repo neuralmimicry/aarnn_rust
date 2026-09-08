@@ -751,25 +751,13 @@ jobs:
 
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
-    if: >-
-      always() &&
-      (
-        github.event_name == 'push' ||
-        (
-          github.event_name == 'workflow_dispatch' &&
-          inputs.environment == 'ui' &&
-          matrix.workload == inputs.container_workload
-        )
-      )
+    if: github.event_name == 'push'
     # Verify jobs and ARM container jobs share the self-hosted runner and
     # checkout/Cargo state. Wait for verification to finish before packaging.
     needs: verify
     strategy:
       fail-fast: false
-      # Hosted amd64 and the single ARM64 runner can make progress together;
-      # ARM variants still serialize naturally because only qc00 matches the
-      # ARM64 self-hosted labels.
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
           - workload: orchestrator
@@ -1042,16 +1030,7 @@ jobs:
 
   container-manifest:
     name: Container Manifest (${{ matrix.workload }})
-    if: >-
-      always() &&
-      (
-        github.event_name == 'push' ||
-        (
-          github.event_name == 'workflow_dispatch' &&
-          inputs.environment == 'ui' &&
-          matrix.workload == inputs.container_workload
-        )
-      )
+    if: github.event_name == 'push'
     needs: container-build
     strategy:
       max-parallel: 1
