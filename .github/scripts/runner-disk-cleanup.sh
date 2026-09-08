@@ -44,6 +44,24 @@ find_work_root() {
   return 1
 }
 
+remove_tree() {
+  local path="$1"
+
+  # Rootless Podman overlay layers can contain root-owned files even though
+  # the graph is owned by the runner user.  Cleanup must be best-effort and
+  # must use the runner's passwordless sudo rule for those files; otherwise a
+  # stale layer makes the next disk-preparation step fail before the build
+  # starts.
+  if rm -rf -- "$path" 2>/dev/null; then
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n rm -rf -- "$path" 2>/dev/null; then
+    return 0
+  fi
+  echo "::warning::Unable to remove stale runner path: $path" >&2
+  return 0
+}
+
 cleanup_stale_workspaces() {
   local work_root current_relative current_job_root candidate candidate_name
   work_root="$(find_work_root || true)"
@@ -57,7 +75,7 @@ cleanup_stale_workspaces() {
     [[ "$candidate_name" == "$current_job_root" ]] && continue
     if find "$candidate" -mindepth 0 -maxdepth 0 -mmin +120 -print -quit | grep -q .; then
       echo "Removing stale runner workspace: $candidate"
-      rm -rf -- "$candidate"
+      remove_tree "$candidate"
     fi
   done < <(find "$work_root" -mindepth 1 -maxdepth 1 -type d -print0)
 }
@@ -69,7 +87,7 @@ cleanup_stale_temp() {
       continue
     fi
     echo "Removing stale runner temporary directory: $candidate"
-    rm -rf -- "$candidate"
+    remove_tree "$candidate"
   done < <(find "$runner_temp" -mindepth 1 -maxdepth 1 -type d -mmin +180 -print0)
 
   while IFS= read -r -d '' candidate; do
@@ -77,7 +95,7 @@ cleanup_stale_temp() {
       continue
     fi
     echo "Removing stale temporary Podman directory: $candidate"
-    rm -rf -- "$candidate"
+    remove_tree "$candidate"
   done < <(find /tmp -mindepth 1 -maxdepth 1 -type d -name 'aarnn-p*' -mmin +180 -print0 2>/dev/null)
 }
 
@@ -118,19 +136,20 @@ remove_job_temp_outputs() {
     value="${!variable:-}"
     [[ -n "$value" ]] || continue
     case "$value" in
-      "$runner_temp"/*|/tmp/aarnn-p*) rm -rf -- "$value" ;;
+      "$runner_temp"/*|/tmp/aarnn-p*) remove_tree "$value" ;;
     esac
   done
 
-  find "$runner_temp" -mindepth 1 -maxdepth 1 -type d \
+  while IFS= read -r -d '' candidate; do
+    remove_tree "$candidate"
+  done < <(find "$runner_temp" -mindepth 1 -maxdepth 1 -type d \
     \( -name "podman-runtime-${GITHUB_RUN_ID:-}-*" \
     -o -name "podman-storage-${GITHUB_RUN_ID:-}-*" \
     -o -name "podman-bin" \
     -o -name "cargo-target-*" \
     -o -name "cargo-home-*" \
     -o -name "rustup-home-*" \
-    -o -name "release-assets-*" \) \
-    -exec rm -rf -- {} +
+    -o -name "release-assets-*" \) -print0)
 }
 
 prune_job_podman() {
