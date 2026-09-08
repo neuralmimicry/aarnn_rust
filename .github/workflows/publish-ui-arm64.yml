@@ -1,0 +1,125 @@
+name: Publish Web UI ARM64 64K
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: neuralmimicry/aarnn_rust
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  publish:
+    name: Web UI ARM64 64K HWE
+    runs-on: [self-hosted, Linux, ARM64]
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "1"
+    defaults:
+      run:
+        working-directory: repo-build-release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          clean: false
+          path: repo-build-release
+
+      - name: Prepare runner disk
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
+
+      - name: Ensure 64K HWE NVIDIA host package
+        run: |
+          set -euo pipefail
+          source scripts/ensure_64k_hwe_nvidia.sh
+          aarnn_ensure_64k_hwe_nvidia true
+
+      - name: Enforce Gail image tag policy
+        run: bash scripts/check_gail_image_tags.sh .
+
+      - name: Verify Podman and configure rootless runtime
+        run: |
+          set -euo pipefail
+          command -v podman
+          command -v runc
+          bash .github/scripts/configure-rootless-podman.sh
+
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = aarch64
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
+        run: |
+          printf '%s' "${GH_TOKEN}" | podman login "${{ env.REGISTRY }}" \
+            --username "${GHCR_USERNAME}" --password-stdin
+
+      - name: Derive UI workload features
+        run: |
+          set -euo pipefail
+          source scripts/container_workloads.sh
+          echo "AARNN_WORKLOAD_FEATURES=$(aarnn_container_workload_features web-ui)" >> "$GITHUB_ENV"
+
+      - name: Prepare Debian package
+        run: |
+          set -euo pipefail
+          chmod +x scripts/prepare_container_package.sh
+          ./scripts/prepare_container_package.sh \
+            --workload web-ui \
+            --arch arm64 \
+            --output-dir ./dist/container \
+            --cache-dir ./.container-cache/debs-ci \
+            --force \
+            --cargo-features "$AARNN_WORKLOAD_FEATURES" \
+            --cargo-build-targets "aarnn_rust web_ui"
+
+      - name: Smoke install Debian package
+        run: |
+          set -euo pipefail
+          podman run --rm --pull=missing --platform linux/arm64 --network host \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "$PWD/dist/container:/tmp/aarnn:ro" \
+            -v "$PWD/scripts:/tmp/scripts:ro" ubuntu:24.04 bash -lc '
+              set -euo pipefail
+              . /tmp/scripts/apt_retry.sh
+              export AARNN_APT_UPDATE_ATTEMPTS=8 AARNN_APT_INSTALL_ATTEMPTS=5 AARNN_APT_RETRY_DELAY_SEC=8
+              deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_arm64.deb" | head -n 1)"
+              test -n "$deb"
+              aarnn_apt_install_with_retry -y --no-install-recommends "$deb"
+              test -x /usr/bin/aarnn_rust
+            '
+
+      - name: Build and push immutable UI image
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          tag="${image}:${GITHUB_SHA}-web-ui-arm64-64k-hwe"
+          args=(
+            --file ./Containerfile
+            --platform linux/arm64
+            --network host
+            --tag "$tag"
+            --build-arg CONTAINER_WORKLOAD=web-ui
+            --build-arg "CARGO_FEATURES=${AARNN_WORKLOAD_FEATURES}"
+            --build-arg PYTHON_MIN_VERSION=3.12
+            --build-arg PYTHON_FULL_VERSION=3.12.2
+            --build-arg TARGET_PAGE_SIZE=64k-hwe
+            .
+          )
+          podman build "${args[@]}"
+          podman push --force-compression --compression-format gzip \
+            --compression-level 1 "$tag"
+
+      - name: Clean runner artifacts
+        if: always()
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
