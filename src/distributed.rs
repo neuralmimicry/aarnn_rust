@@ -10852,6 +10852,36 @@ mod tests {
     }
 
     #[test]
+    fn every_active_layer_gets_one_backup_with_two_eligible_targets() {
+        let assignments = build_sharded_node_assignments(
+            &[("qc01".to_string(), 4.0), ("spirit".to_string(), 1.0)],
+            7,
+        );
+
+        let active_layers: HashSet<u32> = assignments
+            .iter()
+            .flat_map(|(_, active, _)| active.iter().copied())
+            .collect();
+        let backup_layers: HashSet<u32> = assignments
+            .iter()
+            .flat_map(|(_, _, backups)| backups.iter().copied())
+            .collect();
+
+        assert_eq!(active_layers, (0..7).collect());
+        assert_eq!(backup_layers, active_layers);
+        for (node, active, backups) in &assignments {
+            assert!(
+                active.is_empty() || !backups.is_empty(),
+                "active node {node} must have a backup destination"
+            );
+            assert!(
+                active.iter().all(|layer| !backups.contains(layer)),
+                "node {node} cannot be both active and backup owner for one layer"
+            );
+        }
+    }
+
+    #[test]
     fn a_single_eligible_node_does_not_get_a_fake_local_backup() {
         let assignments = build_sharded_node_assignments(&[("node-a".to_string(), 4.0)], 2);
 
