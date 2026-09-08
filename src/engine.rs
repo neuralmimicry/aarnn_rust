@@ -425,7 +425,17 @@ impl RunnerEngine {
     }
 
     pub fn import_snapshot_json(&mut self, snapshot_json: &str) -> anyhow::Result<()> {
+        // Older runtime snapshots did not persist deployment metadata. Keep a
+        // deployment policy already supplied by the workspace manifest when
+        // importing one of those snapshots; otherwise the next autosave would
+        // silently turn a cluster deployment back into the default policy.
+        let manifest_deployment = self.spec.net.deployment.clone();
         self.runner.import_network_json(snapshot_json)?;
+        if self.runner.net.deployment == crate::deployment::DeploymentConfig::default()
+            && manifest_deployment != crate::deployment::DeploymentConfig::default()
+        {
+            self.runner.net.deployment = manifest_deployment;
+        }
         self.spec.net = self.runner.net.clone();
         #[cfg(feature = "superdense_executor")]
         self.superdense.reset();
@@ -617,6 +627,38 @@ mod tests {
         assert_eq!(
             status.total_neurons,
             cfg.num_sensory_neurons + 6 + cfg.num_output_neurons
+        );
+    }
+
+    #[test]
+    fn legacy_snapshot_import_preserves_manifest_deployment_policy() {
+        let mut manifest_spec = EngineSpec::default();
+        manifest_spec
+            .net
+            .deployment
+            .add_mode(crate::deployment::ExecutionMode::Sharded);
+        manifest_spec.net.deployment.scope = crate::deployment::ExecutionScope::Cluster;
+
+        let source = RunnerEngine::new(EngineSpec::default()).expect("source engine");
+        let snapshot = source.export_snapshot_json().expect("snapshot");
+        let mut legacy: serde_json::Value = serde_json::from_str(&snapshot).expect("json");
+        legacy["engine"]["net"]["deployment"] = serde_json::json!({});
+
+        let mut engine = RunnerEngine::new(manifest_spec).expect("engine");
+        engine
+            .import_snapshot_json(&serde_json::to_string(&legacy).expect("legacy json"))
+            .expect("legacy snapshot import");
+
+        assert!(
+            engine
+                .spec()
+                .net
+                .deployment
+                .has_mode(crate::deployment::ExecutionMode::Sharded)
+        );
+        assert_eq!(
+            engine.spec().net.deployment.scope,
+            crate::deployment::ExecutionScope::Cluster
         );
     }
 
