@@ -1445,10 +1445,15 @@ function evenLayerShards(nodeIds, layerCount, totalNeurons) {
   const count = Math.max(1, nodeIds.length);
   const layers = Math.max(1, layerCount);
   return nodeIds.map((nodeId, index) => {
-    const start = Math.floor(index * layers / count);
-    const end = Math.max(start + 1, Math.floor((index + 1) * layers / count));
-    const ownedLayers = Array.from({ length: Math.min(layers, end) - start }, (_, offset) => start + offset);
-    const neuronCount = Math.round((Number(totalNeurons || 0) * ownedLayers.length) / layers);
+    // Use ceil boundaries so a layer is assigned to at most one node when
+    // more nodes than layers are visible. Round cumulative boundaries rather
+    // than each shard independently so estimated counts add to the configured
+    // network total exactly.
+    const start = Math.ceil(index * layers / count);
+    const end = Math.ceil((index + 1) * layers / count);
+    const ownedLayers = Array.from({ length: Math.max(0, end - start) }, (_, offset) => start + offset);
+    const neuronCount = Math.round(Number(totalNeurons || 0) * end / layers)
+      - Math.round(Number(totalNeurons || 0) * start / layers);
     return {
       id: `${nodeId}:virtual-${index}`,
       layers: ownedLayers,
