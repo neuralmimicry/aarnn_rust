@@ -685,7 +685,10 @@ jobs:
       - name: Create or update GitHub release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The rolling release is managed through the same authorized token
+          # used for GHCR publishing.  The repository GITHUB_TOKEN is scoped
+          # read-only for this repository and returns 403 on release edits.
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
           DRAFT_RELEASE: >-
