@@ -1040,6 +1040,9 @@ jobs:
     permissions:
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Verify Podman is available
         run: |
           if ! command -v podman >/dev/null 2>&1; then
@@ -1227,6 +1230,9 @@ jobs:
     permissions:
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Verify Podman is available
         run: |
           command -v podman >/dev/null 2>&1 || {
