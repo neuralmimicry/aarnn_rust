@@ -762,9 +762,14 @@ jobs:
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
     if: github.event_name == 'push'
-    # Verify jobs and ARM container jobs share the self-hosted runner and
-    # checkout/Cargo state. Wait for verification to finish before packaging.
-    needs: verify
+    # The ARM package matrix and the ARM container matrix share qc01. Make
+    # packaging an explicit prerequisite rather than relying only on the
+    # runner concurrency lock: GitHub may evict a waiting matrix request when
+    # a higher-priority container request is queued, which previously dropped
+    # the Ubuntu 25.04 ARM package and therefore skipped release publication.
+    needs:
+      - verify
+      - package-linux
     # Keep ARM package and container compilation mutually exclusive on the
     # self-hosted fleet.  This protects the runner's disk and memory while
     # retaining parallelism for the hosted X64 jobs.
