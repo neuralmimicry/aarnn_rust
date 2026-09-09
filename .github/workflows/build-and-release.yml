@@ -1058,6 +1058,14 @@ jobs:
       matrix:
         workload: [orchestrator, node, web-ui]
     runs-on: ubuntu-24.04
+    # Every matrix entry publishes the same branch/latest aliases for its
+    # workload family.  GitHub can schedule matrix jobs from this workflow
+    # concurrently even with max-parallel set, so serialize the registry
+    # mutation explicitly or one workload can overwrite another's manifest
+    # while it is being verified.
+    concurrency:
+      group: aarnn-container-manifest-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       packages: write
     steps:
