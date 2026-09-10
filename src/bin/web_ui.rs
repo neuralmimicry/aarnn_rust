@@ -8297,13 +8297,22 @@ mod tests {
             (
                 "neuralmimicry-shared-snn".to_string(),
                 vec![
-                    "tenant-aarnn_103".to_string(),
-                    "tenant-aarnn_286".to_string(),
+                    WorkspaceDistributionEntry {
+                        node_id: "tenant-aarnn_103".to_string(),
+                        ..WorkspaceDistributionEntry::default()
+                    },
+                    WorkspaceDistributionEntry {
+                        node_id: "tenant-aarnn_286".to_string(),
+                        ..WorkspaceDistributionEntry::default()
+                    },
                 ],
             ),
             (
                 "tenant-aarnn".to_string(),
-                vec!["tenant-aarnn_103".to_string()],
+                vec![WorkspaceDistributionEntry {
+                    node_id: "tenant-aarnn_103".to_string(),
+                    ..WorkspaceDistributionEntry::default()
+                }],
             ),
         ]);
 
