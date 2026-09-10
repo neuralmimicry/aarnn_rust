@@ -1472,7 +1472,17 @@ function buildPlacementModel() {
     const detail = getActiveWorkspaceDetail();
     const meta = workspaceNetworkMeta(workspace, detail) || {};
     const distribution = workspaceDistributedNodeMeta(workspace, detail);
-    const nodeIds = distribution.nodeIds.length ? distribution.nodeIds : ["local"];
+    const reportedDistribution = detail && detail.summary && Array.isArray(detail.summary.distributed_distribution)
+      ? detail.summary.distributed_distribution
+      : [];
+    const reportedNodeIds = reportedDistribution
+      .map(entry => String(entry && entry.node_id || "").trim())
+      .filter(Boolean);
+    const nodeIds = distribution.nodeIds.length
+      ? distribution.nodeIds
+      : reportedNodeIds.length
+        ? reportedNodeIds
+        : ["local"];
     const autoscaler = state.runtime.autoscaler || {};
     const hosts = Array.isArray(autoscaler.active_remote_host_ids) ? autoscaler.active_remote_host_ids : [];
     const nodes = nodeIds.map((nodeId, index) => {
@@ -1485,6 +1495,56 @@ function buildPlacementModel() {
         shards: []
       };
     });
+    if (reportedDistribution.length) {
+      const nodesById = new Map(nodes.map(node => [node.id, node]));
+      reportedDistribution.forEach(entry => {
+        const nodeId = String(entry && entry.node_id || "").trim();
+        if (!nodeId) return;
+        const node = nodesById.get(nodeId);
+        if (!node) return;
+        const layerCounts = entry && entry.layer_neuron_counts && typeof entry.layer_neuron_counts === "object"
+          ? entry.layer_neuron_counts
+          : {};
+        const layers = (Array.isArray(entry.layers) ? entry.layers : Object.keys(layerCounts))
+          .map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+        if (layers.length) {
+          const neuronCount = placementNeuronCount(layers, layerCounts, meta.total_neurons);
+          node.shards.push({
+            id: placementShardId(nodeId, "active", layers),
+            layers,
+            neuronCount,
+            neuronCountKnown: placementNeuronCountKnown(layers, layerCounts),
+            role: "active",
+            ...placementActivityForLayers(layers, activity, neuronCount),
+            movements: [],
+            source: "workspace orchestrator report"
+          });
+        }
+        const backupLayers = (Array.isArray(entry.backup_layers) ? entry.backup_layers : [])
+          .map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+        if (backupLayers.length) {
+          const neuronCount = placementNeuronCount(backupLayers, layerCounts, 0);
+          node.shards.push({
+            id: placementShardId(nodeId, "backup", backupLayers),
+            layers: backupLayers,
+            neuronCount,
+            neuronCountKnown: placementNeuronCountKnown(backupLayers, layerCounts),
+            role: "backup",
+            ...placementActivityForLayers(backupLayers, activity, neuronCount),
+            movements: [],
+            source: "workspace orchestrator replica report"
+          });
+        }
+      });
+      return {
+        networkId: meta.network_id || source.networkId,
+        nodes,
+        movements: [],
+        step: activity.sim_step,
+        sourceLabel: "workspace orchestrator report",
+        reported: true
+      };
+    }
     evenLayerShards(nodeIds, meta.num_layers || 1, meta.total_neurons || 0).forEach((shard, index) => {
       const layers = shard.layers;
       const metric = placementActivityForLayers(layers, activity, shard.neuronCount);

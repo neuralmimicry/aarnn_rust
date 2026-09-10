@@ -3,6 +3,7 @@ use anyhow::{Context, anyhow};
 use reqwest::Method;
 use reqwest::blocking::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -57,6 +58,19 @@ pub struct WorkspaceSummary {
     pub distributed_node_count: usize,
     #[serde(default)]
     pub distributed_node_ids: Vec<String>,
+    #[serde(default)]
+    pub distributed_distribution: Vec<WorkspaceDistributionEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceDistributionEntry {
+    pub node_id: String,
+    #[serde(default)]
+    pub layers: Vec<u32>,
+    #[serde(default)]
+    pub layer_neuron_counts: HashMap<u32, u64>,
+    #[serde(default)]
+    pub backup_layers: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

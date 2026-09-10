@@ -86,7 +86,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
-use aarnn_rust::runtime_api::{AutoscalerReport, WorkspaceSummary};
+use aarnn_rust::runtime_api::{AutoscalerReport, WorkspaceDistributionEntry, WorkspaceSummary};
 
 type OidcClient = CoreClient<
     EndpointSet,
@@ -6572,18 +6572,27 @@ fn resolve_runtime_workspace_owner(
 
 fn apply_workspace_distribution_metadata(
     workspaces: &mut [WorkspaceSummary],
-    distribution_by_network: &HashMap<String, Vec<String>>,
+    distribution_by_network: &HashMap<String, Vec<WorkspaceDistributionEntry>>,
 ) {
     for workspace in workspaces {
         workspace.distributed_node_count = 0;
         workspace.distributed_node_ids.clear();
+        workspace.distributed_distribution.clear();
         let network_id = workspace.network_id.trim();
         if network_id.is_empty() {
             continue;
         }
-        if let Some(node_ids) = distribution_by_network.get(network_id) {
+        if let Some(entries) = distribution_by_network.get(network_id) {
+            let mut node_ids = entries
+                .iter()
+                .map(|entry| entry.node_id.trim().to_string())
+                .filter(|node_id| !node_id.is_empty())
+                .collect::<Vec<_>>();
+            node_ids.sort();
+            node_ids.dedup();
             workspace.distributed_node_count = node_ids.len();
-            workspace.distributed_node_ids = node_ids.clone();
+            workspace.distributed_node_ids = node_ids;
+            workspace.distributed_distribution = entries.clone();
         }
     }
 }
@@ -6629,7 +6638,10 @@ fn apply_workspace_distribution_autoscaler_fallback(
     }
 
     for workspace in workspaces.iter_mut().filter(|workspace| workspace.running) {
-        if workspace.distributed_node_count > 0 || !workspace.distributed_node_ids.is_empty() {
+        if workspace.distributed_node_count > 0
+            || !workspace.distributed_node_ids.is_empty()
+            || !workspace.distributed_distribution.is_empty()
+        {
             continue;
         }
         workspace.distributed_node_count = inferred_node_count;
@@ -6639,7 +6651,7 @@ fn apply_workspace_distribution_autoscaler_fallback(
 
 async fn fetch_workspace_distribution_by_network(
     state: &AppState,
-) -> Option<HashMap<String, Vec<String>>> {
+) -> Option<HashMap<String, Vec<WorkspaceDistributionEntry>>> {
     let orchestrator = state.default_orchestrator.as_deref()?;
     let target_addr = normalize_target_addr(orchestrator);
     let mut client = connect_cluster_client(target_addr).await.ok()?;
@@ -6667,40 +6679,59 @@ async fn fetch_workspace_distribution_by_network(
         }
     }
 
-    let mut distribution_by_network: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut distribution_by_network: HashMap<String, Vec<WorkspaceDistributionEntry>> =
+        HashMap::new();
     for network in &status.networks {
         let network_id = network.network_id.trim();
         if network_id.is_empty() {
             continue;
         }
-        let entry = distribution_by_network
-            .entry(network_id.to_string())
-            .or_default();
-        for node_id in network.distribution.keys() {
-            let node_id = node_id.trim();
-            if !node_id.is_empty() {
-                entry.insert(node_id.to_string());
-            }
-        }
-        if entry.is_empty()
-            && let Some(active_nodes) = active_nodes_by_network.get(network_id)
-        {
-            entry.extend(active_nodes.iter().cloned());
+        let entries = network
+            .distribution
+            .iter()
+            .filter_map(|(node_id, range)| {
+                let node_id = node_id.trim();
+                (!node_id.is_empty()).then(|| WorkspaceDistributionEntry {
+                    node_id: node_id.to_string(),
+                    layers: range.layers.clone(),
+                    layer_neuron_counts: range.layer_neuron_counts.clone(),
+                    backup_layers: range.backup_layers.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            distribution_by_network.insert(network_id.to_string(), entries);
+        } else if let Some(active_nodes) = active_nodes_by_network.get(network_id) {
+            distribution_by_network.insert(
+                network_id.to_string(),
+                active_nodes
+                    .iter()
+                    .map(|node_id| WorkspaceDistributionEntry {
+                        node_id: node_id.clone(),
+                        ..WorkspaceDistributionEntry::default()
+                    })
+                    .collect(),
+            );
         }
     }
     for (network_id, node_ids) in active_nodes_by_network {
         distribution_by_network
             .entry(network_id)
-            .or_insert(node_ids);
+            .or_insert_with(|| {
+                node_ids
+                    .into_iter()
+                    .map(|node_id| WorkspaceDistributionEntry {
+                        node_id,
+                        ..WorkspaceDistributionEntry::default()
+                    })
+                    .collect()
+            });
     }
 
-    let mut normalized = HashMap::with_capacity(distribution_by_network.len());
-    for (network_id, node_ids) in distribution_by_network {
-        let mut ids = node_ids.into_iter().collect::<Vec<_>>();
-        ids.sort();
-        normalized.insert(network_id, ids);
+    for entries in distribution_by_network.values_mut() {
+        entries.sort_by(|left, right| left.node_id.cmp(&right.node_id));
     }
-    Some(normalized)
+    Some(distribution_by_network)
 }
 
 async fn enrich_workspace_summaries_with_distribution(

@@ -932,6 +932,7 @@ impl WorkspaceManifest {
             last_saved_at_ms: self.last_saved_at_ms,
             distributed_node_count: 0,
             distributed_node_ids: Vec::new(),
+            distributed_distribution: Vec::new(),
         }
     }
 }
