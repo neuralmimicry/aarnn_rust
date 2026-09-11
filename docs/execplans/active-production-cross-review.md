@@ -39,6 +39,15 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [~] `2026-09-11` Live distributed AARNN logs showed early-cell formation followed
+  by repeated interface counters returning to `1/32` and `1/16`. The heartbeat
+  path treated every larger layer count as a placement change and reissued a
+  legacy `LoadNetwork` command containing the older snapshot, resetting worker
+  growth. `src/distributed.rs` now treats count increases for already hosted
+  layers as telemetry only; the focused regression test proves that this path
+  does not request a snapshot reload, while a new hosted layer still requests
+  placement work. Deployment and live growth evidence remain pending.
+
 - [x] `2026-09-05` Completed a focused review of automatic sharding and
   whole-brain relocation. `src/distributed.rs` currently makes telemetry-driven
   layer-range deployment changes and may retain a full-network anchor; it does

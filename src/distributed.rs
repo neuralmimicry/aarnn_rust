@@ -2702,7 +2702,15 @@ fn preserve_sharded_node_assignments(
     Some(assignments)
 }
 
-fn network_resource_observation_changed(range: &LayerRange, resources: &NetworkResources) -> bool {
+/// Return whether a heartbeat changes the layer placement shape.
+///
+/// A larger count for an already hosted layer is biological growth. It must
+/// be merged into the authoritative placement telemetry, but it must not
+/// trigger `rebalance_networks`: the legacy LoadNetwork command carries the
+/// last published snapshot and would otherwise replace the worker's newer
+/// in-memory topology with that older snapshot. Placement is only required
+/// when the set of hosted layers changes.
+fn network_resource_topology_changed(range: &LayerRange, resources: &NetworkResources) -> bool {
     let hosted_layers = range
         .layers
         .iter()
@@ -2717,13 +2725,7 @@ fn network_resource_observation_changed(range: &LayerRange, resources: &NetworkR
     if hosted_layers != reported_layers {
         return true;
     }
-    resources.layer_neuron_counts.iter().any(|(layer, count)| {
-        range
-            .layer_neuron_counts
-            .get(layer)
-            .map(|known| count > known)
-            .unwrap_or(true)
-    })
+    false
 }
 
 fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) -> Vec<u32> {
@@ -8279,9 +8281,8 @@ impl DistributedNeuromorphic for DistributedNode {
                         // placement. Capacity includes noisy measured latency,
                         // and rebuilding here caused shard oscillation and
                         // repeated UnloadNetwork/LoadNetwork cycles. Rebalance
-                        // only when the worker reports a new hosted layer or a
-                        // larger biological layer count.
-                        needs_rebalance |= network_resource_observation_changed(range, &net_res);
+                        // only when the worker reports a new hosted layer.
+                        needs_rebalance |= network_resource_topology_changed(range, &net_res);
                         // Heartbeats can briefly observe a worker between an
                         // unload and its replacement LoadNetwork command.  An
                         // empty report is therefore an unknown observation,
@@ -10481,6 +10482,31 @@ mod tests {
 
         assert_eq!(total_neurons_from_distribution(&distribution), 112);
         assert_eq!(total_neurons_from_distribution(&HashMap::new()), 0);
+    }
+
+    #[test]
+    fn biological_growth_does_not_trigger_snapshot_reload() {
+        let range = LayerRange {
+            layers: vec![0],
+            layer_neuron_counts: HashMap::from([(0, 146)]),
+            backup_layers: vec![1],
+        };
+        let grown = NetworkResources {
+            num_neurons: 151,
+            layer_neuron_counts: HashMap::from([(0, 151), (1, 175)]),
+            ..Default::default()
+        };
+        assert!(
+            !network_resource_topology_changed(&range, &grown),
+            "a larger hosted layer is telemetry growth, not a placement change"
+        );
+
+        let new_layer = NetworkResources {
+            num_neurons: 167,
+            layer_neuron_counts: HashMap::from([(0, 151), (1, 175), (2, 16)]),
+            ..Default::default()
+        };
+        assert!(network_resource_topology_changed(&range, &new_layer));
     }
 
     #[test]
