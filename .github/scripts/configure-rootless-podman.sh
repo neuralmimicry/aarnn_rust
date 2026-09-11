@@ -4,9 +4,14 @@ set -euo pipefail
 
 uid="$(id -u)"
 conf_dir="${HOME}/.config/containers"
-runtime_dir="/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-storage_root="/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
-podman_tmp="/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}"
+# Multiple matrix jobs can share one self-hosted runner and therefore the
+# same run id, attempt, and uid. Include the job identity and process id so
+# their rootless overlay stores can never race during setup or cleanup.
+job_key="${GITHUB_JOB:-job}-${BASHPID}"
+job_key="$(printf '%s' "${job_key}" | tr -c 'A-Za-z0-9_.-' '-')"
+runtime_dir="/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
+storage_root="/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
+podman_tmp="/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
 
 mkdir -p "${conf_dir}"
 rm -rf "${runtime_dir}" "${storage_root}" "${podman_tmp}"
