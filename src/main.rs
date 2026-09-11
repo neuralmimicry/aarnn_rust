@@ -4075,24 +4075,45 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         )
         .await?;
 
-        // Register the brain network if we are an orchestrator
-        let default_playing = distributed_autostart_enabled();
-        let mut state = node.state.write().await;
-        let mut status = crate::distributed::proto::NetworkStatus {
-            network_id: args.brain_id.clone(),
-            distribution: std::collections::HashMap::new(),
-            current_dt: args.dt_ms,
-            total_neurons: 0,
-            num_layers: (args.num_hidden_layers + 1) as u32,
-            desired_aarnn_depth: 5, // Default to max realism depth
-            config_json: String::new(),
-            neuron_model: NeuronModel::Aarnn.to_str().to_string(),
-            learning_rule: LearningRule::Aarnn.to_str().to_string(),
-            playing: default_playing,
-            ..Default::default()
-        };
-        crate::distributed::sync_network_status_deployment_from_payload(&mut status, "");
-        state.network_registry.insert(args.brain_id.clone(), status);
+        // Register the implicit brain only when the orchestrator has no
+        // explicit startup network specification. When both are present, the
+        // old implicit entry becomes a blank, depth-zero registry record while
+        // the configured network is registered later from its real payload.
+        let explicit_network_ids = std::env::var("NM_ORCHESTRATOR_NETWORK_SPECS")
+            .ok()
+            .and_then(|raw| {
+                serde_json::from_str::<Vec<OrchestratorNetworkSpec>>(&raw)
+                    .ok()
+                    .map(|specs| {
+                        specs
+                            .into_iter()
+                            .map(|spec| spec.network_id)
+                            .collect::<std::collections::HashSet<_>>()
+                    })
+            });
+        let register_implicit = explicit_network_ids
+            .as_ref()
+            .map(|ids| ids.is_empty() || ids.contains(&args.brain_id))
+            .unwrap_or(true);
+        if register_implicit {
+            let default_playing = distributed_autostart_enabled();
+            let mut state = node.state.write().await;
+            let mut status = crate::distributed::proto::NetworkStatus {
+                network_id: args.brain_id.clone(),
+                distribution: std::collections::HashMap::new(),
+                current_dt: args.dt_ms,
+                total_neurons: 0,
+                num_layers: (args.num_hidden_layers + 1) as u32,
+                desired_aarnn_depth: 5, // Default to max realism depth
+                config_json: String::new(),
+                neuron_model: NeuronModel::Aarnn.to_str().to_string(),
+                learning_rule: LearningRule::Aarnn.to_str().to_string(),
+                playing: default_playing,
+                ..Default::default()
+            };
+            crate::distributed::sync_network_status_deployment_from_payload(&mut status, "");
+            state.network_registry.insert(args.brain_id.clone(), status);
+        }
     }
 
     if let Some(path) = args.stable_migration_spec.clone() {

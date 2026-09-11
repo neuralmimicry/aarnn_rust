@@ -2638,6 +2638,94 @@ fn build_sharded_node_assignments(
         .collect()
 }
 
+/// Keep a healthy sharded assignment while workers report biological growth.
+///
+/// Capacity telemetry is intentionally noisy because it includes measured
+/// step latency. Rebuilding a placement from that value on every heartbeat
+/// causes an otherwise healthy network to oscillate between workers. A legacy
+/// `UnloadNetwork` also discards the worker's in-memory growth state, so this
+/// oscillation looked like a network that could never grow. Preserve the last
+/// complete assignment until an assigned worker disappears or the placement
+/// no longer covers every layer.
+fn preserve_sharded_node_assignments(
+    previous: &HashMap<String, LayerRange>,
+    eligible_nodes: &HashSet<String>,
+    total_layers: u32,
+) -> Option<Vec<(String, Vec<u32>, Vec<u32>)>> {
+    if previous.is_empty() || total_layers == 0 {
+        return None;
+    }
+
+    let mut active_coverage = vec![0u8; total_layers as usize];
+    let mut backup_coverage = vec![0u8; total_layers as usize];
+    let mut assignments = Vec::new();
+    let mut nodes: Vec<&String> = previous.keys().collect();
+    nodes.sort();
+    for node_id in nodes {
+        if !eligible_nodes.contains(node_id) {
+            return None;
+        }
+        let range = previous.get(node_id)?;
+        let mut active = range
+            .layers
+            .iter()
+            .copied()
+            .filter(|layer| *layer < total_layers)
+            .collect::<Vec<_>>();
+        let mut backups = range
+            .backup_layers
+            .iter()
+            .copied()
+            .filter(|layer| *layer < total_layers)
+            .collect::<Vec<_>>();
+        active.sort_unstable();
+        active.dedup();
+        backups.sort_unstable();
+        backups.dedup();
+        for layer in &active {
+            active_coverage[*layer as usize] = active_coverage[*layer as usize].saturating_add(1);
+        }
+        for layer in &backups {
+            backup_coverage[*layer as usize] = backup_coverage[*layer as usize].saturating_add(1);
+        }
+        if active.is_empty() && backups.is_empty() {
+            return None;
+        }
+        assignments.push((node_id.clone(), active, backups));
+    }
+
+    if active_coverage.iter().any(|count| *count != 1)
+        || (eligible_nodes.len() > 1 && backup_coverage.iter().any(|count| *count == 0))
+    {
+        return None;
+    }
+    Some(assignments)
+}
+
+fn network_resource_observation_changed(range: &LayerRange, resources: &NetworkResources) -> bool {
+    let hosted_layers = range
+        .layers
+        .iter()
+        .chain(range.backup_layers.iter())
+        .copied()
+        .collect::<HashSet<_>>();
+    let reported_layers = resources
+        .layer_neuron_counts
+        .keys()
+        .copied()
+        .collect::<HashSet<_>>();
+    if hosted_layers != reported_layers {
+        return true;
+    }
+    resources.layer_neuron_counts.iter().any(|(layer, count)| {
+        range
+            .layer_neuron_counts
+            .get(layer)
+            .map(|known| count > known)
+            .unwrap_or(true)
+    })
+}
+
 fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) -> Vec<u32> {
     let mut layers = active_layers.to_vec();
     layers.extend(backup_layers.iter().copied());
@@ -6854,8 +6942,18 @@ impl DistributedNode {
                     all_pending.push((node_id_clone, stop_cmd));
                 }
             } else {
-                let node_assignments =
-                    build_sharded_node_assignments(&target_node_capacities, total_layers);
+                let eligible_nodes = target_node_capacities
+                    .iter()
+                    .map(|(node_id, _)| node_id.clone())
+                    .collect::<HashSet<_>>();
+                let node_assignments = preserve_sharded_node_assignments(
+                    &previous_distribution,
+                    &eligible_nodes,
+                    total_layers,
+                )
+                .unwrap_or_else(|| {
+                    build_sharded_node_assignments(&target_node_capacities, total_layers)
+                });
 
                 for (node_id, layers, redundant) in node_assignments {
                     let hosted_layers = hosted_layers_for_assignment(&layers, &redundant);
@@ -8177,11 +8275,13 @@ impl DistributedNeuromorphic for DistributedNode {
                     .insert(req.node_id.clone(), net_res.clone());
                 if let Some(net_status) = state.network_registry.get_mut(&net_id) {
                     if let Some(range) = net_status.distribution.get_mut(&req.node_id) {
-                        // Re-run placement after a replacement heartbeat so a
-                        // previously deferred source unload can be released
-                        // only after the replacement has reported its loaded
-                        // network.
-                        needs_rebalance = true;
+                        // A normal heartbeat must not trigger a fresh capacity
+                        // placement. Capacity includes noisy measured latency,
+                        // and rebuilding here caused shard oscillation and
+                        // repeated UnloadNetwork/LoadNetwork cycles. Rebalance
+                        // only when the worker reports a new hosted layer or a
+                        // larger biological layer count.
+                        needs_rebalance |= network_resource_observation_changed(range, &net_res);
                         // Heartbeats can briefly observe a worker between an
                         // unload and its replacement LoadNetwork command.  An
                         // empty report is therefore an unknown observation,
