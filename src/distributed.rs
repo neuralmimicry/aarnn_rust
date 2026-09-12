@@ -2736,6 +2736,10 @@ fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) ->
     layers
 }
 
+fn reported_layers_for_resources(active_layers: &[u32], backup_layers: &[u32]) -> Vec<u32> {
+    hosted_layers_for_assignment(active_layers, backup_layers)
+}
+
 fn deployment_prefers_combined(deployment: &DeploymentConfig) -> bool {
     deployment.combined_group.is_some()
         || deployment.has_mode(crate::deployment::ExecutionMode::Combined)
@@ -5717,7 +5721,17 @@ impl DistributedNode {
             let mut layer_neuron_counts = HashMap::new();
             let mut total_neurons = 0u64;
 
-            for &l in &net.assigned_layers {
+            // Heartbeats must describe the complete hosted placement shape,
+            // including redundant layers.  The orchestrator compares this
+            // set with active+backup placement; omitting backups makes every
+            // heartbeat look like a topology change and replays LoadNetwork,
+            // which discards biological growth.  Keep num_neurons as the
+            // active total so redundant_neurons remains a separate resource
+            // metric (REQ growth and placement stability).
+            let reported_layers =
+                reported_layers_for_resources(&net.assigned_layers, &net.redundant_layers);
+
+            for &l in &reported_layers {
                 let size = if (l as usize) < net.runner.net.num_hidden_layers {
                     net.runner.layer_size(l as usize) as u64
                 } else if (l as usize) == net.runner.net.num_hidden_layers {
@@ -5726,7 +5740,9 @@ impl DistributedNode {
                     0
                 };
                 layer_neuron_counts.insert(l, size);
-                total_neurons += size;
+                if net.assigned_layers.contains(&l) {
+                    total_neurons += size;
+                }
             }
 
             res.insert(
@@ -10507,6 +10523,14 @@ mod tests {
             ..Default::default()
         };
         assert!(network_resource_topology_changed(&range, &new_layer));
+    }
+
+    #[test]
+    fn worker_resource_reports_include_backup_layers() {
+        assert_eq!(
+            reported_layers_for_resources(&[0, 2], &[1, 2]),
+            vec![0, 1, 2]
+        );
     }
 
     #[test]
