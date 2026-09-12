@@ -6897,6 +6897,28 @@ impl DistributedNode {
             let previous_nodes: HashSet<String> = net_status.distribution.keys().cloned().collect();
             let previous_distribution = net_status.distribution.clone();
             let previous_total_neurons = net_status.total_neurons;
+
+            // Keep every currently assigned worker in the candidate set while
+            // its heartbeat is still healthy.  Capacity and latency telemetry
+            // is deliberately noisy, so ranking the workers again on every
+            // heartbeat can otherwise evict a perfectly good active or backup
+            // shard for one interval.  That interval is enough for the legacy
+            // LoadNetwork handoff to reload the baseline snapshot and erase
+            // biological growth.  A worker that has actually left the cluster
+            // is absent from node_capacity_map and is still removed here.
+            if shard_across_nodes {
+                for node_id in &previous_nodes {
+                    if target_node_capacities
+                        .iter()
+                        .any(|(candidate, _)| candidate == node_id)
+                    {
+                        continue;
+                    }
+                    if let Some(capacity) = node_capacity_map.get(node_id).copied() {
+                        target_node_capacities.push((node_id.clone(), capacity));
+                    }
+                }
+            }
             let mut known_counts = known_layer_neuron_counts(
                 &previous_distribution,
                 runtime_metrics_snapshot.get(net_id),
