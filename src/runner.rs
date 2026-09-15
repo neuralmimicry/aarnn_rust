@@ -24918,6 +24918,12 @@ mod tests {
     fn test_active_dendritic_compartments_boost_excitation() {
         let mut net = NetworkConfig::default();
         net.growth_enabled = true;
+        // This test exercises the shared profile path.  The default human
+        // fixture contains randomized region/type assignments, whose
+        // per-cell profiles intentionally override `aarnn_bio`.
+        net.brain_regions.clear();
+        net.neuron_types.clear();
+        net.clumping_design = crate::config::ClumpingDesign::None;
         net.aarnn_bio.dendritic_active_enabled = true;
         net.aarnn_bio.dendritic_ca_influx_gain = 1.0;
         net.aarnn_bio.dendritic_plateau_threshold = 0.0;

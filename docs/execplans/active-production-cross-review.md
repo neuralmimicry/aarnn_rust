@@ -2333,3 +2333,23 @@ Distribution is `dist/minecraft/` with SHA256SUMS. Unity Editor and Bedrock clie
 rendering remain unavailable, and native mapping/calibration/physics gates remain
 open. The opt-in legacy AER1 sandbox preserves the closed production I/O gate;
 no native engine content hash is presented as biological or physics equivalence.
+
+## Verification update — 2026-09-15 18:53Z: all-feature active-dendrite fixture
+
+- [x] Investigated GitHub Actions run `35006958890`, job `104512616535`, with
+  `gh` authentication. The x64 job failed only at
+  `runner::tests::test_active_dendritic_compartments_boost_excitation`; the
+  ARM64 verification job passed.
+- [x] Reproduced the failure with the CI feature profile. `Runner::new` rebuilds
+  the default human topology and resolves randomized per-cell profiles, so the
+  test's edits to the shared `aarnn_bio` profile were not authoritative. The
+  test fixture now clears the clumping design, regions and neuron types before
+  asserting the shared-profile active-dendrite path. This changes no production
+  biological or numerical semantics.
+- [x] The focused CI-equivalent command passes:
+  `cargo test --locked --all-features --lib
+  runner::tests::test_active_dendritic_compartments_boost_excitation --
+  --exact --nocapture`. The complete x64 workflow test command also passes:
+  `NM_DISABLE_OPENCL=1 cargo test --locked --all-features --lib --bin web_ui
+  --test '*'` (402 library tests plus all integration suites). `cargo fmt
+  --all --check` and `git diff --check` also pass.
