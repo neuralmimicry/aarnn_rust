@@ -50,7 +50,8 @@ use crate::providers::VideoFileProvider;
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 use crate::providers::WebcamCaptureProvider;
 use crate::providers::{
-    AudioFileProvider, MicrophoneProvider, RandomProvider, SensoryProvider, ThetaProvider,
+    AudioFileProvider, MAX_AUDIO_SENSORY_NEURONS, MicrophoneDeviceInfo, MicrophoneProvider,
+    RandomProvider, SensoryProvider, ThetaProvider, list_microphone_devices,
 };
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
@@ -82,6 +83,33 @@ use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::sync::RwLock;
 #[cfg(feature = "ui")]
 use tonic::Request;
+
+#[cfg(feature = "ui")]
+const CONTROLS_PANEL_MIN_WIDTH: f32 = 288.0;
+
+#[cfg(feature = "ui")]
+const CONTROL_STATUS_ROW_HEIGHT: f32 = 18.0;
+
+#[cfg(feature = "ui")]
+const LAYOUT_SIZE_QUANTUM: f32 = 4.0;
+
+#[cfg(feature = "ui")]
+fn add_fixed_control_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    let text = text.into();
+    let width = ui.available_width().max(1.0);
+    ui.add_sized(
+        vec2(width, CONTROL_STATUS_ROW_HEIGHT),
+        egui::Label::new(text).truncate(),
+    )
+}
+
+#[cfg(feature = "ui")]
+fn quantize_layout_size(size: egui::Vec2) -> egui::Vec2 {
+    vec2(
+        (size.x / LAYOUT_SIZE_QUANTUM).round() * LAYOUT_SIZE_QUANTUM,
+        (size.y / LAYOUT_SIZE_QUANTUM).round() * LAYOUT_SIZE_QUANTUM,
+    )
+}
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 use crate::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
@@ -505,6 +533,15 @@ pub(crate) struct IpcUdsService {
 }
 
 fn ipc_socket_path(brain_id: &str) -> String {
+    if let Ok(socket_dir) = std::env::var("NM_IPC_SOCKET_DIR") {
+        let socket_dir = socket_dir.trim_end_matches('/');
+        if !socket_dir.is_empty() {
+            if brain_id == "default" {
+                return format!("{}/aarnn_rust.nn", socket_dir);
+            }
+            return format!("{}/aarnn_rust.{}.nn", socket_dir, brain_id);
+        }
+    }
     if let Ok(home) = std::env::var("HOME") {
         if brain_id == "default" {
             format!("{}/aarnn_rust.nn", home)
@@ -629,7 +666,6 @@ impl IpcUdsServer {
                                 hs.s_names.len(),
                                 hs.o_names.len()
                             );
-                            self.send_size_hint_to_last_peer();
                             let peer_str = self
                                 .last_peer
                                 .as_ref()
@@ -1228,6 +1264,10 @@ fn ga_ramp_label(population_size: usize, worker_cap: usize, sim_time_ms: f64) ->
 #[allow(dead_code)]
 enum SimControl {
     SetPlaying(bool),
+    /// Route provider frames into a managed distributed network. The local
+    /// Runner remains untouched while this target is active; the distributed
+    /// executor owns the biological step.
+    SetDistributedInput(Option<String>),
     SetProvider(Box<dyn SensoryProvider + Send>),
     ApplyConfig(crate::config::NetworkConfig),
     SetModel(NeuronModel),
@@ -1251,6 +1291,13 @@ enum SimControl {
     SetIpcThreshold(f32),
     SetFeedback(bool),
     Shutdown,
+}
+
+#[cfg(feature = "ui")]
+struct DistributedSensoryFrame {
+    network_id: String,
+    step_index: i64,
+    spikes: Vec<i8>,
 }
 
 #[cfg(feature = "ui")]
@@ -1503,6 +1550,9 @@ struct App {
     http_aer_source_url: String,
     http_aer_base: u32,
     http_aer_status: Arc<RwLock<HttpAerInputStatus>>,
+    audio_file_path: Option<String>,
+    audio_file_sample_rate: Option<u32>,
+    audio_file_sample_count: Option<usize>,
     sensory_count: usize,
     neuron_model: NeuronModelSel,
     izh_preset: IzhPreset,
@@ -1524,6 +1574,9 @@ struct App {
     // simple RNG state for random spikes
     random_spike_probability: f32,
     mic_running: bool,
+    microphone_devices: Vec<MicrophoneDeviceInfo>,
+    microphone_device_id: Option<String>,
+    microphone_devices_error: Option<String>,
     // GA Search
     ga_search: Option<GASearch>,
     ga_running: bool,
@@ -1856,6 +1909,25 @@ struct App {
     initial_stdp: STDPParams,
     initial_model: NeuronModel,
     initial_learning: Learning,
+}
+
+#[cfg(feature = "ui")]
+fn microphone_display_label(
+    device: &MicrophoneDeviceInfo,
+    devices: &[MicrophoneDeviceInfo],
+) -> String {
+    let duplicate_name = devices
+        .iter()
+        .filter(|candidate| candidate.name == device.name)
+        .count()
+        > 1;
+    let identity = if duplicate_name {
+        format!(" [{}]", device.id)
+    } else {
+        String::new()
+    };
+    let default_marker = if device.is_default { " (default)" } else { "" };
+    format!("{}{}{}", device.name, identity, default_marker)
 }
 
 #[cfg(feature = "ui")]
@@ -2317,12 +2389,77 @@ impl App {
         let stdp = STDPParams::default();
         let initial_lif = lif.clone();
         let initial_stdp = stdp.clone();
-        let initial_model = NeuronModel::Aarnn;
-        let initial_learning = Learning::Aarnn;
+        // Keep AARNN as the biological default.  Operators and bounded QA runs
+        // may select a model explicitly at startup; this is useful for the
+        // certified LIF/Izh GPU path without changing persisted model semantics.
+        let initial_model = match std::env::var("AARNN_UI_NEURON_MODEL")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("lif") => NeuronModel::Lif,
+            Some("izh") => NeuronModel::Izh(IzhikevichParams::from_preset("RS", lif.dt)),
+            _ => NeuronModel::Aarnn,
+        };
+        let initial_learning = if matches!(initial_model, NeuronModel::Aarnn) {
+            Learning::Aarnn
+        } else {
+            Learning::Stdp
+        };
         let mut runner = Runner::new(lif, stdp, net_cfg.clone(), initial_model, initial_learning);
         if let Some(json) = startup_snapshot_json.as_ref() {
             if let Err(e) = runner.import_network_json(json) {
                 nm_err!("[warn] Startup snapshot import failed: {}", e);
+            }
+        }
+
+        // An explicit startup audio source is useful for unattended examples and
+        // QA, but it must go through the same validated provider as the file
+        // picker.  A zero-sized snapshot has no input contract, so provision a
+        // bounded sensory layer before admitting audio rather than producing an
+        // empty spike vector and claiming success.
+        let mut startup_audio_provider = None;
+        let mut startup_audio_path = None;
+        let mut startup_audio_sample_rate = None;
+        let mut startup_audio_sample_count = None;
+        let mut startup_audio_status = None;
+        if let Ok(raw_path) = std::env::var("AARNN_AUDIO_FILE") {
+            let raw_path = raw_path.trim();
+            if !raw_path.is_empty() {
+                let path = std::path::Path::new(raw_path);
+                startup_audio_path = Some(raw_path.to_owned());
+                let requested_sensory = std::env::var("AARNN_AUDIO_SENSORY_NEURONS")
+                    .ok()
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .filter(|&value| (1..=MAX_AUDIO_SENSORY_NEURONS).contains(&value))
+                    .unwrap_or(64);
+                if runner.net.num_sensory_neurons == 0 {
+                    runner.resize_sensory(requested_sensory);
+                }
+                match AudioFileProvider::from_path(path, runner.net.num_sensory_neurons) {
+                    Ok(provider) => {
+                        startup_audio_sample_rate = Some(provider.sample_rate());
+                        startup_audio_sample_count = Some(provider.sample_count());
+                        startup_audio_status = Some(format!(
+                            "Audio input: {} ({} Hz, {} samples, {} EQ bands, S={})",
+                            path.display(),
+                            provider.sample_rate(),
+                            provider.sample_count(),
+                            provider.band_count(),
+                            runner.net.num_sensory_neurons
+                        ));
+                        nm_log!("[audio] {}", startup_audio_status.as_deref().unwrap());
+                        startup_audio_provider = Some(provider);
+                    }
+                    Err(error) => {
+                        startup_audio_status = Some(format!(
+                            "Audio input failed for {}: {}",
+                            path.display(),
+                            error
+                        ));
+                        nm_err!("[audio] {}", startup_audio_status.as_deref().unwrap());
+                    }
+                }
             }
         }
         let initial_net_cfg = runner.net.clone();
@@ -2343,6 +2480,33 @@ impl App {
         let prev_spk_h = hidden_layer_sizes.iter().map(|&h| vec![0i8; h]).collect();
         let runner = Arc::new(RwLock::new(runner));
         let (sim_tx, sim_rx) = std::sync::mpsc::channel::<SimControl>();
+        let (distributed_input_tx, mut distributed_input_rx) =
+            tokio::sync::mpsc::channel::<DistributedSensoryFrame>(32);
+        if let Some(node) = distributed_node.clone() {
+            runtime_handle.spawn(async move {
+                while let Some(frame) = distributed_input_rx.recv().await {
+                    if let Err(error) = node
+                        .inject_external_sensory_spikes(
+                            &frame.network_id,
+                            frame.step_index,
+                            &frame.spikes,
+                        )
+                        .await
+                    {
+                        // A frame observed while a cluster network is being
+                        // stopped/reset is an unadmitted peripheral sample;
+                        // report it and allow the next frame after Start to be
+                        // admitted at the new boundary.
+                        nm_err!(
+                            "[distributed-input] {} frame at step {} was not admitted: {}",
+                            frame.network_id,
+                            frame.step_index,
+                            error
+                        );
+                    }
+                }
+            });
+        }
         let playing_atomic = Arc::new(AtomicBool::new(false));
         let spectral_bands = Arc::new(RwLock::new(Vec::new()));
         let sensory_spikes_snapshot = Arc::new(RwLock::new(Vec::new()));
@@ -2381,6 +2545,7 @@ impl App {
         let sim_last_spike_len_thread = sim_last_spike_len.clone();
         let sim_t_ms_bits_thread = sim_t_ms_bits.clone();
         let sim_remote_only = remote_only;
+        let sim_distributed_input_tx = distributed_input_tx.clone();
         let sim_throttle = sim_throttle_ms.clone();
         let sim_idle_sleep_ms = std::env::var("NM_SIM_IDLE_SLEEP_MS")
             .ok()
@@ -2414,8 +2579,13 @@ impl App {
             .clamp(100, 10_000);
         #[cfg(all(feature = "robot_io", unix))]
         let sim_ipc_stats = ipc_stats.clone();
+        let startup_audio_loaded = startup_audio_provider.is_some();
         let mut sim_provider: Box<dyn SensoryProvider + Send> =
-            Box::new(RandomProvider::new(n_s, 0.02));
+            if let Some(provider) = startup_audio_provider {
+                Box::new(provider)
+            } else {
+                Box::new(RandomProvider::new(n_s, 0.02))
+            };
         let ipc_aer_cfg = aer_cfg.clone().unwrap_or_default();
         let ipc_aer_sensory_base = ipc_aer_cfg.sensory_base;
         let ipc_aer_output_base = ipc_aer_cfg.output_base;
@@ -2425,6 +2595,7 @@ impl App {
         let mut sim_ipc_service: Option<IpcUdsService> = early_ipc_service;
 
         let runner_start = std::time::Instant::now();
+        let sim_audio_diagnostic = startup_audio_loaded;
         std::thread::Builder::new()
             .name("simulation".into())
             .spawn(move || {
@@ -2666,12 +2837,18 @@ impl App {
                 let mut pending_ipc_dt: Option<f64> = None;
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut pending_ipc_reward: Option<f32> = None;
+                let mut distributed_input_target: Option<String> = None;
+                let mut distributed_input_step: i64 = 0;
                 loop {
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
                         match msg {
                             SimControl::SetPlaying(p) => {
                                 sim_playing.store(p, Ordering::SeqCst);
+                            }
+                            SimControl::SetDistributedInput(target) => {
+                                distributed_input_target = target;
+                                distributed_input_step = 0;
                             }
                             SimControl::SetProvider(p) => {
                                 sim_provider.stop();
@@ -2758,10 +2935,45 @@ impl App {
                         }
                     }
 
-                    if sim_remote_only {
+                    if sim_remote_only && distributed_input_target.is_none() {
                         std::thread::sleep(std::time::Duration::from_millis(
                             sim_remote_idle_sleep_ms,
                         ));
+                        continue;
+                    }
+
+                    // A cluster view has its own managed Runner and logical
+                    // clock. Consume the selected provider here only to emit
+                    // governed sensory frames; never step the local Runner a
+                    // second time or make the cluster inherit wall-clock
+                    // timing from this UI process.
+                    if let Some(network_id) = distributed_input_target.as_ref() {
+                        let spikes = sim_provider.next_spikes();
+                        sim_step_counter_thread.fetch_add(1, Ordering::Relaxed);
+                        sim_last_spike_count_thread.store(
+                            spikes.iter().filter(|&&v| v != 0).count() as u64,
+                            Ordering::Relaxed,
+                        );
+                        sim_last_spike_len_thread
+                            .store(spikes.len() as u64, Ordering::Relaxed);
+                        if let Ok(mut snap) = sim_sensory_snapshot.try_write() {
+                            *snap = spikes.clone();
+                        }
+                        if let Some(bands) = sim_provider.last_bands() {
+                            if let Ok(mut b) = sim_spectral.try_write() {
+                                *b = bands.to_vec();
+                            }
+                        }
+                        let frame = DistributedSensoryFrame {
+                            network_id: network_id.clone(),
+                            step_index: distributed_input_step,
+                            spikes,
+                        };
+                        distributed_input_step = distributed_input_step.saturating_add(1);
+                        if sim_distributed_input_tx.blocking_send(frame).is_err() {
+                            nm_err!("[distributed-input] receiver stopped");
+                            distributed_input_target = None;
+                        }
                         continue;
                     }
 
@@ -3650,8 +3862,23 @@ impl App {
                                 std::thread::yield_now();
                             }
                             if let Some(bands) = last_bands {
+                                if sim_audio_diagnostic {
+                                    let step = sim_step_counter_thread.load(Ordering::Relaxed);
+                                    if step > 0 && step.is_multiple_of(60) {
+                                        let peak = bands.iter().copied().fold(0.0f32, f32::max);
+                                        let spike_count = sim_last_spike_count_thread.load(Ordering::Relaxed);
+                                        let spike_len = sim_last_spike_len_thread.load(Ordering::Relaxed);
+                                        nm_log!(
+                                            "[audio] frame={} eq_peak={:.4} sensory_spikes={}/{}",
+                                            step,
+                                            peak,
+                                            spike_count,
+                                            spike_len
+                                        );
+                                    }
                                 if let Ok(mut b) = sim_spectral.try_write() {
                                     *b = bands;
+                                }
                                 }
                             }
                         }
@@ -3816,27 +4043,47 @@ impl App {
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(0);
         let http_aer_status = Arc::new(RwLock::new(HttpAerInputStatus::default()));
+        let (microphone_devices, microphone_devices_error) = match list_microphone_devices() {
+            Ok(devices) => (devices, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
 
         let mut app = Self {
             brain_id: brain_id.clone(),
             playing: false,
             loop_feedback: false,
-            #[cfg(all(feature = "robot_io", unix))]
-            input_source: if _ipc_enabled {
-                InputSource::ExternalIpc
+            input_source: if startup_audio_loaded {
+                InputSource::AudioFile
             } else {
+                #[cfg(all(feature = "robot_io", unix))]
+                if _ipc_enabled {
+                    InputSource::ExternalIpc
+                } else {
+                    InputSource::Random
+                }
+                #[cfg(not(all(feature = "robot_io", unix)))]
                 InputSource::Random
             },
-            #[cfg(not(all(feature = "robot_io", unix)))]
-            input_source: InputSource::Random,
             http_aer_source_url,
             http_aer_base,
             http_aer_status,
+            audio_file_path: startup_audio_path,
+            audio_file_sample_rate: startup_audio_sample_rate,
+            audio_file_sample_count: startup_audio_sample_count,
             sensory_count: n_s,
-            neuron_model: NeuronModelSel::Aarnn,
+            neuron_model: match initial_model {
+                NeuronModel::Lif => NeuronModelSel::Lif,
+                NeuronModel::Izh(_) => NeuronModelSel::Izh,
+                NeuronModel::Aarnn => NeuronModelSel::Aarnn,
+            },
             izh_preset: IzhPreset::RS,
-            learning: LearningSel::Aarnn,
-            status: "Ready".to_string(),
+            learning: match initial_learning {
+                Learning::Stdp => LearningSel::Stdp,
+                Learning::Hebb => LearningSel::Hebb,
+                Learning::Oja => LearningSel::Oja,
+                Learning::Aarnn => LearningSel::Aarnn,
+            },
+            status: startup_audio_status.unwrap_or_else(|| "Ready".to_string()),
             remote_only,
             runner,
             sim_tx,
@@ -3847,6 +4094,9 @@ impl App {
             total_conn: 0,
             random_spike_probability: 0.02,
             mic_running: false,
+            microphone_devices,
+            microphone_device_id: None,
+            microphone_devices_error,
             ga_search: None,
             ga_running: false,
             ga_panel_visible: false,
@@ -3936,7 +4186,7 @@ impl App {
             show_transmissions: false,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             transmissions_opacity: 0.8,
-            show_equalizer: false,
+            show_equalizer: startup_audio_loaded,
             probes: Vec::new(),
             next_probe_id: 1,
             scope_time_ms: 2000.0,
@@ -4159,6 +4409,21 @@ impl App {
             initial_model,
             initial_learning,
         };
+
+        if startup_audio_loaded {
+            let autoplay = std::env::var("AARNN_AUDIO_AUTOPLAY")
+                .ok()
+                .map(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(true);
+            if autoplay {
+                app.set_standalone_playing(true);
+            }
+        }
 
         if remote_only {
             app.status = "Remote-only UI (local simulation disabled)".into();
@@ -5722,11 +5987,44 @@ impl App {
         let _ = self.sim_tx.send(SimControl::SetPlaying(playing));
     }
 
+    fn refresh_microphone_devices(&mut self) {
+        match list_microphone_devices() {
+            Ok(devices) => {
+                if let Some(selected_id) = self.microphone_device_id.as_ref()
+                    && !devices.iter().any(|device| &device.id == selected_id)
+                {
+                    self.microphone_device_id = None;
+                    if self.mic_running {
+                        self.status =
+                            "Selected microphone disappeared; stop and choose another device"
+                                .to_string();
+                    }
+                }
+                self.microphone_devices = devices;
+                self.microphone_devices_error = None;
+            }
+            Err(error) => {
+                self.microphone_devices_error = Some(error.to_string());
+                self.microphone_devices.clear();
+            }
+        }
+    }
+
     fn reset_and_start_standalone(&mut self, status: &str) {
         let _ = self.sim_tx.send(SimControl::Reset);
         self.refresh_ui_buffers();
         self.status = status.to_string();
         self.set_standalone_playing(true);
+    }
+
+    fn set_distributed_input(&self, network_id: &str, enabled: bool) {
+        let provider_ready = match self.input_source {
+            InputSource::AudioFile => self.audio_file_path.is_some(),
+            InputSource::Microphone => self.mic_running,
+            _ => false,
+        };
+        let target = (enabled && provider_ready).then(|| network_id.to_owned());
+        let _ = self.sim_tx.send(SimControl::SetDistributedInput(target));
     }
 
     fn apply_cluster_control(
@@ -5773,6 +6071,7 @@ impl App {
                     }
                 }
                 self.status = format!("{} {} ({})", view_scope, status, network_id);
+                self.set_distributed_input(network_id, playing_after);
             } else {
                 self.status = format!(
                     "{} {} failed: {}",
@@ -10422,10 +10721,15 @@ impl eframe::App for App {
             } else {
                 "controls"
             };
+            let controls_panel_min_width = if self.graph_explorer || self.placement_explorer {
+                0.0
+            } else {
+                CONTROLS_PANEL_MIN_WIDTH
+            };
             egui::Panel::right(controls_panel_id)
                     .resizable(true)
-                    .size_range(0.0..=600.0)
-                    .default_size(if self.graph_explorer { 0.0 } else { 260.0_f32 })
+                    .size_range(controls_panel_min_width..=600.0)
+                    .default_size(controls_panel_min_width)
                     .show_inside(ui, |ui| {
                     if self.graph_explorer || self.placement_explorer {
                         return;
@@ -10442,14 +10746,11 @@ impl eframe::App for App {
                     } else {
                         "busy"
                     };
-                    ui.add(
-                        egui::Label::new(format!("Status: {} | Sleep: {}", self.status, sleep_label))
-                            .truncate(),
+                    add_fixed_control_label(
+                        ui,
+                        format!("Status: {} | Sleep: {}", self.status, sleep_label),
                     );
-                    ui.add(
-                        egui::Label::new(format!("FPAA: {}", self.fpaa_status.summary))
-                            .truncate(),
-                    );
+                    add_fixed_control_label(ui, format!("FPAA: {}", self.fpaa_status.summary));
                     ui.separator();
 
                     if let Some(binding) = self.remote_workspace_binding.clone() {
@@ -10719,39 +11020,93 @@ impl eframe::App for App {
                             .runner
                             .try_read()
                             .map(|r| {
-                                r.cl.as_ref()
-                                    .map(|cl| (cl.execution_target(), cl.is_cuda_backend()))
+                                r.cl.as_ref().map(|cl| {
+                                    (
+                                        cl.execution_target(),
+                                        cl.is_cuda_backend(),
+                                        r.aarnn_gpu_transition_supported(),
+                                    )
+                                })
                             })
                             .ok();
                         let use_aarnn = matches!(model_cloned, NeuronModel::Aarnn);
+                        let gpu_view_playing = self
+                            .resolve_view_playing(None)
+                            .unwrap_or(self.playing);
+                        let distributed_gpu_view =
+                            !matches!(self.view_source, ViewSource::Standalone);
                         let (gpu_line, gpu_status_line) = match cl_status {
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, true))) => (
+                            Some(Some((
+                                crate::cl_compute::OpenCLExecutionTarget::Gpu,
+                                true,
+                                aarnn_gpu_supported,
+                            ))) => (
                                 "GPU: Detected (CUDA)".to_string(),
-                                if self.playing {
-                                    if !use_aarnn || !net_cloned.use_morphology {
-                                        "GPU Status: Active (Dense CUDA path)".to_string()
+                                if self.remote_only {
+                                    "GPU Status: Detected locally; cluster worker status is shown per node".to_string()
+                                } else if distributed_gpu_view {
+                                    if gpu_view_playing {
+                                        if use_aarnn && aarnn_gpu_supported {
+                                            "GPU Status: Cluster active; certified AARNN GPU path; worker backend status is shown per node".to_string()
+                                        } else if use_aarnn {
+                                            "GPU Status: Cluster active; AARNN CPU reference fallback for the current heterogeneous profile; worker backend status is shown per node".to_string()
+                                        } else {
+                                            "GPU Status: Cluster active; worker GPU status is shown per node".to_string()
+                                        }
                                     } else {
-                                        "GPU Status: Active (Sparse CUDA path)".to_string()
+                                        "GPU Status: Cluster paused; worker GPU status is shown per node".to_string()
                                     }
+                                } else if !gpu_view_playing {
+                                    "GPU Status: Ready (simulation paused)".to_string()
+                                } else if use_aarnn && aarnn_gpu_supported {
+                                    "GPU Status: Active (certified AARNN CUDA path)".to_string()
+                                } else if use_aarnn {
+                                    "GPU Status: Active (AARNN CPU reference fallback for the current heterogeneous profile)".to_string()
+                                } else if !net_cloned.use_morphology {
+                                    "GPU Status: Active (dense CUDA path)".to_string()
                                 } else {
-                                    "GPU Status: Inactive".to_string()
+                                    "GPU Status: Active (sparse CUDA path)".to_string()
                                 },
                             ),
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Gpu, false))) => (
+                            Some(Some((
+                                crate::cl_compute::OpenCLExecutionTarget::Gpu,
+                                false,
+                                aarnn_gpu_supported,
+                            ))) => (
                                 "GPU: Detected (OpenCL)".to_string(),
-                                if self.playing {
-                                    if !use_aarnn || !net_cloned.use_morphology {
-                                        "GPU Status: Active (Dense path)".to_string()
+                                if self.remote_only {
+                                    "GPU Status: Detected locally; cluster worker status is shown per node".to_string()
+                                } else if distributed_gpu_view {
+                                    if gpu_view_playing {
+                                        if use_aarnn && aarnn_gpu_supported {
+                                            "GPU Status: Cluster active; certified AARNN GPU path; worker backend status is shown per node".to_string()
+                                        } else if use_aarnn {
+                                            "GPU Status: Cluster active; AARNN CPU reference fallback for the current heterogeneous profile; worker backend status is shown per node".to_string()
+                                        } else {
+                                            "GPU Status: Cluster active; worker GPU status is shown per node".to_string()
+                                        }
                                     } else {
-                                        "GPU Status: Active (Sparse path)".to_string()
+                                        "GPU Status: Cluster paused; worker GPU status is shown per node".to_string()
                                     }
+                                } else if !gpu_view_playing {
+                                    "GPU Status: Ready (simulation paused)".to_string()
+                                } else if use_aarnn && aarnn_gpu_supported {
+                                    "GPU Status: Active (certified AARNN OpenCL path)".to_string()
+                                } else if use_aarnn {
+                                    "GPU Status: Active (AARNN CPU reference fallback for the current heterogeneous profile)".to_string()
+                                } else if !net_cloned.use_morphology {
+                                    "GPU Status: Active (dense path)".to_string()
                                 } else {
-                                    "GPU Status: Inactive".to_string()
+                                    "GPU Status: Active (sparse path)".to_string()
                                 },
                             ),
-                            Some(Some((crate::cl_compute::OpenCLExecutionTarget::Cpu, _))) => (
+                            Some(Some((
+                                crate::cl_compute::OpenCLExecutionTarget::Cpu,
+                                _,
+                                _,
+                            ))) => (
                                 "GPU: Not Detected (OpenCL CPU fallback)".to_string(),
-                                if self.playing {
+                                if gpu_view_playing {
                                     "GPU Status: Active (OpenCL CPU path)".to_string()
                                 } else {
                                     "GPU Status: Inactive".to_string()
@@ -10763,8 +11118,11 @@ impl eframe::App for App {
                             ),
                             None => ("GPU: Busy".to_string(), "GPU Status: busy".to_string()),
                         };
-                        ui.label(gpu_line);
-                        ui.label(gpu_status_line);
+                        let gpu_line_response = add_fixed_control_label(ui, gpu_line.clone());
+                        gpu_line_response.on_hover_text(gpu_line);
+                        let gpu_status_response =
+                            add_fixed_control_label(ui, gpu_status_line.clone());
+                        gpu_status_response.on_hover_text(gpu_status_line);
                     }
                     ui.label(format!("Rayon Pool Threads: {}", rayon::current_num_threads()));
                     let (sim_parallel_line_1, sim_parallel_line_2, sim_parallel_line_3) =
@@ -10832,7 +11190,7 @@ impl eframe::App for App {
                                 .map(|(idx, usage)| format!("C{}:{:.0}%", idx, usage))
                                 .collect::<Vec<_>>()
                                 .join("  ");
-                            ui.label(format!("Top Cores: {}", top));
+                            add_fixed_control_label(ui, format!("Top Cores: {}", top));
                         }
                     }
                     let (pacing, reason) = crate::ga::ga_pacing_status();
@@ -12696,8 +13054,8 @@ impl eframe::App for App {
                     ui.radio_value(&mut self.input_source, InputSource::Theta, "Theta").on_hover_text("Deterministic theta rhythm spikes (global oscillation)");
                     ui.radio_value(&mut self.input_source, InputSource::ExternalHttpAer, "HTTP/HTTPS AER")
                         .on_hover_text("Pull NDJSON AER frames from an HTTP/HTTPS stream and feed them into sensory spikes.");
-                    ui.radio_value(&mut self.input_source, InputSource::AudioFile, "Audio File").on_hover_text("Decode audio file → spectral bands → probabilistic spikes");
-                    ui.radio_value(&mut self.input_source, InputSource::Microphone, "Microphone").on_hover_text("Live mic capture → spectral bands → probabilistic spikes");
+                    ui.radio_value(&mut self.input_source, InputSource::AudioFile, "Audio File").on_hover_text("Decode audio file → spectral bands → repeatable rate-coded spikes");
+                    ui.radio_value(&mut self.input_source, InputSource::Microphone, "Microphone").on_hover_text("Live mic capture → spectral bands → rate-coded spikes");
                     #[cfg(feature = "image_input")]
                     ui.radio_value(&mut self.input_source, InputSource::ImageFile, "Image").on_hover_text("Static picture → grayscale → downsample to sensory → spikes");
                     #[cfg(feature = "video_input")]
@@ -12709,6 +13067,9 @@ impl eframe::App for App {
                         .on_hover_text("Receive sensory spikes via AER (preferred) or legacy float frames over Unix Domain Socket; floats are thresholded to spikes.");
                 });
                 if self.input_source != prev_input_source {
+                    if !matches!(self.view_source, ViewSource::Standalone) {
+                        self.set_distributed_input("", false);
+                    }
                     match self.input_source {
                         InputSource::Random => {
                             let n = net_cloned.num_sensory_neurons;
@@ -12738,6 +13099,12 @@ impl eframe::App for App {
                             #[cfg(feature = "webcam_input")]
                             { self.cam_running = false; }
                             self.connect_http_aer_source(net_cloned.num_sensory_neurons);
+                        }
+                        InputSource::Microphone => {
+                            self.refresh_microphone_devices();
+                            self.mic_running = false;
+                            #[cfg(feature = "webcam_input")]
+                            { self.cam_running = false; }
                         }
                         _ => {}
                     }
@@ -12788,8 +13155,27 @@ impl eframe::App for App {
                     InputSource::AudioFile => {
                         if ui.button("Choose File...").on_hover_text("Open an audio file (wav, flac, ogg, mp3)").clicked() {
                             if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["wav","flac","ogg","mp3"]).pick_file() {
-                                match AudioFileProvider::from_path(&path, net_cloned.num_sensory_neurons) {
+                                let audio_sensory_count = if net_cloned.num_sensory_neurons > 0 {
+                                    net_cloned.num_sensory_neurons
+                                } else {
+                                    std::env::var("AARNN_AUDIO_SENSORY_NEURONS")
+                                        .ok()
+                                        .and_then(|value| value.trim().parse::<usize>().ok())
+                                        .filter(|&value| (1..=MAX_AUDIO_SENSORY_NEURONS).contains(&value))
+                                        .unwrap_or(64)
+                                };
+                                match AudioFileProvider::from_path(&path, audio_sensory_count) {
                                     Ok(p) => {
+                                        if net_cloned.num_sensory_neurons == 0 {
+                                            self.sensory_count = audio_sensory_count;
+                                            self.local_net.num_sensory_neurons = audio_sensory_count;
+                                            let _ = self
+                                                .sim_tx
+                                                .send(SimControl::ResizeSensory(audio_sensory_count));
+                                        }
+                                        self.audio_file_path = Some(path.display().to_string());
+                                        self.audio_file_sample_rate = Some(p.sample_rate());
+                                        self.audio_file_sample_count = Some(p.sample_count());
                                         let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(p)));
                                         self.mic_running = false;
                                         #[cfg(feature = "webcam_input")]
@@ -12797,6 +13183,13 @@ impl eframe::App for App {
                                         self.status = format!("Loaded file: {}", path.display());
                                         self.smoothed_equalizer_values.clear();
                                         self.show_equalizer = true;
+                                        if let ViewSource::LocalManaged(network_id)
+                                        | ViewSource::ClusterGlobal(network_id) = &self.view_source
+                                        {
+                                            if self.resolve_view_playing(None) == Some(true) {
+                                                self.set_distributed_input(network_id, true);
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         self.status = format!("Failed to load audio: {}", e);
@@ -12806,6 +13199,18 @@ impl eframe::App for App {
                                 }
                             }
                         }
+                        if let Some(path) = self.audio_file_path.as_deref() {
+                            ui.label(format!("File: {}", path));
+                        }
+                        if let (Some(rate), Some(samples)) =
+                            (self.audio_file_sample_rate, self.audio_file_sample_count)
+                        {
+                            ui.label(format!("Decoded: {} Hz, {} mono samples", rate, samples));
+                        }
+                        let steps = self.sim_step_counter.load(Ordering::Relaxed);
+                        let spikes = self.sim_last_spike_count.load(Ordering::Relaxed);
+                        let total = self.sim_last_spike_len.load(Ordering::Relaxed);
+                        ui.label(format!("Sim steps: {}  last sensory spikes: {}/{}", steps, spikes, total));
                     }
                     #[cfg(feature = "robot_io")]
                     InputSource::ExternalIpc => {
@@ -12896,6 +13301,69 @@ impl eframe::App for App {
                         }
                     }
                     InputSource::Microphone => {
+                        let selected_device_id = self.microphone_device_id.clone();
+                        let selected_device_label = selected_device_id
+                            .as_deref()
+                            .and_then(|id| {
+                                self.microphone_devices
+                                    .iter()
+                                    .find(|device| device.id == id)
+                            })
+                            .map(|device| {
+                                microphone_display_label(device, &self.microphone_devices)
+                            })
+                            .unwrap_or_else(|| "System default microphone".to_string());
+                        ui.horizontal(|ui| {
+                            ui.label("Microphone");
+                            egui::ComboBox::from_id_salt("microphone-device")
+                                .selected_text(selected_device_label)
+                                .show_ui(ui, |ui| {
+                                    let mut selected = self.microphone_device_id.clone();
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        None,
+                                        "System default microphone",
+                                    );
+                                    for device in self.microphone_devices.clone() {
+                                        let label = microphone_display_label(
+                                            &device,
+                                            &self.microphone_devices,
+                                        );
+                                        ui.selectable_value(
+                                            &mut selected,
+                                            Some(device.id),
+                                            label,
+                                        );
+                                    }
+                                    if selected != self.microphone_device_id {
+                                        self.microphone_device_id = selected;
+                                        if self.mic_running {
+                                            self.status =
+                                                "Microphone selection changed; restart capture"
+                                                    .to_string();
+                                        }
+                                    }
+                                });
+                            if ui.button("Refresh").clicked() {
+                                self.refresh_microphone_devices();
+                            }
+                        });
+                        if let Some(error) = self.microphone_devices_error.as_deref() {
+                            ui.colored_label(
+                                egui::Color32::LIGHT_RED,
+                                format!("Microphone enumeration failed: {error}"),
+                            );
+                        } else if self.microphone_devices.is_empty() {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                "No microphone input devices are currently available",
+                            );
+                        } else {
+                            ui.label(format!(
+                                "{} microphone input device(s) available",
+                                self.microphone_devices.len()
+                            ));
+                        }
                         let label = if self.mic_running { "Stop Mic" } else { "Start Mic" };
                         if ui.button(label).clicked() {
                             if self.mic_running {
@@ -12905,13 +13373,27 @@ impl eframe::App for App {
                                 self.status = "Microphone stopped (Random fallback)".to_string();
                             } else {
                                 let n = net_cloned.num_sensory_neurons;
-                                match MicrophoneProvider::new(n) {
+                                let provider = match self.microphone_device_id.as_deref() {
+                                    Some(device_id) => {
+                                        MicrophoneProvider::new_with_device_id(n, device_id)
+                                    }
+                                    None => MicrophoneProvider::new(n),
+                                };
+                                match provider {
                                     Ok(p) => {
+                                        let device_name = p.device_name().to_string();
                                         let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(p)));
                                         self.mic_running = true;
-                                        self.status = "Microphone started".to_string();
+                                        self.status = format!("Microphone started: {device_name}");
                                         self.smoothed_equalizer_values.clear();
                                         self.show_equalizer = true;
+                                        if let ViewSource::LocalManaged(network_id)
+                                        | ViewSource::ClusterGlobal(network_id) = &self.view_source
+                                        {
+                                            if self.resolve_view_playing(None) == Some(true) {
+                                                self.set_distributed_input(network_id, true);
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         self.status = format!("Mic unavailable: {} — falling back to Random", e);
@@ -14473,13 +14955,25 @@ impl eframe::App for App {
 
             // Pre-compute Oscilloscope rect so we can gate network wheel-zoom when hovering scope
             let margin = 10.0f32;
-            let scope_w = 520.0f32;
+            let bottom_gap = 16.0f32;
+            let bottom_width = (panel_rect.width() - 2.0 * margin).max(1.0);
+            let compact_bottom_panels = bottom_width < 520.0 + 300.0 + bottom_gap;
+            let (scope_w, raster_w) = if compact_bottom_panels {
+                let shared_width = (bottom_width - bottom_gap).max(2.0);
+                ((shared_width * 0.62).max(1.0), (shared_width * 0.38).max(1.0))
+            } else {
+                (520.0, 300.0)
+            };
             let scope_h = 150.0f32;
             let scope_rect = egui::Rect::from_min_size(
                 egui::pos2(
-                    (panel_rect.center().x - scope_w * 0.5)
-                        .max(panel_rect.left() + margin)
-                        .min(panel_rect.right() - scope_w - margin),
+                    if compact_bottom_panels {
+                        panel_rect.left() + margin
+                    } else {
+                        (panel_rect.center().x - scope_w * 0.5)
+                            .max(panel_rect.left() + margin)
+                            .min(panel_rect.right() - scope_w - margin)
+                    },
                     panel_rect.bottom() - scope_h - margin,
                 ),
                 egui::vec2(scope_w, scope_h),
@@ -14807,7 +15301,9 @@ impl eframe::App for App {
             }
 
             // Recompute layout when size, counts, or (in growth mode) topology sizes change
-            let mut need_recompute = cam_changed || self.last_rendered_panel_size != panel_rect.size()
+            let layout_panel_size = quantize_layout_size(panel_rect.size());
+            let mut need_recompute = cam_changed
+                || self.last_rendered_panel_size != layout_panel_size
                 || self.sensory_positions.len() != layout_ns
                 || self.hidden_positions.len() != layout_layers
                 || self.output_positions.len() != layout_o;
@@ -14918,7 +15414,7 @@ impl eframe::App for App {
                 }
             }
             if need_recompute {
-                self.last_rendered_panel_size = panel_rect.size();
+                self.last_rendered_panel_size = quantize_layout_size(panel_rect.size());
                 self.last_layout_recompute = std::time::Instant::now();
                 let ns = layout_ns.max(1);
                 let o = layout_o.max(1);
@@ -17213,7 +17709,11 @@ impl eframe::App for App {
 
             // Fixed-corner hint so it doesn't block right-clicking near the cursor
             if hovered_target.is_none() {
-                let hint_pos = egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 24.0);
+                // Keep this below the optional output-path diagnostic. The
+                // diagnostic is live in standalone views, so placing both at
+                // the same y coordinate makes the text visibly overlap as the
+                // view changes between standalone and managed modes.
+                let hint_pos = egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 43.0);
                 painter.text(
                     hint_pos,
                     egui::Align2::LEFT_TOP,
@@ -17261,7 +17761,6 @@ impl eframe::App for App {
             }
 
             // Optional follow-up: small spike raster inset (outputs) at bottom-right
-            let raster_w = 300.0f32;
             let raster_h = 130.0f32;
             let rrect = egui::Rect::from_min_size(
                 egui::pos2(panel_rect.right() - raster_w - margin, panel_rect.bottom() - raster_h - margin),

@@ -98,6 +98,7 @@ namespace NeuralMimicry
 
         [SerializeField, Tooltip("World Y at water surface (metres).")]
         private float _waterSurfaceY = 0f;
+        public void SetWaterSurface(float height) { _waterSurfaceY = height; }
 
         [SerializeField, Tooltip("Depth range for swim bladder normalisation (metres).")]
         private float _swimBladderDepthRange = 0.05f;

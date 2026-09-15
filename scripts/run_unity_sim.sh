@@ -7,6 +7,9 @@
 # Usage:
 #   ./run_unity_sim.sh [--robots <spec>] [--tcp-host <host>] [--tcp-base-port <n>] [--no-build]
 #
+# `--node <count>` / `--nodes <count>` starts the distributed cluster runtime
+# and a TCP bridge for each brain, preserving the Unity client protocol.
+#
 # Quick-start:
 #   # Launch one C. elegans brain for Unity (listens on 127.0.0.1:7890):
 #   ./run_unity_sim.sh
@@ -18,9 +21,9 @@
 # Unity project setup
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# This script starts one TCP server per AARNN brain instance.  Each server
-# accepts a single persistent connection from the corresponding robot prefab
-# in Unity.
+# This script starts one TCP endpoint per AARNN brain instance. With
+# `--node`/`--nodes`, those endpoints are bridges into distributed brain nodes;
+# without it, they remain the standalone TCP servers for compatibility.
 #
 # 1. NmSimulationManager (MonoBehaviour on a scene-level GameObject):
 #      AarnnHost     = "127.0.0.1"

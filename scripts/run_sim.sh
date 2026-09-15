@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # run_sim.sh — Unified AARNN simulator launcher
 #
-# Selects the simulation backend (Webots, Unreal, Unity, or all three) and
+# Selects the simulation backend (Webots, Unreal, Unity, WebGL, or all three)
+# and
 # starts the appropriate AARNN brain processes for the requested robot spec.
 #
 # Usage:
 #   ./run_sim.sh [options]
 #
 # Options:
-#   --sim <webots|unreal|unity|all>
+#   --sim <webots|unreal|unity|webgl|minecraft|all>
 #                     Simulation backend (default: webots).
 #                       webots  — launch Webots + AARNN via run_multi_robot_webots.sh
 #                       unreal  — start AARNN brains AND launch the Unreal project
 #                                 (robots spawn and connect automatically)
 #                       unity   — start AARNN brains; press Play in the Unity editor
+#                       webgl   — start the distributed AARNN runtime and authenticated
+#                                 web gateway; open the printed URL in a browser
 #                       all     — launch Webots AND (Unreal + brains) concurrently
+#                       minecraft — detected Fabric 1.21.1 client + local authenticated TCP companion
 #   --robots <spec>   Robot spec, e.g. "celegans=1,hexapod=2,nao=1"
 #                     (default: celegans=1).
 #                     Supported types: celegans, drosophila_banc, drosophila_fafb,
@@ -31,18 +35,30 @@
 #   --tcp-ready-timeout <seconds>
 #                     Time to wait for each TCP brain server to bind before launching
 #                     Unreal/Unity (default: 600).
-#   --no-build        Skip cargo build of nn_tcp_server.
-#   --all-features    Build nn_tcp_server with cargo --all-features (parity testing).
+#   --node <n>        Number of distributed worker nodes for the selected backend
+#   --nodes <n>       Alias for --node; distribute the configured brain shards
+#                     across this many workers for Webots, Unreal, Unity, or WebGL.
+#   --no-build        Skip the selected brain-runtime build (reuse release binaries).
+#   --all-features    Build standalone nn_tcp_server with cargo --all-features.
 #   --engine <path>   Unreal Engine directory (…/UnrealEngine/Engine).
 #                     Default: $UE_ENGINE or /home/pbisaacs/Developer/Engine.
 #   --uproject <path> Unreal .uproject to launch (default: sim/unreal/NeuralMimicrySim.uproject).
 #   --map <name>      Boot map for --sim unreal (default: Template_Default).
 #   --no-engine       For unreal/all: start brain servers only, don't launch Unreal.
+#   --minecraft-edition <auto|java|bedrock>
+#                     Detect Java/Fabric or native Bedrock Dedicated Server; force a named edition.
+#   --bedrock-dir <path>
+#                     Existing, configured Bedrock Dedicated Server directory.
+#   --web-port <n>    Browser WebGL gateway port (default: 8080).
+#   --orchestrator-port <n>
+#                     Fixed cluster gRPC port for WebGL (default: auto-select).
 #   --config-map <csv>
 #                     Per-brain config map CSV (forwarded to Webots launcher).
 #   --network-map <csv>
 #                     Per-brain network map CSV (forwarded to Webots launcher).
 #   --help            Show this usage message.
+#   --nao-social      Fresh local NAO social reference model, chat and autonomous
+#                     encounters. One NAO; see sim/nao/README.md.
 #   [other args]      Remaining args are forwarded to run_multi_robot_webots.sh when
 #                     --sim webots is active.
 #
@@ -55,6 +71,9 @@
 #
 #   # Start both Webots and TCP servers simultaneously:
 #   ./run_sim.sh --sim all --robots "celegans=1,hexapod=1"
+#
+#   # Distribute C. elegans shards across three workers for Unreal:
+#   ./run_sim.sh --sim unreal --robots "celegans=1" --node 3
 
 set -euo pipefail
 
@@ -71,13 +90,19 @@ fi
 # Defaults
 # ---------------------------------------------------------------------------
 SIM_BACKEND="${SIM_BACKEND:-webots}"
+MINECRAFT_EDITION="${NM_MINECRAFT_EDITION:-auto}"
 ROBOT_SPEC="${ROBOT_SPEC:-celegans=1}"
 TCP_HOST="${TCP_HOST:-127.0.0.1}"
 TCP_BASE_PORT="${TCP_BASE_PORT:-7890}"
 TCP_READY_TIMEOUT="${TCP_READY_TIMEOUT:-600}"
+CLUSTER_NODE_COUNT="${NM_CLUSTER_NODES:-1}"
+CLUSTER_NODE_COUNT_SET=0
 NO_BUILD=0
+NAO_SOCIAL=0
 BUILD_ALL_FEATURES=0
 WEBOTS_PASSTHROUGH_ARGS=()
+CONFIG_MAP_CSV=""
+NETWORK_MAP_CSV=""
 
 # Unreal Engine launch configuration (used when --sim unreal/all).
 UE_ENGINE="${UE_ENGINE:-/home/pbisaacs/Developer/Engine}"
@@ -85,6 +110,10 @@ UPROJECT="${UPROJECT:-$ROOT_DIR/sim/unreal/NeuralMimicrySim.uproject}"
 UE_MAP="${UE_MAP:-/Engine/Maps/Templates/Template_Default}"
 UE_GAMEMODE="/Script/NmAerBridge.NmSimGameMode"
 LAUNCH_ENGINE=1              # 0 = start brain servers only (no engine window)
+WEBGL_HOST="${WEBGL_HOST:-127.0.0.1}"
+WEBGL_PORT="${WEBGL_PORT:-8080}"
+WEBGL_ORCHESTRATOR_PORT="${WEBGL_ORCHESTRATOR_PORT:-}"
+WEBGL_RUNTIME_FEATURES="${NM_WEBGL_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
 
 # ---------------------------------------------------------------------------
 # Robot type tables
@@ -140,6 +169,15 @@ while [ "$#" -gt 0 ]; do
       shift
       TCP_READY_TIMEOUT="${1:-$TCP_READY_TIMEOUT}"
       ;;
+    --node|--nodes)
+      shift
+      CLUSTER_NODE_COUNT="${1:-}"
+      CLUSTER_NODE_COUNT_SET=1
+      ;;
+    --node=*|--nodes=*)
+      CLUSTER_NODE_COUNT="${1#*=}"
+      CLUSTER_NODE_COUNT_SET=1
+      ;;
     --no-build)
       NO_BUILD=1
       ;;
@@ -161,9 +199,34 @@ while [ "$#" -gt 0 ]; do
     --no-engine)
       LAUNCH_ENGINE=0
       ;;
-    --config-map|--network-map)
-      WEBOTS_PASSTHROUGH_ARGS+=("$1" "${2:-}")
+    --nao-social)
+      NAO_SOCIAL=1
+      ;;
+    --minecraft-edition)
       shift
+      MINECRAFT_EDITION="${1:-auto}"
+      ;;
+    --bedrock-dir)
+      shift
+      export NM_BEDROCK_DIR="${1:-}"
+      ;;
+    --web-port|--webgl-port)
+      shift
+      WEBGL_PORT="${1:-$WEBGL_PORT}"
+      ;;
+    --orchestrator-port)
+      shift
+      WEBGL_ORCHESTRATOR_PORT="${1:-$WEBGL_ORCHESTRATOR_PORT}"
+      ;;
+    --config-map)
+      shift
+      CONFIG_MAP_CSV="${1:-}"
+      WEBOTS_PASSTHROUGH_ARGS+=(--config-map "$CONFIG_MAP_CSV")
+      ;;
+    --network-map)
+      shift
+      NETWORK_MAP_CSV="${1:-}"
+      WEBOTS_PASSTHROUGH_ARGS+=(--network-map "$NETWORK_MAP_CSV")
       ;;
     --help|-h)
       usage
@@ -181,11 +244,23 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+if [ "$NAO_SOCIAL" -eq 1 ]; then
+  if [ "$SIM_BACKEND" = all ] || [ "$CLUSTER_NODE_COUNT" != 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
+    echo 'NAO social reference requires one simulator and one fresh local brain; custom/distributed snapshots are unsupported.' >&2
+    exit 2
+  fi
+  social_args=(--sim "$SIM_BACKEND" --body-port "$TCP_BASE_PORT" --minecraft-edition "$MINECRAFT_EDITION")
+  if [ "$LAUNCH_ENGINE" -eq 0 ]; then social_args+=(--no-engine); fi
+  if [ -n "${NM_BEDROCK_DIR:-}" ]; then social_args+=(--bedrock-dir "$NM_BEDROCK_DIR"); fi
+  export UE_ENGINE
+  exec python3 "$ROOT_DIR/scripts/run_nao_social.py" "${social_args[@]}"
+fi
+
 # Validate --sim value
 case "$SIM_BACKEND" in
-  webots|unreal|unity|all) ;;
+  webots|unreal|unity|webgl|minecraft|all) ;;
   *)
-    echo "run_sim.sh: invalid --sim value '$SIM_BACKEND' (must be webots, unreal, unity, or all)" >&2
+    echo "run_sim.sh: invalid --sim value '$SIM_BACKEND' (must be webots, unreal, unity, webgl, minecraft, or all)" >&2
     exit 1
     ;;
 esac
@@ -200,6 +275,23 @@ fi
 if ! [[ "$TCP_READY_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TCP_READY_TIMEOUT" -lt 1 ]; then
   echo "run_sim.sh: --tcp-ready-timeout must be a positive integer, got '$TCP_READY_TIMEOUT'" >&2
   exit 1
+fi
+
+if ! [[ "$WEBGL_PORT" =~ ^[0-9]+$ ]] || [ "$WEBGL_PORT" -lt 1 ] || [ "$WEBGL_PORT" -gt 65535 ]; then
+  echo "run_sim.sh: --web-port must be an integer in [1..65535], got '$WEBGL_PORT'" >&2
+  exit 1
+fi
+if [ -n "$WEBGL_ORCHESTRATOR_PORT" ] && { ! [[ "$WEBGL_ORCHESTRATOR_PORT" =~ ^[0-9]+$ ]] || [ "$WEBGL_ORCHESTRATOR_PORT" -lt 1 ] || [ "$WEBGL_ORCHESTRATOR_PORT" -gt 65535 ]; }; then
+  echo "run_sim.sh: --orchestrator-port must be an integer in [1..65535], got '$WEBGL_ORCHESTRATOR_PORT'" >&2
+  exit 1
+fi
+
+if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] && { ! [[ "$CLUSTER_NODE_COUNT" =~ ^[0-9]+$ ]] || [ "$CLUSTER_NODE_COUNT" -lt 1 ]; }; then
+  echo "run_sim.sh: --node/--nodes must be a positive integer, got '$CLUSTER_NODE_COUNT'" >&2
+  exit 1
+fi
+if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
+  WEBOTS_PASSTHROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
 fi
 
 # ---------------------------------------------------------------------------
@@ -263,6 +355,14 @@ build_tcp_server() {
 # ---------------------------------------------------------------------------
 TCP_PIDS=()
 TCP_PORTS=()
+CLUSTER_PIDS=()
+BRIDGE_PIDS=()
+BRIDGE_PORTS=()
+CLUSTER_SOCKET_DIR=""
+CLUSTER_LOG_DIR=""
+DISTRIBUTED_MODE=0
+WEBGL_BACKEND_PID=""
+WEBGL_WEB_PID=""
 
 cleanup_tcp_servers() {
   local sig="${1:-TERM}"
@@ -282,11 +382,60 @@ cleanup_tcp_servers() {
         kill -KILL "$pid" 2>/dev/null || true
       fi
     done
+    TCP_PIDS=()
+    TCP_PORTS=()
+  fi
+}
+
+cleanup_distributed_runtime() {
+  if [ "${#BRIDGE_PIDS[@]}" -gt 0 ]; then
+    echo ""
+    echo "run_sim.sh: shutting down distributed TCP bridges …"
+    local pid
+    for pid in "${BRIDGE_PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+      fi
+    done
+  fi
+  if [ "${#CLUSTER_PIDS[@]}" -gt 0 ]; then
+    echo "run_sim.sh: shutting down distributed brain cluster …"
+    for pid in "${CLUSTER_PIDS[@]}"; do
+      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    done
+  fi
+  sleep 1
+  for pid in "${BRIDGE_PIDS[@]}"; do
+    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${CLUSTER_PIDS[@]}"; do
+    if [ -n "${pid:-}" ]; then
+      kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  BRIDGE_PIDS=()
+  BRIDGE_PORTS=()
+  CLUSTER_PIDS=()
+  if [ -n "$CLUSTER_SOCKET_DIR" ] && [ -d "$CLUSTER_SOCKET_DIR" ]; then
+    rm -rf "$CLUSTER_SOCKET_DIR"
   fi
 }
 
 cleanup_all() {
   cleanup_tcp_servers TERM
+  cleanup_distributed_runtime
+  if [ -n "${WEBGL_WEB_PID:-}" ] && kill -0 "$WEBGL_WEB_PID" 2>/dev/null; then
+    echo "run_sim.sh: shutting down WebGL web gateway (pid $WEBGL_WEB_PID) …"
+    kill -TERM "$WEBGL_WEB_PID" 2>/dev/null || true
+  fi
+  WEBGL_WEB_PID=""
+  if [ -n "${WEBGL_BACKEND_PID:-}" ] && kill -0 "$WEBGL_BACKEND_PID" 2>/dev/null; then
+    echo "run_sim.sh: shutting down WebGL cluster runtime (pid $WEBGL_BACKEND_PID) …"
+    kill -TERM -- "-$WEBGL_BACKEND_PID" 2>/dev/null || kill -TERM "$WEBGL_BACKEND_PID" 2>/dev/null || true
+  fi
+  WEBGL_BACKEND_PID=""
   # If we launched a Webots subprocess in "all" mode, kill it too
   if [ -n "${WEBOTS_PID:-}" ] && kill -0 "$WEBOTS_PID" 2>/dev/null; then
     echo "run_sim.sh: shutting down Webots launcher (pid $WEBOTS_PID) …"
@@ -297,6 +446,24 @@ cleanup_all() {
     echo "run_sim.sh: shutting down Unreal Engine (pid $UE_PID) …"
     kill -TERM "$UE_PID" 2>/dev/null || true
   fi
+}
+
+free_tcp_port() {
+  local requested="${1:-0}"
+  python3 - "$requested" <<'PY'
+import socket
+import sys
+requested = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    if requested:
+        sock.bind(("127.0.0.1", requested))
+    else:
+        sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+finally:
+    sock.close()
+PY
 }
 
 tcp_port_listening() {
@@ -368,10 +535,7 @@ trap 'echo ""; echo "run_sim.sh: interrupted."; cleanup_all; exit 130' INT TERM
 # ---------------------------------------------------------------------------
 # Launch TCP brain servers
 # ---------------------------------------------------------------------------
-start_tcp_servers() {
-  build_tcp_server
-
-  # Parse spec into parallel arrays
+resolve_brain_arrays() {
   BRAIN_IDS=()
   BRAIN_TYPES=()
   local brain_lines=""
@@ -389,6 +553,12 @@ start_tcp_servers() {
     echo "run_sim.sh: no brain instances resolved from spec '$ROBOT_SPEC'" >&2
     exit 1
   fi
+}
+
+start_tcp_servers() {
+  build_tcp_server
+  resolve_brain_arrays
+  local total="${#BRAIN_IDS[@]}"
 
   echo ""
   echo "run_sim.sh: launching $total TCP brain server(s) …"
@@ -459,16 +629,155 @@ start_tcp_servers() {
   echo "run_sim.sh: $total brain server(s) ready on $TCP_HOST:$TCP_BASE_PORT – $(( TCP_BASE_PORT + total - 1 ))"
 }
 
+wait_for_ipc_sockets() {
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local brain
+  while [ "$SECONDS" -le "$deadline" ]; do
+    local all_ready=1
+    for brain in "${BRAIN_IDS[@]}"; do
+      if [ "$brain" = "default" ]; then
+        [ -S "$CLUSTER_SOCKET_DIR/aarnn_rust.nn" ] || { all_ready=0; break; }
+      else
+        [ -S "$CLUSTER_SOCKET_DIR/aarnn_rust.${brain}.nn" ] || { all_ready=0; break; }
+      fi
+    done
+    if [ "$all_ready" -eq 1 ]; then return 0; fi
+    for pid in "${CLUSTER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: distributed runtime exited before its IPC sockets became ready." >&2
+        exit 1
+      fi
+    done
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for distributed IPC sockets." >&2
+  exit 1
+}
+
+wait_for_tcp_bridges_ready() {
+  local total="${#BRIDGE_PIDS[@]}"
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local ready_count=0
+  echo ""
+  echo "run_sim.sh: waiting for distributed TCP bridge readiness (timeout ${TCP_READY_TIMEOUT}s) …"
+  while [ "$SECONDS" -le "$deadline" ]; do
+    ready_count=0
+    local i
+    for (( i=0; i<total; i++ )); do
+      local pid="${BRIDGE_PIDS[$i]}"
+      local port="${BRIDGE_PORTS[$i]}"
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: distributed TCP bridge on ${TCP_HOST}:${port} exited before listening." >&2
+        exit 1
+      fi
+      if tcp_port_listening "$port"; then ready_count=$((ready_count + 1)); fi
+    done
+    if [ "$ready_count" -eq "$total" ]; then
+      echo "run_sim.sh: all distributed TCP bridge(s) are listening."
+      return 0
+    fi
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for distributed TCP bridges (${ready_count}/${total})." >&2
+  exit 1
+}
+
+start_distributed_tcp_servers() {
+  resolve_brain_arrays
+  local total="${#BRAIN_IDS[@]}"
+  if [ "$CLUSTER_NODE_COUNT" -lt "$total" ]; then
+    echo "run_sim.sh: --node/--nodes=$CLUSTER_NODE_COUNT requires at least one worker per brain ($total)." >&2
+    exit 1
+  fi
+  if [ ! -x "$ROOT_DIR/scripts/tcp_aer_ipc_bridge.py" ]; then
+    echo "run_sim.sh: distributed TCP bridge is missing or not executable." >&2
+    exit 1
+  fi
+
+  DISTRIBUTED_MODE=1
+  CLUSTER_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aarnn-sim-ipc.XXXXXX")"
+  CLUSTER_LOG_DIR="$ROOT_DIR/logs/sim_cluster_${BASHPID}"
+  mkdir -p "$CLUSTER_LOG_DIR"
+  local cluster_config_map=""
+  local cluster_network_map=""
+  local i brain_id brain_type path
+  for (( i=0; i<total; i++ )); do
+    brain_id="${BRAIN_IDS[$i]}"
+    brain_type="${BRAIN_TYPES[$i]}"
+    path="$(robot_config_file "$brain_type")"
+    if [ -f "$path" ]; then
+      cluster_config_map="${cluster_config_map:+$cluster_config_map,}${brain_id}=${path}"
+    fi
+    path="$(robot_network_file "$brain_type")"
+    if [ -f "$path" ]; then
+      cluster_network_map="${cluster_network_map:+$cluster_network_map,}${brain_id}=${path}"
+    fi
+  done
+  [ -n "$CONFIG_MAP_CSV" ] && cluster_config_map="${cluster_config_map:+$cluster_config_map,}${CONFIG_MAP_CSV}"
+  [ -n "$NETWORK_MAP_CSV" ] && cluster_network_map="${cluster_network_map:+$cluster_network_map,}${NETWORK_MAP_CSV}"
+
+  local cluster_cmd=(
+    env
+    "NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"
+    "NM_CLUSTER_NODES=$CLUSTER_NODE_COUNT"
+    "LOG_DIR=$CLUSTER_LOG_DIR"
+    "$ROOT_DIR/run_webot.sh"
+    --runtime cluster --no-webots --no-diag --no-orchestrator-ui
+    --node-ui-hidden --nodes "$CLUSTER_NODE_COUNT"
+    --brains "$(IFS=,; echo "${BRAIN_IDS[*]}")"
+  )
+  if [ "$NO_BUILD" -eq 1 ]; then cluster_cmd+=(--no-build); fi
+  [ -n "$cluster_config_map" ] && cluster_cmd+=(--config-map "$cluster_config_map")
+  [ -n "$cluster_network_map" ] && cluster_cmd+=(--network-map "$cluster_network_map")
+
+  echo ""
+  echo "run_sim.sh: launching distributed brain runtime with $CLUSTER_NODE_COUNT worker(s) …"
+  setsid "${cluster_cmd[@]}" >"$CLUSTER_LOG_DIR/runtime.log" 2>&1 &
+  CLUSTER_PIDS+=("$!")
+  wait_for_ipc_sockets
+
+  echo ""
+  echo "run_sim.sh: launching $total distributed TCP bridge(s) …"
+  for (( i=0; i<total; i++ )); do
+    brain_id="${BRAIN_IDS[$i]}"
+    brain_type="${BRAIN_TYPES[$i]}"
+    local port=$((TCP_BASE_PORT + i))
+    if tcp_port_listening "$port"; then
+      echo "run_sim.sh: ${TCP_HOST}:${port} already has a TCP listener." >&2
+      exit 1
+    fi
+    local ipc_path="$CLUSTER_SOCKET_DIR/aarnn_rust.${brain_id}.nn"
+    if [ "$brain_id" = "default" ]; then ipc_path="$CLUSTER_SOCKET_DIR/aarnn_rust.nn"; fi
+    local log_file="$CLUSTER_LOG_DIR/bridge_${brain_id}.log"
+    python3 "$ROOT_DIR/scripts/tcp_aer_ipc_bridge.py" \
+      --listen "$TCP_HOST:$port" --ipc "$ipc_path" \
+      --sensory "$(robot_sensory "$brain_type")" \
+      --output "$(robot_output "$brain_type")" \
+      >"$log_file" 2>&1 &
+    BRIDGE_PIDS+=("$!")
+    BRIDGE_PORTS+=("$port")
+    printf "  %-28s  %-22s  %s  %s  %s\n" \
+      "$brain_id" "${TCP_HOST}:${port}" \
+      "sensory=$(robot_sensory "$brain_type")" "output=$(robot_output "$brain_type")" "${BRIDGE_PIDS[$i]}"
+  done
+  wait_for_tcp_bridges_ready
+  echo "run_sim.sh: distributed brain bridges ready on $TCP_HOST:$TCP_BASE_PORT – $((TCP_BASE_PORT + total - 1))"
+}
 # Block until the brain servers exit (used when no engine is auto-launched).
 serve_and_wait() {
+  local total="${#BRAIN_IDS[@]}"
   echo ""
   echo "run_sim.sh: connect your simulation engine using:"
   echo "   Host : $TCP_HOST"
-  echo "   Ports: $TCP_BASE_PORT – $(( TCP_BASE_PORT + ${#TCP_PIDS[@]} - 1 ))"
+  echo "   Ports: $TCP_BASE_PORT – $(( TCP_BASE_PORT + total - 1 ))"
   echo ""
   echo "Press Ctrl-C to stop all servers."
   echo ""
-  wait "${TCP_PIDS[@]}"
+  if [ "$DISTRIBUTED_MODE" -eq 1 ]; then
+    wait "${BRIDGE_PIDS[@]}"
+  else
+    wait "${TCP_PIDS[@]}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -542,6 +851,122 @@ launch_webots_background() {
 }
 
 # ---------------------------------------------------------------------------
+# Launch the browser WebGL simulator through the authenticated web gateway.
+# ---------------------------------------------------------------------------
+launch_webgl() {
+  resolve_brain_arrays
+  local total="${#BRAIN_IDS[@]}"
+  if [ "$CLUSTER_NODE_COUNT" -lt "$total" ]; then
+    echo "run_sim.sh: WebGL --node/--nodes=$CLUSTER_NODE_COUNT requires at least one worker per brain ($total)." >&2
+    echo "  Use --nodes $total or a larger value so every brain retains an IPC owner." >&2
+    exit 1
+  fi
+
+  local orch_port="$WEBGL_ORCHESTRATOR_PORT"
+  if [ -z "$orch_port" ]; then
+    orch_port="$(free_tcp_port 0)"
+  else
+    orch_port="$(free_tcp_port "$orch_port")"
+  fi
+  local web_port
+  web_port="$(free_tcp_port "$WEBGL_PORT")"
+  local brain_csv
+  brain_csv="$(IFS=,; echo "${BRAIN_IDS[*]}")"
+  local log_dir="$ROOT_DIR/logs/webgl_sim_${BASHPID}"
+  mkdir -p "$log_dir"
+  local ipc_dir="$log_dir/ipc"
+  mkdir -p "$ipc_dir"
+
+  local config_map="" network_map="" i brain_id brain_type path
+  for (( i=0; i<total; i++ )); do
+    brain_id="${BRAIN_IDS[$i]}"
+    brain_type="${BRAIN_TYPES[$i]}"
+    path="$(robot_config_file "$brain_type")"
+    [ -f "$path" ] && config_map="${config_map:+$config_map,}${brain_id}=${path}"
+    path="$(robot_network_file "$brain_type")"
+    [ -f "$path" ] && network_map="${network_map:+$network_map,}${brain_id}=${path}"
+  done
+  [ -n "$CONFIG_MAP_CSV" ] && config_map="${config_map:+$config_map,}${CONFIG_MAP_CSV}"
+  [ -n "$NETWORK_MAP_CSV" ] && network_map="${network_map:+$network_map,}${NETWORK_MAP_CSV}"
+
+  if [ "$NO_BUILD" -eq 0 ]; then
+    echo "run_sim.sh: building the AARNN cluster and browser gateway …"
+    cargo build --release --locked --no-default-features \
+      --bin aarnn_rust --features "$WEBGL_RUNTIME_FEATURES"
+    cargo build --release --locked --no-default-features \
+      --bin web_ui --features engine_runtime,ui
+  fi
+  if [ ! -x "$ROOT_DIR/target/release/aarnn_rust" ] || [ ! -x "$ROOT_DIR/target/release/web_ui" ]; then
+    echo "run_sim.sh: WebGL requires target/release/aarnn_rust and target/release/web_ui." >&2
+    exit 1
+  fi
+  if ! command -v strings >/dev/null 2>&1 || ! strings "$ROOT_DIR/target/release/aarnn_rust" | grep -F "[IpcUdsServer] Bound to" >/dev/null; then
+    echo "run_sim.sh: target/release/aarnn_rust was built without the robot_io IPC runtime." >&2
+    echo "  Re-run without --no-build, or build with --features $WEBGL_RUNTIME_FEATURES." >&2
+    exit 1
+  fi
+
+  local backend_cmd=(
+    env
+    "NM_BRAINS=$brain_csv"
+    "NM_IPC_SOCKET_DIR=$ipc_dir"
+    "LOG_DIR=$log_dir"
+    "$ROOT_DIR/run_webot.sh"
+    --runtime cluster --no-webots --no-diag --no-orchestrator-ui
+    --node-ui-hidden --nodes "$CLUSTER_NODE_COUNT" --brains "$brain_csv"
+    --orchestrator-port "$orch_port" --no-build
+  )
+  [ -n "$config_map" ] && backend_cmd+=(--config-map "$config_map")
+  [ -n "$network_map" ] && backend_cmd+=(--network-map "$network_map")
+  echo "run_sim.sh: launching WebGL cluster with $CLUSTER_NODE_COUNT worker(s) …"
+  setsid "${backend_cmd[@]}" >"$log_dir/cluster.log" 2>&1 &
+  WEBGL_BACKEND_PID="$!"
+
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    if ! kill -0 "$WEBGL_BACKEND_PID" 2>/dev/null; then
+      echo "run_sim.sh: WebGL cluster exited before gRPC became ready; see $log_dir/cluster.log" >&2
+      exit 1
+    fi
+    if tcp_port_listening "$orch_port"; then break; fi
+    sleep 1
+  done
+  if ! tcp_port_listening "$orch_port"; then
+    echo "run_sim.sh: timed out waiting for WebGL orchestrator on port $orch_port." >&2
+    exit 1
+  fi
+
+  echo "run_sim.sh: launching browser gateway on $WEBGL_HOST:$web_port …"
+  "$ROOT_DIR/target/release/web_ui" \
+    --listen "$WEBGL_HOST:$web_port" \
+    --orchestrator "http://127.0.0.1:$orch_port" \
+    --default-network "${BRAIN_IDS[0]}" \
+    --runtime-root "$log_dir/runtime" \
+    >"$log_dir/web_ui.log" 2>&1 &
+  WEBGL_WEB_PID="$!"
+  local web_url="http://$WEBGL_HOST:$web_port"
+  for _ in $(seq 1 "$TCP_READY_TIMEOUT"); do
+    if curl --fail --silent --show-error --max-time 1 "$web_url/api/config" >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$WEBGL_WEB_PID" 2>/dev/null; then
+      echo "run_sim.sh: WebGL gateway exited during startup; see $log_dir/web_ui.log" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  if ! curl --fail --silent --show-error --max-time 1 "$web_url/api/config" >/dev/null 2>&1; then
+    echo "run_sim.sh: timed out waiting for WebGL gateway at $web_url." >&2
+    exit 1
+  fi
+  echo ""
+  echo "AARNN WebGL simulator is ready: $web_url/sim/webgl?network_id=${BRAIN_IDS[0]}"
+  echo "  brains: $brain_csv"
+  echo "  workers: $CLUSTER_NODE_COUNT"
+  echo "  logs: $log_dir"
+  echo "Open the URL in a browser and select the matching brain/network ID."
+  wait "$WEBGL_WEB_PID"
+}
+
+# ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
 case "$SIM_BACKEND" in
@@ -549,18 +974,70 @@ case "$SIM_BACKEND" in
     launch_webots
     ;;
   unreal)
-    start_tcp_servers
+    if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
+      start_distributed_tcp_servers
+    else
+      start_tcp_servers
+    fi
     launch_unreal_engine
     ;;
   unity)
     # No Unity CLI integration; start the brains and let the user press Play in
     # the Unity editor (see scripts/run_unity_sim.sh for project setup).
-    start_tcp_servers
+    if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
+      start_distributed_tcp_servers
+    else
+      start_tcp_servers
+    fi
     serve_and_wait
+    ;;
+  webgl)
+    launch_webgl
+    ;;
+  minecraft)
+    # Detect every required capability before starting any brain process.
+    minecraft_edition="$(python3 "$ROOT_DIR/scripts/minecraft.py" edition --edition "$MINECRAFT_EDITION")"
+    python3 "$ROOT_DIR/scripts/minecraft.py" doctor --require bridge --edition "$minecraft_edition"
+    if [ "$LAUNCH_ENGINE" -eq 1 ]; then
+      python3 "$ROOT_DIR/scripts/minecraft.py" doctor --require engine --edition "$minecraft_edition"
+    fi
+    resolve_brain_arrays
+    minecraft_profiles="$(IFS=,; echo "${BRAIN_TYPES[*]}")"
+    if [ "${#BRAIN_TYPES[@]}" -gt 6 ] || [ "$(printf '%s\n' "${BRAIN_TYPES[@]}" | sort -u | wc -l)" -ne "${#BRAIN_TYPES[@]}" ]; then
+      echo "Minecraft lab supports one robot of each profile (six maximum)." >&2
+      exit 2
+    fi
+    if [ "$TCP_HOST" != 127.0.0.1 ]; then
+      echo "Minecraft companion requires loopback Rust TCP endpoints." >&2
+      exit 2
+    fi
+    if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then start_distributed_tcp_servers; else start_tcp_servers; fi
+    minecraft_java="$(python3 "$ROOT_DIR/scripts/minecraft.py" java)"
+    "$minecraft_java" -jar "$ROOT_DIR/sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar" \
+      --base-port "$TCP_BASE_PORT" --profiles "$minecraft_profiles" &
+    minecraft_bridge_pid="$!"
+    TCP_PIDS+=("$minecraft_bridge_pid")
+    python3 "$ROOT_DIR/scripts/minecraft.py" wait-bridge --pid "$minecraft_bridge_pid"
+    if [ "$minecraft_edition" = bedrock ]; then
+      echo "Bedrock lab: /scriptevent aarnn:world build; /scriptevent aarnn:visit <profile>; /scriptevent aarnn:stop"
+      if [ "$LAUNCH_ENGINE" -eq 1 ]; then
+        python3 "$ROOT_DIR/scripts/minecraft.py" launch --edition bedrock
+      else
+        wait "$minecraft_bridge_pid"
+      fi
+    else
+      if [ "$LAUNCH_ENGINE" -eq 1 ]; then python3 "$ROOT_DIR/scripts/minecraft.py" launch --edition java; fi
+      echo "Minecraft lab: /aarnn world, /aarnn visit <profile>, /aarnn connect <profile>; stop with /aarnn stop."
+      wait "$minecraft_bridge_pid"
+    fi
     ;;
   all)
     launch_webots_background
-    start_tcp_servers
+    if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
+      start_distributed_tcp_servers
+    else
+      start_tcp_servers
+    fi
     launch_unreal_engine
     ;;
 esac

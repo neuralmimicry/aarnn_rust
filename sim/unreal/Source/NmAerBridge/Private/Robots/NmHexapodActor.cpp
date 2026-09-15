@@ -1,6 +1,7 @@
 // Copyright NeuralMimicry. All Rights Reserved.
 
 #include "Robots/NmHexapodActor.h"
+#include "NmSharedContent.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
@@ -94,13 +95,14 @@ void UNmHexapodComponent::CollectSensors(TArray<float>& OutSensors)
         auto TraceDistance = [&](const FVector& Dir) -> float
         {
             FHitResult Hit;
+            FCollisionQueryParams Params; Params.AddIgnoredActor(Owner);
             const bool bHit = World->LineTraceSingleByChannel(
-                Hit, BodyLoc, BodyLoc + Dir * MaxRange, ECC_Visibility);
+                Hit, BodyLoc, BodyLoc + Dir * MaxRange, ECC_Visibility, Params);
             return bHit ? (1.f - (Hit.Distance / MaxRange)) : 0.f;
         };
 
-        OutSensors[30] = TraceDistance(ForwardDir);            // front
-        OutSensors[31] = TraceDistance(-ForwardDir);           // rear
+        OutSensors[32] = TraceDistance((ForwardDir - BodyMesh->GetRightVector() * .25f).GetSafeNormal()); // left
+        OutSensors[33] = TraceDistance((ForwardDir + BodyMesh->GetRightVector() * .25f).GetSafeNormal()); // right
     }
 
     // --- Camera event channels [32..33]: luminance delta as on/off events ---
@@ -122,8 +124,8 @@ void UNmHexapodComponent::CollectSensors(TArray<float>& OutSensors)
 
                 // Event channels: +change and -change
                 const float Delta = MeanLum - PrevLuminance[0];
-                OutSensors[32] = FMath::Clamp(Delta, 0.f, 1.f);    // positive event
-                OutSensors[33] = FMath::Clamp(-Delta, 0.f, 1.f);   // negative event
+                OutSensors[30] = FMath::Clamp(Delta, 0.f, 1.f);    // positive event
+                OutSensors[31] = FMath::Clamp(-Delta, 0.f, 1.f);   // negative event
                 PrevLuminance[0] = MeanLum;
             }
         }
@@ -155,42 +157,11 @@ void UNmHexapodComponent::ApplyActuators(const TArray<float>& Actuators)
 
 void UNmHexapodComponent::GetSensorNames(TArray<FString>& OutNames) const
 {
-    OutNames.Reset(NumSensors);
-    const char* JointNames[] = {"coxa", "femur", "tibia"};
-    for (int32 leg = 0; leg < NumLegs; ++leg)
-    {
-        for (int32 j = 0; j < JointsPerLeg; ++j)
-        {
-            OutNames.Add(FString::Printf(TEXT("leg%d_%s_pos"), leg, ANSI_TO_TCHAR(JointNames[j])));
-        }
-    }
-    for (int32 f = 0; f < NumLegs; ++f)
-    {
-        OutNames.Add(FString::Printf(TEXT("foot%d_contact"), f));
-    }
-    OutNames.Add(TEXT("accel_x"));
-    OutNames.Add(TEXT("accel_y"));
-    OutNames.Add(TEXT("accel_z"));
-    OutNames.Add(TEXT("gyro_x"));
-    OutNames.Add(TEXT("gyro_y"));
-    OutNames.Add(TEXT("gyro_z"));
-    OutNames.Add(TEXT("sonar_front"));
-    OutNames.Add(TEXT("sonar_rear"));
-    OutNames.Add(TEXT("cam_event_pos"));
-    OutNames.Add(TEXT("cam_event_neg"));
+    NmSharedContent::Channels(TEXT("hexapod"), false, OutNames);
 }
-
 void UNmHexapodComponent::GetActuatorNames(TArray<FString>& OutNames) const
 {
-    OutNames.Reset(NumActuators);
-    const char* JointNames[] = {"coxa", "femur", "tibia"};
-    for (int32 leg = 0; leg < NumLegs; ++leg)
-    {
-        for (int32 j = 0; j < JointsPerLeg; ++j)
-        {
-            OutNames.Add(FString::Printf(TEXT("leg%d_%s_drive"), leg, ANSI_TO_TCHAR(JointNames[j])));
-        }
-    }
+    NmSharedContent::Channels(TEXT("hexapod"), true, OutNames);
 }
 
 // ============================================================================

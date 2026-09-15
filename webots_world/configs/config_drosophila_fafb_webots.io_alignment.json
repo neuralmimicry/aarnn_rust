@@ -1,2097 +1,2097 @@
 {
   "dataset": "FAFB v783",
-  "brain_id": "default",
+  "brain_id": "fafb",
   "sensor_regex": "^dros_s_[0-9]{2}_.*$",
   "actuator_regex": "^dros_o_[0-9]{3}_.*$",
   "sensory_channels": [
     {
       "channel_index": 0,
-      "connectome_node_id": "sensory_000",
+      "connectome_node_id": "720575940626979621",
       "device_port": "dros_s_00_accel.x"
     },
     {
       "channel_index": 1,
-      "connectome_node_id": "sensory_001",
+      "connectome_node_id": "720575940628908548",
       "device_port": "dros_s_00_accel.y"
     },
     {
       "channel_index": 2,
-      "connectome_node_id": "sensory_002",
+      "connectome_node_id": "720575940624547622",
       "device_port": "dros_s_00_accel.z"
     },
     {
       "channel_index": 3,
-      "connectome_node_id": "sensory_003",
+      "connectome_node_id": "720575940613583001",
       "device_port": "dros_s_03_gyro.x"
     },
     {
       "channel_index": 4,
-      "connectome_node_id": "sensory_004",
+      "connectome_node_id": "720575940625952755",
       "device_port": "dros_s_03_gyro.y"
     },
     {
       "channel_index": 5,
-      "connectome_node_id": "sensory_005",
+      "connectome_node_id": "720575940627497244",
       "device_port": "dros_s_03_gyro.z"
     },
     {
       "channel_index": 6,
-      "connectome_node_id": "sensory_006",
+      "connectome_node_id": "720575940634612194",
       "device_port": "dros_s_06_touch_front"
     },
     {
       "channel_index": 7,
-      "connectome_node_id": "sensory_007",
+      "connectome_node_id": "720575940620008758",
       "device_port": "dros_s_07_touch_rear"
     },
     {
       "channel_index": 8,
-      "connectome_node_id": "sensory_008",
+      "connectome_node_id": "720575940619991862",
       "device_port": "dros_s_08_touch_left"
     },
     {
       "channel_index": 9,
-      "connectome_node_id": "sensory_009",
+      "connectome_node_id": "720575940628307026",
       "device_port": "dros_s_09_touch_right"
     },
     {
       "channel_index": 10,
-      "connectome_node_id": "sensory_010",
+      "connectome_node_id": "720575940611563310",
       "device_port": "dros_s_10_prox_00"
     },
     {
       "channel_index": 11,
-      "connectome_node_id": "sensory_011",
+      "connectome_node_id": "720575940620975696",
       "device_port": "dros_s_11_prox_01"
     },
     {
       "channel_index": 12,
-      "connectome_node_id": "sensory_012",
+      "connectome_node_id": "720575940650935673",
       "device_port": "dros_s_12_prox_02"
     },
     {
       "channel_index": 13,
-      "connectome_node_id": "sensory_013",
+      "connectome_node_id": "720575940629513222",
       "device_port": "dros_s_13_prox_03"
     },
     {
       "channel_index": 14,
-      "connectome_node_id": "sensory_014",
+      "connectome_node_id": "720575940640834211",
       "device_port": "dros_s_14_prox_04"
     },
     {
       "channel_index": 15,
-      "connectome_node_id": "sensory_015",
+      "connectome_node_id": "720575940628069501",
       "device_port": "dros_s_15_prox_05"
     },
     {
       "channel_index": 16,
-      "connectome_node_id": "sensory_016",
+      "connectome_node_id": "720575940623444044",
       "device_port": "dros_s_16_prox_06"
     },
     {
       "channel_index": 17,
-      "connectome_node_id": "sensory_017",
+      "connectome_node_id": "720575940638900713",
       "device_port": "dros_s_17_prox_07"
     },
     {
       "channel_index": 18,
-      "connectome_node_id": "sensory_018",
+      "connectome_node_id": "720575940627190556",
       "device_port": "dros_s_18_prox_08"
     },
     {
       "channel_index": 19,
-      "connectome_node_id": "sensory_019",
+      "connectome_node_id": "720575940618308825",
       "device_port": "dros_s_19_prox_09"
     },
     {
       "channel_index": 20,
-      "connectome_node_id": "sensory_020",
+      "connectome_node_id": "720575940632504874",
       "device_port": "dros_s_20_prox_10"
     },
     {
       "channel_index": 21,
-      "connectome_node_id": "sensory_021",
+      "connectome_node_id": "720575940629382150",
       "device_port": "dros_s_21_prox_11"
     },
     {
       "channel_index": 22,
-      "connectome_node_id": "sensory_022",
+      "connectome_node_id": "720575940622523508",
       "device_port": "dros_s_22_prox_12"
     },
     {
       "channel_index": 23,
-      "connectome_node_id": "sensory_023",
+      "connectome_node_id": "720575940622726271",
       "device_port": "dros_s_23_prox_13"
     },
     {
       "channel_index": 24,
-      "connectome_node_id": "sensory_024",
+      "connectome_node_id": "720575940608545219",
       "device_port": "dros_s_24_prox_14"
     },
     {
       "channel_index": 25,
-      "connectome_node_id": "sensory_025",
+      "connectome_node_id": "720575940640736371",
       "device_port": "dros_s_25_prox_15"
     },
     {
       "channel_index": 26,
-      "connectome_node_id": "sensory_026",
+      "connectome_node_id": "720575940632795532",
       "device_port": "dros_s_26_prox_16"
     },
     {
       "channel_index": 27,
-      "connectome_node_id": "sensory_027",
+      "connectome_node_id": "720575940625934094",
       "device_port": "dros_s_27_prox_17"
     },
     {
       "channel_index": 28,
-      "connectome_node_id": "sensory_028",
+      "connectome_node_id": "720575940627796298",
       "device_port": "dros_s_28_prox_18"
     },
     {
       "channel_index": 29,
-      "connectome_node_id": "sensory_029",
+      "connectome_node_id": "720575940640851363",
       "device_port": "dros_s_29_prox_19"
     },
     {
       "channel_index": 30,
-      "connectome_node_id": "sensory_030",
+      "connectome_node_id": "720575940609282825",
       "device_port": "dros_s_30_prox_20"
     },
     {
       "channel_index": 31,
-      "connectome_node_id": "sensory_031",
+      "connectome_node_id": "720575940612976497",
       "device_port": "dros_s_31_prox_21"
     },
     {
       "channel_index": 32,
-      "connectome_node_id": "sensory_032",
+      "connectome_node_id": "720575940623000858",
       "device_port": "dros_s_32_prox_22"
     },
     {
       "channel_index": 33,
-      "connectome_node_id": "sensory_033",
+      "connectome_node_id": "720575940633305681",
       "device_port": "dros_s_33_prox_23"
     },
     {
       "channel_index": 34,
-      "connectome_node_id": "sensory_034",
+      "connectome_node_id": "720575940631945815",
       "device_port": "dros_s_34_eye_left.on.r00c00"
     },
     {
       "channel_index": 35,
-      "connectome_node_id": "sensory_035",
+      "connectome_node_id": "720575940604569824",
       "device_port": "dros_s_34_eye_left.off.r00c00"
     },
     {
       "channel_index": 36,
-      "connectome_node_id": "sensory_036",
+      "connectome_node_id": "720575940625102224",
       "device_port": "dros_s_34_eye_left.on.r00c01"
     },
     {
       "channel_index": 37,
-      "connectome_node_id": "sensory_037",
+      "connectome_node_id": "720575940634545890",
       "device_port": "dros_s_34_eye_left.off.r00c01"
     },
     {
       "channel_index": 38,
-      "connectome_node_id": "sensory_038",
+      "connectome_node_id": "720575940630770042",
       "device_port": "dros_s_34_eye_left.on.r00c02"
     },
     {
       "channel_index": 39,
-      "connectome_node_id": "sensory_039",
+      "connectome_node_id": "720575940618366843",
       "device_port": "dros_s_34_eye_left.off.r00c02"
     },
     {
       "channel_index": 40,
-      "connectome_node_id": "sensory_040",
+      "connectome_node_id": "720575940619071005",
       "device_port": "dros_s_34_eye_left.on.r00c03"
     },
     {
       "channel_index": 41,
-      "connectome_node_id": "sensory_041",
+      "connectome_node_id": "720575940637689486",
       "device_port": "dros_s_34_eye_left.off.r00c03"
     },
     {
       "channel_index": 42,
-      "connectome_node_id": "sensory_042",
+      "connectome_node_id": "720575940626783065",
       "device_port": "dros_s_34_eye_left.on.r00c04"
     },
     {
       "channel_index": 43,
-      "connectome_node_id": "sensory_043",
+      "connectome_node_id": "720575940626462014",
       "device_port": "dros_s_34_eye_left.off.r00c04"
     },
     {
       "channel_index": 44,
-      "connectome_node_id": "sensory_044",
+      "connectome_node_id": "720575940612264817",
       "device_port": "dros_s_34_eye_left.on.r00c05"
     },
     {
       "channel_index": 45,
-      "connectome_node_id": "sensory_045",
+      "connectome_node_id": "720575940625741287",
       "device_port": "dros_s_34_eye_left.off.r00c05"
     },
     {
       "channel_index": 46,
-      "connectome_node_id": "sensory_046",
+      "connectome_node_id": "720575940604088288",
       "device_port": "dros_s_34_eye_left.on.r00c06"
     },
     {
       "channel_index": 47,
-      "connectome_node_id": "sensory_047",
+      "connectome_node_id": "720575940630810306",
       "device_port": "dros_s_34_eye_left.off.r00c06"
     },
     {
       "channel_index": 48,
-      "connectome_node_id": "sensory_048",
+      "connectome_node_id": "720575940626403917",
       "device_port": "dros_s_34_eye_left.on.r00c07"
     },
     {
       "channel_index": 49,
-      "connectome_node_id": "sensory_049",
+      "connectome_node_id": "720575940612718563",
       "device_port": "dros_s_34_eye_left.off.r00c07"
     },
     {
       "channel_index": 50,
-      "connectome_node_id": "sensory_050",
+      "connectome_node_id": "720575940625049781",
       "device_port": "dros_s_34_eye_left.on.r00c08"
     },
     {
       "channel_index": 51,
-      "connectome_node_id": "sensory_051",
+      "connectome_node_id": "720575940610584184",
       "device_port": "dros_s_34_eye_left.off.r00c08"
     },
     {
       "channel_index": 52,
-      "connectome_node_id": "sensory_052",
+      "connectome_node_id": "720575940636543668",
       "device_port": "dros_s_34_eye_left.on.r00c09"
     },
     {
       "channel_index": 53,
-      "connectome_node_id": "sensory_053",
+      "connectome_node_id": "720575940632403986",
       "device_port": "dros_s_34_eye_left.off.r00c09"
     },
     {
       "channel_index": 54,
-      "connectome_node_id": "sensory_054",
+      "connectome_node_id": "720575940613065130",
       "device_port": "dros_s_34_eye_left.on.r00c10"
     },
     {
       "channel_index": 55,
-      "connectome_node_id": "sensory_055",
+      "connectome_node_id": "720575940615743650",
       "device_port": "dros_s_34_eye_left.off.r00c10"
     },
     {
       "channel_index": 56,
-      "connectome_node_id": "sensory_056",
+      "connectome_node_id": "720575940618444473",
       "device_port": "dros_s_34_eye_left.on.r00c11"
     },
     {
       "channel_index": 57,
-      "connectome_node_id": "sensory_057",
+      "connectome_node_id": "720575940635684762",
       "device_port": "dros_s_34_eye_left.off.r00c11"
     },
     {
       "channel_index": 58,
-      "connectome_node_id": "sensory_058",
+      "connectome_node_id": "720575940639209956",
       "device_port": "dros_s_34_eye_left.on.r01c00"
     },
     {
       "channel_index": 59,
-      "connectome_node_id": "sensory_059",
+      "connectome_node_id": "720575940632777320",
       "device_port": "dros_s_34_eye_left.off.r01c00"
     },
     {
       "channel_index": 60,
-      "connectome_node_id": "sensory_060",
+      "connectome_node_id": "720575940623636701",
       "device_port": "dros_s_34_eye_left.on.r01c01"
     },
     {
       "channel_index": 61,
-      "connectome_node_id": "sensory_061",
+      "connectome_node_id": "720575940624377224",
       "device_port": "dros_s_34_eye_left.off.r01c01"
     },
     {
       "channel_index": 62,
-      "connectome_node_id": "sensory_062",
+      "connectome_node_id": "720575940628038808",
       "device_port": "dros_s_34_eye_left.on.r01c02"
     },
     {
       "channel_index": 63,
-      "connectome_node_id": "sensory_063",
+      "connectome_node_id": "720575940625525740",
       "device_port": "dros_s_34_eye_left.off.r01c02"
     },
     {
       "channel_index": 64,
-      "connectome_node_id": "sensory_064",
+      "connectome_node_id": "720575940625000200",
       "device_port": "dros_s_34_eye_left.on.r01c03"
     },
     {
       "channel_index": 65,
-      "connectome_node_id": "sensory_065",
+      "connectome_node_id": "720575940628360506",
       "device_port": "dros_s_34_eye_left.off.r01c03"
     },
     {
       "channel_index": 66,
-      "connectome_node_id": "sensory_066",
+      "connectome_node_id": "720575940614710509",
       "device_port": "dros_s_34_eye_left.on.r01c04"
     },
     {
       "channel_index": 67,
-      "connectome_node_id": "sensory_067",
+      "connectome_node_id": "720575940627502338",
       "device_port": "dros_s_34_eye_left.off.r01c04"
     },
     {
       "channel_index": 68,
-      "connectome_node_id": "sensory_068",
+      "connectome_node_id": "720575940627706398",
       "device_port": "dros_s_34_eye_left.on.r01c05"
     },
     {
       "channel_index": 69,
-      "connectome_node_id": "sensory_069",
+      "connectome_node_id": "720575940626044942",
       "device_port": "dros_s_34_eye_left.off.r01c05"
     },
     {
       "channel_index": 70,
-      "connectome_node_id": "sensory_070",
+      "connectome_node_id": "720575940631190016",
       "device_port": "dros_s_34_eye_left.on.r01c06"
     },
     {
       "channel_index": 71,
-      "connectome_node_id": "sensory_071",
+      "connectome_node_id": "720575940628467611",
       "device_port": "dros_s_34_eye_left.off.r01c06"
     },
     {
       "channel_index": 72,
-      "connectome_node_id": "sensory_072",
+      "connectome_node_id": "720575940606149321",
       "device_port": "dros_s_34_eye_left.on.r01c07"
     },
     {
       "channel_index": 73,
-      "connectome_node_id": "sensory_073",
+      "connectome_node_id": "720575940614956072",
       "device_port": "dros_s_34_eye_left.off.r01c07"
     },
     {
       "channel_index": 74,
-      "connectome_node_id": "sensory_074",
+      "connectome_node_id": "720575940635945919",
       "device_port": "dros_s_34_eye_left.on.r01c08"
     },
     {
       "channel_index": 75,
-      "connectome_node_id": "sensory_075",
+      "connectome_node_id": "720575940609258850",
       "device_port": "dros_s_34_eye_left.off.r01c08"
     },
     {
       "channel_index": 76,
-      "connectome_node_id": "sensory_076",
+      "connectome_node_id": "720575940624973831",
       "device_port": "dros_s_34_eye_left.on.r01c09"
     },
     {
       "channel_index": 77,
-      "connectome_node_id": "sensory_077",
+      "connectome_node_id": "720575940605899692",
       "device_port": "dros_s_34_eye_left.off.r01c09"
     },
     {
       "channel_index": 78,
-      "connectome_node_id": "sensory_078",
+      "connectome_node_id": "720575940616733323",
       "device_port": "dros_s_34_eye_left.on.r01c10"
     },
     {
       "channel_index": 79,
-      "connectome_node_id": "sensory_079",
+      "connectome_node_id": "720575940619615552",
       "device_port": "dros_s_34_eye_left.off.r01c10"
     },
     {
       "channel_index": 80,
-      "connectome_node_id": "sensory_080",
+      "connectome_node_id": "720575940623888397",
       "device_port": "dros_s_34_eye_left.on.r01c11"
     },
     {
       "channel_index": 81,
-      "connectome_node_id": "sensory_081",
+      "connectome_node_id": "720575940648650884",
       "device_port": "dros_s_34_eye_left.off.r01c11"
     },
     {
       "channel_index": 82,
-      "connectome_node_id": "sensory_082",
+      "connectome_node_id": "720575940611079236",
       "device_port": "dros_s_34_eye_left.on.r02c00"
     },
     {
       "channel_index": 83,
-      "connectome_node_id": "sensory_083",
+      "connectome_node_id": "720575940627996285",
       "device_port": "dros_s_34_eye_left.off.r02c00"
     },
     {
       "channel_index": 84,
-      "connectome_node_id": "sensory_084",
+      "connectome_node_id": "720575940618865112",
       "device_port": "dros_s_34_eye_left.on.r02c01"
     },
     {
       "channel_index": 85,
-      "connectome_node_id": "sensory_085",
+      "connectome_node_id": "720575940623528925",
       "device_port": "dros_s_34_eye_left.off.r02c01"
     },
     {
       "channel_index": 86,
-      "connectome_node_id": "sensory_086",
+      "connectome_node_id": "720575940644632087",
       "device_port": "dros_s_34_eye_left.on.r02c02"
     },
     {
       "channel_index": 87,
-      "connectome_node_id": "sensory_087",
+      "connectome_node_id": "720575940628406538",
       "device_port": "dros_s_34_eye_left.off.r02c02"
     },
     {
       "channel_index": 88,
-      "connectome_node_id": "sensory_088",
+      "connectome_node_id": "720575940615366055",
       "device_port": "dros_s_34_eye_left.on.r02c03"
     },
     {
       "channel_index": 89,
-      "connectome_node_id": "sensory_089",
+      "connectome_node_id": "720575940621640363",
       "device_port": "dros_s_34_eye_left.off.r02c03"
     },
     {
       "channel_index": 90,
-      "connectome_node_id": "sensory_090",
+      "connectome_node_id": "720575940635983770",
       "device_port": "dros_s_34_eye_left.on.r02c04"
     },
     {
       "channel_index": 91,
-      "connectome_node_id": "sensory_091",
+      "connectome_node_id": "720575940609460491",
       "device_port": "dros_s_34_eye_left.off.r02c04"
     },
     {
       "channel_index": 92,
-      "connectome_node_id": "sensory_092",
+      "connectome_node_id": "720575940637056887",
       "device_port": "dros_s_34_eye_left.on.r02c05"
     },
     {
       "channel_index": 93,
-      "connectome_node_id": "sensory_093",
+      "connectome_node_id": "720575940622364854",
       "device_port": "dros_s_34_eye_left.off.r02c05"
     },
     {
       "channel_index": 94,
-      "connectome_node_id": "sensory_094",
+      "connectome_node_id": "720575940635089945",
       "device_port": "dros_s_34_eye_left.on.r02c06"
     },
     {
       "channel_index": 95,
-      "connectome_node_id": "sensory_095",
+      "connectome_node_id": "720575940618554041",
       "device_port": "dros_s_34_eye_left.off.r02c06"
     },
     {
       "channel_index": 96,
-      "connectome_node_id": "sensory_096",
+      "connectome_node_id": "720575940617257985",
       "device_port": "dros_s_34_eye_left.on.r02c07"
     },
     {
       "channel_index": 97,
-      "connectome_node_id": "sensory_097",
+      "connectome_node_id": "720575940613686698",
       "device_port": "dros_s_34_eye_left.off.r02c07"
     },
     {
       "channel_index": 98,
-      "connectome_node_id": "sensory_098",
+      "connectome_node_id": "720575940623499132",
       "device_port": "dros_s_34_eye_left.on.r02c08"
     },
     {
       "channel_index": 99,
-      "connectome_node_id": "sensory_099",
+      "connectome_node_id": "720575940624931888",
       "device_port": "dros_s_34_eye_left.off.r02c08"
     },
     {
       "channel_index": 100,
-      "connectome_node_id": "sensory_100",
+      "connectome_node_id": "720575940621529435",
       "device_port": "dros_s_34_eye_left.on.r02c09"
     },
     {
       "channel_index": 101,
-      "connectome_node_id": "sensory_101",
+      "connectome_node_id": "720575940630546540",
       "device_port": "dros_s_34_eye_left.off.r02c09"
     },
     {
       "channel_index": 102,
-      "connectome_node_id": "sensory_102",
+      "connectome_node_id": "720575940628592968",
       "device_port": "dros_s_34_eye_left.on.r02c10"
     },
     {
       "channel_index": 103,
-      "connectome_node_id": "sensory_103",
+      "connectome_node_id": "720575940622160705",
       "device_port": "dros_s_34_eye_left.off.r02c10"
     },
     {
       "channel_index": 104,
-      "connectome_node_id": "sensory_104",
+      "connectome_node_id": "720575940607635913",
       "device_port": "dros_s_34_eye_left.on.r02c11"
     },
     {
       "channel_index": 105,
-      "connectome_node_id": "sensory_105",
+      "connectome_node_id": "720575940634854554",
       "device_port": "dros_s_34_eye_left.off.r02c11"
     },
     {
       "channel_index": 106,
-      "connectome_node_id": "sensory_106",
+      "connectome_node_id": "720575940626143806",
       "device_port": "dros_s_34_eye_left.on.r03c00"
     },
     {
       "channel_index": 107,
-      "connectome_node_id": "sensory_107",
+      "connectome_node_id": "720575940623413116",
       "device_port": "dros_s_34_eye_left.off.r03c00"
     },
     {
       "channel_index": 108,
-      "connectome_node_id": "sensory_108",
+      "connectome_node_id": "720575940631306284",
       "device_port": "dros_s_34_eye_left.on.r03c01"
     },
     {
       "channel_index": 109,
-      "connectome_node_id": "sensory_109",
+      "connectome_node_id": "720575940637611365",
       "device_port": "dros_s_34_eye_left.off.r03c01"
     },
     {
       "channel_index": 110,
-      "connectome_node_id": "sensory_110",
+      "connectome_node_id": "720575940628200551",
       "device_port": "dros_s_34_eye_left.on.r03c02"
     },
     {
       "channel_index": 111,
-      "connectome_node_id": "sensory_111",
+      "connectome_node_id": "720575940631023159",
       "device_port": "dros_s_34_eye_left.off.r03c02"
     },
     {
       "channel_index": 112,
-      "connectome_node_id": "sensory_112",
+      "connectome_node_id": "720575940626246525",
       "device_port": "dros_s_34_eye_left.on.r03c03"
     },
     {
       "channel_index": 113,
-      "connectome_node_id": "sensory_113",
+      "connectome_node_id": "720575940623432918",
       "device_port": "dros_s_34_eye_left.off.r03c03"
     },
     {
       "channel_index": 114,
-      "connectome_node_id": "sensory_114",
+      "connectome_node_id": "720575940619918203",
       "device_port": "dros_s_34_eye_left.on.r03c04"
     },
     {
       "channel_index": 115,
-      "connectome_node_id": "sensory_115",
+      "connectome_node_id": "720575940603464672",
       "device_port": "dros_s_34_eye_left.off.r03c04"
     },
     {
       "channel_index": 116,
-      "connectome_node_id": "sensory_116",
+      "connectome_node_id": "720575940618295454",
       "device_port": "dros_s_34_eye_left.on.r03c05"
     },
     {
       "channel_index": 117,
-      "connectome_node_id": "sensory_117",
+      "connectome_node_id": "720575940640803200",
       "device_port": "dros_s_34_eye_left.off.r03c05"
     },
     {
       "channel_index": 118,
-      "connectome_node_id": "sensory_118",
+      "connectome_node_id": "720575940617691734",
       "device_port": "dros_s_34_eye_left.on.r03c06"
     },
     {
       "channel_index": 119,
-      "connectome_node_id": "sensory_119",
+      "connectome_node_id": "720575940620023686",
       "device_port": "dros_s_34_eye_left.off.r03c06"
     },
     {
       "channel_index": 120,
-      "connectome_node_id": "sensory_120",
+      "connectome_node_id": "720575940632311115",
       "device_port": "dros_s_34_eye_left.on.r03c07"
     },
     {
       "channel_index": 121,
-      "connectome_node_id": "sensory_121",
+      "connectome_node_id": "720575940637594334",
       "device_port": "dros_s_34_eye_left.off.r03c07"
     },
     {
       "channel_index": 122,
-      "connectome_node_id": "sensory_122",
+      "connectome_node_id": "720575940629513478",
       "device_port": "dros_s_34_eye_left.on.r03c08"
     },
     {
       "channel_index": 123,
-      "connectome_node_id": "sensory_123",
+      "connectome_node_id": "720575940636873791",
       "device_port": "dros_s_34_eye_left.off.r03c08"
     },
     {
       "channel_index": 124,
-      "connectome_node_id": "sensory_124",
+      "connectome_node_id": "720575940635202204",
       "device_port": "dros_s_34_eye_left.on.r03c09"
     },
     {
       "channel_index": 125,
-      "connectome_node_id": "sensory_125",
+      "connectome_node_id": "720575940625357547",
       "device_port": "dros_s_34_eye_left.off.r03c09"
     },
     {
       "channel_index": 126,
-      "connectome_node_id": "sensory_126",
+      "connectome_node_id": "720575940627253604",
       "device_port": "dros_s_34_eye_left.on.r03c10"
     },
     {
       "channel_index": 127,
-      "connectome_node_id": "sensory_127",
+      "connectome_node_id": "720575940621801819",
       "device_port": "dros_s_34_eye_left.off.r03c10"
     },
     {
       "channel_index": 128,
-      "connectome_node_id": "sensory_128",
+      "connectome_node_id": "720575940616736198",
       "device_port": "dros_s_34_eye_left.on.r03c11"
     },
     {
       "channel_index": 129,
-      "connectome_node_id": "sensory_129",
+      "connectome_node_id": "720575940621116807",
       "device_port": "dros_s_34_eye_left.off.r03c11"
     },
     {
       "channel_index": 130,
-      "connectome_node_id": "sensory_130",
+      "connectome_node_id": "720575940633556644",
       "device_port": "dros_s_34_eye_left.on.r04c00"
     },
     {
       "channel_index": 131,
-      "connectome_node_id": "sensory_131",
+      "connectome_node_id": "720575940616551029",
       "device_port": "dros_s_34_eye_left.off.r04c00"
     },
     {
       "channel_index": 132,
-      "connectome_node_id": "sensory_132",
+      "connectome_node_id": "720575940621371045",
       "device_port": "dros_s_34_eye_left.on.r04c01"
     },
     {
       "channel_index": 133,
-      "connectome_node_id": "sensory_133",
+      "connectome_node_id": "720575940638128474",
       "device_port": "dros_s_34_eye_left.off.r04c01"
     },
     {
       "channel_index": 134,
-      "connectome_node_id": "sensory_134",
+      "connectome_node_id": "720575940623788040",
       "device_port": "dros_s_34_eye_left.on.r04c02"
     },
     {
       "channel_index": 135,
-      "connectome_node_id": "sensory_135",
+      "connectome_node_id": "720575940606756030",
       "device_port": "dros_s_34_eye_left.off.r04c02"
     },
     {
       "channel_index": 136,
-      "connectome_node_id": "sensory_136",
+      "connectome_node_id": "720575940632698797",
       "device_port": "dros_s_34_eye_left.on.r04c03"
     },
     {
       "channel_index": 137,
-      "connectome_node_id": "sensory_137",
+      "connectome_node_id": "720575940621689727",
       "device_port": "dros_s_34_eye_left.off.r04c03"
     },
     {
       "channel_index": 138,
-      "connectome_node_id": "sensory_138",
+      "connectome_node_id": "720575940623133097",
       "device_port": "dros_s_34_eye_left.on.r04c04"
     },
     {
       "channel_index": 139,
-      "connectome_node_id": "sensory_139",
+      "connectome_node_id": "720575940630204155",
       "device_port": "dros_s_34_eye_left.off.r04c04"
     },
     {
       "channel_index": 140,
-      "connectome_node_id": "sensory_140",
+      "connectome_node_id": "720575940622516852",
       "device_port": "dros_s_34_eye_left.on.r04c05"
     },
     {
       "channel_index": 141,
-      "connectome_node_id": "sensory_141",
+      "connectome_node_id": "720575940652554657",
       "device_port": "dros_s_34_eye_left.off.r04c05"
     },
     {
       "channel_index": 142,
-      "connectome_node_id": "sensory_142",
+      "connectome_node_id": "720575940613783277",
       "device_port": "dros_s_34_eye_left.on.r04c06"
     },
     {
       "channel_index": 143,
-      "connectome_node_id": "sensory_143",
+      "connectome_node_id": "720575940631517251",
       "device_port": "dros_s_34_eye_left.off.r04c06"
     },
     {
       "channel_index": 144,
-      "connectome_node_id": "sensory_144",
+      "connectome_node_id": "720575940619148829",
       "device_port": "dros_s_34_eye_left.on.r04c07"
     },
     {
       "channel_index": 145,
-      "connectome_node_id": "sensory_145",
+      "connectome_node_id": "720575940628455942",
       "device_port": "dros_s_34_eye_left.off.r04c07"
     },
     {
       "channel_index": 146,
-      "connectome_node_id": "sensory_146",
+      "connectome_node_id": "720575940615028143",
       "device_port": "dros_s_34_eye_left.on.r04c08"
     },
     {
       "channel_index": 147,
-      "connectome_node_id": "sensory_147",
+      "connectome_node_id": "720575940632080977",
       "device_port": "dros_s_34_eye_left.off.r04c08"
     },
     {
       "channel_index": 148,
-      "connectome_node_id": "sensory_148",
+      "connectome_node_id": "720575940639080765",
       "device_port": "dros_s_34_eye_left.on.r04c09"
     },
     {
       "channel_index": 149,
-      "connectome_node_id": "sensory_149",
+      "connectome_node_id": "720575940605758142",
       "device_port": "dros_s_34_eye_left.off.r04c09"
     },
     {
       "channel_index": 150,
-      "connectome_node_id": "sensory_150",
+      "connectome_node_id": "720575940624057853",
       "device_port": "dros_s_34_eye_left.on.r04c10"
     },
     {
       "channel_index": 151,
-      "connectome_node_id": "sensory_151",
+      "connectome_node_id": "720575940612284569",
       "device_port": "dros_s_34_eye_left.off.r04c10"
     },
     {
       "channel_index": 152,
-      "connectome_node_id": "sensory_152",
+      "connectome_node_id": "720575940626872932",
       "device_port": "dros_s_34_eye_left.on.r04c11"
     },
     {
       "channel_index": 153,
-      "connectome_node_id": "sensory_153",
+      "connectome_node_id": "720575940617207185",
       "device_port": "dros_s_34_eye_left.off.r04c11"
     },
     {
       "channel_index": 154,
-      "connectome_node_id": "sensory_154",
+      "connectome_node_id": "720575940630006521",
       "device_port": "dros_s_34_eye_left.on.r05c00"
     },
     {
       "channel_index": 155,
-      "connectome_node_id": "sensory_155",
+      "connectome_node_id": "720575940624879911",
       "device_port": "dros_s_34_eye_left.off.r05c00"
     },
     {
       "channel_index": 156,
-      "connectome_node_id": "sensory_156",
+      "connectome_node_id": "720575940618165393",
       "device_port": "dros_s_34_eye_left.on.r05c01"
     },
     {
       "channel_index": 157,
-      "connectome_node_id": "sensory_157",
+      "connectome_node_id": "720575940632469290",
       "device_port": "dros_s_34_eye_left.off.r05c01"
     },
     {
       "channel_index": 158,
-      "connectome_node_id": "sensory_158",
+      "connectome_node_id": "720575940610640482",
       "device_port": "dros_s_34_eye_left.on.r05c02"
     },
     {
       "channel_index": 159,
-      "connectome_node_id": "sensory_159",
+      "connectome_node_id": "720575940631842360",
       "device_port": "dros_s_34_eye_left.off.r05c02"
     },
     {
       "channel_index": 160,
-      "connectome_node_id": "sensory_160",
+      "connectome_node_id": "720575940628695043",
       "device_port": "dros_s_34_eye_left.on.r05c03"
     },
     {
       "channel_index": 161,
-      "connectome_node_id": "sensory_161",
+      "connectome_node_id": "720575940628154364",
       "device_port": "dros_s_34_eye_left.off.r05c03"
     },
     {
       "channel_index": 162,
-      "connectome_node_id": "sensory_162",
+      "connectome_node_id": "720575940615255603",
       "device_port": "dros_s_34_eye_left.on.r05c04"
     },
     {
       "channel_index": 163,
-      "connectome_node_id": "sensory_163",
+      "connectome_node_id": "720575940618321364",
       "device_port": "dros_s_34_eye_left.off.r05c04"
     },
     {
       "channel_index": 164,
-      "connectome_node_id": "sensory_164",
+      "connectome_node_id": "720575940650416505",
       "device_port": "dros_s_34_eye_left.on.r05c05"
     },
     {
       "channel_index": 165,
-      "connectome_node_id": "sensory_165",
+      "connectome_node_id": "720575940613455986",
       "device_port": "dros_s_34_eye_left.off.r05c05"
     },
     {
       "channel_index": 166,
-      "connectome_node_id": "sensory_166",
+      "connectome_node_id": "720575940624394790",
       "device_port": "dros_s_34_eye_left.on.r05c06"
     },
     {
       "channel_index": 167,
-      "connectome_node_id": "sensory_167",
+      "connectome_node_id": "720575940632847661",
       "device_port": "dros_s_34_eye_left.off.r05c06"
     },
     {
       "channel_index": 168,
-      "connectome_node_id": "sensory_168",
+      "connectome_node_id": "720575940616534338",
       "device_port": "dros_s_34_eye_left.on.r05c07"
     },
     {
       "channel_index": 169,
-      "connectome_node_id": "sensory_169",
+      "connectome_node_id": "720575940617678566",
       "device_port": "dros_s_34_eye_left.off.r05c07"
     },
     {
       "channel_index": 170,
-      "connectome_node_id": "sensory_170",
+      "connectome_node_id": "720575940626039996",
       "device_port": "dros_s_34_eye_left.on.r05c08"
     },
     {
       "channel_index": 171,
-      "connectome_node_id": "sensory_171",
+      "connectome_node_id": "720575940633631396",
       "device_port": "dros_s_34_eye_left.off.r05c08"
     },
     {
       "channel_index": 172,
-      "connectome_node_id": "sensory_172",
+      "connectome_node_id": "720575940617787963",
       "device_port": "dros_s_34_eye_left.on.r05c09"
     },
     {
       "channel_index": 173,
-      "connectome_node_id": "sensory_173",
+      "connectome_node_id": "720575940631147776",
       "device_port": "dros_s_34_eye_left.off.r05c09"
     },
     {
       "channel_index": 174,
-      "connectome_node_id": "sensory_174",
+      "connectome_node_id": "720575940613891442",
       "device_port": "dros_s_34_eye_left.on.r05c10"
     },
     {
       "channel_index": 175,
-      "connectome_node_id": "sensory_175",
+      "connectome_node_id": "720575940632427603",
       "device_port": "dros_s_34_eye_left.off.r05c10"
     },
     {
       "channel_index": 176,
-      "connectome_node_id": "sensory_176",
+      "connectome_node_id": "720575940621393172",
       "device_port": "dros_s_34_eye_left.on.r05c11"
     },
     {
       "channel_index": 177,
-      "connectome_node_id": "sensory_177",
+      "connectome_node_id": "720575940644702112",
       "device_port": "dros_s_34_eye_left.off.r05c11"
     },
     {
       "channel_index": 178,
-      "connectome_node_id": "sensory_178",
+      "connectome_node_id": "720575940614137809",
       "device_port": "dros_s_34_eye_left.on.r06c00"
     },
     {
       "channel_index": 179,
-      "connectome_node_id": "sensory_179",
+      "connectome_node_id": "720575940640263989",
       "device_port": "dros_s_34_eye_left.off.r06c00"
     },
     {
       "channel_index": 180,
-      "connectome_node_id": "sensory_180",
+      "connectome_node_id": "720575940609137500",
       "device_port": "dros_s_34_eye_left.on.r06c01"
     },
     {
       "channel_index": 181,
-      "connectome_node_id": "sensory_181",
+      "connectome_node_id": "720575940637098352",
       "device_port": "dros_s_34_eye_left.off.r06c01"
     },
     {
       "channel_index": 182,
-      "connectome_node_id": "sensory_182",
+      "connectome_node_id": "720575940619822784",
       "device_port": "dros_s_34_eye_left.on.r06c02"
     },
     {
       "channel_index": 183,
-      "connectome_node_id": "sensory_183",
+      "connectome_node_id": "720575940622186305",
       "device_port": "dros_s_34_eye_left.off.r06c02"
     },
     {
       "channel_index": 184,
-      "connectome_node_id": "sensory_184",
+      "connectome_node_id": "720575940611379569",
       "device_port": "dros_s_34_eye_left.on.r06c03"
     },
     {
       "channel_index": 185,
-      "connectome_node_id": "sensory_185",
+      "connectome_node_id": "720575940632689199",
       "device_port": "dros_s_34_eye_left.off.r06c03"
     },
     {
       "channel_index": 186,
-      "connectome_node_id": "sensory_186",
+      "connectome_node_id": "720575940629486714",
       "device_port": "dros_s_34_eye_left.on.r06c04"
     },
     {
       "channel_index": 187,
-      "connectome_node_id": "sensory_187",
+      "connectome_node_id": "720575940623475324",
       "device_port": "dros_s_34_eye_left.off.r06c04"
     },
     {
       "channel_index": 188,
-      "connectome_node_id": "sensory_188",
+      "connectome_node_id": "720575940620330545",
       "device_port": "dros_s_34_eye_left.on.r06c05"
     },
     {
       "channel_index": 189,
-      "connectome_node_id": "sensory_189",
+      "connectome_node_id": "720575940618932763",
       "device_port": "dros_s_34_eye_left.off.r06c05"
     },
     {
       "channel_index": 190,
-      "connectome_node_id": "sensory_190",
+      "connectome_node_id": "720575940647436835",
       "device_port": "dros_s_34_eye_left.on.r06c06"
     },
     {
       "channel_index": 191,
-      "connectome_node_id": "sensory_191",
+      "connectome_node_id": "720575940618987600",
       "device_port": "dros_s_34_eye_left.off.r06c06"
     },
     {
       "channel_index": 192,
-      "connectome_node_id": "sensory_192",
+      "connectome_node_id": "720575940621619627",
       "device_port": "dros_s_34_eye_left.on.r06c07"
     },
     {
       "channel_index": 193,
-      "connectome_node_id": "sensory_193",
+      "connectome_node_id": "720575940628082053",
       "device_port": "dros_s_34_eye_left.off.r06c07"
     },
     {
       "channel_index": 194,
-      "connectome_node_id": "sensory_194",
+      "connectome_node_id": "720575940633190847",
       "device_port": "dros_s_34_eye_left.on.r06c08"
     },
     {
       "channel_index": 195,
-      "connectome_node_id": "sensory_195",
+      "connectome_node_id": "720575940635119723",
       "device_port": "dros_s_34_eye_left.off.r06c08"
     },
     {
       "channel_index": 196,
-      "connectome_node_id": "sensory_196",
+      "connectome_node_id": "720575940619411147",
       "device_port": "dros_s_34_eye_left.on.r06c09"
     },
     {
       "channel_index": 197,
-      "connectome_node_id": "sensory_197",
+      "connectome_node_id": "720575940606692542",
       "device_port": "dros_s_34_eye_left.off.r06c09"
     },
     {
       "channel_index": 198,
-      "connectome_node_id": "sensory_198",
+      "connectome_node_id": "720575940633787309",
       "device_port": "dros_s_34_eye_left.on.r06c10"
     },
     {
       "channel_index": 199,
-      "connectome_node_id": "sensory_199",
+      "connectome_node_id": "720575940623957173",
       "device_port": "dros_s_34_eye_left.off.r06c10"
     },
     {
       "channel_index": 200,
-      "connectome_node_id": "sensory_200",
+      "connectome_node_id": "720575940636489140",
       "device_port": "dros_s_34_eye_left.on.r06c11"
     },
     {
       "channel_index": 201,
-      "connectome_node_id": "sensory_201",
+      "connectome_node_id": "720575940633157919",
       "device_port": "dros_s_34_eye_left.off.r06c11"
     },
     {
       "channel_index": 202,
-      "connectome_node_id": "sensory_202",
+      "connectome_node_id": "720575940623636957",
       "device_port": "dros_s_34_eye_left.on.r07c00"
     },
     {
       "channel_index": 203,
-      "connectome_node_id": "sensory_203",
+      "connectome_node_id": "720575940637526190",
       "device_port": "dros_s_34_eye_left.off.r07c00"
     },
     {
       "channel_index": 204,
-      "connectome_node_id": "sensory_204",
+      "connectome_node_id": "720575940618340057",
       "device_port": "dros_s_34_eye_left.on.r07c01"
     },
     {
       "channel_index": 205,
-      "connectome_node_id": "sensory_205",
+      "connectome_node_id": "720575940620027515",
       "device_port": "dros_s_34_eye_left.off.r07c01"
     },
     {
       "channel_index": 206,
-      "connectome_node_id": "sensory_206",
+      "connectome_node_id": "720575940628346634",
       "device_port": "dros_s_34_eye_left.on.r07c02"
     },
     {
       "channel_index": 207,
-      "connectome_node_id": "sensory_207",
+      "connectome_node_id": "720575940622719770",
       "device_port": "dros_s_34_eye_left.off.r07c02"
     },
     {
       "channel_index": 208,
-      "connectome_node_id": "sensory_208",
+      "connectome_node_id": "720575940640031360",
       "device_port": "dros_s_34_eye_left.on.r07c03"
     },
     {
       "channel_index": 209,
-      "connectome_node_id": "sensory_209",
+      "connectome_node_id": "720575940643867296",
       "device_port": "dros_s_34_eye_left.off.r07c03"
     },
     {
       "channel_index": 210,
-      "connectome_node_id": "sensory_210",
+      "connectome_node_id": "720575940624225741",
       "device_port": "dros_s_34_eye_left.on.r07c04"
     },
     {
       "channel_index": 211,
-      "connectome_node_id": "sensory_211",
+      "connectome_node_id": "720575940621195290",
       "device_port": "dros_s_34_eye_left.off.r07c04"
     },
     {
       "channel_index": 212,
-      "connectome_node_id": "sensory_212",
+      "connectome_node_id": "720575940635468991",
       "device_port": "dros_s_34_eye_left.on.r07c05"
     },
     {
       "channel_index": 213,
-      "connectome_node_id": "sensory_213",
+      "connectome_node_id": "720575940627250238",
       "device_port": "dros_s_34_eye_left.off.r07c05"
     },
     {
       "channel_index": 214,
-      "connectome_node_id": "sensory_214",
+      "connectome_node_id": "720575940627277754",
       "device_port": "dros_s_34_eye_left.on.r07c06"
     },
     {
       "channel_index": 215,
-      "connectome_node_id": "sensory_215",
+      "connectome_node_id": "720575940633626337",
       "device_port": "dros_s_34_eye_left.off.r07c06"
     },
     {
       "channel_index": 216,
-      "connectome_node_id": "sensory_216",
+      "connectome_node_id": "720575940633294796",
       "device_port": "dros_s_34_eye_left.on.r07c07"
     },
     {
       "channel_index": 217,
-      "connectome_node_id": "sensory_217",
+      "connectome_node_id": "720575940622998627",
       "device_port": "dros_s_34_eye_left.off.r07c07"
     },
     {
       "channel_index": 218,
-      "connectome_node_id": "sensory_218",
+      "connectome_node_id": "720575940627604977",
       "device_port": "dros_s_34_eye_left.on.r07c08"
     },
     {
       "channel_index": 219,
-      "connectome_node_id": "sensory_219",
+      "connectome_node_id": "720575940608293129",
       "device_port": "dros_s_34_eye_left.off.r07c08"
     },
     {
       "channel_index": 220,
-      "connectome_node_id": "sensory_220",
+      "connectome_node_id": "720575940637547365",
       "device_port": "dros_s_34_eye_left.on.r07c09"
     },
     {
       "channel_index": 221,
-      "connectome_node_id": "sensory_221",
+      "connectome_node_id": "720575940620609739",
       "device_port": "dros_s_34_eye_left.off.r07c09"
     },
     {
       "channel_index": 222,
-      "connectome_node_id": "sensory_222",
+      "connectome_node_id": "720575940606696369",
       "device_port": "dros_s_34_eye_left.on.r07c10"
     },
     {
       "channel_index": 223,
-      "connectome_node_id": "sensory_223",
+      "connectome_node_id": "720575940632821352",
       "device_port": "dros_s_34_eye_left.off.r07c10"
     },
     {
       "channel_index": 224,
-      "connectome_node_id": "sensory_224",
+      "connectome_node_id": "720575940624712206",
       "device_port": "dros_s_34_eye_left.on.r07c11"
     },
     {
       "channel_index": 225,
-      "connectome_node_id": "sensory_225",
+      "connectome_node_id": "720575940648646532",
       "device_port": "dros_s_34_eye_left.off.r07c11"
     },
     {
       "channel_index": 226,
-      "connectome_node_id": "sensory_226",
+      "connectome_node_id": "720575940633145903",
       "device_port": "dros_s_35_eye_right.on.r00c00"
     },
     {
       "channel_index": 227,
-      "connectome_node_id": "sensory_227",
+      "connectome_node_id": "720575940616871878",
       "device_port": "dros_s_35_eye_right.off.r00c00"
     },
     {
       "channel_index": 228,
-      "connectome_node_id": "sensory_228",
+      "connectome_node_id": "720575940619895125",
       "device_port": "dros_s_35_eye_right.on.r00c01"
     },
     {
       "channel_index": 229,
-      "connectome_node_id": "sensory_229",
+      "connectome_node_id": "720575940604470240",
       "device_port": "dros_s_35_eye_right.off.r00c01"
     },
     {
       "channel_index": 230,
-      "connectome_node_id": "sensory_230",
+      "connectome_node_id": "720575940627344740",
       "device_port": "dros_s_35_eye_right.on.r00c02"
     },
     {
       "channel_index": 231,
-      "connectome_node_id": "sensory_231",
+      "connectome_node_id": "720575940621457690",
       "device_port": "dros_s_35_eye_right.off.r00c02"
     },
     {
       "channel_index": 232,
-      "connectome_node_id": "sensory_232",
+      "connectome_node_id": "720575940619134789",
       "device_port": "dros_s_35_eye_right.on.r00c03"
     },
     {
       "channel_index": 233,
-      "connectome_node_id": "sensory_233",
+      "connectome_node_id": "720575940622123981",
       "device_port": "dros_s_35_eye_right.off.r00c03"
     },
     {
       "channel_index": 234,
-      "connectome_node_id": "sensory_234",
+      "connectome_node_id": "720575940640333109",
       "device_port": "dros_s_35_eye_right.on.r00c04"
     },
     {
       "channel_index": 235,
-      "connectome_node_id": "sensory_235",
+      "connectome_node_id": "720575940605876866",
       "device_port": "dros_s_35_eye_right.off.r00c04"
     },
     {
       "channel_index": 236,
-      "connectome_node_id": "sensory_236",
+      "connectome_node_id": "720575940610899666",
       "device_port": "dros_s_35_eye_right.on.r00c05"
     },
     {
       "channel_index": 237,
-      "connectome_node_id": "sensory_237",
+      "connectome_node_id": "720575940619637056",
       "device_port": "dros_s_35_eye_right.off.r00c05"
     },
     {
       "channel_index": 238,
-      "connectome_node_id": "sensory_238",
+      "connectome_node_id": "720575940626977947",
       "device_port": "dros_s_35_eye_right.on.r00c06"
     },
     {
       "channel_index": 239,
-      "connectome_node_id": "sensory_239",
+      "connectome_node_id": "720575940640141757",
       "device_port": "dros_s_35_eye_right.off.r00c06"
     },
     {
       "channel_index": 240,
-      "connectome_node_id": "sensory_240",
+      "connectome_node_id": "720575940644791918",
       "device_port": "dros_s_35_eye_right.on.r00c07"
     },
     {
       "channel_index": 241,
-      "connectome_node_id": "sensory_241",
+      "connectome_node_id": "720575940631103744",
       "device_port": "dros_s_35_eye_right.off.r00c07"
     },
     {
       "channel_index": 242,
-      "connectome_node_id": "sensory_242",
+      "connectome_node_id": "720575940624774839",
       "device_port": "dros_s_35_eye_right.on.r00c08"
     },
     {
       "channel_index": 243,
-      "connectome_node_id": "sensory_243",
+      "connectome_node_id": "720575940613804259",
       "device_port": "dros_s_35_eye_right.off.r00c08"
     },
     {
       "channel_index": 244,
-      "connectome_node_id": "sensory_244",
+      "connectome_node_id": "720575940616169578",
       "device_port": "dros_s_35_eye_right.on.r00c09"
     },
     {
       "channel_index": 245,
-      "connectome_node_id": "sensory_245",
+      "connectome_node_id": "720575940618757666",
       "device_port": "dros_s_35_eye_right.off.r00c09"
     },
     {
       "channel_index": 246,
-      "connectome_node_id": "sensory_246",
+      "connectome_node_id": "720575940621103239",
       "device_port": "dros_s_35_eye_right.on.r00c10"
     },
     {
       "channel_index": 247,
-      "connectome_node_id": "sensory_247",
+      "connectome_node_id": "720575940630407388",
       "device_port": "dros_s_35_eye_right.off.r00c10"
     },
     {
       "channel_index": 248,
-      "connectome_node_id": "sensory_248",
+      "connectome_node_id": "720575940616390261",
       "device_port": "dros_s_35_eye_right.on.r00c11"
     },
     {
       "channel_index": 249,
-      "connectome_node_id": "sensory_249",
+      "connectome_node_id": "720575940613302169",
       "device_port": "dros_s_35_eye_right.off.r00c11"
     },
     {
       "channel_index": 250,
-      "connectome_node_id": "sensory_250",
+      "connectome_node_id": "720575940627594568",
       "device_port": "dros_s_35_eye_right.on.r01c00"
     },
     {
       "channel_index": 251,
-      "connectome_node_id": "sensory_251",
+      "connectome_node_id": "720575940622949256",
       "device_port": "dros_s_35_eye_right.off.r01c00"
     },
     {
       "channel_index": 252,
-      "connectome_node_id": "sensory_252",
+      "connectome_node_id": "720575940613560994",
       "device_port": "dros_s_35_eye_right.on.r01c01"
     },
     {
       "channel_index": 253,
-      "connectome_node_id": "sensory_253",
+      "connectome_node_id": "720575940611666898",
       "device_port": "dros_s_35_eye_right.off.r01c01"
     },
     {
       "channel_index": 254,
-      "connectome_node_id": "sensory_254",
+      "connectome_node_id": "720575940635066975",
       "device_port": "dros_s_35_eye_right.on.r01c02"
     },
     {
       "channel_index": 255,
-      "connectome_node_id": "sensory_255",
+      "connectome_node_id": "720575940614374034",
       "device_port": "dros_s_35_eye_right.off.r01c02"
     },
     {
       "channel_index": 256,
-      "connectome_node_id": "sensory_256",
+      "connectome_node_id": "720575940608336514",
       "device_port": "dros_s_35_eye_right.on.r01c03"
     },
     {
       "channel_index": 257,
-      "connectome_node_id": "sensory_257",
+      "connectome_node_id": "720575940621148948",
       "device_port": "dros_s_35_eye_right.off.r01c03"
     },
     {
       "channel_index": 258,
-      "connectome_node_id": "sensory_258",
+      "connectome_node_id": "720575940631999685",
       "device_port": "dros_s_35_eye_right.on.r01c04"
     },
     {
       "channel_index": 259,
-      "connectome_node_id": "sensory_259",
+      "connectome_node_id": "720575940628143376",
       "device_port": "dros_s_35_eye_right.off.r01c04"
     },
     {
       "channel_index": 260,
-      "connectome_node_id": "sensory_260",
+      "connectome_node_id": "720575940613590501",
       "device_port": "dros_s_35_eye_right.on.r01c05"
     },
     {
       "channel_index": 261,
-      "connectome_node_id": "sensory_261",
+      "connectome_node_id": "720575940639172585",
       "device_port": "dros_s_35_eye_right.off.r01c05"
     },
     {
       "channel_index": 262,
-      "connectome_node_id": "sensory_262",
+      "connectome_node_id": "720575940659611777",
       "device_port": "dros_s_35_eye_right.on.r01c06"
     },
     {
       "channel_index": 263,
-      "connectome_node_id": "sensory_263",
+      "connectome_node_id": "720575940645693988",
       "device_port": "dros_s_35_eye_right.off.r01c06"
     },
     {
       "channel_index": 264,
-      "connectome_node_id": "sensory_264",
+      "connectome_node_id": "720575940628865644",
       "device_port": "dros_s_35_eye_right.on.r01c07"
     },
     {
       "channel_index": 265,
-      "connectome_node_id": "sensory_265",
+      "connectome_node_id": "720575940639352483",
       "device_port": "dros_s_35_eye_right.off.r01c07"
     },
     {
       "channel_index": 266,
-      "connectome_node_id": "sensory_266",
+      "connectome_node_id": "720575940610515651",
       "device_port": "dros_s_35_eye_right.on.r01c08"
     },
     {
       "channel_index": 267,
-      "connectome_node_id": "sensory_267",
+      "connectome_node_id": "720575940607155890",
       "device_port": "dros_s_35_eye_right.off.r01c08"
     },
     {
       "channel_index": 268,
-      "connectome_node_id": "sensory_268",
+      "connectome_node_id": "720575940621132894",
       "device_port": "dros_s_35_eye_right.on.r01c09"
     },
     {
       "channel_index": 269,
-      "connectome_node_id": "sensory_269",
+      "connectome_node_id": "720575940608287497",
       "device_port": "dros_s_35_eye_right.off.r01c09"
     },
     {
       "channel_index": 270,
-      "connectome_node_id": "sensory_270",
+      "connectome_node_id": "720575940624313834",
       "device_port": "dros_s_35_eye_right.on.r01c10"
     },
     {
       "channel_index": 271,
-      "connectome_node_id": "sensory_271",
+      "connectome_node_id": "720575940620124143",
       "device_port": "dros_s_35_eye_right.off.r01c10"
     },
     {
       "channel_index": 272,
-      "connectome_node_id": "sensory_272",
+      "connectome_node_id": "720575940623387786",
       "device_port": "dros_s_35_eye_right.on.r01c11"
     },
     {
       "channel_index": 273,
-      "connectome_node_id": "sensory_273",
+      "connectome_node_id": "720575940631180599",
       "device_port": "dros_s_35_eye_right.off.r01c11"
     },
     {
       "channel_index": 274,
-      "connectome_node_id": "sensory_274",
+      "connectome_node_id": "720575940635211768",
       "device_port": "dros_s_35_eye_right.on.r02c00"
     },
     {
       "channel_index": 275,
-      "connectome_node_id": "sensory_275",
+      "connectome_node_id": "720575940637321646",
       "device_port": "dros_s_35_eye_right.off.r02c00"
     },
     {
       "channel_index": 276,
-      "connectome_node_id": "sensory_276",
+      "connectome_node_id": "720575940616758322",
       "device_port": "dros_s_35_eye_right.on.r02c01"
     },
     {
       "channel_index": 277,
-      "connectome_node_id": "sensory_277",
+      "connectome_node_id": "720575940623072013",
       "device_port": "dros_s_35_eye_right.off.r02c01"
     },
     {
       "channel_index": 278,
-      "connectome_node_id": "sensory_278",
+      "connectome_node_id": "720575940624951847",
       "device_port": "dros_s_35_eye_right.on.r02c02"
     },
     {
       "channel_index": 279,
-      "connectome_node_id": "sensory_279",
+      "connectome_node_id": "720575940614727903",
       "device_port": "dros_s_35_eye_right.off.r02c02"
     },
     {
       "channel_index": 280,
-      "connectome_node_id": "sensory_280",
+      "connectome_node_id": "720575940629609457",
       "device_port": "dros_s_35_eye_right.on.r02c03"
     },
     {
       "channel_index": 281,
-      "connectome_node_id": "sensory_281",
+      "connectome_node_id": "720575940632069583",
       "device_port": "dros_s_35_eye_right.off.r02c03"
     },
     {
       "channel_index": 282,
-      "connectome_node_id": "sensory_282",
+      "connectome_node_id": "720575940619046469",
       "device_port": "dros_s_35_eye_right.on.r02c04"
     },
     {
       "channel_index": 283,
-      "connectome_node_id": "sensory_283",
+      "connectome_node_id": "720575940631670615",
       "device_port": "dros_s_35_eye_right.off.r02c04"
     },
     {
       "channel_index": 284,
-      "connectome_node_id": "sensory_284",
+      "connectome_node_id": "720575940617668747",
       "device_port": "dros_s_35_eye_right.on.r02c05"
     },
     {
       "channel_index": 285,
-      "connectome_node_id": "sensory_285",
+      "connectome_node_id": "720575940631340815",
       "device_port": "dros_s_35_eye_right.off.r02c05"
     },
     {
       "channel_index": 286,
-      "connectome_node_id": "sensory_286",
+      "connectome_node_id": "720575940626675837",
       "device_port": "dros_s_35_eye_right.on.r02c06"
     },
     {
       "channel_index": 287,
-      "connectome_node_id": "sensory_287",
+      "connectome_node_id": "720575940619055617",
       "device_port": "dros_s_35_eye_right.off.r02c06"
     },
     {
       "channel_index": 288,
-      "connectome_node_id": "sensory_288",
+      "connectome_node_id": "720575940614707871",
       "device_port": "dros_s_35_eye_right.on.r02c07"
     },
     {
       "channel_index": 289,
-      "connectome_node_id": "sensory_289",
+      "connectome_node_id": "720575940630549370",
       "device_port": "dros_s_35_eye_right.off.r02c07"
     },
     {
       "channel_index": 290,
-      "connectome_node_id": "sensory_290",
+      "connectome_node_id": "720575940638668659",
       "device_port": "dros_s_35_eye_right.on.r02c08"
     },
     {
       "channel_index": 291,
-      "connectome_node_id": "sensory_291",
+      "connectome_node_id": "720575940620802836",
       "device_port": "dros_s_35_eye_right.off.r02c08"
     },
     {
       "channel_index": 292,
-      "connectome_node_id": "sensory_292",
+      "connectome_node_id": "720575940631758393",
       "device_port": "dros_s_35_eye_right.on.r02c09"
     },
     {
       "channel_index": 293,
-      "connectome_node_id": "sensory_293",
+      "connectome_node_id": "720575940620196929",
       "device_port": "dros_s_35_eye_right.off.r02c09"
     },
     {
       "channel_index": 294,
-      "connectome_node_id": "sensory_294",
+      "connectome_node_id": "720575940621398254",
       "device_port": "dros_s_35_eye_right.on.r02c10"
     },
     {
       "channel_index": 295,
-      "connectome_node_id": "sensory_295",
+      "connectome_node_id": "720575940626848275",
       "device_port": "dros_s_35_eye_right.off.r02c10"
     },
     {
       "channel_index": 296,
-      "connectome_node_id": "sensory_296",
+      "connectome_node_id": "720575940626309562",
       "device_port": "dros_s_35_eye_right.on.r02c11"
     },
     {
       "channel_index": 297,
-      "connectome_node_id": "sensory_297",
+      "connectome_node_id": "720575940643576224",
       "device_port": "dros_s_35_eye_right.off.r02c11"
     },
     {
       "channel_index": 298,
-      "connectome_node_id": "sensory_298",
+      "connectome_node_id": "720575940630501228",
       "device_port": "dros_s_35_eye_right.on.r03c00"
     },
     {
       "channel_index": 299,
-      "connectome_node_id": "sensory_299",
+      "connectome_node_id": "720575940606354633",
       "device_port": "dros_s_35_eye_right.off.r03c00"
     },
     {
       "channel_index": 300,
-      "connectome_node_id": "sensory_300",
+      "connectome_node_id": "720575940618603009",
       "device_port": "dros_s_35_eye_right.on.r03c01"
     },
     {
       "channel_index": 301,
-      "connectome_node_id": "sensory_301",
+      "connectome_node_id": "720575940636832879",
       "device_port": "dros_s_35_eye_right.off.r03c01"
     },
     {
       "channel_index": 302,
-      "connectome_node_id": "sensory_302",
+      "connectome_node_id": "720575940617991195",
       "device_port": "dros_s_35_eye_right.on.r03c02"
     },
     {
       "channel_index": 303,
-      "connectome_node_id": "sensory_303",
+      "connectome_node_id": "720575940622923923",
       "device_port": "dros_s_35_eye_right.off.r03c02"
     },
     {
       "channel_index": 304,
-      "connectome_node_id": "sensory_304",
+      "connectome_node_id": "720575940630665580",
       "device_port": "dros_s_35_eye_right.on.r03c03"
     },
     {
       "channel_index": 305,
-      "connectome_node_id": "sensory_305",
+      "connectome_node_id": "720575940630487035",
       "device_port": "dros_s_35_eye_right.off.r03c03"
     },
     {
       "channel_index": 306,
-      "connectome_node_id": "sensory_306",
+      "connectome_node_id": "720575940622143245",
       "device_port": "dros_s_35_eye_right.on.r03c04"
     },
     {
       "channel_index": 307,
-      "connectome_node_id": "sensory_307",
+      "connectome_node_id": "720575940628895750",
       "device_port": "dros_s_35_eye_right.off.r03c04"
     },
     {
       "channel_index": 308,
-      "connectome_node_id": "sensory_308",
+      "connectome_node_id": "720575940620718040",
       "device_port": "dros_s_35_eye_right.on.r03c05"
     },
     {
       "channel_index": 309,
-      "connectome_node_id": "sensory_309",
+      "connectome_node_id": "720575940637136752",
       "device_port": "dros_s_35_eye_right.off.r03c05"
     },
     {
       "channel_index": 310,
-      "connectome_node_id": "sensory_310",
+      "connectome_node_id": "720575940643290272",
       "device_port": "dros_s_35_eye_right.on.r03c06"
     },
     {
       "channel_index": 311,
-      "connectome_node_id": "sensory_311",
+      "connectome_node_id": "720575940626768442",
       "device_port": "dros_s_35_eye_right.off.r03c06"
     },
     {
       "channel_index": 312,
-      "connectome_node_id": "sensory_312",
+      "connectome_node_id": "720575940643120525",
       "device_port": "dros_s_35_eye_right.on.r03c07"
     },
     {
       "channel_index": 313,
-      "connectome_node_id": "sensory_313",
+      "connectome_node_id": "720575940637464718",
       "device_port": "dros_s_35_eye_right.off.r03c07"
     },
     {
       "channel_index": 314,
-      "connectome_node_id": "sensory_314",
+      "connectome_node_id": "720575940627068772",
       "device_port": "dros_s_35_eye_right.on.r03c08"
     },
     {
       "channel_index": 315,
-      "connectome_node_id": "sensory_315",
+      "connectome_node_id": "720575940629981440",
       "device_port": "dros_s_35_eye_right.off.r03c08"
     },
     {
       "channel_index": 316,
-      "connectome_node_id": "sensory_316",
+      "connectome_node_id": "720575940634000979",
       "device_port": "dros_s_35_eye_right.on.r03c09"
     },
     {
       "channel_index": 317,
-      "connectome_node_id": "sensory_317",
+      "connectome_node_id": "720575940618807454",
       "device_port": "dros_s_35_eye_right.off.r03c09"
     },
     {
       "channel_index": 318,
-      "connectome_node_id": "sensory_318",
+      "connectome_node_id": "720575940608181122",
       "device_port": "dros_s_35_eye_right.on.r03c10"
     },
     {
       "channel_index": 319,
-      "connectome_node_id": "sensory_319",
+      "connectome_node_id": "720575940661289345",
       "device_port": "dros_s_35_eye_right.off.r03c10"
     },
     {
       "channel_index": 320,
-      "connectome_node_id": "sensory_320",
+      "connectome_node_id": "720575940621771502",
       "device_port": "dros_s_35_eye_right.on.r03c11"
     },
     {
       "channel_index": 321,
-      "connectome_node_id": "sensory_321",
+      "connectome_node_id": "720575940621522624",
       "device_port": "dros_s_35_eye_right.off.r03c11"
     },
     {
       "channel_index": 322,
-      "connectome_node_id": "sensory_322",
+      "connectome_node_id": "720575940624163303",
       "device_port": "dros_s_35_eye_right.on.r04c00"
     },
     {
       "channel_index": 323,
-      "connectome_node_id": "sensory_323",
+      "connectome_node_id": "720575940614363363",
       "device_port": "dros_s_35_eye_right.off.r04c00"
     },
     {
       "channel_index": 324,
-      "connectome_node_id": "sensory_324",
+      "connectome_node_id": "720575940629532777",
       "device_port": "dros_s_35_eye_right.on.r04c01"
     },
     {
       "channel_index": 325,
-      "connectome_node_id": "sensory_325",
+      "connectome_node_id": "720575940614595582",
       "device_port": "dros_s_35_eye_right.off.r04c01"
     },
     {
       "channel_index": 326,
-      "connectome_node_id": "sensory_326",
+      "connectome_node_id": "720575940630097103",
       "device_port": "dros_s_35_eye_right.on.r04c02"
     },
     {
       "channel_index": 327,
-      "connectome_node_id": "sensory_327",
+      "connectome_node_id": "720575940646576436",
       "device_port": "dros_s_35_eye_right.off.r04c02"
     },
     {
       "channel_index": 328,
-      "connectome_node_id": "sensory_328",
+      "connectome_node_id": "720575940631131436",
       "device_port": "dros_s_35_eye_right.on.r04c03"
     },
     {
       "channel_index": 329,
-      "connectome_node_id": "sensory_329",
+      "connectome_node_id": "720575940640140341",
       "device_port": "dros_s_35_eye_right.off.r04c03"
     },
     {
       "channel_index": 330,
-      "connectome_node_id": "sensory_330",
+      "connectome_node_id": "720575940614614495",
       "device_port": "dros_s_35_eye_right.on.r04c04"
     },
     {
       "channel_index": 331,
-      "connectome_node_id": "sensory_331",
+      "connectome_node_id": "720575940624184764",
       "device_port": "dros_s_35_eye_right.off.r04c04"
     },
     {
       "channel_index": 332,
-      "connectome_node_id": "sensory_332",
+      "connectome_node_id": "720575940618153105",
       "device_port": "dros_s_35_eye_right.on.r04c05"
     },
     {
       "channel_index": 333,
-      "connectome_node_id": "sensory_333",
+      "connectome_node_id": "720575940621440859",
       "device_port": "dros_s_35_eye_right.off.r04c05"
     },
     {
       "channel_index": 334,
-      "connectome_node_id": "sensory_334",
+      "connectome_node_id": "720575940621820404",
       "device_port": "dros_s_35_eye_right.on.r04c06"
     },
     {
       "channel_index": 335,
-      "connectome_node_id": "sensory_335",
+      "connectome_node_id": "720575940646419747",
       "device_port": "dros_s_35_eye_right.off.r04c06"
     },
     {
       "channel_index": 336,
-      "connectome_node_id": "sensory_336",
+      "connectome_node_id": "720575940648669060",
       "device_port": "dros_s_35_eye_right.on.r04c07"
     },
     {
       "channel_index": 337,
-      "connectome_node_id": "sensory_337",
+      "connectome_node_id": "720575940628739560",
       "device_port": "dros_s_35_eye_right.off.r04c07"
     },
     {
       "channel_index": 338,
-      "connectome_node_id": "sensory_338",
+      "connectome_node_id": "720575940622791429",
       "device_port": "dros_s_35_eye_right.on.r04c08"
     },
     {
       "channel_index": 339,
-      "connectome_node_id": "sensory_339",
+      "connectome_node_id": "720575940637628762",
       "device_port": "dros_s_35_eye_right.off.r04c08"
     },
     {
       "channel_index": 340,
-      "connectome_node_id": "sensory_340",
+      "connectome_node_id": "720575940634790648",
       "device_port": "dros_s_35_eye_right.on.r04c09"
     },
     {
       "channel_index": 341,
-      "connectome_node_id": "sensory_341",
+      "connectome_node_id": "720575940636821616",
       "device_port": "dros_s_35_eye_right.off.r04c09"
     },
     {
       "channel_index": 342,
-      "connectome_node_id": "sensory_342",
+      "connectome_node_id": "720575940638049136",
       "device_port": "dros_s_35_eye_right.on.r04c10"
     },
     {
       "channel_index": 343,
-      "connectome_node_id": "sensory_343",
+      "connectome_node_id": "720575940622331830",
       "device_port": "dros_s_35_eye_right.off.r04c10"
     },
     {
       "channel_index": 344,
-      "connectome_node_id": "sensory_344",
+      "connectome_node_id": "720575940622440308",
       "device_port": "dros_s_35_eye_right.on.r04c11"
     },
     {
       "channel_index": 345,
-      "connectome_node_id": "sensory_345",
+      "connectome_node_id": "720575940624394317",
       "device_port": "dros_s_35_eye_right.off.r04c11"
     },
     {
       "channel_index": 346,
-      "connectome_node_id": "sensory_346",
+      "connectome_node_id": "720575940608252082",
       "device_port": "dros_s_35_eye_right.on.r05c00"
     },
     {
       "channel_index": 347,
-      "connectome_node_id": "sensory_347",
+      "connectome_node_id": "720575940627076964",
       "device_port": "dros_s_35_eye_right.off.r05c00"
     },
     {
       "channel_index": 348,
-      "connectome_node_id": "sensory_348",
+      "connectome_node_id": "720575940653577974",
       "device_port": "dros_s_35_eye_right.on.r05c01"
     },
     {
       "channel_index": 349,
-      "connectome_node_id": "sensory_349",
+      "connectome_node_id": "720575940644496288",
       "device_port": "dros_s_35_eye_right.off.r05c01"
     },
     {
       "channel_index": 350,
-      "connectome_node_id": "sensory_350",
+      "connectome_node_id": "720575940615160386",
       "device_port": "dros_s_35_eye_right.on.r05c02"
     },
     {
       "channel_index": 351,
-      "connectome_node_id": "sensory_351",
+      "connectome_node_id": "720575940618116569",
       "device_port": "dros_s_35_eye_right.off.r05c02"
     },
     {
       "channel_index": 352,
-      "connectome_node_id": "sensory_352",
+      "connectome_node_id": "720575940605601214",
       "device_port": "dros_s_35_eye_right.on.r05c03"
     },
     {
       "channel_index": 353,
-      "connectome_node_id": "sensory_353",
+      "connectome_node_id": "720575940637623780",
       "device_port": "dros_s_35_eye_right.off.r05c03"
     },
     {
       "channel_index": 354,
-      "connectome_node_id": "sensory_354",
+      "connectome_node_id": "720575940613579943",
       "device_port": "dros_s_35_eye_right.on.r05c04"
     },
     {
       "channel_index": 355,
-      "connectome_node_id": "sensory_355",
+      "connectome_node_id": "720575940638624189",
       "device_port": "dros_s_35_eye_right.off.r05c04"
     },
     {
       "channel_index": 356,
-      "connectome_node_id": "sensory_356",
+      "connectome_node_id": "720575940634707863",
       "device_port": "dros_s_35_eye_right.on.r05c05"
     },
     {
       "channel_index": 357,
-      "connectome_node_id": "sensory_357",
+      "connectome_node_id": "720575940629437054",
       "device_port": "dros_s_35_eye_right.off.r05c05"
     },
     {
       "channel_index": 358,
-      "connectome_node_id": "sensory_358",
+      "connectome_node_id": "720575940621819630",
       "device_port": "dros_s_35_eye_right.on.r05c06"
     },
     {
       "channel_index": 359,
-      "connectome_node_id": "sensory_359",
+      "connectome_node_id": "720575940630024566",
       "device_port": "dros_s_35_eye_right.off.r05c06"
     },
     {
       "channel_index": 360,
-      "connectome_node_id": "sensory_360",
+      "connectome_node_id": "720575940642506459",
       "device_port": "dros_s_35_eye_right.on.r05c07"
     },
     {
       "channel_index": 361,
-      "connectome_node_id": "sensory_361",
+      "connectome_node_id": "720575940630247579",
       "device_port": "dros_s_35_eye_right.off.r05c07"
     },
     {
       "channel_index": 362,
-      "connectome_node_id": "sensory_362",
+      "connectome_node_id": "720575940640830453",
       "device_port": "dros_s_35_eye_right.on.r05c08"
     },
     {
       "channel_index": 363,
-      "connectome_node_id": "sensory_363",
+      "connectome_node_id": "720575940642086389",
       "device_port": "dros_s_35_eye_right.off.r05c08"
     },
     {
       "channel_index": 364,
-      "connectome_node_id": "sensory_364",
+      "connectome_node_id": "720575940623050334",
       "device_port": "dros_s_35_eye_right.on.r05c09"
     },
     {
       "channel_index": 365,
-      "connectome_node_id": "sensory_365",
+      "connectome_node_id": "720575940621551854",
       "device_port": "dros_s_35_eye_right.off.r05c09"
     },
     {
       "channel_index": 366,
-      "connectome_node_id": "sensory_366",
+      "connectome_node_id": "720575940640541091",
       "device_port": "dros_s_35_eye_right.on.r05c10"
     },
     {
       "channel_index": 367,
-      "connectome_node_id": "sensory_367",
+      "connectome_node_id": "720575940627927573",
       "device_port": "dros_s_35_eye_right.off.r05c10"
     },
     {
       "channel_index": 368,
-      "connectome_node_id": "sensory_368",
+      "connectome_node_id": "720575940615723314",
       "device_port": "dros_s_35_eye_right.on.r05c11"
     },
     {
       "channel_index": 369,
-      "connectome_node_id": "sensory_369",
+      "connectome_node_id": "720575940628762280",
       "device_port": "dros_s_35_eye_right.off.r05c11"
     },
     {
       "channel_index": 370,
-      "connectome_node_id": "sensory_370",
+      "connectome_node_id": "720575940620595053",
       "device_port": "dros_s_35_eye_right.on.r06c00"
     },
     {
       "channel_index": 371,
-      "connectome_node_id": "sensory_371",
+      "connectome_node_id": "720575940623203805",
       "device_port": "dros_s_35_eye_right.off.r06c00"
     },
     {
       "channel_index": 372,
-      "connectome_node_id": "sensory_372",
+      "connectome_node_id": "720575940611352014",
       "device_port": "dros_s_35_eye_right.on.r06c01"
     },
     {
       "channel_index": 373,
-      "connectome_node_id": "sensory_373",
+      "connectome_node_id": "720575940633350812",
       "device_port": "dros_s_35_eye_right.off.r06c01"
     },
     {
       "channel_index": 374,
-      "connectome_node_id": "sensory_374",
+      "connectome_node_id": "720575940612337331",
       "device_port": "dros_s_35_eye_right.on.r06c02"
     },
     {
       "channel_index": 375,
-      "connectome_node_id": "sensory_375",
+      "connectome_node_id": "720575940618851073",
       "device_port": "dros_s_35_eye_right.off.r06c02"
     },
     {
       "channel_index": 376,
-      "connectome_node_id": "sensory_376",
+      "connectome_node_id": "720575940621164720",
       "device_port": "dros_s_35_eye_right.on.r06c03"
     },
     {
       "channel_index": 377,
-      "connectome_node_id": "sensory_377",
+      "connectome_node_id": "720575940637902938",
       "device_port": "dros_s_35_eye_right.off.r06c03"
     },
     {
       "channel_index": 378,
-      "connectome_node_id": "sensory_378",
+      "connectome_node_id": "720575940624206472",
       "device_port": "dros_s_35_eye_right.on.r06c04"
     },
     {
       "channel_index": 379,
-      "connectome_node_id": "sensory_379",
+      "connectome_node_id": "720575940628586261",
       "device_port": "dros_s_35_eye_right.off.r06c04"
     },
     {
       "channel_index": 380,
-      "connectome_node_id": "sensory_380",
+      "connectome_node_id": "720575940620464321",
       "device_port": "dros_s_35_eye_right.on.r06c05"
     },
     {
       "channel_index": 381,
-      "connectome_node_id": "sensory_381",
+      "connectome_node_id": "720575940625253193",
       "device_port": "dros_s_35_eye_right.off.r06c05"
     },
     {
       "channel_index": 382,
-      "connectome_node_id": "sensory_382",
+      "connectome_node_id": "720575940626201372",
       "device_port": "dros_s_35_eye_right.on.r06c06"
     },
     {
       "channel_index": 383,
-      "connectome_node_id": "sensory_383",
+      "connectome_node_id": "720575940648570244",
       "device_port": "dros_s_35_eye_right.off.r06c06"
     },
     {
       "channel_index": 384,
-      "connectome_node_id": "sensory_384",
+      "connectome_node_id": "720575940618189227",
       "device_port": "dros_s_35_eye_right.on.r06c07"
     },
     {
       "channel_index": 385,
-      "connectome_node_id": "sensory_385",
+      "connectome_node_id": "720575940638633535",
       "device_port": "dros_s_35_eye_right.off.r06c07"
     },
     {
       "channel_index": 386,
-      "connectome_node_id": "sensory_386",
+      "connectome_node_id": "720575940622538520",
       "device_port": "dros_s_35_eye_right.on.r06c08"
     },
     {
       "channel_index": 387,
-      "connectome_node_id": "sensory_387",
+      "connectome_node_id": "720575940629229020",
       "device_port": "dros_s_35_eye_right.off.r06c08"
     },
     {
       "channel_index": 388,
-      "connectome_node_id": "sensory_388",
+      "connectome_node_id": "720575940622048862",
       "device_port": "dros_s_35_eye_right.on.r06c09"
     },
     {
       "channel_index": 389,
-      "connectome_node_id": "sensory_389",
+      "connectome_node_id": "720575940619636615",
       "device_port": "dros_s_35_eye_right.off.r06c09"
     },
     {
       "channel_index": 390,
-      "connectome_node_id": "sensory_390",
+      "connectome_node_id": "720575940625082969",
       "device_port": "dros_s_35_eye_right.on.r06c10"
     },
     {
       "channel_index": 391,
-      "connectome_node_id": "sensory_391",
+      "connectome_node_id": "720575940624694503",
       "device_port": "dros_s_35_eye_right.off.r06c10"
     },
     {
       "channel_index": 392,
-      "connectome_node_id": "sensory_392",
+      "connectome_node_id": "720575940630183286",
       "device_port": "dros_s_35_eye_right.on.r06c11"
     },
     {
       "channel_index": 393,
-      "connectome_node_id": "sensory_393",
+      "connectome_node_id": "720575940629249783",
       "device_port": "dros_s_35_eye_right.off.r06c11"
     },
     {
       "channel_index": 394,
-      "connectome_node_id": "sensory_394",
+      "connectome_node_id": "720575940630914858",
       "device_port": "dros_s_35_eye_right.on.r07c00"
     },
     {
       "channel_index": 395,
-      "connectome_node_id": "sensory_395",
+      "connectome_node_id": "720575940660217473",
       "device_port": "dros_s_35_eye_right.off.r07c00"
     },
     {
       "channel_index": 396,
-      "connectome_node_id": "sensory_396",
+      "connectome_node_id": "720575940620746478",
       "device_port": "dros_s_35_eye_right.on.r07c01"
     },
     {
       "channel_index": 397,
-      "connectome_node_id": "sensory_397",
+      "connectome_node_id": "720575940617613398",
       "device_port": "dros_s_35_eye_right.off.r07c01"
     },
     {
       "channel_index": 398,
-      "connectome_node_id": "sensory_398",
+      "connectome_node_id": "720575940622156976",
       "device_port": "dros_s_35_eye_right.on.r07c02"
     },
     {
       "channel_index": 399,
-      "connectome_node_id": "sensory_399",
+      "connectome_node_id": "720575940608235186",
       "device_port": "dros_s_35_eye_right.off.r07c02"
     },
     {
       "channel_index": 400,
-      "connectome_node_id": "sensory_400",
+      "connectome_node_id": "720575940630945335",
       "device_port": "dros_s_35_eye_right.on.r07c03"
     },
     {
       "channel_index": 401,
-      "connectome_node_id": "sensory_401",
+      "connectome_node_id": "720575940632416298",
       "device_port": "dros_s_35_eye_right.off.r07c03"
     },
     {
       "channel_index": 402,
-      "connectome_node_id": "sensory_402",
+      "connectome_node_id": "720575940611505102",
       "device_port": "dros_s_35_eye_right.on.r07c04"
     },
     {
       "channel_index": 403,
-      "connectome_node_id": "sensory_403",
+      "connectome_node_id": "720575940630496374",
       "device_port": "dros_s_35_eye_right.off.r07c04"
     },
     {
       "channel_index": 404,
-      "connectome_node_id": "sensory_404",
+      "connectome_node_id": "720575940632943277",
       "device_port": "dros_s_35_eye_right.on.r07c05"
     },
     {
       "channel_index": 405,
-      "connectome_node_id": "sensory_405",
+      "connectome_node_id": "720575940635330204",
       "device_port": "dros_s_35_eye_right.off.r07c05"
     },
     {
       "channel_index": 406,
-      "connectome_node_id": "sensory_406",
+      "connectome_node_id": "720575940618886710",
       "device_port": "dros_s_35_eye_right.on.r07c06"
     },
     {
       "channel_index": 407,
-      "connectome_node_id": "sensory_407",
+      "connectome_node_id": "720575940617299131",
       "device_port": "dros_s_35_eye_right.off.r07c06"
     },
     {
       "channel_index": 408,
-      "connectome_node_id": "sensory_408",
+      "connectome_node_id": "720575940615886534",
       "device_port": "dros_s_35_eye_right.on.r07c07"
     },
     {
       "channel_index": 409,
-      "connectome_node_id": "sensory_409",
+      "connectome_node_id": "720575940620610420",
       "device_port": "dros_s_35_eye_right.off.r07c07"
     },
     {
       "channel_index": 410,
-      "connectome_node_id": "sensory_410",
+      "connectome_node_id": "720575940628059261",
       "device_port": "dros_s_35_eye_right.on.r07c08"
     },
     {
       "channel_index": 411,
-      "connectome_node_id": "sensory_411",
+      "connectome_node_id": "720575940624258857",
       "device_port": "dros_s_35_eye_right.off.r07c08"
     },
     {
       "channel_index": 412,
-      "connectome_node_id": "sensory_412",
+      "connectome_node_id": "720575940627264062",
       "device_port": "dros_s_35_eye_right.on.r07c09"
     },
     {
       "channel_index": 413,
-      "connectome_node_id": "sensory_413",
+      "connectome_node_id": "720575940633176204",
       "device_port": "dros_s_35_eye_right.off.r07c09"
     },
     {
       "channel_index": 414,
-      "connectome_node_id": "sensory_414",
+      "connectome_node_id": "720575940613552947",
       "device_port": "dros_s_35_eye_right.on.r07c10"
     },
     {
       "channel_index": 415,
-      "connectome_node_id": "sensory_415",
+      "connectome_node_id": "720575940627800728",
       "device_port": "dros_s_35_eye_right.off.r07c10"
     },
     {
       "channel_index": 416,
-      "connectome_node_id": "sensory_416",
+      "connectome_node_id": "720575940628734376",
       "device_port": "dros_s_35_eye_right.on.r07c11"
     },
     {
       "channel_index": 417,
-      "connectome_node_id": "sensory_417",
+      "connectome_node_id": "720575940607667723",
       "device_port": "dros_s_35_eye_right.off.r07c11"
     }
   ],

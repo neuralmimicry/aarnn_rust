@@ -139,6 +139,14 @@ struct Args {
     #[arg(long)]
     orchestrator: Option<String>,
 
+    /// Network/brain ID to select when the control surface and simulator open.
+    #[arg(long)]
+    default_network: Option<String>,
+
+    /// Optional node ID to select when the control surface opens.
+    #[arg(long)]
+    default_node: Option<String>,
+
     /// Auth mode: none, local, oidc.
     #[arg(long, default_value = "none")]
     auth_mode: String,
@@ -275,6 +283,8 @@ impl AuthMode {
 #[derive(Clone)]
 struct AppState {
     default_orchestrator: Option<String>,
+    default_network: Option<String>,
+    default_node: Option<String>,
     default_runtime_user: Option<String>,
     auth: AuthConfig,
     cors: CorsConfig,
@@ -513,6 +523,7 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "activity"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "export"]) => Some(AccessRequirement::aarnn_observe()),
         ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "aer", "infer"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "stream"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "llm", "mirror"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "update_network"]) => Some(AccessRequirement::aarnn_use()),
@@ -1442,6 +1453,22 @@ struct AerInjectPayload {
 }
 
 #[derive(Deserialize)]
+struct AerInferencePayload {
+    network_id: String,
+    node_id: Option<String>,
+    step_index: Option<i64>,
+    time_ms: Option<f32>,
+    dt_ms: Option<f32>,
+    aer_base: Option<u32>,
+    aer_payload_hex: Option<String>,
+    spike_indices: Option<Vec<u32>>,
+    input_values: Option<Vec<f32>>,
+    spike_io: Option<SpikeIoConfig>,
+    is_backward: Option<bool>,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
 struct AerStreamQuery {
     addr: Option<String>,
     network_id: Option<String>,
@@ -1603,6 +1630,8 @@ struct AuthModeResponse {
 #[derive(Serialize)]
 struct UiConfigResponse {
     default_orchestrator: Option<String>,
+    default_network: Option<String>,
+    default_node: Option<String>,
     default_runtime_user: Option<String>,
     shared_login_url: Option<String>,
     token_vault_url: Option<String>,
@@ -1873,6 +1902,12 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         default_orchestrator: args.orchestrator,
+        default_network: args
+            .default_network
+            .or_else(|| env_opt("NM_WEB_UI_DEFAULT_NETWORK")),
+        default_node: args
+            .default_node
+            .or_else(|| env_opt("NM_WEB_UI_DEFAULT_NODE")),
         default_runtime_user: env_opt("NM_WEB_UI_DEFAULT_RUNTIME_USER"),
         auth,
         cors,
@@ -1956,6 +1991,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/activity", get(activity))
         .route("/export", get(export))
         .route("/aer/inject", post(aer_inject))
+        .route("/aer/infer", post(aer_infer))
         .route("/aer/stream", post(aer_stream))
         .route("/llm/mirror", post(llm_mirror))
         .route("/update_network", post(update_network))
@@ -1972,6 +2008,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/service-access.js", get(service_access_js))
         .route("/management-client.generated.js", get(management_client_js))
         .route("/aer-transport.js", get(aer_transport_js))
+        .route("/sim/webgl", get(webgl_sim_html))
+        .route("/webgl-sim.js", get(webgl_sim_js))
+        .route("/webgl-world.js", get(webgl_world_js))
+        .route("/sim-content.generated.js", get(sim_content_js))
         .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
         .route("/docs", get(docs_page))
@@ -2060,6 +2100,61 @@ async fn aer_transport_js() -> impl IntoResponse {
         HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/aer-transport.js"))
+}
+
+async fn webgl_sim_html() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (headers, include_str!("../../web_ui/webgl-sim.html"))
+}
+
+async fn webgl_sim_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (headers, include_str!("../../web_ui/webgl-sim.js"))
+}
+
+async fn webgl_world_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (headers, include_str!("../../web_ui/webgl-world.js"))
+}
+
+async fn sim_content_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (
+        headers,
+        include_str!("../../web_ui/sim-content.generated.js"),
+    )
 }
 
 async fn shell_js() -> impl IntoResponse {
@@ -2219,6 +2314,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "type": "object",
             "properties": {
               "default_orchestrator": { "type": "string", "nullable": true, "description": "Default gRPC orchestrator address." },
+              "default_network": { "type": "string", "nullable": true, "description": "Network/brain ID selected by the simulator launcher." },
+              "default_node": { "type": "string", "nullable": true, "description": "Optional node ID selected by the simulator launcher." },
               "default_runtime_user": { "type": "string", "nullable": true, "description": "Default runtime workspace namespace used for anonymous browser sessions." },
               "shared_login_url": { "type": "string", "nullable": true, "description": "Commercial NeuralMimicry login URL used for cross-product SSO handoff." },
               "token_vault_url": { "type": "string", "nullable": true, "description": "Commercial token vault URL." },
@@ -3009,7 +3106,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
-            "/api/aer/inject": {
+        "/api/aer/inject": {
               "post": {
                 "tags": ["network"],
                 "summary": "Inject one AER exchange into a running network",
@@ -3056,6 +3153,29 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "400": { "description": "Invalid payload or missing fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+            }
+          },
+        "/api/aer/infer": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Admit one browser/WebGL sensory frame and return later output spikes",
+            "description": "Resolves an active worker when node_id is omitted, admits the frame through the distributed AER path, and returns output activity observed after admission.",
+            "operationId": "inferAerExchange",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/AerInjectPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Admission and output spike result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+              "400": { "description": "Invalid or empty sensory frame.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "No active worker or inference transport failure.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -3255,6 +3375,8 @@ async fn auth_mode_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
 async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(UiConfigResponse {
         default_orchestrator: state.default_orchestrator.clone(),
+        default_network: state.default_network.clone(),
+        default_node: state.default_node.clone(),
         default_runtime_user: state.default_runtime_user.clone(),
         shared_login_url: state.commerce.shared_login_url.clone(),
         token_vault_url: state.commerce.token_vault_url.clone(),
@@ -6971,6 +7093,7 @@ struct MirrorInferenceOutput {
 async fn send_aer_inference(
     target_addr: String,
     batch: SpikeBatch,
+    requested_timeout_ms: Option<u64>,
 ) -> Result<MirrorInferenceOutput, ApiError> {
     let network_id = batch.network_id.clone();
     let mut activity_client =
@@ -7000,8 +7123,10 @@ async fn send_aer_inference(
         });
     };
 
-    let timeout_ms = env_opt("AARNN_LLM_INFERENCE_TIMEOUT_MS")
-        .and_then(|value| value.parse::<u64>().ok())
+    let timeout_ms = requested_timeout_ms
+        .or_else(|| {
+            env_opt("AARNN_LLM_INFERENCE_TIMEOUT_MS").and_then(|value| value.parse::<u64>().ok())
+        })
         .unwrap_or(5_000)
         .clamp(50, 60_000);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
@@ -7033,6 +7158,88 @@ async fn send_aer_inference(
                     .then(|| hex::encode(output.aer_payload)),
             });
         }
+    }
+}
+
+/// Browser/WebGL inference adapter. The browser sends sensory values or an
+/// already encoded AER frame to this bounded HTTP gateway; the gateway keeps
+/// target resolution, admission, logical-time assignment, and output history
+/// on the same distributed path used by the native simulators.
+async fn aer_infer(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AerInferencePayload>,
+) -> impl IntoResponse {
+    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
+        return resp;
+    }
+    if payload.network_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "network_id is required" })),
+        )
+            .into_response();
+    }
+    if payload
+        .input_values
+        .as_ref()
+        .is_some_and(|values| values.len() > 8192)
+    {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "WebGL sensory frame exceeds the 8192-value bound" })),
+        )
+            .into_response();
+    }
+
+    let orchestrator_addr = match resolve_addr_or_default(None, state.default_orchestrator.clone())
+    {
+        Ok(addr) => addr,
+        Err(err) => return err.into_response(),
+    };
+    let target_addr = match resolve_network_addr(
+        orchestrator_addr,
+        &payload.network_id,
+        payload.node_id.clone(),
+    )
+    .await
+    {
+        Ok(addr) => addr,
+        Err(err) => return err.into_response(),
+    };
+
+    let batch = match build_aer_batch(
+        &target_addr,
+        payload.network_id.clone(),
+        payload.step_index.unwrap_or(0),
+        payload.time_ms,
+        payload.dt_ms,
+        payload.aer_base.unwrap_or(0),
+        payload.is_backward.unwrap_or(false),
+        payload.aer_payload_hex,
+        payload.spike_indices,
+        payload.input_values,
+        payload.spike_io,
+    )
+    .await
+    {
+        Ok(batch) => batch,
+        Err(err) => return err.into_response(),
+    };
+
+    match send_aer_inference(target_addr.clone(), batch, payload.timeout_ms).await {
+        Ok(output) => (
+            StatusCode::OK,
+            Json(json!({
+                "accepted_batches": output.accepted_batches,
+                "target": target_addr,
+                "network_id": payload.network_id,
+                "output_step_index": output.output_step_index,
+                "output_spike_indices": output.output_spike_indices,
+                "output_aer_payload_hex": output.output_aer_payload_hex,
+            })),
+        )
+            .into_response(),
+        Err(err) => err.into_response(),
     }
 }
 
@@ -7568,7 +7775,7 @@ async fn stimulate_llm_mirror(
         }
     };
 
-    match send_aer_inference(target_addr, batch).await {
+    match send_aer_inference(target_addr, batch, None).await {
         Ok(inference) => {
             response.accepted_batches = inference.accepted_batches;
             response.output_step_index = inference.output_step_index;
@@ -8191,6 +8398,10 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/llm/mirror"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/aer/infer"),
             Some(AccessRequirement::aarnn_use())
         );
         assert_eq!(

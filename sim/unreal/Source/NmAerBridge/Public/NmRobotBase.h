@@ -32,6 +32,9 @@ class NMAERBRIDGE_API UNmRobotBase : public UActorComponent
 
 public:
     UNmRobotBase();
+    // Presentation-space context only; never a biological/logical clock.
+    FVector HabitatCentre = FVector::ZeroVector;
+    float HabitatRadiusCm = 0.f;
 
     // -------------------------------------------------------------------------
     // Configuration (editable per-instance in the Details panel)

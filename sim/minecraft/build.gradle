@@ -1,0 +1,112 @@
+plugins {
+    id 'fabric-loom' version '1.12.7'
+}
+version = project.mod_version
+group = 'org.neuralmimicry'
+base { archivesName = 'aarnn-minecraft' }
+repositories { mavenCentral() }
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+loom {
+    splitEnvironmentSourceSets()
+    mods {
+        aarnn { sourceSet sourceSets.main; sourceSet sourceSets.client }
+        aarnn_gametest { sourceSet sourceSets.gametest }
+    }
+    runs {
+        gameTest {
+            server()
+            name 'Minecraft habitat tests'
+            vmArg '-Dfabric-api.gametest'
+            vmArg '-Dfabric-api.gametest.report-file=build/gametest-results.xml'
+            runDir 'build/gametest'
+            source sourceSets.gametest
+        }
+    }
+}
+sourceSets {
+    visualtest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output + sourceSets.client.compileClasspath + sourceSets.client.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output + sourceSets.client.runtimeClasspath + sourceSets.client.output
+    }
+}
+loom {
+    mods { aarnn_visualtest { sourceSet sourceSets.visualtest } }
+    runs {
+        visualTest {
+            client()
+            source sourceSets.visualtest
+            runDir 'build/visual'
+            programArgs '--quickPlaySingleplayer', 'AARNN-Sensory-Lab', '--width', '1280', '--height', '960'
+        }
+    }
+}
+tasks.register('worldPack', JavaExec) {
+    dependsOn gametestClasses
+    classpath = sourceSets.gametest.runtimeClasspath
+    mainClass = 'org.neuralmimicry.minecraft.WorldPack'
+}
+tasks.register('prepareVisualWorld', Sync) {
+    from { zipTree(layout.buildDirectory.file('distributions/AARNN-Sensory-Lab.zip')) }
+    into layout.buildDirectory.dir('visual/saves')
+}
+tasks.named('runVisualTest') { dependsOn 'prepareVisualWorld' }
+tasks.named('runGameTest') {
+    doFirst { delete layout.buildDirectory.file('gametest/clean-exit.json') }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+configurations { bridgeLibraries }
+dependencies { bridgeLibraries 'com.google.code.gson:gson:2.10.1' }
+tasks.register('bridgeJar', Jar) {
+    dependsOn classes
+    archiveClassifier = 'bridge'
+    manifest { attributes 'Main-Class': 'org.neuralmimicry.minecraft.BridgeMain' }
+    from(sourceSets.main.output) {
+        include 'org/neuralmimicry/minecraft/BridgeMain*.class'
+        include 'org/neuralmimicry/minecraft/Content*.class'
+        include 'org/neuralmimicry/minecraft/AerCodec*.class'
+        include 'aarnn/content.generated.json'
+    }
+    from({ configurations.bridgeLibraries.collect { zipTree(it) } }) {
+        exclude 'META-INF/MANIFEST.MF', 'module-info.class'
+    }
+    from('LICENSE', 'NOTICE.md')
+    from('licenses') { into 'licenses' }
+}
+build.dependsOn bridgeJar
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach { options.release = 21 }
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand version: project.version }
+}
+test {
+    dependsOn 'referenceFixtures'
+    useJUnitPlatform()
+    maxHeapSize = '1g'
+    testLogging { events 'passed', 'failed', 'skipped'; exceptionFormat 'full' }
+}
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+tasks.register('referenceFixtures', Exec) {
+    workingDir '../..'
+    commandLine 'node', 'scripts/qa/minecraft_oracle.cjs'
+}
+jar { from('LICENSE', 'NOTICE.md') }

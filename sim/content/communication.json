@@ -1,0 +1,25 @@
+{
+  "schema": "SIM-COMMUNICATION/1",
+  "scope": "Same-world reference simulations; actions originate from returned neural output or an identified player/NPC action",
+  "autonomous": true,
+  "max_nearby_participants": 64,
+  "max_addressed_turns": 8,
+  "max_turn_hops": 1,
+  "default_raw_text_retention": "ephemeral",
+  "profiles": {
+    "celegans": {"receive": ["contact", "chemical_food_cue", "light"], "emit": ["body_motion", "contact"], "speech": false},
+    "drosophila_banc": {"receive": ["vision", "proximity", "chemical_food_cue"], "emit": ["body_motion", "contact"], "speech": false},
+    "drosophila_fafb": {"receive": ["vision", "proximity", "chemical_food_cue"], "emit": ["body_motion", "contact"], "speech": false},
+    "hexapod": {"receive": ["vision", "proximity", "contact"], "emit": ["body_motion", "contact"], "speech": false},
+    "nao": {"receive": ["vision", "proximity", "contact", "addressed_text", "submitted_speech_transcript"], "emit": ["body_motion", "contact", "social_speech_act"], "speech": "NAO-SOCIAL/1 opt-in model and decoder"},
+    "zebrafish": {"receive": ["vision", "proximity", "lateral_line_proxy", "chemical_food_cue"], "emit": ["body_motion", "contact"], "speech": false}
+  },
+  "rules": [
+    "Robots, NPCs and players are observable participants, not static scenery-only exceptions.",
+    "Existing motor output may autonomously approach, orient or move near another participant; receiver sensory channels observe the resulting scene on a following sample.",
+    "Do not translate arbitrary text directly into a worm, fly, fish or hexapod neural channel that lacks a text binding.",
+    "A player or NPC may provide food, contact or visible motion through the environment; no chemical secretion or vocal apparatus is invented for a robot.",
+    "A social invitation is not an instruction to the recipient and cannot execute commands, grant control or recursively forward itself.",
+    "Absence of a compatible modality is explicit. Receiving a cue is learning opportunity, not proof of changed knowledge or biological understanding."
+  ]
+}

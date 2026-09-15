@@ -42,6 +42,7 @@ public:
 
 private:
     // Previous root angular velocity (for vibration delta)
+    FVector PreviousLinearVelocity = FVector::ZeroVector;
     FVector PrevRootAngularVel = FVector::ZeroVector;
 
     // Per-muscle low-pass traces so sparse spike outputs still drive smooth

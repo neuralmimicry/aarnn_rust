@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "package": "org.neuralmimicry.minecraft.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "TestStorage"
+  ]
+}

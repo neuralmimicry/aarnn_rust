@@ -340,6 +340,7 @@
   "ui_target_fps": 60.0,
   "clumping_design": "NematodeWorm",
   "max_total_neurons": 398,
+  "io_channels_are_biological": false,
   "sleep_enabled": true,
   "sleep_cycle_ms": 180000.0,
   "sleep_duration_ms": 1200.0,

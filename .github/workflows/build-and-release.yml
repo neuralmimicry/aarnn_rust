@@ -225,6 +225,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Install Node for simulator content oracles
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Verify simulator content and generated worlds
+        run: cargo xtask qa run --suite simulator-content
+
+      - name: Retain simulator content evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulator-content-${{ matrix.runner_arch }}-${{ github.run_attempt }}
+          path: repo-build-release/target/qa/simulator-content/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run lint checks
         # Keep the full lint gate on the hosted runner. ARM verification
         # still performs the build, test, release, and smoke-test gates below

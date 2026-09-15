@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AARNN WebGL Simulator</title>
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      body { min-width: 0; }
+      .webgl-app { max-width: 1500px; margin: 0 auto; padding: 18px; }
+      .webgl-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+      .webgl-toolbar label { display: grid; gap: 5px; color: #aeb9c8; font-size: 12px; }
+      .webgl-toolbar input, .webgl-toolbar select { min-width: 150px; }
+      .webgl-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; margin-top: 14px; }
+      #webgl-canvas { width: 100%; height: min(70vh, 720px); display: block; background: #07101d; border: 1px solid #27364c; border-radius: 8px; }
+      .webgl-card { background: #101a29; border: 1px solid #27364c; border-radius: 8px; padding: 14px; }
+      .webgl-card h2 { margin: 0 0 10px; font-size: 15px; }
+      .webgl-stat { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #223047; color: #b9c5d5; }
+      .webgl-stat strong { color: #f1f5fb; text-align: right; overflow-wrap: anywhere; }
+      .webgl-note { color: #8f9db1; font-size: 12px; line-height: 1.45; }
+      .webgl-ok { color: #68d391; }
+      .webgl-warn { color: #f6c85f; }
+      .webgl-error { color: #ff8d8d; }
+      body.nao-social .webgl-layout { grid-template-columns: minmax(0,1fr) 430px; align-items:start; }
+      body.nao-social .webgl-layout > aside { grid-column:1; grid-row:2; }
+      body.nao-social #nao-chat-window { grid-column:2; grid-row:1 / span 2; height:720px !important; margin:0 !important; box-sizing:border-box; }
+      body.nao-social #webgl-canvas { height:540px; }
+      @media (max-width:900px) { body.nao-social .webgl-layout { grid-template-columns:1fr; } body.nao-social #nao-chat-window { grid-column:1; grid-row:auto; } }
+      @media (max-width: 900px) { .webgl-layout { grid-template-columns: 1fr; } #webgl-canvas { height: 62vh; } }
+    </style>
+  </head>
+  <body>
+    <main class="webgl-app">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="title">NeuralMimicry WebGL Simulator</div>
+          <div class="subtitle">Browser rendering with the same robot channel profiles and distributed AER brain path as the native simulators</div>
+        </div>
+        <div class="topbar-right"><a class="btn ghost small" id="webgl-control-surface-link" href="/">Control surface</a></div>
+      </header>
+
+      <section class="panel" style="margin-top: 14px">
+        <div class="webgl-toolbar">
+          <label>Robot profile
+            <select id="webgl-robot">
+              <option value="celegans">C. elegans</option>
+              <option value="drosophila_banc">Drosophila BANC</option>
+              <option value="drosophila_fafb">Drosophila FAFB</option>
+              <option value="hexapod">Hexapod</option>
+              <option value="nao">NAO</option>
+              <option value="zebrafish">Zebrafish</option>
+            </select>
+          </label>
+          <label>Brain / network ID
+            <input id="webgl-network" value="celegans_0" autocomplete="off" />
+          </label>
+          <label>Target node (optional)
+            <input id="webgl-node" placeholder="auto" autocomplete="off" />
+          </label>
+          <button class="btn" id="webgl-connect" type="button">Connect brain</button>
+          <button class="btn ghost" id="webgl-pause" type="button">Pause</button>
+          <label><span>Anatomy cutaway</span><input id="webgl-anatomy" type="checkbox" /></label>
+          <button class="btn ghost" id="webgl-focus-robot" type="button">Inspect robot</button>
+          <button class="btn ghost" id="webgl-reset-view" type="button">Reset view</button>
+          <span id="webgl-capability" class="webgl-note">Checking WebGL…</span>
+        </div>
+      </section>
+
+      <section class="webgl-layout">
+        <div style="position:relative"><canvas tabindex="0" id="webgl-canvas" aria-label="WebGL robot simulation"></canvas><p id="nao-bubble" hidden role="status" style="position:absolute;left:20%;right:20%;top:12px;padding:12px;background:#163e3e;color:white;border-radius:14px;text-align:center;pointer-events:none"></p></div>
+        <aside class="webgl-card">
+          <h2 id="webgl-habitat">Habitat</h2>
+          <p class="webgl-note" id="webgl-cues"></p>
+          <p class="webgl-note" id="webgl-anatomy-description"></p>
+          <p class="webgl-note" id="webgl-biology"></p>
+          <p class="webgl-note">Drag to orbit, scroll to zoom. Keyboard: arrows and +/− to orbit/zoom; Shift+arrows moves your blue avatar. The browser uses a bounded kinematic body and scene-based sensory proxies.</p>
+          <div class="webgl-stat"><span>Shared content</span><strong id="webgl-content-version"></strong></div>
+          <h2 style="margin-top:16px">Neural link</h2>
+          <div class="webgl-stat"><span>Transport</span><strong id="webgl-transport">idle</strong></div>
+          <div class="webgl-stat"><span>Brain</span><strong id="webgl-brain">celegans_0</strong></div>
+          <div class="webgl-stat"><span>Node</span><strong id="webgl-target">auto</strong></div>
+          <div class="webgl-stat"><span>Step</span><strong id="webgl-step">0</strong></div>
+          <div class="webgl-stat"><span>Sensory channels</span><strong id="webgl-sensory">24</strong></div>
+          <div class="webgl-stat"><span>Actuator channels</span><strong id="webgl-output">96</strong></div>
+          <div class="webgl-stat"><span>Input spikes</span><strong id="webgl-input-spikes">0</strong></div>
+          <div class="webgl-stat"><span>Output spikes</span><strong id="webgl-output-spikes">0</strong></div>
+          <p id="webgl-message" role="status" class="webgl-note">Select a running brain and connect. Rendering remains available as an offline preview when no brain is configured.</p>
+          <p class="webgl-note">Browser input is focused to this page. Camera, microphone, WebUSB, global keyboard, and global pointer access are not assumed by this simulator.</p>
+          <section id="nao-social-setup" hidden>
+            <h2>Local NAO conversation lab</h2>
+            <p class="webgl-note">This separate reference session supports NAO’s small social vocabulary. Connect the body, then join the conversation below.</p>
+            <label for="nao-body-token">Local simulator credential</label>
+            <input id="nao-body-token" type="password" autocomplete="off" style="width:100%;box-sizing:border-box">
+          </section>
+        </aside>
+      </section>
+      <iframe id="nao-chat-window" hidden title="Talk to NAO" style="width:100%;height:680px;border:1px solid #27364c;margin-top:14px;border-radius:8px"></iframe>
+    </main>
+    <script src="/aer-transport.js"></script>
+    <script src="/sim-content.generated.js"></script>
+    <script src="/webgl-world.js"></script>
+    <script src="/webgl-sim.js"></script>
+  </body>
+</html>

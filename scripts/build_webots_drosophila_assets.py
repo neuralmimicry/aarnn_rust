@@ -12,6 +12,8 @@ Fourth-pass generator:
 
 from __future__ import annotations
 
+from sim_content import surface_details, webots_nodes, reference_world
+
 import argparse
 import json
 import math
@@ -827,6 +829,7 @@ def generate_proto(
         eye_camera_height=eye_camera_height,
     )
     visual_core = build_visual_core_body_block()
+    visual_core += webots_nodes(surface_details('fly'), .024, (0, 0, .001), frame='yup', detail=True)
     articulated_wings = build_wing_joint("left") + build_wing_joint("right")
     articulated_legs = "".join([
         build_leg_chain("left", "front", 0.00490, 0.00235, 0.00220, -1.05, -0.80, 0.44, 0.52, 0.00210, 0.00390, 0.00590, 0.00480),
@@ -914,209 +917,13 @@ def generate_world(
     *,
     single_instance: bool = False,
 ) -> None:
-    world = """#VRML_SIM R2025a utf8
-
-EXTERNPROTO \"https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto\"
-EXTERNPROTO \"https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto\"
-EXTERNPROTO \"../protos/DrosophilaRobot.proto\"
-
-WorldInfo {
-  basicTimeStep 16
-}
-Viewpoint {
-  fieldOfView 0.92
-  # Zero-roll camera: pitched downward only, so the horizon and ground stay level.
-  orientation 0.999 0.045 0 1.18
-  position 0.34 0.23 0.34
-}
-TexturedBackground {
-}
-TexturedBackgroundLight {
-}
-# Ground and floor detail. All large surfaces are axis-aligned and level to keep the scene visually horizontal.
-Solid {
-  translation 0 0.005 0
-  name \"ground_base\"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.34 0.31 0.25
-        roughness 0.95
-      }
-      geometry Box {
-        size 40 0.01 40
-      }
-    }
-  ]
-  boundingObject Box {
-    size 40 0.01 40
-  }
-}
-Solid {
-  translation 0 0.011 0
-  name \"grass_layer\"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.29 0.40 0.25
-        roughness 0.90
-      }
-      geometry Box {
-        size 3.2 0.002 3.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 3.2 0.002 3.2
-  }
-}
-Solid {
-  translation 0.03 0.0035 0.02
-  rotation 0 1 0 0.14
-  name \"orchard_soil_patch\"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.39 0.31 0.20
-        roughness 0.87
-      }
-      geometry Box {
-        size 1.46 0.003 1.08
-      }
-    }
-  ]
-  boundingObject Box {
-    size 1.46 0.003 1.08
-  }
-}
-Solid {
-  translation 0 0.020 0
-  name \"spawn_platform\"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.50 0.38 0.23
-        roughness 0.62
-      }
-      geometry Cylinder {
-        radius 0.18
-        height 0.040
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.18
-    height 0.040
-  }
-}
-Solid {
-  translation -0.10 0.050 0
-  name \"spawn_rail_west\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.020 0.060 0.32 } } ]
-  boundingObject Box { size 0.020 0.060 0.32 }
-}
-Solid {
-  translation 0 0.050 -0.15
-  name \"spawn_rail_north\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.24 0.060 0.020 } } ]
-  boundingObject Box { size 0.24 0.060 0.020 }
-}
-Solid {
-  translation 0 0.050 0.15
-  name \"spawn_rail_south\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.41 0.31 0.19 roughness 0.72 } geometry Box { size 0.24 0.060 0.020 } } ]
-  boundingObject Box { size 0.24 0.060 0.020 }
-}
-Solid {
-  translation 0 0.065 -0.96
-  name \"berm_north\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 2.10 0.13 0.10 } } ]
-  boundingObject Box { size 2.10 0.13 0.10 }
-}
-Solid {
-  translation 0 0.065 0.96
-  name \"berm_south\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 2.10 0.13 0.10 } } ]
-  boundingObject Box { size 2.10 0.13 0.10 }
-}
-Solid {
-  translation -0.96 0.065 0
-  name \"berm_west\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 0.10 0.13 2.10 } } ]
-  boundingObject Box { size 0.10 0.13 2.10 }
-}
-Solid {
-  translation 0.96 0.065 0
-  name \"berm_east\"
-  children [ Shape { appearance PBRAppearance { baseColor 0.43 0.34 0.22 roughness 0.86 } geometry Box { size 0.10 0.13 2.10 } } ]
-  boundingObject Box { size 0.10 0.13 2.10 }
-}
-DrosophilaRobot {
-  translation 0 0.044 0
-  name \"Drosophila\"
-  controller \"nao_nn_controller_uds\"
-  controllerArgs [
-    \"NM_BRAINS=default\"
-  ]
-}
-"""
     proto_a_ref = os.path.relpath(proto_a_path.resolve(), world_path.parent.resolve()).replace("\\", "/")
-    proto_b_ref = os.path.relpath(proto_b_path.resolve(), world_path.parent.resolve()).replace("\\", "/")
-    extern_lines = [f"EXTERNPROTO \"{proto_a_ref}\""]
-    if (not single_instance) and proto_b_ref != proto_a_ref:
-        extern_lines.append(f"EXTERNPROTO \"{proto_b_ref}\"")
-    world = world.replace(
-        "EXTERNPROTO \"../protos/DrosophilaRobot.proto\"",
-        "\n".join(extern_lines),
-    )
-    world = world.replace(
-        "Viewpoint {\n  fieldOfView 0.92",
-        "Viewpoint {\n  fieldOfView 0.92",
-    )
-    old_robot_block = """DrosophilaRobot {
-  translation 0 0.044 0
-  name \"Drosophila\"
-  controller \"nao_nn_controller_uds\"
-  controllerArgs [
-    \"NM_BRAINS=default\"
-  ]
-}
-"""
-    if single_instance:
-        new_robot_block = f"""{proto_a_name} {{
-  translation 0 0.044 0
-  name \"Drosophila\"
-  controller \"nao_nn_controller_uds\"
-  controllerArgs [
-    \"NM_BRAINS={brain_a}\"
-    \"NM_SENSORS_{brain_a}={DROS_SENSORS_REGEX}\"
-    \"NM_ACTUATORS_{brain_a}={DROS_ACTUATORS_REGEX}\"
-  ]
-}}
-"""
-    else:
-        new_robot_block = f"""{proto_a_name} {{
-  translation -0.032 0.044 0
-  name \"Drosophila_BANC\"
-  controller \"nao_nn_controller_uds\"
-  controllerArgs [
-    \"NM_BRAINS={brain_a}\"
-    \"NM_SENSORS_{brain_a}={DROS_SENSORS_REGEX}\"
-    \"NM_ACTUATORS_{brain_a}={DROS_ACTUATORS_REGEX}\"
-  ]
-}}
-{proto_b_name} {{
-  translation 0.032 0.044 0
-  name \"Drosophila_FAFB\"
-  controller \"nao_nn_controller_uds\"
-  controllerArgs [
-    \"NM_BRAINS={brain_b}\"
-    \"NM_SENSORS_{brain_b}={DROS_SENSORS_REGEX}\"
-    \"NM_ACTUATORS_{brain_b}={DROS_ACTUATORS_REGEX}\"
-  ]
-}}
-"""
-    world = world.replace(old_robot_block, new_robot_block)
+    args = [f"NM_BRAINS={brain_a}", f"NM_SENSORS_{brain_a}={DROS_SENSORS_REGEX}", f"NM_ACTUATORS_{brain_a}={DROS_ACTUATORS_REGEX}"]
+    world = reference_world('drosophila_banc', proto_a_name, proto_a_ref, args)
+    if not single_instance:
+        proto_b_ref = os.path.relpath(proto_b_path.resolve(), world_path.parent.resolve()).replace("\\", "/")
+        world = world.replace('WorldInfo {', f'EXTERNPROTO "{proto_b_ref}"\nWorldInfo {{')
+        world += f'''{proto_b_name} {{ translation 0.2 0 0.028 rotation 1 0 0 1.570796 name "Drosophila_FAFB" controller "nao_nn_controller_uds" controllerArgs [ "NM_BRAINS={brain_b}" "NM_SENSORS_{brain_b}={DROS_SENSORS_REGEX}" "NM_ACTUATORS_{brain_b}={DROS_ACTUATORS_REGEX}" ] }}\n'''
     world_path.write_text(world, encoding="utf-8")
 
 

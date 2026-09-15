@@ -54,7 +54,12 @@ PROTO ZebrafishRobot [
             geometry Sphere { radius 0.00440 }
           }
         ]
-      }
+      }Solid { name "nm_neuromast_0_-1" translation 0.033600 -0.007904 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_neuromast_0_1" translation 0.033600 0.007904 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_neuromast_1_-1" translation 0.027600 -0.007339 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_neuromast_1_1" translation 0.027600 0.007339 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_neuromast_2_-1" translation 0.021600 -0.006775 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_neuromast_2_1" translation 0.021600 0.006775 0.001200 rotation 0 0 1 0.000000 children [ Transform { scale 0.001120 0.000720 0.001120 children [ Shape { appearance PBRAppearance { baseColor 0.17 0.38 0.47 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 
       # ---- Lateral line sensors (left flank) ----
       Transform {
@@ -362,7 +367,7 @@ PROTO ZebrafishRobot [
               children [
                 Shape {
                   appearance PBRAppearance {
-                    baseColor 0.15 0.15 0.20
+                    baseColor 0.48 0.64 0.58
                     roughness 0.65 metalness 0
                   }
                   geometry Capsule {
@@ -395,7 +400,7 @@ PROTO ZebrafishRobot [
               children [
                 Shape {
                   appearance PBRAppearance {
-                    baseColor 0.92 0.88 0.65
+                    baseColor 0.53 0.67 0.62
                     roughness 0.65 metalness 0
                   }
                   geometry Capsule {
@@ -428,7 +433,7 @@ PROTO ZebrafishRobot [
               children [
                 Shape {
                   appearance PBRAppearance {
-                    baseColor 0.15 0.15 0.20
+                    baseColor 0.58 0.71 0.67
                     roughness 0.65 metalness 0
                   }
                   geometry Capsule {
@@ -461,7 +466,7 @@ PROTO ZebrafishRobot [
               children [
                 Shape {
                   appearance PBRAppearance {
-                    baseColor 0.92 0.88 0.65
+                    baseColor 0.63 0.74 0.71
                     roughness 0.65 metalness 0
                   }
                   geometry Capsule {
@@ -490,6 +495,7 @@ PROTO ZebrafishRobot [
           translation 0.01240 0.0 0.0
           children []
           boundingObject Sphere { radius 0.00200 }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.0002 }
         }
             }
@@ -498,6 +504,7 @@ PROTO ZebrafishRobot [
             rotation 0 0 1 1.5708
             children [ Capsule { radius 0.00470 height 0.01141 } ]
           }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.000800 }
         }
             }
@@ -506,6 +513,7 @@ PROTO ZebrafishRobot [
             rotation 0 0 1 1.5708
             children [ Capsule { radius 0.00580 height 0.01141 } ]
           }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.000870 }
         }
             }
@@ -514,6 +522,7 @@ PROTO ZebrafishRobot [
             rotation 0 0 1 1.5708
             children [ Capsule { radius 0.00690 height 0.01141 } ]
           }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.001035 }
         }
             }
@@ -522,6 +531,7 @@ PROTO ZebrafishRobot [
             rotation 0 0 1 1.5708
             children [ Capsule { radius 0.00800 height 0.01141 } ]
           }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.001200 }
         }
       }
@@ -632,6 +642,7 @@ PROTO ZebrafishRobot [
           translation 0.01368 0.0 0.0
           children []
           boundingObject Sphere { radius 0.0001 }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.00001 }
         }
       }
@@ -654,6 +665,7 @@ PROTO ZebrafishRobot [
           translation 0.00912 0.0 0.0
           children []
           boundingObject Sphere { radius 0.0001 }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.00001 }
         }
       }
@@ -676,6 +688,7 @@ PROTO ZebrafishRobot [
           translation 0.00912 0.0 0.0
           children []
           boundingObject Sphere { radius 0.0001 }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.00001 }
         }
       }
@@ -698,6 +711,7 @@ PROTO ZebrafishRobot [
           translation -0.00304 0.0 0.0
           children []
           boundingObject Sphere { radius 0.0001 }
+          immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
           physics Physics { density -1 mass 0.00001 }
         }
       }
@@ -1209,7 +1223,8 @@ PROTO ZebrafishRobot [
       ]
     }
 
-    physics Physics {
+    immersionProperties [ ImmersionProperties { fluidName "nm_freshwater" } ]
+          physics Physics {
       density -1
       mass    0.008
       # Damping sub-node: correct mechanism in Webots R2025a for linear/angular

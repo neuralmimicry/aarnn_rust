@@ -13,7 +13,7 @@ use cudarc::driver::{
     PushKernelArg,
 };
 #[cfg(feature = "cuda")]
-use cudarc::nvrtc::compile_ptx;
+use cudarc::nvrtc::{CompileOptions, Ptx, compile_ptx_with_opts};
 
 #[allow(non_camel_case_types)]
 pub type cl_device_id = ocl::types::cl_device_id;
@@ -58,14 +58,16 @@ impl From<String> for ClError {
 
 #[cfg(feature = "cuda")]
 impl From<cudarc::driver::DriverError> for ClError {
-    fn from(_value: cudarc::driver::DriverError) -> Self {
+    fn from(value: cudarc::driver::DriverError) -> Self {
+        crate::nm_log!("[warn] CUDA driver operation failed: {value:?}");
         Self(-1)
     }
 }
 
 #[cfg(feature = "cuda")]
 impl From<cudarc::nvrtc::CompileError> for ClError {
-    fn from(_value: cudarc::nvrtc::CompileError) -> Self {
+    fn from(value: cudarc::nvrtc::CompileError) -> Self {
+        crate::nm_log!("[warn] CUDA NVRTC compilation failed: {value:?}");
         Self(-1)
     }
 }
@@ -463,8 +465,48 @@ impl Program {
         #[cfg(feature = "cuda")]
         {
             if let Some(ctx) = context.cuda_ctx() {
-                let ptx = compile_ptx(source).map_err(ClError::from)?;
-                let module = ctx.load_module(ptx).map_err(ClError::from)?;
+                let mut include_paths = Vec::new();
+                for root in [
+                    std::env::var_os("CUDA_PATH"),
+                    std::env::var_os("CUDA_HOME"),
+                    Some(std::ffi::OsString::from("/usr/local/cuda")),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let include = std::path::PathBuf::from(root).join("include");
+                    if include.is_dir() {
+                        let include = include.to_string_lossy().into_owned();
+                        if !include_paths.iter().any(|path| path == &include) {
+                            include_paths.push(include);
+                        }
+                    }
+                }
+                let ptx = compile_ptx_with_opts(
+                    source,
+                    CompileOptions {
+                        include_paths,
+                        arch: Some("compute_75"),
+                        ..CompileOptions::default()
+                    },
+                )
+                .map_err(ClError::from)?;
+                let module = match ctx.load_module(ptx) {
+                    Ok(module) => module,
+                    Err(ptx_error) => {
+                        crate::nm_log!(
+                            "[warn] CUDA PTX load failed: {ptx_error:?}; trying a device-matched CUBIN fallback."
+                        );
+                        let cubin = compile_cuda_cubin(source, ctx).map_err(|error| {
+                            crate::nm_log!(
+                                "[warn] CUDA CUBIN fallback failed: {error}; retaining the PTX error."
+                            );
+                            ClError::from(ptx_error)
+                        })?;
+                        ctx.load_module(Ptx::from_binary(cubin))
+                            .map_err(ClError::from)?
+                    }
+                };
                 return Ok(Self {
                     backend: ProgramBackend::Cuda(module),
                 });
@@ -472,6 +514,76 @@ impl Program {
         }
         Err(ClError(CL_INVALID_VALUE))
     }
+}
+
+#[cfg(feature = "cuda")]
+fn compile_cuda_cubin(source: &str, context: &CudaContext) -> std::result::Result<Vec<u8>, String> {
+    use std::fs;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_CUBIN_ID: AtomicU64 = AtomicU64::new(0);
+
+    let (major, minor) = context
+        .compute_capability()
+        .map_err(|error| format!("could not query CUDA compute capability: {error:?}"))?;
+    if !(0..=9).contains(&major) || !(0..=9).contains(&minor) {
+        return Err(format!(
+            "unsupported CUDA compute capability {major}.{minor}"
+        ));
+    }
+
+    let root = std::env::var_os("CUDA_PATH")
+        .or_else(|| std::env::var_os("CUDA_HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/cuda"));
+    let nvcc = std::env::var_os("NVCC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("bin/nvcc"));
+    let temp_root = std::env::temp_dir();
+    let id = NEXT_CUBIN_ID.fetch_add(1, Ordering::Relaxed);
+    let stem = format!("aarnn_cuda_{}_{}", std::process::id(), id);
+    let source_path = temp_root.join(format!("{stem}.cu"));
+    let cubin_path = temp_root.join(format!("{stem}.cubin"));
+    fs::write(&source_path, source).map_err(|error| {
+        format!(
+            "could not write temporary CUDA source {}: {error}",
+            source_path.display()
+        )
+    })?;
+
+    let include = root.join("include");
+    let output = Command::new(&nvcc)
+        .arg("--cubin")
+        .arg(format!("--gpu-architecture=sm_{major}{minor}"))
+        .arg("--std=c++14")
+        .arg("-O2")
+        .arg("-I")
+        .arg(&include)
+        .arg("-o")
+        .arg(&cubin_path)
+        .arg(&source_path)
+        .output()
+        .map_err(|error| format!("could not execute {}: {error}", nvcc.display()));
+
+    let result = match output {
+        Ok(output) if output.status.success() => fs::read(&cubin_path).map_err(|error| {
+            format!(
+                "could not read generated CUBIN {}: {error}",
+                cubin_path.display()
+            )
+        }),
+        Ok(output) => Err(format!(
+            "{} exited with {}; stderr: {}",
+            nvcc.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Err(error),
+    };
+    let _ = fs::remove_file(&source_path);
+    let _ = fs::remove_file(&cubin_path);
+    result
 }
 
 pub struct Kernel {
@@ -798,6 +910,63 @@ impl<'a> ExecuteKernel<'a> {
                         .map_err(ClError::from)
                 }?;
             }
+            "aarnn_step" => {
+                let v_buf = get!(0, BufF64);
+                let n_neurons = v_buf.len().min(i32::MAX as usize) as i32;
+                let mut v = v_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut u = get!(1, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut i_total = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut threshold_offset = get!(3, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut refr = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let dt = get!(5, F64);
+                let a = get!(6, F64);
+                let b = get!(7, F64);
+                let c = get!(8, F64);
+                let d = get!(9, F64);
+                let v_th = get!(10, F64);
+                let threshold_increment = get!(11, F64);
+                let threshold_min = get!(12, F64);
+                let threshold_max = get!(13, F64);
+                let adaptive_threshold_enabled = get!(14, I32);
+                let refractory_enabled = get!(15, I32);
+                let refractory_steps = get!(16, I32);
+                let mut spk = get!(17, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *v)
+                        .arg(&mut *u)
+                        .arg(&mut *i_total)
+                        .arg(&mut *threshold_offset)
+                        .arg(&mut *refr)
+                        .arg(&dt)
+                        .arg(&a)
+                        .arg(&b)
+                        .arg(&c)
+                        .arg(&d)
+                        .arg(&v_th)
+                        .arg(&threshold_increment)
+                        .arg(&threshold_min)
+                        .arg(&threshold_max)
+                        .arg(&adaptive_threshold_enabled)
+                        .arg(&refractory_enabled)
+                        .arg(&refractory_steps)
+                        .arg(&mut *spk)
+                        .arg(&n_neurons)
+                        .launch(cfg_1d)
+                        .map_err(ClError::from)
+                }?;
+            }
             "syn_acc_dense" => {
                 let mut i_acc = get!(0, BufF64)
                     .cuda_lock()
@@ -998,6 +1167,98 @@ impl<'a> ExecuteKernel<'a> {
                         .map_err(ClError::from)
                 }?;
             }
+            "syn_acc_sparse_delay_release" => {
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut hist = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut release_mask = get!(2, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(3, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut delays = get!(5, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(6, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let n_post = get!(7, I32);
+                let hist_len = get!(8, I32);
+                let neurons_per_frame = get!(9, I32);
+                let accumulate = get!(10, I32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *i_acc)
+                        .arg(&mut *hist)
+                        .arg(&mut *release_mask)
+                        .arg(&mut *row_ptr)
+                        .arg(&mut *col)
+                        .arg(&mut *delays)
+                        .arg(&mut *w)
+                        .arg(&n_post)
+                        .arg(&hist_len)
+                        .arg(&neurons_per_frame)
+                        .arg(&accumulate)
+                        .launch(cfg_1d)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "syn_acc_sparse_delay_release_stp" => {
+                let mut i_acc = get!(0, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut hist = get!(1, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rel = get!(2, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut release_mask = get!(3, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut row_ptr = get!(4, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut col = get!(5, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut delays = get!(6, BufI32)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut w = get!(7, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let n_post = get!(8, I32);
+                let hist_len = get!(9, I32);
+                let neurons_per_frame = get!(10, I32);
+                let accumulate = get!(11, I32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *i_acc)
+                        .arg(&mut *hist)
+                        .arg(&mut *rel)
+                        .arg(&mut *release_mask)
+                        .arg(&mut *row_ptr)
+                        .arg(&mut *col)
+                        .arg(&mut *delays)
+                        .arg(&mut *w)
+                        .arg(&n_post)
+                        .arg(&hist_len)
+                        .arg(&neurons_per_frame)
+                        .arg(&accumulate)
+                        .launch(cfg_1d)
+                        .map_err(ClError::from)
+                }?;
+            }
             "syn_filter" => {
                 let i_acc_buf = get!(0, BufF64);
                 let n_post = i_acc_buf.len().min(i32::MAX as usize) as i32;
@@ -1011,11 +1272,15 @@ impl<'a> ExecuteKernel<'a> {
                 let mut gaba = get!(3, BufF64)
                     .cuda_lock()
                     .ok_or(ClError(CL_INVALID_VALUE))?;
-                let decay_ampa = get!(4, F64);
-                let decay_nmda = get!(5, F64);
-                let decay_gaba = get!(6, F64);
-                let nmda_ratio = get!(7, F64);
-                let syn_gain = get!(8, F64);
+                let mut vmem = get!(4, BufF64)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let nmda_voltage_sensitivity = get!(5, F64);
+                let decay_ampa = get!(6, F64);
+                let decay_nmda = get!(7, F64);
+                let decay_gaba = get!(8, F64);
+                let nmda_ratio = get!(9, F64);
+                let syn_gain = get!(10, F64);
                 unsafe {
                     stream
                         .launch_builder(kernel)
@@ -1023,6 +1288,8 @@ impl<'a> ExecuteKernel<'a> {
                         .arg(&mut *ampa)
                         .arg(&mut *nmda)
                         .arg(&mut *gaba)
+                        .arg(&mut *vmem)
+                        .arg(&nmda_voltage_sensitivity)
                         .arg(&decay_ampa)
                         .arg(&decay_nmda)
                         .arg(&decay_gaba)
@@ -1061,6 +1328,130 @@ impl<'a> ExecuteKernel<'a> {
                         .arg(&decay_facil)
                         .arg(&n_pre)
                         .launch(cfg_1d)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "release_decision" => {
+                let decisions_buf = get!(0, BufI8);
+                let mut decisions = decisions_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let base_probability = get!(1, F32);
+                let heterogeneity = get!(2, F32);
+                let time_low = get!(3, I32);
+                let time_high = get!(4, I32);
+                let synapse_count = get!(5, I32);
+                let n = synapse_count.max(0) as usize;
+                let cfg = LaunchConfig::for_num_elems(n.min(u32::MAX as usize) as u32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *decisions)
+                        .arg(&base_probability)
+                        .arg(&heterogeneity)
+                        .arg(&time_low)
+                        .arg(&time_high)
+                        .arg(&synapse_count)
+                        .launch(cfg)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "homeostasis_decay" => {
+                let threshold_buf = get!(0, BufF64);
+                let rate_buf = get!(1, BufF64);
+                let mut threshold = threshold_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rate = rate_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let threshold_decay = get!(2, F64);
+                let homeostasis_decay = get!(3, F64);
+                let update_threshold = get!(4, I32);
+                let update_rate = get!(5, I32);
+                let count = get!(6, I32);
+                let cfg = LaunchConfig::for_num_elems(count.max(0).min(i32::MAX) as u32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *threshold)
+                        .arg(&mut *rate)
+                        .arg(&threshold_decay)
+                        .arg(&homeostasis_decay)
+                        .arg(&update_threshold)
+                        .arg(&update_rate)
+                        .arg(&count)
+                        .launch(cfg)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "homeostasis_spikes" => {
+                let threshold_buf = get!(0, BufF64);
+                let rate_buf = get!(1, BufF64);
+                let mut threshold = threshold_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut rate = rate_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut spikes = get!(2, BufI8)
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let homeostasis_decay = get!(3, F64);
+                let target_rate = get!(4, F64);
+                let gain = get!(5, F64);
+                let update_rate = get!(6, I32);
+                let count = get!(7, I32);
+                let cfg = LaunchConfig::for_num_elems(count.max(0).min(i32::MAX) as u32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *threshold)
+                        .arg(&mut *rate)
+                        .arg(&mut *spikes)
+                        .arg(&homeostasis_decay)
+                        .arg(&target_rate)
+                        .arg(&gain)
+                        .arg(&update_rate)
+                        .arg(&count)
+                        .launch(cfg)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "neuromodulation" => {
+                let state_buf = get!(0, BufF64);
+                let targets_buf = get!(1, BufF64);
+                let mut state = state_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut targets = targets_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let decay = get!(2, F64);
+                let resonance_decay = get!(3, F64);
+                let resonance_target = get!(4, F64);
+                let cfg = LaunchConfig::for_num_elems(1);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *state)
+                        .arg(&mut *targets)
+                        .arg(&decay)
+                        .arg(&resonance_decay)
+                        .arg(&resonance_target)
+                        .launch(cfg)
+                        .map_err(ClError::from)
+                }?;
+            }
+            "growth_candidates" => {
+                let rates_buf = get!(0, BufF64);
+                let since_buf = get!(1, BufF64);
+                let candidates_buf = get!(2, BufI8);
+                let mut rates = rates_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut since = since_buf.cuda_lock().ok_or(ClError(CL_INVALID_VALUE))?;
+                let mut candidates = candidates_buf
+                    .cuda_lock()
+                    .ok_or(ClError(CL_INVALID_VALUE))?;
+                let threshold = get!(3, F64);
+                let cooldown = get!(4, F64);
+                let count = get!(5, I32);
+                let cfg = LaunchConfig::for_num_elems(count.max(0).min(i32::MAX) as u32);
+                unsafe {
+                    stream
+                        .launch_builder(kernel)
+                        .arg(&mut *rates)
+                        .arg(&mut *since)
+                        .arg(&mut *candidates)
+                        .arg(&threshold)
+                        .arg(&cooldown)
+                        .arg(&count)
+                        .launch(cfg)
                         .map_err(ClError::from)
                 }?;
             }

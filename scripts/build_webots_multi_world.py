@@ -6,6 +6,8 @@ distinct brain ID via controllerArgs (NM_BRAINS=<brain_id>).
 
 from __future__ import annotations
 
+from sim_content import webots_habitats
+
 import argparse
 import math
 import os
@@ -2472,11 +2474,13 @@ def main() -> None:
         choices=["auto", "on", "off"],
         default=os.environ.get("NM_WORLD_FRIDGE", "auto"),
         help=(
-            "Kitchen fridge policy. 'auto' enables fridge only for NAO-only worlds; "
-            "'on' always includes it; 'off' always excludes it."
+            "Legacy kitchen switch; shared room furniture is now defined by the content catalogue. "
+            "Use the catalogue to change furniture across simulators."
         ),
     )
     args = parser.parse_args()
+    if args.fridge == "on":
+        parser.error("--fridge on is unavailable in shared-content worlds; edit sim/content/catalog.json and its compiler for cross-simulator furniture")
 
     world_path = Path(args.world)
     world_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2597,8 +2601,8 @@ def main() -> None:
         center_z,
         target_height,
     )
-    stimuli_nodes = build_robot_stimuli(entries, positions, arena_half_size)
-    interaction_stick_nodes = build_interaction_sticks(entries, positions, arena_half_size)
+    stimuli_nodes = webots_habitats(entries, positions)
+    interaction_stick_nodes = ""
 
     world = f"""#VRML_SIM R2025a utf8
 
@@ -2643,13 +2647,13 @@ DirectionalLight {{
   intensity 1.05
   castShadows TRUE
 }}
-{build_environment_block(entries, positions, arena_half_size, include_fridge)}
+
 {stimuli_nodes}
 {interaction_stick_nodes}
 {recorder_supervisor_node()}
 {''.join(robot_nodes)}
 """
-    world_path.write_text(world, encoding="utf-8")
+    world_path.write_text(world.rstrip() + "\n", encoding="utf-8")
     wbproj_path = world_path.with_name(f".{world_path.stem}.wbproj")
     if wbproj_path.exists():
         wbproj_path.unlink()

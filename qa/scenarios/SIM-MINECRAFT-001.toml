@@ -1,0 +1,21 @@
+id = "SIM-MINECRAFT-001"
+version = 1
+title = "Minecraft Java/Bedrock habitats, six robot equivalents and Rust sandbox bridge"
+requirements = ["INV-002", "INV-007", "INV-008", "INV-015", "INV-016", "INV-017", "spec-19.3", "spec-21.13-21.14"]
+products = ["host", "workstation"]
+mode = "reference sandbox; production workstation_io remains disabled"
+seed = 481516
+logical_stop = "six profiles, 30 sensory frames and 12 anatomy mesh fixtures; optional native scene and real Rust snapshot round trips"
+oracle = "sensory absolute error <=1e-10 vs WebGL; sampled mesh error <=1e-6; motor error <=1e-12; bounds, dimensions, identities and disarm assertions"
+required_artifacts = ["result.json", "run.log", "toolchain and content digests", "JUnit XML", "world or screenshots or neural report when selected"]
+model_fixture_digest = "generated:sim/content/compiled.generated.json digest field"
+config_fixture_digest = "sha256:sim/content/catalog.json; recorded per run"
+input_fixture_digest = "sha256:scripts/qa/minecraft_oracle.cjs; recorded per run"
+target_triples = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+capabilities = ["java21", "python3", "nodejs", "gradle-wrapper", "local-filesystem"]
+device_requirement = "contract: no installed game; world: Fabric GameTest runtime; visual: OpenGL/display; neural: built Rust nn_tcp_server and six local snapshots; bedrock-native: Linux BDS, Java 21 and those snapshots; absent requested capabilities fail"
+resource_bounds = "six robot/habitat pairs; 512 parts per body; 32 food objects; one outstanding request per robot; HTTP request 32 KiB; response 64 KiB; six bridge workers and six queued tasks"
+latency_bounds = "build 1200 s; native 300 s; visual 600 s; each snapshot startup 180 s and inference 2.5 s / fish 10 s / flies 60 s; transport handshake 60 s; no biological real-time claim"
+reference_profile = "IllustrativeSimulatorContentV1; Java Minecraft 1.21.1 / Fabric 0.107.0+1.21.1; native BDS 1.26.45.1 / Script API 2.9.0"
+expected_digest_procedure = "shared generator --check; WebGL generates independent JVM fixtures; retain JAR SHA-256; neural lane records local snapshot SHA-256 and returned channel activity"
+admission_loss_policy = "before-admission backpressure; no retry after ambiguous reply; timeout/stop/unload clears sandbox outputs; legacy transport does not certify production commit provenance"

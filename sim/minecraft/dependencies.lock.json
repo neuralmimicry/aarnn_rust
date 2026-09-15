@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "downloads": [
+    {
+      "file": "fabric-installer-1.1.2.jar",
+      "url": "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar",
+      "sha256": "61e035bf7bf70153e127440ce34de47c9036f0a2d0c65d1529454bd35ceefe4f"
+    },
+    {
+      "file": "fabric-api-0.107.0+1.21.1.jar",
+      "url": "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.107.0+1.21.1/fabric-api-0.107.0+1.21.1.jar",
+      "sha256": "b335ec20be7d7a87287f7fd0b3f6fe1ff48e1d7a8769277493225cddf3986964"
+    }
+  ]
+}

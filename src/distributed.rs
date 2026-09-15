@@ -123,6 +123,8 @@ pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
 /// Special layer index used on `StreamSpikes` to inject sensory spikes from external
 /// AER/HTTP sources into the network's next simulation step.
 pub const EXTERNAL_SENSORY_LAYER_INDEX: u32 = u32::MAX;
+/// Bound externally admitted sensory frames before they reach a worker queue.
+const MAX_EXTERNAL_SENSORY_SPIKES: usize = 16 * 1024 * 1024;
 /// Default timeout budget for burst-mode spike forwarding fallback.
 const DEFAULT_SPIKE_BURST_TIMEOUT_MS: u64 = 120;
 /// Timeout budget for short-lived gRPC connections used by burst forwarding.
@@ -844,10 +846,23 @@ where
 
 fn discovery_target_tokens(configured: Option<&str>) -> Vec<String> {
     let configured = configured.unwrap_or_default();
-    let mut targets = vec![
-        "255.255.255.255:50050".to_string(),
-        "127.0.0.1:50050".to_string(),
-    ];
+    let disable_defaults = std::env::var("NM_DISCOVERY_DISABLE_DEFAULTS")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let mut targets = if disable_defaults {
+        Vec::new()
+    } else {
+        vec![
+            "255.255.255.255:50050".to_string(),
+            "127.0.0.1:50050".to_string(),
+        ]
+    };
     let mut seen = targets.iter().cloned().collect::<HashSet<_>>();
     for raw in configured.split([',', ';', ' ', '\t', '\n']) {
         let raw = raw
@@ -1258,6 +1273,16 @@ fn network_config_shape_compatible(
         && current_cfg.num_hidden_layers == requested_cfg.num_hidden_layers
         && current_cfg.num_hidden_per_layer_initial == requested_cfg.num_hidden_per_layer_initial
         && current_cfg.num_output_neurons == requested_cfg.num_output_neurons
+        && current_cfg.io_channels_are_biological == requested_cfg.io_channels_are_biological
+}
+
+/// Number of distributed computational layers. External sensory and motor
+/// channels are handled at the hidden-layer boundary and do not become a
+/// separate biological shard when the imported profile marks I/O external.
+fn configured_execution_layer_count(config: &NetworkConfig) -> u32 {
+    (config
+        .num_hidden_layers
+        .saturating_add(usize::from(config.io_channels_are_biological))) as u32
 }
 
 fn total_neurons_from_distribution(distribution: &HashMap<String, LayerRange>) -> u64 {
@@ -1356,7 +1381,9 @@ pub(crate) fn configured_layer_neuron_counts(payload: &str) -> HashMap<u32, u64>
             };
             counts.insert(layer as u32, size as u64);
         }
-        counts.insert(hidden_layers as u32, snapshot.w_out.rows as u64);
+        if snapshot.net.io_channels_are_biological {
+            counts.insert(hidden_layers as u32, snapshot.w_out.rows as u64);
+        }
         return counts;
     }
 
@@ -1367,10 +1394,12 @@ pub(crate) fn configured_layer_neuron_counts(payload: &str) -> HashMap<u32, u64>
             for layer in 0..config.num_hidden_layers {
                 counts.insert(layer as u32, config.num_hidden_per_layer_initial as u64);
             }
-            counts.insert(
-                config.num_hidden_layers as u32,
-                config.num_output_neurons as u64,
-            );
+            if config.io_channels_are_biological {
+                counts.insert(
+                    config.num_hidden_layers as u32,
+                    config.num_output_neurons as u64,
+                );
+            }
             counts
         })
         .unwrap_or_default()
@@ -2653,6 +2682,17 @@ fn preserve_sharded_node_assignments(
     total_layers: u32,
 ) -> Option<Vec<(String, Vec<u32>, Vec<u32>)>> {
     if previous.is_empty() || total_layers == 0 {
+        return None;
+    }
+
+    // A complete assignment is stable during telemetry churn, but it must not
+    // permanently pin a network to the workers that happened to register
+    // first. When the target set grows, return None so the caller rebuilds a
+    // deterministic assignment that includes the newly eligible worker. The
+    // target set has already been reduced by desired_shards and placement
+    // policy, so this only fires when the active policy admits an additional
+    // target.
+    if eligible_nodes.len() > previous.len() {
         return None;
     }
 
@@ -4716,6 +4756,87 @@ impl DistributedNode {
         .map_err(|status| status.to_string())
     }
 
+    /// Admit a bounded sensory frame from a governed UI/peripheral source.
+    ///
+    /// The frame is admitted at the orchestrator's current logical-step
+    /// boundary and then forwarded through the same `SpikeBatch` transport as
+    /// inter-shard activity.  The local slot is single-entry by design: when
+    /// the managed step has not consumed the previous frame, this method waits
+    /// with bounded backpressure instead of overwriting an admitted sample.
+    pub async fn inject_external_sensory_spikes(
+        &self,
+        network_id: &str,
+        step_index: i64,
+        spikes: &[i8],
+    ) -> Result<(), String> {
+        if network_id.trim().is_empty() {
+            return Err("external sensory injection requires a network id".to_owned());
+        }
+        if step_index < 0 {
+            return Err("external sensory injection requires a non-negative step".to_owned());
+        }
+        if spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES {
+            return Err("external sensory frame exceeds the configured spike bound".to_owned());
+        }
+
+        let exchange = encode_exchange(step_index as u64, 0, spikes);
+        let batch = SpikeBatch {
+            network_id: network_id.to_owned(),
+            layer_index: EXTERNAL_SENSORY_LAYER_INDEX,
+            step_index,
+            spike_indices: exchange.spike_indices,
+            is_backward: false,
+            aer_payload: exchange.aer_payload,
+            aer_base: exchange.aer_base,
+        };
+
+        loop {
+            let (network, is_orchestrator) = {
+                let state = self.state.read().await;
+                (
+                    state.networks.get(network_id).cloned(),
+                    state.is_orchestrator,
+                )
+            };
+            let Some(network) = network else {
+                return Err(format!("network {network_id} is not loaded on this node"));
+            };
+
+            let mut net = network.write().await;
+            if !net.playing {
+                return Err(format!("network {network_id} is paused"));
+            }
+            let sensory_len = net.runner.net.num_sensory_neurons;
+            if spikes.len() != sensory_len {
+                return Err(format!(
+                    "external sensory width {} does not match network width {}",
+                    spikes.len(),
+                    sensory_len
+                ));
+            }
+            let decoded = spikes_from_transport(
+                &batch.aer_payload,
+                batch.aer_base,
+                &batch.spike_indices,
+                sensory_len,
+            )
+            .map_err(|error| format!("invalid external sensory frame: {error}"))?;
+            if net.external_sensory_spikes.is_some() {
+                drop(net);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                continue;
+            }
+            net.external_sensory_spikes = Some(decoded);
+            drop(net);
+
+            if is_orchestrator {
+                self.send_spike_batches(network_id, std::slice::from_ref(&batch), None)
+                    .await;
+            }
+            return Ok(());
+        }
+    }
+
     #[cfg(feature = "replicated_durability")]
     async fn admit_causal_spike_ingress(
         &self,
@@ -5163,7 +5284,7 @@ impl DistributedNode {
                 let (fresh_cfg, fresh_json) =
                     fresh_single_neuron_snapshot(net_status.desired_aarnn_depth, model, learning)?;
                 net_status.config_json = fresh_json.clone();
-                net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
+                net_status.num_layers = configured_execution_layer_count(&fresh_cfg);
                 // `New` is an explicit biological replacement.  The monotonic
                 // count retention used during ordinary placement handoff must
                 // not carry the previous network's size into this new brain.
@@ -5333,7 +5454,9 @@ impl DistributedNode {
             for &l in &net.assigned_layers {
                 let size = if (l as usize) < net.runner.net.num_hidden_layers {
                     net.runner.layer_size(l as usize) as u64
-                } else if (l as usize) == net.runner.net.num_hidden_layers {
+                } else if net.runner.net.io_channels_are_biological
+                    && (l as usize) == net.runner.net.num_hidden_layers
+                {
                     net.runner.net.num_output_neurons as u64
                 } else {
                     0
@@ -5734,7 +5857,9 @@ impl DistributedNode {
             for &l in &reported_layers {
                 let size = if (l as usize) < net.runner.net.num_hidden_layers {
                     net.runner.layer_size(l as usize) as u64
-                } else if (l as usize) == net.runner.net.num_hidden_layers {
+                } else if net.runner.net.io_channels_are_biological
+                    && (l as usize) == net.runner.net.num_hidden_layers
+                {
                     net.runner.net.num_output_neurons as u64
                 } else {
                     0
@@ -6798,7 +6923,8 @@ impl DistributedNode {
                             // Snapshot shape conflicts with requested config (e.g. stale S/O from
                             // previous runs). Prefer config payload to keep hosted runners aligned.
                             config_payload = serde_json::to_string(&requested_cfg).ok();
-                            snapshot_layers = Some((requested_cfg.num_hidden_layers + 1) as u32);
+                            snapshot_layers =
+                                Some(configured_execution_layer_count(&requested_cfg));
                             network_snapshots.remove(net_id);
                         }
                     }
@@ -6808,7 +6934,7 @@ impl DistributedNode {
                     if let Ok(snap) =
                         crate::runner::decode_snapshot_with_profile_backfill(&effective_snapshot)
                     {
-                        snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
+                        snapshot_layers = Some(configured_execution_layer_count(&snap.net));
                     }
                 }
             } else if !net_status.config_json.is_empty() {
@@ -6818,7 +6944,7 @@ impl DistributedNode {
                     let snap_json = net_status.config_json.clone();
                     network_snapshots.insert(net_id.clone(), snap_json.clone());
                     config_payload = Some(snap_json);
-                    snapshot_layers = Some((snap.net.num_hidden_layers + 1) as u32);
+                    snapshot_layers = Some(configured_execution_layer_count(&snap.net));
                 }
             }
 
@@ -8585,14 +8711,15 @@ impl DistributedNeuromorphic for DistributedNode {
                                 {
                                     network_snapshots
                                         .insert(network_id.clone(), effective_cfg_json.clone());
-                                    net_status.num_layers = (snap.net.num_hidden_layers + 1) as u32;
+                                    net_status.num_layers =
+                                        configured_execution_layer_count(&snap.net);
                                     // Snapshot imports should be redistributed across all active nodes.
                                     needs_rebalance = true;
                                 } else if let Ok(net_cfg) =
                                     serde_json::from_str::<NetworkConfig>(&net_status.config_json)
                                 {
                                     // Keep layer metadata in sync for config-only updates too.
-                                    let updated_layers = (net_cfg.num_hidden_layers + 1) as u32;
+                                    let updated_layers = configured_execution_layer_count(&net_cfg);
                                     if updated_layers > 0 && updated_layers != net_status.num_layers
                                     {
                                         net_status.num_layers = updated_layers;
@@ -8682,7 +8809,8 @@ impl DistributedNeuromorphic for DistributedNode {
                                     Status::internal(format!("new network failed: {}", e))
                                 })?;
                                 net_status.config_json = fresh_json.clone();
-                                net_status.num_layers = (fresh_cfg.num_hidden_layers + 1) as u32;
+                                net_status.num_layers =
+                                    configured_execution_layer_count(&fresh_cfg);
                                 // `New` replaces the biological state, so
                                 // reset its published dimension together with
                                 // the fresh snapshot. Rebalance will preserve
@@ -9368,12 +9496,24 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::not_found("network not hosted on this node"));
         };
 
-        let (hidden, output, output_history, sim_step, sim_time_ms) =
+        let (sensory, hidden, output, output_history, sim_step, sim_time_ms) =
             tokio::task::spawn_blocking(move || {
                 let net = net_arc.blocking_read();
                 let ts_us = (net.runner.t_ms * 1000.0) as u64;
                 let sim_step = net.runner.t as u64;
                 let sim_time_ms = net.runner.t_ms;
+                let sensory_vec: Vec<i8> = net
+                    .runner
+                    .spk_hist_s
+                    .front()
+                    .map(|frame| frame.iter().copied().collect())
+                    .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
+                let exchange = encode_exchange(ts_us, 0, &sensory_vec);
+                let sensory = SpikeIndices {
+                    indices: exchange.spike_indices,
+                    aer_payload: exchange.aer_payload,
+                    aer_base: exchange.aer_base,
+                };
                 let hidden = net
                     .runner
                     .last_spk_h
@@ -9410,18 +9550,21 @@ impl DistributedNeuromorphic for DistributedNode {
                         }
                     })
                     .collect::<Vec<_>>();
-                (hidden, output, output_history, sim_step, sim_time_ms)
+                (
+                    sensory,
+                    hidden,
+                    output,
+                    output_history,
+                    sim_step,
+                    sim_time_ms,
+                )
             })
             .await
             .map_err(|e| Status::internal(format!("activity task failed: {}", e)))?;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
-            sensory: Some(SpikeIndices {
-                indices: Vec::new(),
-                aer_payload: Vec::new(),
-                aer_base: 0,
-            }),
+            sensory: Some(sensory),
             hidden,
             output: Some(output),
             sim_step,
@@ -10316,6 +10459,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_activity_rpc_reports_current_sensory_hidden_and_output_spikes() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("activity-node".to_string(), true);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 2;
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "activity".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize activity test config")
+                .into_bytes(),
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+
+        {
+            let state = node.state.read().await;
+            let network = state.networks.get("activity").expect("network loaded");
+            let mut network = network.write().await;
+            network.runner.spk_hist_s[0][1] = 1;
+            network.runner.last_spk_h[0][2] = 1;
+            network.runner.last_spk_o[0] = 1;
+            network.runner.t = 7;
+            network.runner.t_ms = 7.0;
+        }
+
+        let response = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "activity".to_string(),
+            }))
+            .await
+            .expect("activity response")
+            .into_inner();
+
+        assert_eq!(response.sim_step, 7);
+        assert_eq!(response.sensory.expect("sensory envelope").indices, vec![1]);
+        assert_eq!(response.hidden[0].indices, vec![2]);
+        assert_eq!(response.output.expect("output envelope").indices, vec![0]);
+    }
+
+    #[tokio::test]
     async fn cluster_snapshot_rpc_fails_closed_when_a_shard_is_unavailable() {
         use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
 
@@ -10650,6 +10842,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn external_connectome_readout_is_not_a_distributed_neuron_layer() {
+        let payload = r#"{
+            "num_hidden_layers": 1,
+            "num_hidden_per_layer_initial": 302,
+            "num_sensory_neurons": 24,
+            "num_output_neurons": 96,
+            "io_channels_are_biological": false
+        }"#;
+        let config = serde_json::from_str::<NetworkConfig>(payload).expect("valid config");
+        let counts = configured_layer_neuron_counts(payload);
+
+        assert_eq!(configured_execution_layer_count(&config), 1);
+        assert_eq!(counts, HashMap::from([(0, 302)]));
+        assert_eq!(configured_total_neurons(payload), 302);
+    }
+
     #[tokio::test]
     async fn new_network_replaces_the_published_neuron_total() {
         let node = DistributedNode::new("orch".to_owned(), true);
@@ -10981,6 +11190,39 @@ mod tests {
     }
 
     #[test]
+    fn sharded_rebalance_rebuilds_when_a_new_target_joins() {
+        let previous = HashMap::from([
+            (
+                "node-a".to_string(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![2, 3],
+                },
+            ),
+            (
+                "node-b".to_string(),
+                LayerRange {
+                    layers: vec![2, 3],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![0, 1],
+                },
+            ),
+        ]);
+        let eligible = HashSet::from([
+            "node-a".to_string(),
+            "node-b".to_string(),
+            "node-c".to_string(),
+        ]);
+
+        assert_eq!(
+            preserve_sharded_node_assignments(&previous, &eligible, 4),
+            None,
+            "a newly eligible target must trigger expansion of the sharded assignment"
+        );
+    }
+
+    #[test]
     fn tiny_networks_keep_partial_views_when_targets_exceed_layers() {
         let assignments = build_sharded_node_assignments(
             &[
@@ -11216,7 +11458,7 @@ mod tests {
                             backup_layers: Vec::new(),
                         },
                     )]),
-                    num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
+                    num_layers: configured_execution_layer_count(&current_from_payload),
                     desired_aarnn_depth: 1,
                     config_json: snapshot_json.clone(),
                     neuron_model: "aarnn".to_string(),
@@ -11303,7 +11545,7 @@ mod tests {
                             backup_layers: Vec::new(),
                         },
                     )]),
-                    num_layers: (current_from_payload.num_hidden_layers + 1) as u32,
+                    num_layers: configured_execution_layer_count(&current_from_payload),
                     desired_aarnn_depth: 1,
                     config_json: snapshot_json.clone(),
                     neuron_model: "aarnn".to_string(),
@@ -11367,7 +11609,7 @@ mod tests {
                         backup_layers: Vec::new(),
                     },
                 )]),
-                num_layers: (current_cfg.num_hidden_layers + 1) as u32,
+                num_layers: configured_execution_layer_count(&current_cfg),
                 desired_aarnn_depth: 1,
                 config_json: snapshot_json.clone(),
                 neuron_model: "aarnn".to_string(),
@@ -11445,7 +11687,7 @@ mod tests {
                         backup_layers: Vec::new(),
                     },
                 )]),
-                num_layers: (current_cfg.num_hidden_layers + 1) as u32,
+                num_layers: configured_execution_layer_count(&current_cfg),
                 desired_aarnn_depth: 1,
                 config_json: snapshot_json.clone(),
                 neuron_model: "aarnn".to_string(),
@@ -11570,6 +11812,58 @@ mod tests {
         .await;
 
         assert!(!node.state.read().await.networks.contains_key("alpha"));
+    }
+
+    #[tokio::test]
+    async fn external_sensory_injection_is_shape_checked_and_admitted_once() {
+        let node = DistributedNode::new("test-node".to_string(), true);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize test network config")
+                .into_bytes(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        let sensory_len = {
+            let state = node.state.read().await;
+            let network = state.networks.get("alpha").expect("network loaded");
+            let mut network = network.write().await;
+            if network.runner.net.num_sensory_neurons == 0 {
+                network.runner.resize_sensory(2);
+            }
+            network.playing = true;
+            network.runner.net.num_sensory_neurons
+        };
+        let mut spikes = vec![0i8; sensory_len];
+        spikes[0] = 1;
+        node.inject_external_sensory_spikes("alpha", 7, &spikes)
+            .await
+            .expect("sensory frame admitted");
+
+        let state = node.state.read().await;
+        let network = state.networks.get("alpha").expect("network loaded");
+        let network = network.read().await;
+        assert_eq!(
+            network.external_sensory_spikes.as_deref(),
+            Some(spikes.as_slice())
+        );
+        drop(network);
+        drop(state);
+
+        let error = node
+            .inject_external_sensory_spikes("alpha", 8, &[1])
+            .await
+            .expect_err("a second frame must apply backpressure while the slot is occupied");
+        assert!(error.contains("width"));
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 // Copyright NeuralMimicry. All Rights Reserved.
 
 #include "Robots/NmCelegansActor.h"
+#include "NmSharedContent.h"
 
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -64,91 +65,59 @@ UNmCelegansComponent::UNmCelegansComponent()
 // ----------------------------------------------------------------------------
 // CollectSensors — 24 channels
 // ----------------------------------------------------------------------------
-// [0]      Head proximity (forward, normalized 0-1 over 5 cm)
-// [1..12]  12 chemoreceptor proxies — line traces at 30° angle increments
-// [13..20] 8 mechanoreceptor (segment velocity magnitudes)
-// [21..23] 3 vibration channels (root angular velocity X/Y/Z)
+// Canonical catalogue order: inertial [0..5], touch [6..7], light/heat [8..11],
+// taste/chemical [12..18], flow [19..20], far proximity [21..23].
+// These are engineering transducers, not fitted biological receptor models.
 // ----------------------------------------------------------------------------
 
 void UNmCelegansComponent::CollectSensors(TArray<float>& OutSensors)
 {
-    OutSensors.SetNumZeroed(NumSensors);
-
-    if (SegmentMeshes.Num() == 0 || !GetOwner())
+    OutSensors.Init(0.f, NumSensors);
+    if (SegmentMeshes.IsEmpty() || !GetOwner() || !GetWorld()) return;
+    auto Root = SegmentMeshes[0];
+    if (!Root) return;
+    const FVector Head = Root->GetComponentLocation();
+    const FVector Tail = SegmentMeshes.Last()->GetComponentLocation();
+    const FVector Forward = -Root->GetForwardVector(); // this rig grows +X from head to tail
+    const FVector Side = -Root->GetRightVector();
+    const FVector Velocity = Root->GetPhysicsLinearVelocity();
+    const FVector Accel = Root->GetComponentQuat().UnrotateVector((Velocity - PreviousLinearVelocity) /
+        FMath::Max(.001f, GetWorld()->GetDeltaSeconds()) / 100.f);
+    PreviousLinearVelocity = Velocity;
+    const FVector Angular = Root->GetComponentQuat().UnrotateVector(Root->GetPhysicsAngularVelocityInRadians());
+    for (int32 I = 0; I < 3; ++I)
     {
-        return;
+        const float Sign = I == 1 ? -1.f : 1.f;
+        OutSensors[I] = FMath::Clamp(.5f + Sign * Accel[I] / 20.f, 0.f, 1.f);
+        OutSensors[3 + I] = FMath::Clamp(.5f + Sign * Angular[I] / 20.f, 0.f, 1.f);
     }
-
-    UWorld* World = GetWorld();
-    UStaticMeshComponent* Head = SegmentMeshes[0];
-    if (!Head || !World)
+    auto Probe = [&](const FVector& Start, const FVector& Dir, float Range)
     {
-        return;
-    }
-
-    // --- Channel 0: head forward proximity ---
-    constexpr float ProbeRangeCm = 5.f;   // 5 cm in UE units
-    {
-        const FVector Start = Head->GetComponentLocation();
-        const FVector End   = Start + Head->GetForwardVector() * ProbeRangeCm;
+        FCollisionQueryParams Params; Params.AddIgnoredActor(GetOwner());
         FHitResult Hit;
-        const bool bHit = World->LineTraceSingleByChannel(Hit, Start, End,
-                              ECC_Visibility);
-        OutSensors[0] = bHit ? (1.f - (Hit.Distance / ProbeRangeCm)) : 0.f;
-    }
-
-    // --- Channels 1-12: chemoreceptor proxies at 30° intervals ---
-    constexpr float ChemoRangeCm = 5.f;
-    for (int32 i = 0; i < 12; ++i)
+        const bool Found = GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Dir.GetSafeNormal() * Range, ECC_Visibility, Params);
+        return Found ? FMath::Clamp(1.f - Hit.Distance / Range, 0.f, 1.f) : 0.f;
+    };
+    OutSensors[6] = Probe(Head, Forward, 4.f);
+    OutSensors[7] = Probe(Tail, -Forward, 4.f);
+    for (int32 I = 8; I <= 18; ++I)
     {
-        const float AngleDeg = i * 30.f;
-        const FRotator Rot(0.f, AngleDeg, 0.f);
-        const FVector Dir    = Rot.RotateVector(Head->GetForwardVector());
-        const FVector Start  = Head->GetComponentLocation();
-        const FVector End    = Start + Dir * ChemoRangeCm;
-        FHitResult Hit;
-        const bool bHit = World->LineTraceSingleByChannel(Hit, Start, End,
-                              ECC_Visibility);
-        OutSensors[1 + i] = bHit ? (1.f - (Hit.Distance / ChemoRangeCm)) : 0.f;
+        const FString Cue = I < 10 ? TEXT("light") : I < 12 ? TEXT("heat") : TEXT("chemical");
+        const float Offset = I == 12 ? 0.f : (I == 8 || I == 10 || I == 13 || I == 15 || I == 17 ? -2.f : 2.f);
+        const FVector Point = (I >= 17 ? Tail : Head) + Side * Offset;
+        OutSensors[I] = NmSharedContent::SampleField(BrainId, Cue, Point, HabitatCentre, HabitatRadiusCm);
     }
-
-    // --- Channels 13-20: mechanoreceptor (8 evenly-sampled segment velocities) ---
-    const int32 MechSamples = 8;
-    const int32 MechStep = FMath::Max(1, NumSegments / MechSamples);
-    for (int32 m = 0; m < MechSamples; ++m)
-    {
-        const int32 SegIdx = FMath::Min(m * MechStep, SegmentMeshes.Num() - 1);
-        UStaticMeshComponent* Seg = SegmentMeshes[SegIdx];
-        if (Seg)
-        {
-            const float VelMag = Seg->GetPhysicsLinearVelocity().Size();
-            // Normalize: assume max biologically relevant velocity ~50 cm/s
-            OutSensors[13 + m] = FMath::Clamp(VelMag / 50.f, 0.f, 1.f);
-        }
-    }
-
-    // --- Channels 21-23: vibration — root angular velocity ---
-    {
-        UStaticMeshComponent* Root = SegmentMeshes[0];
-        if (Root)
-        {
-            const FVector AngVel = Root->GetPhysicsAngularVelocityInDegrees();
-            constexpr float MaxAngVel = 360.f; // deg/s normalizer
-            OutSensors[21] = FMath::Clamp(AngVel.X / MaxAngVel, -1.f, 1.f) * 0.5f + 0.5f;
-            OutSensors[22] = FMath::Clamp(AngVel.Y / MaxAngVel, -1.f, 1.f) * 0.5f + 0.5f;
-            OutSensors[23] = FMath::Clamp(AngVel.Z / MaxAngVel, -1.f, 1.f) * 0.5f + 0.5f;
-        }
-    }
-
-    PrevRootAngularVel = SegmentMeshes[0]
-        ? SegmentMeshes[0]->GetPhysicsAngularVelocityInDegrees()
-        : FVector::ZeroVector;
+    OutSensors[19] = NmSharedContent::SampleField(BrainId, TEXT("flow"), Head, HabitatCentre, HabitatRadiusCm);
+    OutSensors[20] = NmSharedContent::SampleField(BrainId, TEXT("flow"), Tail, HabitatCentre, HabitatRadiusCm);
+    OutSensors[21] = Probe(Head, Forward - Side * .4f, 50.f);
+    OutSensors[22] = Probe(Head, Forward + Side * .4f, 50.f);
+    OutSensors[23] = Probe(Tail, -Forward, 50.f);
 }
 
 // ----------------------------------------------------------------------------
 // ApplyActuators — 96 channels
-// [seg*4+0] MDL, [seg*4+1] MDR → Swing1 drive (dorsal-ventral)
-// [seg*4+2] MVL, [seg*4+3] MVR → Swing2 drive (left-right)
+// Named MDL/MDR/MVL/MVR readouts map to each segment; vector indices are grouped
+// by muscle name. MVL24 is absent and MVULVA is not a body-wall motor.
 // ----------------------------------------------------------------------------
 
 void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
@@ -176,15 +145,22 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
     SegmentDvDrive.Init(0.0f, NumSegments);
     SegmentLrDrive.Init(0.0f, NumSegments);
 
+    TArray<FString> OutputNames;
+    GetActuatorNames(OutputNames);
+    auto Muscle = [&](const TCHAR* Group, int32 Segment)
+    {
+        const FString Suffix = FString::Printf(TEXT("_%s%02d"), Group, Segment + 1);
+        const int32 Index = OutputNames.IndexOfByPredicate([&](const FString& Name) { return Name.EndsWith(Suffix); });
+        return Index != INDEX_NONE && Actuators.IsValidIndex(Index) ? Actuators[Index] : 0.f;
+    };
     float AbsDriveSum = 0.0f;
     float AbsDriveMax = 0.0f;
     for (int32 Seg = 0; Seg < NumSegments; ++Seg)
     {
-        const int32 Base = Seg * 4;
-        const float MDL = ContractFromOutput(Actuators[Base + 0], MdlTrace[Seg]);
-        const float MDR = ContractFromOutput(Actuators[Base + 1], MdrTrace[Seg]);
-        const float MVL = ContractFromOutput(Actuators[Base + 2], MvlTrace[Seg]);
-        const float MVR = ContractFromOutput(Actuators[Base + 3], MvrTrace[Seg]);
+        const float MDL = ContractFromOutput(Muscle(TEXT("MDL"), Seg), MdlTrace[Seg]);
+        const float MDR = ContractFromOutput(Muscle(TEXT("MDR"), Seg), MdrTrace[Seg]);
+        const float MVL = ContractFromOutput(Muscle(TEXT("MVL"), Seg), MvlTrace[Seg]);
+        const float MVR = ContractFromOutput(Muscle(TEXT("MVR"), Seg), MvrTrace[Seg]);
 
         const float Dorsal = 0.5f * (MDL + MDR);
         const float Ventral = 0.5f * (MVL + MVR);
@@ -331,35 +307,11 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
 
 void UNmCelegansComponent::GetSensorNames(TArray<FString>& OutNames) const
 {
-    OutNames.Reset(NumSensors);
-    OutNames.Add(TEXT("head_proximity"));
-    for (int32 i = 0; i < 12; ++i)
-    {
-        OutNames.Add(FString::Printf(TEXT("chemo_%02d"), i));
-    }
-    for (int32 i = 0; i < 8; ++i)
-    {
-        OutNames.Add(FString::Printf(TEXT("mech_vel_%02d"), i));
-    }
-    OutNames.Add(TEXT("vib_angvel_x"));
-    OutNames.Add(TEXT("vib_angvel_y"));
-    OutNames.Add(TEXT("vib_angvel_z"));
+    NmSharedContent::Channels(TEXT("celegans"), false, OutNames);
 }
-
-// ----------------------------------------------------------------------------
-// GetActuatorNames
-// ----------------------------------------------------------------------------
-
 void UNmCelegansComponent::GetActuatorNames(TArray<FString>& OutNames) const
 {
-    OutNames.Reset(NumActuators);
-    for (int32 seg = 0; seg < NumSegments; ++seg)
-    {
-        OutNames.Add(FString::Printf(TEXT("seg%02d_MDL"), seg));
-        OutNames.Add(FString::Printf(TEXT("seg%02d_MDR"), seg));
-        OutNames.Add(FString::Printf(TEXT("seg%02d_MVL"), seg));
-        OutNames.Add(FString::Printf(TEXT("seg%02d_MVR"), seg));
-    }
+    NmSharedContent::Channels(TEXT("celegans"), true, OutNames);
 }
 
 // ============================================================================

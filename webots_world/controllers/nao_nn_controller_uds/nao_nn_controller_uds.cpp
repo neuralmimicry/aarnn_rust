@@ -2018,6 +2018,9 @@ int main(int argc, char** argv) {
         } else {
             b.sock_path = home_str + "/aarnn_rust." + id + ".nn";
         }
+        if (const char* social_socket = std::getenv("NM_NAO_SOCKET")) {
+            if (*social_socket && brain_ids.size() == 1) b.sock_path = social_socket;
+        }
         brains.push_back(std::move(b));
     }
 
@@ -2215,6 +2218,20 @@ int main(int argc, char** argv) {
 
     while (robot.step(dt) != -1) {
         double now = monotonic_now_seconds();
+        // The robot window receives a chat-only invitation, never the body/admin
+        // credential. Text/voice stay in the bounded social companion UI.
+        for (int messages = 0; messages < 4; ++messages) {
+            const std::string message = robot.wwiReceiveText();
+            if (message.empty()) break;
+            if (message == "nao_chat_ready" && all_s_names.size() == 250 && all_o_names.size() == 40) {
+                const char* url = std::getenv("NM_NAO_CHAT_URL");
+                const char* invitation = std::getenv("NM_NAO_JOIN_TOKEN");
+                if (url && invitation && std::string(url).rfind("http://127.0.0.1:", 0) == 0 && std::strlen(invitation) <= 128) {
+                    const std::string response = std::string("nao_chat_session ") + url + "/#invite=" + invitation;
+                    robot.wwiSendText(response.c_str());
+                } else robot.wwiSendText("nao_chat_unavailable");
+            }
+        }
 
         // 0) Handle keyboard
         if (kb_mapper.is_enabled()) {

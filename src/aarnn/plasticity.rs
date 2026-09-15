@@ -274,6 +274,27 @@ pub fn release_probability(
     (base + delta).clamp(0.0, 1.0)
 }
 
+/// Return the deterministic uniform variate used for a synaptic release
+/// decision.  Release is part of the biological event stream, so it must not
+/// depend on thread scheduling, GPU work-group order, or the process-global
+/// `fastrand` state.  The two coordinates are deliberately explicit: a
+/// synapse may release on one logical step and fail on the next while replaying
+/// the same trace produces the same result.
+#[inline]
+pub fn release_draw(synapse_index: usize, time_step: u64) -> f32 {
+    let seed = (synapse_index as u64)
+        .wrapping_mul(0x9e3779b185ebca87)
+        .wrapping_add(time_step.wrapping_mul(0xd2b74407b1ce6e93));
+    hash_to_unit(seed) as f32
+}
+
+/// Evaluate one deterministic probabilistic release decision.
+#[inline]
+pub fn should_release(base: f32, heterogeneity: f32, synapse_index: usize, time_step: u64) -> bool {
+    release_draw(synapse_index, time_step)
+        <= release_probability(base, heterogeneity, Some(synapse_index), time_step)
+}
+
 /// Infer whether a presynaptic column should be treated as inhibitory.
 ///
 /// This keeps Dale-law enforcement reproducible even before explicit cell types are
@@ -399,6 +420,13 @@ mod tests {
     fn test_triplet_gain_clamps() {
         let scale = triplet_eta_scale(10.0, 10.0, 0.0, 1.0, 0.0);
         assert_eq!(scale, 5.0);
+    }
+
+    #[test]
+    fn release_decision_is_replayable_and_index_sensitive() {
+        let first = should_release(0.5, 0.2, 7, 11);
+        assert_eq!(first, should_release(0.5, 0.2, 7, 11));
+        assert_ne!(release_draw(7, 11).to_bits(), release_draw(7, 12).to_bits());
     }
 
     #[test]

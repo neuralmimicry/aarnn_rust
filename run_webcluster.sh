@@ -126,7 +126,7 @@ else
     # Build both entry points in one package feature graph so Cargo does not
     # rebuild the shared library between the orchestrator and dashboard.
     cargo build --release --locked --no-default-features \
-        --bin aarnn_rust --bin web_ui --features "engine_runtime,ui"
+        --bin aarnn_rust --bin web_ui --features "engine_runtime,ui,cuda"
 fi
 
 #echo "Starting Standalone Network (Brain ID: standalone)..."
@@ -138,7 +138,7 @@ export NMD_TFLITE_ALLOW_LARGE=1
 
 echo "Starting Distributed Orchestrator (Brain ID: cluster_master)..."
 "$BIN_DIR/aarnn_rust" --orchestrator --brain-id cluster_master \
-    --grpc-addr 0.0.0.0:$ORCH_PORT --advertise-addr 127.0.0.1:$ORCH_PORT \
+    --grpc-addr "0.0.0.0:$ORCH_PORT" --advertise-addr "127.0.0.1:$ORCH_PORT" \
     "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" > orchestrator.log 2>&1 &
 PIDS=("$!")
 
@@ -151,8 +151,8 @@ fi
 
 echo "Starting Distributed Nodes (Brain IDs: node_1, node_2) connecting to orchestrator at http://127.0.0.1:$ORCH_PORT ..."
 "$BIN_DIR/aarnn_rust" --node --brain-id node_1 \
-    --grpc-addr 0.0.0.0:$NODE1_PORT --advertise-addr 127.0.0.1:$NODE1_PORT \
-    --orchestrator-addr http://127.0.0.1:$ORCH_PORT > node_1.log 2>&1 &
+    --grpc-addr "0.0.0.0:$NODE1_PORT" --advertise-addr "127.0.0.1:$NODE1_PORT" \
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_1.log 2>&1 &
 PIDS+=("$!")
 sleep 1
 if ! kill -0 "${PIDS[1]}" 2>/dev/null; then
@@ -160,8 +160,8 @@ if ! kill -0 "${PIDS[1]}" 2>/dev/null; then
     exit 1
 fi
 "$BIN_DIR/aarnn_rust" --node --brain-id node_2 \
-    --grpc-addr 0.0.0.0:$NODE2_PORT --advertise-addr 127.0.0.1:$NODE2_PORT \
-    --orchestrator-addr http://127.0.0.1:$ORCH_PORT > node_2.log 2>&1 &
+    --grpc-addr "0.0.0.0:$NODE2_PORT" --advertise-addr "127.0.0.1:$NODE2_PORT" \
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_2.log 2>&1 &
 PIDS+=("$!")
 sleep 1
 if ! kill -0 "${PIDS[2]}" 2>/dev/null; then

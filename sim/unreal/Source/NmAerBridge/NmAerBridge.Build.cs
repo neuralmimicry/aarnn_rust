@@ -22,6 +22,9 @@ public class NmAerBridge : ModuleRules
         {
             "Json",
             "JsonUtilities",
+            "HTTP",
+            "Slate",
+            "SlateCore",
         });
     }
 }

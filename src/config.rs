@@ -1475,6 +1475,7 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
     }
 
     backfill!(clumping_design);
+    backfill!(io_channels_are_biological);
     backfill!(brain_regions);
     backfill!(growth_enabled);
     backfill!(use_morphology);
@@ -1571,6 +1572,9 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
 pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
     cfg.spike_io.profile = NetworkIoProfileSelector::Celegans;
+    // C. elegans imports contain 302 biological neurons. Sensory channels and
+    // muscle targets are external adapters/readouts driven by that population.
+    cfg.io_channels_are_biological = false;
 
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
@@ -2165,17 +2169,27 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct NetworkConfig {
-    /// Number of sensory (input) neurons. These neurons receive external stimuli.
+    /// Number of sensory input channels. Legacy profiles may account for these
+    /// channels as neurons; connectome profiles can mark them as external I/O
+    /// with `io_channels_are_biological`.
     pub num_sensory_neurons: usize,
     /// Number of hidden layers in the network. In the classic matrix path, this is fixed.
     /// With `growth3d` enabled, this can be an initial value.
     pub num_hidden_layers: usize,
     /// Initial number of neurons per hidden layer.
     pub num_hidden_per_layer_initial: usize,
-    /// Number of output neurons. These neurons provide the network's final response.
+    /// Number of output/readout channels. Legacy profiles may account for these
+    /// channels as neurons; connectome profiles can use them as motor/effector
+    /// readouts driven by biological neurons.
     pub num_output_neurons: usize,
-    /// Maximum total number of neurons allowed in the network (sensory + hidden + output).
-    /// If 0, no limit is enforced.
+    /// Whether sensory and output channels are biological neurons for counting
+    /// and growth limits. This remains true by default for compatibility with
+    /// existing network profiles. A connectome import sets it false when I/O
+    /// channels are external adapters/readouts.
+    pub io_channels_are_biological: bool,
+    /// Maximum total number of biological neurons allowed in the network when
+    /// I/O channels are external, otherwise the legacy sensory + hidden + output
+    /// total. If 0, no limit is enforced.
     pub max_total_neurons: u64,
     /// Probability of a synapse being created between an input neuron and a neuron
     /// in the first hidden layer during initialization.
@@ -2531,6 +2545,7 @@ impl Default for NetworkConfig {
             num_hidden_layers: 1,
             num_hidden_per_layer_initial: 1,
             num_output_neurons: 0,
+            io_channels_are_biological: true,
             max_total_neurons: 0,
             p_in: 0.15,
             p_hidden: 0.10,

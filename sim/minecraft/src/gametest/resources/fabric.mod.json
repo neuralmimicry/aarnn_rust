@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "aarnn_gametest",
+  "version": "1.0.0",
+  "name": "AARNN Minecraft acceptance fixtures (development only)",
+  "environment": "server",
+  "entrypoints": {
+    "fabric-gametest": [
+      "org.neuralmimicry.minecraft.HabitatGameTests"
+    ]
+  },
+  "depends": {
+    "aarnn": "*",
+    "fabric-gametest-api-v1": "*"
+  },
+  "mixins": [
+    "aarnn-test-mixins.json"
+  ]
+}
