@@ -43,6 +43,10 @@ class NMAERBRIDGE_API ANmSimGameMode : public AGameModeBase
 public:
     ANmSimGameMode();
 
+    /** Show schematic internal anatomy instead of the worm/fish outer skin. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Simulation Content")
+    bool bAnatomyCutaway = false;
+
 protected:
     virtual void BeginPlay() override;
 
@@ -55,10 +59,6 @@ private:
     AActor* SpawnRobot(UClass* RobotClass, const FString& BrainId,
                        const FString& Host, int32 Port,
                        const FVector& Location, float Scale, float WaterTopZ);
-
-    /** Build one habitat of the given kind centred at Center. */
-    void SpawnHabitat(ENmHabitat Kind, const FVector& Center,
-                      float RadiusCm, float WallTopZ);
 
     /** Position the player's spectator camera to frame all spawned robots. */
     UFUNCTION()

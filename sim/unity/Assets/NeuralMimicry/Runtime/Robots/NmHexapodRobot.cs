@@ -126,56 +126,10 @@ namespace NeuralMimicry
         // ------------------------------------------------------------------ //
 
         /// <inheritdoc/>
-        public override string[] SensorNames
-        {
-            get
-            {
-                if (_sensorNamesCache != null) return _sensorNamesCache;
-                int pixCount = _retinaWidth * _retinaHeight;
-                int total = BaseSensors + 2 * pixCount;
-                var names = new string[total];
-                string[] legTag  = { "FL", "ML", "HL", "FR", "MR", "HR" };
-                string[] jntTag  = { "coxa", "femur", "tibia" };
-                int i = 0;
-                for (int l = 0; l < NumLegs; l++)
-                    for (int j = 0; j < JointsPerLeg; j++)
-                        names[i++] = $"hex_s_{i:D2}_leg_{legTag[l]}_{jntTag[j]}_pos";
-                for (int l = 0; l < NumLegs; l++)
-                    names[i++] = $"hex_s_{i:D2}_foot_{legTag[l]}_contact";
-                names[i++] = "hex_s_24_accel_x";
-                names[i++] = "hex_s_25_accel_y";
-                names[i++] = "hex_s_26_accel_z";
-                names[i++] = "hex_s_27_gyro_x";
-                names[i++] = "hex_s_28_gyro_y";
-                names[i++] = "hex_s_29_gyro_z";
-                names[i++] = "hex_s_30_ultrasonic_front";
-                names[i++] = "hex_s_31_ultrasonic_rear";
-                for (int p = 0; p < pixCount; p++)
-                    names[i++] = $"hex_s_{i:D2}_cam_on_{p:D3}";
-                for (int p = 0; p < pixCount; p++)
-                    names[i++] = $"hex_s_{i:D2}_cam_off_{p:D3}";
-                _sensorNamesCache = names;
-                return names;
-            }
-        }
-
-        /// <inheritdoc/>
-        public override string[] ActuatorNames
-        {
-            get
-            {
-                if (_actuatorNamesCache != null) return _actuatorNamesCache;
-                var names = new string[TotalActuators];
-                string[] legTag = { "FL", "ML", "HL", "FR", "MR", "HR" };
-                string[] jntTag = { "coxa", "femur", "tibia" };
-                int i = 0;
-                for (int l = 0; l < NumLegs; l++)
-                    for (int j = 0; j < JointsPerLeg; j++)
-                        names[i++] = $"hex_o_{i:D2}_leg_{legTag[l]}_{jntTag[j]}";
-                _actuatorNamesCache = names;
-                return names;
-            }
-        }
+        public override string[] SensorNames => NmHabitat.Profile(this).sensor_names;
+        public override string[] ActuatorNames => NmHabitat.Profile(this).output_names;
+        private float previousLuminance;
+        private bool hasLuminance;
 
         // ------------------------------------------------------------------ //
         // MonoBehaviour lifecycle
@@ -183,6 +137,8 @@ namespace NeuralMimicry
 
         private void Awake()
         {
+            if (_retinaWidth != 1 || _retinaHeight != 1)
+                throw new InvalidOperationException("The canonical hexapod profile requires a 1 x 1 ON/OFF retina (34 sensory channels).");
             if (!_bodyBuilt)
                 BuildBody();
         }
@@ -375,12 +331,10 @@ namespace NeuralMimicry
             sensors[idx++] = Mathf.Clamp01((angVel.y + _gyroMax) / (2f * _gyroMax));
             sensors[idx++] = Mathf.Clamp01((angVel.z + _gyroMax) / (2f * _gyroMax));
 
-            // --- Ultrasonics [30..31].
-            sensors[idx++] = UltrasonicReading(_ultraFrontOrigin,  transform.forward);
-            sensors[idx++] = UltrasonicReading(_ultraRearOrigin,  -transform.forward);
-
-            // --- Camera event channels [32..32+2*pixCount-1].
-            FillCameraEvents(sensors, idx, idx + pixCount, pixCount);
+            // Canonical camera ON/OFF at 30/31, then left/right sonar at 32/33.
+            FillCameraEvents(sensors, 30, 31, 1);
+            sensors[32] = UltrasonicReading(_ultraFrontOrigin, transform.forward - transform.right * .25f);
+            sensors[33] = UltrasonicReading(_ultraFrontOrigin, transform.forward + transform.right * .25f);
 
             return sensors;
         }
@@ -412,8 +366,10 @@ namespace NeuralMimicry
                 float bright = pixels[p].r / 255f * 0.2126f +
                                pixels[p].g / 255f * 0.7152f +
                                pixels[p].b / 255f * 0.0722f;
-                if (onStart  + p < sensors.Length) sensors[onStart  + p] = bright > _onThreshold ? bright : 0f;
-                if (offStart + p < sensors.Length) sensors[offStart + p] = bright <= _onThreshold ? 1f - bright : 0f;
+                float delta = hasLuminance ? bright - previousLuminance : 0f;
+                sensors[onStart + p] = Mathf.Clamp01(delta);
+                sensors[offStart + p] = Mathf.Clamp01(-delta);
+                previousLuminance = bright; hasLuminance = true;
             }
         }
 

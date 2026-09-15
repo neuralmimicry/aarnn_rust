@@ -1,6 +1,7 @@
 // Copyright NeuralMimicry. All Rights Reserved.
 
 #include "Robots/NmNaoActor.h"
+#include "NmNaoChatComponent.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
@@ -509,6 +510,11 @@ ANmNaoActor::ANmNaoActor()
 void ANmNaoActor::BeginPlay()
 {
     Super::BeginPlay();
+    if (!FPlatformMisc::GetEnvironmentVariable(TEXT("NM_NAO_SESSION_FILE")).IsEmpty())
+    {
+        auto Chat = NewObject<UNmNaoChatComponent>(this);
+        Chat->RegisterComponent();
+    }
 
     // Wire all joint constraints: Component1=parent body, Component2=child segment
     // For simplicity, all joints are attached to the torso root; each constraint

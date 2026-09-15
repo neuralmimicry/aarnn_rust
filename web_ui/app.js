@@ -96,6 +96,7 @@ const signupBtn = document.getElementById("signup-btn");
 const oidcLogin = document.getElementById("oidc-login");
 const userStatus = document.getElementById("user-status");
 const logoutBtn = document.getElementById("logout-btn");
+const webglSimulatorLink = document.getElementById("webgl-simulator-link");
 const tokenBalanceEl = document.getElementById("token-balance");
 const tokenBurnRateEl = document.getElementById("token-burn-rate");
 const tokenFleetBurnRateEl = document.getElementById("token-fleet-burn-rate");
@@ -149,12 +150,17 @@ const SNAPSHOT_POLL_PLAYING_MS = 5000;
 const SNAPSHOT_POLL_IDLE_MS = 20000;
 const EQ_BANDS = 12;
 const PROBE_HISTORY = 220;
-const RASTER_HISTORY = 180;
+// Keep the browser raster window aligned with the native Rust UI's
+// `raster_cols` buffer. The displayed spike total is the sum over this window,
+// so different lengths make two views of the same stream look inconsistent.
+const RASTER_HISTORY = 240;
 const MAX_RASTER_OUTPUTS = 4096;
 const PROBE_HOLD_SAMPLES = 3;
 const PROBE_RELEASE_STEP = 0.25;
 const PROBE_COLORS = ["#71e0b1", "#ffd37a", "#7db8ff", "#ff9b7a", "#d4a8ff", "#9ce67a", "#ffcf99", "#8dd8ff"];
 let bootstrapRuntimeDefaultUser = "";
+let bootstrapDefaultNetwork = "";
+let bootstrapDefaultNode = "";
 const state = {
   targets: loadTargets(),
   cards: new Map(),
@@ -230,6 +236,23 @@ const state = {
     drag: null
   }
 };
+const routeParams = new URLSearchParams(window.location.search || "");
+const routeNetworkOverride = (routeParams.get("network_id") || "").trim();
+const routeNodeOverride = (routeParams.get("node_id") || "").trim();
+if (routeNetworkOverride) state.activeNetwork = routeNetworkOverride;
+if (routeNodeOverride) state.activeNodeId = routeNodeOverride;
+
+function simulatorHref(networkId = state.activeNetwork, nodeId = state.activeNodeId) {
+  const params = new URLSearchParams();
+  if (networkId) params.set("network_id", networkId);
+  if (nodeId) params.set("node_id", nodeId);
+  const query = params.toString();
+  return query ? `/sim/webgl?${query}` : "/sim/webgl";
+}
+
+function syncSimulatorLink() {
+  if (webglSimulatorLink) webglSimulatorLink.href = simulatorHref();
+}
 const serviceAccessApi = window.NMServiceAccess || {
   getServiceAccessMap: () => ({}),
   getServiceAccess: (_sessionData, serviceKey) => ({
@@ -530,6 +553,9 @@ function applyUserConfig(cfg) {
     state.instrumentation.nextProbeId = state.instrumentation.probes.reduce((maxId, probe) => Math.max(maxId, probe.id), 0) + 1;
     resetInstrumentationBuffers();
   }
+  if (routeNetworkOverride) state.activeNetwork = routeNetworkOverride;
+  if (routeNodeOverride) state.activeNodeId = routeNodeOverride;
+  syncSimulatorLink();
   renderInstrumentation();
   suppressUserConfigSave = false;
 }
@@ -800,6 +826,15 @@ function resetTokenState() {
 }
 function applyBootstrapConfig(cfg = {}) {
   const defaultUser = cfg && typeof cfg.default_runtime_user === "string" ? cfg.default_runtime_user.trim() : "";
+  bootstrapDefaultNetwork = cfg && typeof cfg.default_network === "string" ? cfg.default_network.trim() : "";
+  bootstrapDefaultNode = cfg && typeof cfg.default_node === "string" ? cfg.default_node.trim() : "";
+  if (!routeNetworkOverride && !state.activeNetwork && bootstrapDefaultNetwork) {
+    state.activeNetwork = bootstrapDefaultNetwork;
+  }
+  if (!routeNodeOverride && !state.activeNodeId && bootstrapDefaultNode) {
+    state.activeNodeId = bootstrapDefaultNode;
+  }
+  syncSimulatorLink();
   bootstrapRuntimeDefaultUser = defaultUser;
   state.runtime.defaultUser = defaultUser;
   state.commerce.sharedLoginUrl = normalizeExternalLink(cfg === null || cfg === void 0 ? void 0 : cfg.shared_login_url);
@@ -1422,13 +1457,22 @@ function activeSource() {
 
 function placementActivityForLayers(layers, activity, fallbackTotal) {
   const hidden = Array.isArray(activity && activity.hidden) ? activity.hidden : [];
-  const sensory = activity && activity.sensory ? activity.sensory : { indices: [] };
   const output = activity && activity.output ? activity.output : { indices: [] };
   let active = 0;
   let observed = 0;
   for (const layer of layers) {
     const layerIndex = Number(layer);
-    const envelope = layerIndex === 0 ? sensory : hidden[layerIndex - 1] || output;
+    // Distributed placement layer numbers exclude the sensory input vector:
+    // layer 0 is the first hidden/biological shard, and the output layer is
+    // immediately after the last hidden activity envelope.  The activity
+    // response keeps sensory separate, so using it for layer 0 makes every
+    // original hidden neuron appear idle and shifts hidden activity onto the
+    // output shard.
+    const envelope = layerIndex >= 0 && layerIndex < hidden.length
+      ? hidden[layerIndex]
+      : layerIndex === hidden.length
+        ? output
+        : { indices: [] };
     const indices = Array.isArray(envelope && envelope.indices) ? envelope.indices : [];
     active += indices.length;
     observed += indices.length ? Math.max(indices.length, Number(fallbackTotal || 0)) : 0;
@@ -2562,6 +2606,10 @@ async function bootstrapDefaultTarget() {
     if (!state.active || !state.targets.includes(state.active)) {
       setActive(defaultAddr);
     }
+    if (!routeNetworkOverride && !state.activeNetwork && bootstrapDefaultNetwork) {
+      state.activeNetwork = bootstrapDefaultNetwork;
+      saveActiveNetwork();
+    }
     return defaultAddr;
   } catch (_) {
     return "";
@@ -2587,6 +2635,7 @@ function setActive(addr) {
       card.btn.classList.remove("active");
     }
   });
+  syncSimulatorLink();
   refreshNetworkSelect();
 }
 function refreshNetworkSelect() {
@@ -2649,6 +2698,19 @@ function refreshNetworkSelect() {
   const current = state.activeNetwork;
   networkSelect.innerHTML = "";
   if (networks.length === 0) {
+    const fallbackNetwork = state.activeNetwork || bootstrapDefaultNetwork;
+    if (fallbackNetwork) {
+      const opt = document.createElement("option");
+      opt.value = fallbackNetwork;
+      opt.textContent = `${fallbackNetwork} (starting)`;
+      networkSelect.appendChild(opt);
+      state.activeNetwork = fallbackNetwork;
+      networkSelect.value = fallbackNetwork;
+      syncSimulatorLink();
+      refreshNodeSelect();
+      refreshControlButtons();
+      return;
+    }
     const opt = document.createElement("option");
     opt.value = "";
     opt.textContent = "(no networks)";
@@ -2668,12 +2730,14 @@ function refreshNetworkSelect() {
     networkSelect.appendChild(opt);
   });
   if (!networks.some(n => n.network_id === current)) {
-    state.activeNetwork = networks[0].network_id;
+    const preferred = routeNetworkOverride || bootstrapDefaultNetwork;
+    state.activeNetwork = networks.some(n => n.network_id === preferred) ? preferred : networks[0].network_id;
     saveActiveNetwork();
     state.activeNodeId = "";
     saveActiveNode();
   }
   networkSelect.value = state.activeNetwork;
+  syncSimulatorLink();
   refreshNodeSelect();
   if (state.activeNetwork && state.activeNetwork !== state.lastNetworkId) {
     state.lastNetworkId = state.activeNetwork;
@@ -2709,6 +2773,7 @@ networkSelect.addEventListener("change", () => {
   resetInstrumentationBuffers();
   state.activeNodeId = "";
   saveActiveNode();
+  syncSimulatorLink();
   refreshNodeSelect();
   if (state.activeNetwork && state.activeNetwork !== state.lastNetworkId) {
     state.lastNetworkId = state.activeNetwork;
@@ -2763,6 +2828,7 @@ function refreshNodeSelect() {
 nodeSelect.addEventListener("change", () => {
   state.activeNodeId = nodeSelect.value;
   saveActiveNode();
+  syncSimulatorLink();
   if (isWorkspaceMode()) {
     renderWorkspaceSidebar();
     return;

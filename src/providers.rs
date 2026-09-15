@@ -38,6 +38,66 @@ pub trait SensoryProvider {
     fn set_dt(&mut self, _dt_ms: f32) {}
 }
 
+/// Stable, operator-facing description of an available microphone.
+///
+/// CPAL device handles are short-lived and may become invalid after a hot-plug
+/// event.  The UI therefore stores the backend-provided `id` and resolves it
+/// again when a stream is started instead of retaining a device handle across
+/// refreshes.
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MicrophoneDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Enumerate the input devices currently exposed by the active CPAL host.
+pub fn list_microphone_devices() -> anyhow::Result<Vec<MicrophoneDeviceInfo>> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let host = cpal::default_host();
+    let default_id = host
+        .default_input_device()
+        .and_then(|device| device.id().ok())
+        .map(|id| id.to_string());
+    let devices = host
+        .input_devices()
+        .map_err(|error| anyhow::anyhow!("failed to enumerate microphone devices: {error}"))?;
+
+    let mut result = Vec::new();
+    for device in devices {
+        let id = device
+            .id()
+            .map_err(|error| anyhow::anyhow!("failed to identify a microphone device: {error}"))?
+            .to_string();
+        if result
+            .iter()
+            .any(|entry: &MicrophoneDeviceInfo| entry.id == id)
+        {
+            continue;
+        }
+        let name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .unwrap_or_else(|_| id.clone());
+        result.push(MicrophoneDeviceInfo {
+            is_default: default_id.as_deref() == Some(id.as_str()),
+            id,
+            name,
+        });
+    }
+    Ok(result)
+}
+
+/// Maximum sensory width accepted by the file-backed audio provider.
+///
+/// Audio input is an operator-facing boundary.  Keeping its width bounded
+/// prevents an accidental environment value or malformed UI request from
+/// allocating an unbounded spike raster and the corresponding input weights.
+#[cfg(feature = "ui")]
+pub const MAX_AUDIO_SENSORY_NEURONS: usize = 65_536;
+
 #[cfg(feature = "ui")]
 pub struct RandomProvider {
     num_sensory_neurons: usize,
@@ -177,7 +237,9 @@ impl BandMapper {
 pub struct AudioFileProvider {
     num_sensory_neurons: usize,
     data: Vec<f32>,
+    sample_rate: u32,
     cursor: usize,
+    frame_index: u64,
     win: usize,
     hop: usize,
     fft: Arc<dyn rustfft::Fft<f32>>,
@@ -198,7 +260,16 @@ impl AudioFileProvider {
         use symphonia::core::probe::Hint;
         use symphonia::default::get_probe;
 
-        let file = std::fs::File::open(path)?;
+        anyhow::ensure!(
+            num_sensory_neurons > 0,
+            "audio input requires at least one sensory neuron"
+        );
+        anyhow::ensure!(
+            num_sensory_neurons <= MAX_AUDIO_SENSORY_NEURONS,
+            "audio input supports at most {MAX_AUDIO_SENSORY_NEURONS} sensory neurons"
+        );
+        let file = std::fs::File::open(path)
+            .map_err(|e| anyhow::anyhow!("failed to open audio file {}: {e}", path.display()))?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let hint = Hint::new();
         let probed = get_probe().format(
@@ -216,7 +287,7 @@ impl AudioFileProvider {
         let codec_params = track.codec_params.clone();
         let mut decoder =
             symphonia::default::get_codecs().make(&codec_params, &DecoderOptions::default())?;
-        let _sample_rate = codec_params
+        let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| anyhow::anyhow!("Unknown sample rate"))?;
 
@@ -247,9 +318,25 @@ impl AudioFileProvider {
                         }
                     }
                 }
-                Err(_) => { /* ignore decode errors */ }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "failed to decode audio packet in {}: {error}",
+                        path.display()
+                    ));
+                }
             }
         }
+
+        anyhow::ensure!(
+            !pcm.is_empty(),
+            "audio file {} contains no decodable samples",
+            path.display()
+        );
+        anyhow::ensure!(
+            pcm.iter().all(|sample| sample.is_finite()),
+            "audio file {} contains non-finite samples",
+            path.display()
+        );
 
         // Normalize gently
         let maxv = pcm.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
@@ -273,7 +360,9 @@ impl AudioFileProvider {
         Ok(Self {
             num_sensory_neurons,
             data: pcm,
+            sample_rate,
             cursor: 0,
+            frame_index: 0,
             win,
             hop,
             fft,
@@ -283,6 +372,18 @@ impl AudioFileProvider {
             last_bands,
             mapper,
         })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn band_count(&self) -> usize {
+        self.bands
     }
 
     fn next_window(&mut self) -> Vec<f32> {
@@ -351,12 +452,14 @@ impl SensoryProvider for AudioFileProvider {
             return vec![0i8; self.num_sensory_neurons];
         }
         self.compute_bands(&win);
+        let frame_index = self.frame_index;
+        self.frame_index = self.frame_index.wrapping_add(1);
         // Convert bands to spikes across sensory ranges
         let mut out = vec![0i8; self.num_sensory_neurons];
         for (b, &(start, end)) in self.mapper.ranges().iter().enumerate() {
             let p = (self.last_bands[b] * 0.8).min(0.95);
             for i in start..end {
-                if fastrand::f32() < p {
+                if deterministic_unit(frame_index, i) < p {
                     out[i] = 1;
                 }
             }
@@ -367,14 +470,37 @@ impl SensoryProvider for AudioFileProvider {
         Some(&self.last_bands)
     }
     fn set_num_sensory_neurons(&mut self, n_s: usize) {
+        // The trait cannot return a validation error.  Keep a provider that
+        // was already admitted valid if a later resize request is invalid;
+        // the owning UI reports/rejects the resize through its network path.
+        if n_s == 0 || n_s > MAX_AUDIO_SENSORY_NEURONS {
+            return;
+        }
         self.num_sensory_neurons = n_s;
         self.mapper.set_n_s(n_s);
     }
 }
 
 #[cfg(feature = "ui")]
+fn deterministic_unit(frame_index: u64, neuron_index: usize) -> f32 {
+    // Counter based input dithering keeps the rate-coded raster repeatable
+    // across runs and independent of thread scheduling or unrelated RNG use.
+    let mut x = frame_index
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add(neuron_index as u64 ^ 0xd1b5_4a32_d192_ed03);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    ((x >> 40) as u32) as f32 / (1u32 << 24) as f32
+}
+
+#[cfg(feature = "ui")]
 pub struct MicrophoneProvider {
     num_sensory_neurons: usize,
+    device_id: String,
+    device_name: String,
     // audio capture
     stream: Option<cpal::Stream>,
     buf: Arc<Mutex<Vec<f32>>>,
@@ -391,11 +517,45 @@ pub struct MicrophoneProvider {
 #[cfg(feature = "ui")]
 impl MicrophoneProvider {
     pub fn new(num_sensory_neurons: usize) -> anyhow::Result<Self> {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use cpal::traits::HostTrait;
         let host = cpal::default_host();
         let device = host
             .default_input_device()
             .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
+        Self::new_for_device(num_sensory_neurons, device)
+    }
+
+    /// Start capture from the microphone identified by `MicrophoneDeviceInfo::id`.
+    /// The ID is resolved at start time so unplugging a device cannot leave a
+    /// stale CPAL handle in the simulation thread.
+    pub fn new_with_device_id(num_sensory_neurons: usize, device_id: &str) -> anyhow::Result<Self> {
+        use cpal::traits::HostTrait;
+
+        let parsed_id = device_id
+            .parse::<cpal::DeviceId>()
+            .map_err(|error| anyhow::anyhow!("invalid microphone device ID: {error}"))?;
+        let host = cpal::default_host();
+        let device = host.device_by_id(&parsed_id).ok_or_else(|| {
+            anyhow::anyhow!("selected microphone is no longer available: {device_id}")
+        })?;
+        Self::new_for_device(num_sensory_neurons, device)
+    }
+
+    fn new_for_device(num_sensory_neurons: usize, device: cpal::Device) -> anyhow::Result<Self> {
+        use cpal::traits::{DeviceTrait, StreamTrait};
+
+        anyhow::ensure!(
+            num_sensory_neurons > 0,
+            "microphone input requires at least one sensory neuron"
+        );
+        let device_id = device
+            .id()
+            .map_err(|error| anyhow::anyhow!("failed to identify microphone: {error}"))?
+            .to_string();
+        let device_name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .unwrap_or_else(|_| device_id.clone());
         let mut supported_configs = device
             .supported_input_configs()
             .map_err(|e| anyhow::anyhow!("Failed to query input configs: {}", e))?;
@@ -438,90 +598,173 @@ impl MicrophoneProvider {
         let cap_limit = win * 8;
         let buf_clone = buf.clone();
 
-        // Build and start stream, converting to mono f32
+        // Build and start a raw stream, converting every supported PCM format to
+        // mono f32.  A typed f32 callback is only valid for an f32 device
+        // configuration; using it as a generic fallback would reinterpret the
+        // bytes of integer or 24-bit microphones.
+        fn append_capture_samples<S>(
+            data: &[S],
+            channels: usize,
+            buffer: &mut Vec<f32>,
+            cap_limit: usize,
+        ) where
+            S: cpal::Sample,
+            f32: cpal::FromSample<S>,
+        {
+            use cpal::Sample;
+
+            if channels == 0 {
+                return;
+            }
+            if channels == 1 {
+                buffer.extend(data.iter().copied().map(f32::from_sample));
+            } else {
+                for frame in data.chunks_exact(channels) {
+                    let sum: f32 = frame.iter().copied().map(f32::from_sample).sum();
+                    buffer.push(sum / channels as f32);
+                }
+            }
+            buffer.retain(|sample| sample.is_finite());
+            if buffer.len() > cap_limit {
+                let drop = buffer.len() - cap_limit;
+                buffer.drain(0..drop);
+            }
+        }
+
         let err_fn = |e| nm_err!("Microphone stream error: {}", e);
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut b) = buf_clone.lock() {
-                        if channels == 1 {
-                            b.extend_from_slice(data);
-                        } else {
-                            for frame in data.chunks_exact(channels) {
-                                let mut acc = 0.0f32;
-                                for &s in frame { acc += s; }
-                                b.push(acc / channels as f32);
-                            }
+            cpal::SampleFormat::I8 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<i8>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
                         }
-                        if b.len() > cap_limit { let drop = b.len() - cap_limit; b.drain(0..drop); }
                     }
                 };
-                device.build_input_stream(&config, input_data_fn, err_fn, None)
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
             }
             cpal::SampleFormat::I16 => {
-                let input_data_fn = move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut b) = buf_clone.lock() {
-                        let scale = 1.0f32 / i16::MAX as f32;
-                        if channels == 1 {
-                            b.extend(data.iter().map(|&v| v as f32 * scale));
-                        } else {
-                            for frame in data.chunks_exact(channels) {
-                                let mut acc = 0.0f32; for &s in frame { acc += s as f32 * scale; } b.push(acc / channels as f32);
-                            }
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<i16>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
                         }
-                        if b.len() > cap_limit { let drop = b.len() - cap_limit; b.drain(0..drop); }
                     }
                 };
-                device.build_input_stream(&config, input_data_fn, err_fn, None)
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::I24 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<cpal::I24>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
             }
             cpal::SampleFormat::I32 => {
-                let input_data_fn = move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut b) = buf_clone.lock() {
-                        let scale = 1.0f32 / i32::MAX as f32;
-                        if channels == 1 {
-                            b.extend(data.iter().map(|&v| v as f32 * scale));
-                        } else {
-                            for frame in data.chunks_exact(channels) {
-                                let mut acc = 0.0f32; for &s in frame { acc += s as f32 * scale; } b.push(acc / channels as f32);
-                            }
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<i32>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
                         }
-                        if b.len() > cap_limit { let drop = b.len() - cap_limit; b.drain(0..drop); }
                     }
                 };
-                device.build_input_stream(&config, input_data_fn, err_fn, None)
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::I64 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<i64>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::U8 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<u8>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
             }
             cpal::SampleFormat::U16 => {
-                let input_data_fn = move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut b) = buf_clone.lock() {
-                        if channels == 1 {
-                            b.extend(data.iter().map(|&v| (v as f32 / 32767.5) - 1.0));
-                        } else {
-                            for frame in data.chunks_exact(channels) {
-                                let mut acc = 0.0f32; for &s in frame { acc += (s as f32 / 32767.5) - 1.0; } b.push(acc / channels as f32);
-                            }
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<u16>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
                         }
-                        if b.len() > cap_limit { let drop = b.len() - cap_limit; b.drain(0..drop); }
                     }
                 };
-                device.build_input_stream(&config, input_data_fn, err_fn, None)
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::U24 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<cpal::U24>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::U32 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<u32>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::U64 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<u64>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::F32 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<f32>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            cpal::SampleFormat::F64 => {
+                let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
+                    if let Some(samples) = data.as_slice::<f64>() {
+                        if let Ok(mut buffer) = buf_clone.lock() {
+                            append_capture_samples(samples, channels, &mut buffer, cap_limit);
+                        }
+                    }
+                };
+                device.build_input_stream_raw(&config, sample_format, input_data_fn, err_fn, None)
+            }
+            other if other.is_dsd() => {
+                return Err(anyhow::anyhow!(
+                    "microphone format {other} is DSD and cannot be converted to PCM"
+                ));
             }
             other => {
-                // Fallback: try to build as f32 using cpal internal conversion if supported
-                nm_err!("Unsupported input sample format {:?}, attempting f32 stream with internal conversion", other);
-                let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut b) = buf_clone.lock() {
-                        if channels == 1 { b.extend_from_slice(data); }
-                        else {
-                            for frame in data.chunks_exact(channels) {
-                                let mut acc = 0.0f32; for &s in frame { acc += s; } b.push(acc / channels as f32);
-                            }
-                        }
-                        if b.len() > cap_limit { let drop = b.len() - cap_limit; b.drain(0..drop); }
-                    }
-                };
-                device.build_input_stream(&config, input_data_fn, err_fn, None)
+                return Err(anyhow::anyhow!(
+                    "unsupported microphone sample format {other}"
+                ));
             }
-        }.map_err(|e| anyhow::anyhow!("Failed to build input stream: {}", e))?;
+        }
+        .map_err(|e| anyhow::anyhow!("Failed to build input stream: {}", e))?;
 
         stream
             .play()
@@ -529,6 +772,8 @@ impl MicrophoneProvider {
 
         Ok(Self {
             num_sensory_neurons,
+            device_id,
+            device_name,
             stream: Some(stream),
             buf,
             win,
@@ -539,6 +784,14 @@ impl MicrophoneProvider {
             last_bands,
             mapper,
         })
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
     }
 
     fn take_window(&mut self) -> Vec<f32> {
@@ -1035,5 +1288,145 @@ impl SensoryProvider for WebcamCaptureProvider {
     }
     fn set_num_sensory_neurons(&mut self, n_s: usize) {
         self.num_sensory_neurons = n_s;
+    }
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod tests {
+    use super::{AudioFileProvider, SensoryProvider, list_microphone_devices};
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn write_pcm_wav(path: &std::path::Path, sample_rate: u32, samples: &[i16]) {
+        let data_bytes = (samples.len() * std::mem::size_of::<i16>()) as u32;
+        let byte_rate = sample_rate * 2;
+        let mut file = std::fs::File::create(path).expect("create test wav");
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + data_bytes).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&byte_rate.to_le_bytes()).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&16u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_bytes.to_le_bytes()).unwrap();
+        for sample in samples {
+            file.write_all(&sample.to_le_bytes()).unwrap();
+        }
+        file.flush().unwrap();
+    }
+
+    fn temp_wav(name: &str, samples: &[i16]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "aarnn-provider-{name}-{}-{}.wav",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        write_pcm_wav(&path, 8_000, samples);
+        path
+    }
+
+    #[test]
+    fn microphone_enumeration_is_stable_or_reports_an_explicit_error() {
+        match list_microphone_devices() {
+            Ok(devices) => {
+                let mut ids = std::collections::HashSet::new();
+                for device in &devices {
+                    assert!(!device.id.is_empty());
+                    assert!(!device.name.is_empty());
+                    assert!(ids.insert(device.id.clone()), "duplicate microphone ID");
+                }
+                eprintln!(
+                    "microphone devices: {}",
+                    devices
+                        .iter()
+                        .map(|device| device.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            Err(error) => assert!(!error.to_string().trim().is_empty()),
+        }
+    }
+
+    #[test]
+    fn audio_provider_decodes_eq_and_emits_repeatable_spikes() {
+        let samples: Vec<i16> = (0..8_192)
+            .map(|i| {
+                let phase = (i as f32 * std::f32::consts::TAU * 440.0 / 8_000.0).sin();
+                (phase * i16::MAX as f32 * 0.7) as i16
+            })
+            .collect();
+        let path = temp_wav("sine", &samples);
+        let mut first = AudioFileProvider::from_path(&path, 64).expect("decode sine wav");
+        let mut second = AudioFileProvider::from_path(&path, 64).expect("decode sine wav");
+
+        assert_eq!(first.sample_rate(), 8_000);
+        assert_eq!(first.sample_count(), samples.len());
+        assert!(first.band_count() >= 8);
+        let mut saw_band_energy = false;
+        let mut saw_spike = false;
+        for _ in 0..4 {
+            let first_spikes = first.next_spikes();
+            let second_spikes = second.next_spikes();
+            assert_eq!(first_spikes, second_spikes);
+            assert_eq!(first_spikes.len(), 64);
+            saw_spike |= first_spikes.iter().any(|&spike| spike != 0);
+            saw_band_energy |= first
+                .last_bands()
+                .unwrap()
+                .iter()
+                .any(|&band| band.is_finite() && band > 0.0);
+        }
+        assert!(
+            saw_band_energy,
+            "the EQ must expose decoded spectral energy"
+        );
+        assert!(saw_spike, "non-silent audio must drive sensory spikes");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_provider_maps_silence_to_zero_spikes() {
+        let samples = vec![0i16; 2_048];
+        let path = temp_wav("silence", &samples);
+        let mut provider = AudioFileProvider::from_path(&path, 32).expect("decode silent wav");
+        for _ in 0..2 {
+            assert!(provider.next_spikes().iter().all(|&spike| spike == 0));
+        }
+        assert!(
+            provider
+                .last_bands()
+                .unwrap()
+                .iter()
+                .all(|&band| band == 0.0)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_provider_rejects_zero_sensory_neurons() {
+        let path = temp_wav("zero-sensory", &[1i16; 1_024]);
+        let error = match AudioFileProvider::from_path(&path, 0) {
+            Ok(_) => panic!("zero sensory input must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("at least one sensory neuron"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_provider_rejects_unbounded_sensory_width() {
+        let path = temp_wav("oversized-sensory", &[1i16; 1_024]);
+        let error = match AudioFileProvider::from_path(&path, super::MAX_AUDIO_SENSORY_NEURONS + 1)
+        {
+            Ok(_) => panic!("oversized sensory input must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("supports at most"));
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -79,6 +79,11 @@ fn placement_surface_is_shipped_for_web_and_native_clients() {
     assert!(app.contains("placementPointerToWorld") && app.contains("state.placement.camera"));
     assert!(app.contains("zoomPlacementToShard") && app.contains("placementDetailEl"));
     assert!(app.contains("state.placement.selectedLayers.has"));
+    assert!(
+        app.contains("layerIndex >= 0 && layerIndex < hidden.length")
+            && app.contains("layerIndex === hidden.length"),
+        "placement activity must map distributed layer 0 to hidden activity and the final layer to output activity"
+    );
     assert!(css.contains(".placement-surface") && css.contains(".surface-tab"));
     assert!(css.contains("touch-action: none") && css.contains(".placement-state.moving"));
     let native = read_asset("src/ui.rs");
@@ -93,6 +98,15 @@ fn placement_surface_is_shipped_for_web_and_native_clients() {
     assert!(
         native.contains("Selected placement shard") && native.contains("neuron_count"),
         "native selection and detail surfaces must report the computed neuron count"
+    );
+}
+
+#[test]
+fn distributed_activity_exposes_current_sensory_frame() {
+    let distributed = read_asset("src/distributed.rs");
+    assert!(
+        distributed.contains("spk_hist_s") && distributed.contains("sensory: Some(sensory)"),
+        "the activity RPC must expose the current sensory frame instead of an unconditional empty envelope"
     );
 }
 
@@ -121,4 +135,55 @@ fn browser_aer_crc_uses_the_shared_binary_wire_layout() {
     assert!(source.contains("setBigUint64"));
     assert!(source.contains("setUint32(offset, payload.length"));
     assert!(!source.contains("TextEncoder().encode(canonical"));
+}
+
+#[test]
+fn webgl_simulator_is_shipped_through_the_authenticated_gateway() {
+    let html = read_asset("web_ui/webgl-sim.html");
+    let source = read_asset("web_ui/webgl-sim.js");
+    let app = read_asset("web_ui/app.js");
+    let gateway = read_asset("src/bin/web_ui.rs");
+    let launcher = read_asset("scripts/run_sim.sh");
+    assert!(html.contains("webgl-canvas") && html.contains("webgl-network"));
+    assert!(read_asset("web_ui/index.html").contains("/sim/webgl"));
+    assert!(source.contains("getContext(\"webgl\"") && source.contains("/api/aer/infer"));
+    for profile in [
+        "celegans",
+        "drosophila_banc",
+        "drosophila_fafb",
+        "hexapod",
+        "nao",
+        "zebrafish",
+    ] {
+        let catalogue: serde_json::Value =
+            serde_json::from_str(&read_asset("sim/content/compiled.generated.json")).unwrap();
+        assert!(
+            catalogue["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == profile),
+            "missing WebGL profile {profile}"
+        );
+    }
+    assert!(source.contains("NmSimContent.profiles") && html.contains("/sim-content.generated.js"));
+    assert!(gateway.contains("sim_content_js") && gateway.contains("webgl_world_js"));
+    assert!(source.contains("AARNNBrowserAerSession"));
+    assert!(
+        app.contains("const RASTER_HISTORY = 240"),
+        "browser raster window must match the native Rust UI window"
+    );
+    assert!(
+        source.contains("source_sequence: frame"),
+        "WebGL AER frames must provide the required source sequence"
+    );
+    assert!(gateway.contains("/aer/infer") && gateway.contains("webgl_sim_html"));
+    assert!(gateway.contains("default_network") && gateway.contains("default_node"));
+    assert!(source.contains("webgl-control-surface-link") && source.contains("/api/config"));
+    assert!(launcher.contains("webgl") && launcher.contains("--nodes"));
+    assert!(
+        launcher.contains("robot_io") && launcher.contains("IpcUdsServer"),
+        "WebGL launcher must build and validate the IPC-capable cluster binary"
+    );
+    assert!(!source.contains("KeyboardEvent") && !source.contains("pointerlock"));
 }

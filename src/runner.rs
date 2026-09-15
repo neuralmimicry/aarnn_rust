@@ -39,9 +39,8 @@ use crate::aarnn::plasticity::{
     PlasticityRule, ShortTermPlasticityParams, WeightProposal,
     apply_synaptic_scaling_matrix_rows as scale_synaptic_rows, apply_weight_delta,
     commit_weight_proposals, enforce_dale_matrix_cols as dale_enforce_cols,
-    is_inhibitory_presyn as inferred_inhibitory_presyn,
-    release_probability as release_probability_ref, stp_update_slice as stp_update_slice_ref,
-    triplet_eta_scale, weight_delta,
+    is_inhibitory_presyn as inferred_inhibitory_presyn, should_release as should_release_ref,
+    stp_update_slice as stp_update_slice_ref, triplet_eta_scale, weight_delta,
 };
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::aarnn::transmission::{
@@ -563,6 +562,53 @@ mod snapshot_payload_tests {
         let payload = serde_json::to_string(&Snapshot::default()).expect("serialize snapshot");
         let decoded = decode_snapshot_with_profile_backfill(&payload).expect("decode snapshot");
         assert_eq!(decoded.net, NetworkConfig::default());
+    }
+
+    #[test]
+    fn external_connectome_io_is_not_counted_as_biological_neurons() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 24;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 302;
+        net.num_output_neurons = 96;
+        net.io_channels_are_biological = false;
+        net.max_total_neurons = 398;
+        net.growth_enabled = false;
+
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Lif,
+            Learning::Stdp,
+        );
+
+        assert_eq!(runner.total_neurons(), 302);
+        assert!(!runner.is_at_max_neurons());
+        assert_eq!(runner.w_in.nrows(), 302);
+        assert_eq!(runner.w_out.nrows(), 96);
+        assert_eq!(runner.w_out.ncols(), 302);
+    }
+
+    #[test]
+    fn celegans_profile_backfill_marks_legacy_io_as_external() {
+        let mut value = serde_json::to_value(Snapshot::default()).expect("serialize snapshot");
+        value
+            .get_mut("net")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("snapshot net")
+            .remove("io_channels_are_biological");
+        value["connectome_labels"] = serde_json::json!({
+            "dataset": "openworm_celegans_connectome"
+        });
+
+        let decoded = decode_snapshot_with_profile_backfill(
+            &serde_json::to_string(&value).expect("serialize legacy snapshot"),
+        )
+        .expect("decode legacy C. elegans snapshot");
+        assert!(!decoded.net.io_channels_are_biological);
     }
 
     #[test]
@@ -1384,6 +1430,8 @@ pub struct Runner {
     #[cfg(feature = "opencl")]
     pub cl_w_hh_bwd_dirty: Vec<bool>,
     #[cfg(feature = "opencl")]
+    pub cl_w_hh_rec_dirty: Vec<bool>,
+    #[cfg(feature = "opencl")]
     pub cl_w_out_dirty: bool,
 
     #[cfg(feature = "opencl")]
@@ -1442,6 +1490,17 @@ pub struct Runner {
     pub cl_stp_h_sizes: Vec<usize>,
     #[cfg(feature = "opencl")]
     pub cl_stp_ok: bool,
+    /// Per-step deterministic release mask produced by the certified device.
+    /// Structural event consumers still sort and commit on the CPU.
+    #[cfg(feature = "opencl")]
+    cl_release_decisions: Option<Vec<i8>>,
+    /// Successful morphology CSR transactions in the current runner.  These
+    /// counters are operational evidence for the selected backend and are
+    /// intentionally not part of biological state or checkpoint identity.
+    #[cfg(feature = "opencl")]
+    pub(crate) gpu_sparse_accumulation_count: u64,
+    #[cfg(feature = "opencl")]
+    pub(crate) gpu_sparse_recurrent_count: u64,
 }
 
 pub struct StepOut {
@@ -1728,6 +1787,16 @@ impl Runner {
         }
     }
 
+    /// External readout channels are driven by the hidden source layer. Legacy
+    /// profiles retain the historical separate output-layer assignment.
+    fn is_output_stage_assigned(&self, output_source_layer: usize) -> bool {
+        if self.net.io_channels_are_biological {
+            self.is_layer_assigned(self.net.num_hidden_layers)
+        } else {
+            self.is_layer_assigned(output_source_layer)
+        }
+    }
+
     /// Identify which hidden layers connect to Sensory inputs and Output nodes.
     /// Default: Sensory -> H0, H_last -> Output.
     /// AARNN defaults are profile-aware:
@@ -1925,6 +1994,33 @@ impl Runner {
         &self.net.aarnn_bio
     }
 
+    /// The certified AARNN device transition currently accepts one biology
+    /// profile per population.  Morphology and growth may assign cell-type
+    /// specific profiles, so silently passing the shared profile in that case
+    /// would change the model.  Those populations remain on the reference
+    /// transition until per-neuron parameter buffers are certified.
+    #[cfg(feature = "opencl")]
+    pub(crate) fn aarnn_gpu_transition_supported(&self) -> bool {
+        if !matches!(self.neuron_model, NeuronModel::Aarnn) {
+            return false;
+        }
+        #[cfg(feature = "growth3d")]
+        {
+            let reference = &self.net.aarnn_bio;
+            if self
+                .bio_h
+                .iter()
+                .flat_map(|layer| layer.iter())
+                .any(|bio| bio != reference)
+                || self.bio_s.iter().any(|bio| bio != reference)
+                || self.bio_o.iter().any(|bio| bio != reference)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     #[inline]
     #[allow(unused_variables)]
     fn hidden_dendritic_structure_signal(&self, layer: usize, neuron: usize) -> (f64, f64) {
@@ -2004,13 +2100,257 @@ impl Runner {
     }
 
     #[inline]
-    fn release_probability(&self, syn_idx: Option<usize>) -> f32 {
-        release_probability_ref(
+    fn should_release(&self, syn_idx: usize) -> bool {
+        #[cfg(feature = "opencl")]
+        if let Some(decisions) = &self.cl_release_decisions {
+            if let Some(decision) = decisions.get(syn_idx) {
+                return *decision != 0;
+            }
+        }
+        should_release_ref(
             self.net.p_release_default,
             self.net.aarnn_release_prob_heterogeneity,
             syn_idx,
             self.t as u64,
         )
+    }
+
+    /// Precompute the release mask for the current logical step.  GPU output
+    /// is only consumed as an admission mask; event records are still sorted
+    /// by the canonical CPU key before any topology or neural commit.
+    #[cfg(feature = "opencl")]
+    fn prepare_gpu_release_decisions(&mut self) {
+        self.cl_release_decisions = None;
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if matches!(self.neuron_model, NeuronModel::Aarnn) {
+            let max_synapse = self
+                .syn_in_map
+                .iter()
+                .flatten()
+                .chain(self.syn_out_map.iter().flatten())
+                .chain(self.syn_fwd_map.iter().flatten().flatten())
+                .chain(self.syn_bwd_map.iter().flatten().flatten())
+                .chain(self.syn_rec_map.iter().flatten().flatten())
+                .copied()
+                .filter(|index| *index != usize::MAX)
+                .max();
+            if let (Some(max_synapse), Some(cl)) = (max_synapse, self.cl.clone()) {
+                if let Ok(decisions) = cl.release_decisions(
+                    self.net.p_release_default,
+                    self.net.aarnn_release_prob_heterogeneity,
+                    self.t as u64,
+                    max_synapse.saturating_add(1),
+                ) {
+                    self.cl_release_decisions = Some(decisions);
+                }
+            }
+        }
+    }
+
+    /// Canonicalise morphology transmission records before any structural
+    /// consumer sees them.  Parallel accumulation is allowed to compute rows
+    /// concurrently, but topology effects must be committed in stable
+    /// synapse order so replay is independent of Rayon/OpenCL scheduling.
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn sort_released_events(&mut self) {
+        self.released_events.sort_by_key(|event| {
+            let kind_rank = match event.kind {
+                ReleasedKind::In => 0usize,
+                ReleasedKind::Fwd { layer } => 1usize + layer,
+                ReleasedKind::Bwd { layer } => 1_024usize + layer,
+                ReleasedKind::HiddenRec { layer } => 2_048usize + layer,
+                ReleasedKind::Out => 3_072usize,
+            };
+            (
+                event.syn_idx.unwrap_or(usize::MAX),
+                kind_rank,
+                event.pre_id,
+                event.post_id,
+            )
+        });
+    }
+
+    /// Reconstruct the structural release records for a device sparse
+    /// transaction.  The accelerator returns currents, while morphology
+    /// stimulation, growth bookkeeping and visualisation remain CPU-owned.
+    /// Replaying the same delayed-history predicates with the certified mask
+    /// keeps those records identical to the reference path without making
+    /// topology state device-owned.
+    #[cfg(feature = "opencl")]
+    fn record_gpu_sparse_released_events(
+        &mut self,
+        pre_step_spk_hist_h: &[std::collections::VecDeque<Array1<i8>>],
+    ) {
+        if self.cl_release_decisions.is_none() {
+            return;
+        }
+
+        // Every admitted release is retained.  This vector is a diagnostic and
+        // morphology input, not a bounded transport queue; dropping records
+        // here would violate the committed-event invariant and make CPU/GPU
+        // replay diverge on high fan-in/fan-out topologies.
+        let mut events = Vec::new();
+        let mut push = |event: ReleasedEvent| events.push(event);
+
+        for (post_id, routes) in self.recv_in.iter().enumerate() {
+            for &(pre_id, syn_idx) in routes {
+                if self
+                    .w_in
+                    .get((post_id, pre_id))
+                    .copied()
+                    .unwrap_or(0.0)
+                    .abs()
+                    <= 1.0e-12
+                {
+                    continue;
+                }
+                let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                if self.hist_s_at(steps, pre_id) != 0 && self.should_release(syn_idx) {
+                    let post_layer = self
+                        .morph
+                        .synapses
+                        .get(syn_idx)
+                        .map(|syn| syn.post_layer)
+                        .unwrap_or(0);
+                    push(ReleasedEvent {
+                        kind: ReleasedKind::In,
+                        pre_layer: -1,
+                        post_layer,
+                        pre_id,
+                        post_id,
+                        syn_idx: Some(syn_idx),
+                    });
+                }
+            }
+        }
+
+        for (layer, posts) in self.recv_fwd.iter().enumerate() {
+            for (post_id, routes) in posts.iter().enumerate() {
+                for &(pre_id, syn_idx) in routes {
+                    if self
+                        .w_hh_fwd
+                        .get(layer)
+                        .and_then(|matrix| matrix.get((post_id, pre_id)))
+                        .copied()
+                        .unwrap_or(0.0)
+                        .abs()
+                        <= 1.0e-12
+                    {
+                        continue;
+                    }
+                    let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                    if self.hist_h_at(layer, steps, pre_id) != 0 && self.should_release(syn_idx) {
+                        push(ReleasedEvent {
+                            kind: ReleasedKind::Fwd { layer },
+                            pre_layer: layer as isize,
+                            post_layer: layer as isize + 1,
+                            pre_id,
+                            post_id,
+                            syn_idx: Some(syn_idx),
+                        });
+                    }
+                }
+            }
+        }
+
+        for (layer, posts) in self.recv_bwd.iter().enumerate() {
+            for (post_id, routes) in posts.iter().enumerate() {
+                for &(pre_id, syn_idx) in routes {
+                    if self
+                        .w_hh_bwd
+                        .get(layer)
+                        .and_then(|matrix| matrix.get((post_id, pre_id)))
+                        .copied()
+                        .unwrap_or(0.0)
+                        .abs()
+                        <= 1.0e-12
+                    {
+                        continue;
+                    }
+                    let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                    let signal = pre_step_spk_hist_h
+                        .get(layer + 1)
+                        .and_then(|history| history.get(steps))
+                        .and_then(|frame| frame.get(pre_id))
+                        .copied()
+                        .unwrap_or(0);
+                    if signal != 0 && self.should_release(syn_idx) {
+                        push(ReleasedEvent {
+                            kind: ReleasedKind::Bwd { layer },
+                            pre_layer: layer as isize + 1,
+                            post_layer: layer as isize,
+                            pre_id,
+                            post_id,
+                            syn_idx: Some(syn_idx),
+                        });
+                    }
+                }
+            }
+        }
+
+        for (layer, posts) in self.recv_rec.iter().enumerate() {
+            for (post_id, routes) in posts.iter().enumerate() {
+                for &(pre_id, syn_idx) in routes {
+                    if self
+                        .w_hh_rec
+                        .get(layer)
+                        .and_then(|matrix| matrix.get((post_id, pre_id)))
+                        .copied()
+                        .unwrap_or(0.0)
+                        .abs()
+                        <= 1.0e-12
+                    {
+                        continue;
+                    }
+                    let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                    let signal = pre_step_spk_hist_h
+                        .get(layer)
+                        .and_then(|history| history.get(steps))
+                        .and_then(|frame| frame.get(pre_id))
+                        .copied()
+                        .unwrap_or(0);
+                    if signal != 0 && self.should_release(syn_idx) {
+                        push(ReleasedEvent {
+                            kind: ReleasedKind::HiddenRec { layer },
+                            pre_layer: layer as isize,
+                            post_layer: layer as isize,
+                            pre_id,
+                            post_id,
+                            syn_idx: Some(syn_idx),
+                        });
+                    }
+                }
+            }
+        }
+
+        let out_layer = self.get_io_layers().1;
+        for (post_id, routes) in self.recv_out.iter().enumerate() {
+            for &(pre_id, syn_idx) in routes {
+                if self
+                    .w_out
+                    .get((post_id, pre_id))
+                    .copied()
+                    .unwrap_or(0.0)
+                    .abs()
+                    <= 1.0e-12
+                {
+                    continue;
+                }
+                let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                if self.hist_h_at(out_layer, steps, pre_id) != 0 && self.should_release(syn_idx) {
+                    push(ReleasedEvent {
+                        kind: ReleasedKind::Out,
+                        pre_layer: out_layer as isize,
+                        post_layer: out_layer as isize + 1,
+                        pre_id,
+                        post_id,
+                        syn_idx: Some(syn_idx),
+                    });
+                }
+            }
+        }
+
+        self.released_events = events;
     }
 
     #[inline]
@@ -2440,6 +2780,8 @@ impl Runner {
         }
         self.cl_w_hh_rec_sizes.clear();
         self.cl_w_hh_rec_sizes.resize(l_count, 0);
+        self.cl_w_hh_rec_dirty.clear();
+        self.cl_w_hh_rec_dirty.resize(l_count, true);
 
         self.cl_w_out = None;
         self.cl_w_out_size = 0;
@@ -2513,7 +2855,11 @@ impl Runner {
                 self.v_h[l].len()
             };
             let has_u = self.is_izh_like();
-            let has_refr = matches!(self.neuron_model, NeuronModel::Lif);
+            // AARNN owns an optional refractory state as part of its
+            // deterministic transition. Allocate it even when the current
+            // profile disables the feature so the same device layout can be
+            // reused when a biological depth/profile is changed.
+            let has_refr = matches!(self.neuron_model, NeuronModel::Lif | NeuronModel::Aarnn);
 
             let buf_opt = if is_output {
                 &mut self.cl_buffer_o
@@ -2532,8 +2878,16 @@ impl Runner {
             if need_recreate {
                 if let Ok(new_buf) = CLBuffers::create(&cl.context, size, has_u, has_refr) {
                     *buf_opt = Some(new_buf);
-                    self.sync_cl_state_to_gpu(l, is_output);
                 }
+            }
+            // Threshold homeostasis and adaptive threshold decay are
+            // authoritative CPU post-processing stages.  They can change
+            // threshold_offset between device transitions, so the complete
+            // transition state must be refreshed on every use.  Uploading
+            // v/u/refr as well keeps the boundary transactional after any
+            // CPU-owned fallback (plasticity, growth, morphology, or error).
+            if buf_opt.is_some() {
+                self.sync_cl_state_to_gpu(l, is_output);
             }
         }
     }
@@ -2829,12 +3183,18 @@ impl Runner {
                 self.cl_stp_rel_s = Some(rel);
                 self.cl_stp_s_size = size;
                 if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s) {
+                    let (Some(su), Some(sx)) = (self.stp_u_s.as_slice(), self.stp_x_s.as_slice())
+                    else {
+                        return false;
+                    };
                     unsafe {
-                        if let (Some(su), Some(sx)) =
-                            (self.stp_u_s.as_slice(), self.stp_x_s.as_slice())
-                        {
-                            let _ = cl.queue.enqueue_write_buffer(u, CL_TRUE, 0, su, &[]);
-                            let _ = cl.queue.enqueue_write_buffer(x, CL_TRUE, 0, sx, &[]);
+                        if let Err(e) = cl.queue.enqueue_write_buffer(u, CL_TRUE, 0, su, &[]) {
+                            nm_log!("[warn] OpenCL sensory STP u upload failed: {:?}", e);
+                            return false;
+                        }
+                        if let Err(e) = cl.queue.enqueue_write_buffer(x, CL_TRUE, 0, sx, &[]) {
+                            nm_log!("[warn] OpenCL sensory STP x upload failed: {:?}", e);
+                            return false;
                         }
                     }
                 }
@@ -2899,12 +3259,19 @@ impl Runner {
                     self.cl_stp_h_sizes[l] = size;
                 }
                 if let (Some(u), Some(x)) = (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l]) {
+                    let (Some(su), Some(sx)) =
+                        (self.stp_u_h[l].as_slice(), self.stp_x_h[l].as_slice())
+                    else {
+                        return false;
+                    };
                     unsafe {
-                        if let (Some(su), Some(sx)) =
-                            (self.stp_u_h[l].as_slice(), self.stp_x_h[l].as_slice())
-                        {
-                            let _ = cl.queue.enqueue_write_buffer(u, CL_TRUE, 0, su, &[]);
-                            let _ = cl.queue.enqueue_write_buffer(x, CL_TRUE, 0, sx, &[]);
+                        if let Err(e) = cl.queue.enqueue_write_buffer(u, CL_TRUE, 0, su, &[]) {
+                            nm_log!("[warn] OpenCL hidden[{}] STP u upload failed: {:?}", l, e);
+                            return false;
+                        }
+                        if let Err(e) = cl.queue.enqueue_write_buffer(x, CL_TRUE, 0, sx, &[]) {
+                            nm_log!("[warn] OpenCL hidden[{}] STP x upload failed: {:?}", l, e);
+                            return false;
                         }
                     }
                 }
@@ -2917,48 +3284,100 @@ impl Runner {
     }
 
     #[cfg(feature = "opencl")]
-    fn sync_stp_state_from_gpu(&mut self) {
+    fn sync_stp_state_from_gpu(&mut self) -> bool {
         let cl = match self.cl.as_ref() {
             Some(cl) => cl,
-            None => return,
+            None => return false,
         };
         let s_size = self.net.num_sensory_neurons;
+        let mut sensory_state: Option<(Vec<f64>, Vec<f64>)> = None;
         if s_size > 0 {
-            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_s, &mut self.cl_stp_x_s) {
-                if let (Some(u_slice), Some(x_slice)) =
-                    (self.stp_u_s.as_slice_mut(), self.stp_x_s.as_slice_mut())
+            let (Some(u), Some(x)) = (&self.cl_stp_u_s, &self.cl_stp_x_s) else {
+                return false;
+            };
+            let mut u_values = vec![0.0; s_size];
+            let mut x_values = vec![0.0; s_size];
+            unsafe {
+                if let Err(e) = cl
+                    .queue
+                    .enqueue_read_buffer(u, CL_TRUE, 0, &mut u_values, &[])
                 {
-                    unsafe {
-                        if let Err(e) = cl.queue.enqueue_read_buffer(u, CL_TRUE, 0, u_slice, &[]) {
-                            nm_log!("[warn] OpenCL STP sync u_s failed: {:?}", e);
-                        }
-                        if let Err(e) = cl.queue.enqueue_read_buffer(x, CL_TRUE, 0, x_slice, &[]) {
-                            nm_log!("[warn] OpenCL STP sync x_s failed: {:?}", e);
-                        }
-                    }
+                    nm_log!("[warn] OpenCL STP sync u_s failed: {:?}", e);
+                    return false;
+                }
+                if let Err(e) = cl
+                    .queue
+                    .enqueue_read_buffer(x, CL_TRUE, 0, &mut x_values, &[])
+                {
+                    nm_log!("[warn] OpenCL STP sync x_s failed: {:?}", e);
+                    return false;
                 }
             }
+            sensory_state = Some((u_values, x_values));
         }
+
+        let mut hidden_state: Vec<(usize, Vec<f64>, Vec<f64>)> = Vec::new();
         for l in 0..self.net.num_hidden_layers {
             if l >= self.cl_stp_u_h.len() || l >= self.cl_stp_x_h.len() {
-                break;
+                return false;
             }
-            if let (Some(u), Some(x)) = (&mut self.cl_stp_u_h[l], &mut self.cl_stp_x_h[l]) {
-                if let (Some(u_slice), Some(x_slice)) = (
-                    self.stp_u_h[l].as_slice_mut(),
-                    self.stp_x_h[l].as_slice_mut(),
-                ) {
-                    unsafe {
-                        if let Err(e) = cl.queue.enqueue_read_buffer(u, CL_TRUE, 0, u_slice, &[]) {
-                            nm_log!("[warn] OpenCL STP sync u_h[{}] failed: {:?}", l, e);
-                        }
-                        if let Err(e) = cl.queue.enqueue_read_buffer(x, CL_TRUE, 0, x_slice, &[]) {
-                            nm_log!("[warn] OpenCL STP sync x_h[{}] failed: {:?}", l, e);
-                        }
-                    }
+            let size = self.layer_size(l);
+            if size == 0 {
+                continue;
+            }
+            let (Some(u), Some(x)) = (&self.cl_stp_u_h[l], &self.cl_stp_x_h[l]) else {
+                return false;
+            };
+            let mut u_values = vec![0.0; size];
+            let mut x_values = vec![0.0; size];
+            unsafe {
+                if let Err(e) = cl
+                    .queue
+                    .enqueue_read_buffer(u, CL_TRUE, 0, &mut u_values, &[])
+                {
+                    nm_log!("[warn] OpenCL STP sync u_h[{}] failed: {:?}", l, e);
+                    return false;
+                }
+                if let Err(e) = cl
+                    .queue
+                    .enqueue_read_buffer(x, CL_TRUE, 0, &mut x_values, &[])
+                {
+                    nm_log!("[warn] OpenCL STP sync x_h[{}] failed: {:?}", l, e);
+                    return false;
                 }
             }
+            hidden_state.push((l, u_values, x_values));
         }
+
+        // Validate every CPU destination before publishing any staged state.
+        // This keeps an unexpected topology/profile mismatch transactional as
+        // well as a device read failure.
+        if let Some((u_values, x_values)) = &sensory_state {
+            if self.stp_u_s.len() != u_values.len() || self.stp_x_s.len() != x_values.len() {
+                return false;
+            }
+        }
+        for (l, u_values, x_values) in &hidden_state {
+            let (Some(u), Some(x)) = (self.stp_u_h.get(*l), self.stp_x_h.get(*l)) else {
+                return false;
+            };
+            if u.len() != u_values.len() || x.len() != x_values.len() {
+                return false;
+            }
+        }
+
+        // Publish the complete STP state only after every population was read.
+        if let Some((u_values, x_values)) = sensory_state {
+            self.stp_u_s = Array1::from_vec(u_values);
+            self.stp_x_s = Array1::from_vec(x_values);
+        }
+        for (l, u_values, x_values) in hidden_state {
+            let u = self.stp_u_h.get_mut(l).expect("STP destination validated");
+            let x = self.stp_x_h.get_mut(l).expect("STP destination validated");
+            *u = Array1::from_vec(u_values);
+            *x = Array1::from_vec(x_values);
+        }
+        true
     }
 
     #[cfg(feature = "opencl")]
@@ -2988,6 +3407,30 @@ impl Runner {
                     }
                 }
 
+                let threshold_opt = if is_output {
+                    Some(&self.thr_offset_o)
+                } else {
+                    self.thr_offset_h.get(l)
+                };
+                if let Some(threshold) = threshold_opt {
+                    unsafe {
+                        if let Some(threshold_data) = threshold.as_slice() {
+                            if let Err(e) = cl.queue.enqueue_write_buffer(
+                                &mut buf.threshold_offset,
+                                CL_TRUE,
+                                0,
+                                threshold_data,
+                                &[],
+                            ) {
+                                nm_log!(
+                                    "[warn] OpenCL state sync threshold offset write failed: {:?}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if is_output {
                     if let (Some(ubuf), Some(u)) = (&mut buf.u, self.u_o.as_ref()) {
                         unsafe {
@@ -3000,7 +3443,12 @@ impl Runner {
                             }
                         }
                     }
-                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, self.refr_o.as_ref()) {
+                    let refr = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                        self.izh_refr_o.as_ref()
+                    } else {
+                        self.refr_o.as_ref()
+                    };
+                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, refr) {
                         unsafe {
                             if let Some(refr_data) = refr.as_slice() {
                                 if let Err(e) =
@@ -3033,9 +3481,12 @@ impl Runner {
                             }
                         }
                     }
-                    if let (Some(rbuf), Some(refr)) =
-                        (&mut buf.refr, self.refr_h.as_ref().and_then(|rh| rh.get(l)))
-                    {
+                    let refr = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                        self.izh_refr_h.as_ref().and_then(|rh| rh.get(l))
+                    } else {
+                        self.refr_h.as_ref().and_then(|rh| rh.get(l))
+                    };
+                    if let (Some(rbuf), Some(refr)) = (&mut buf.refr, refr) {
                         unsafe {
                             if let Some(refr_data) = refr.as_slice() {
                                 if let Err(e) =
@@ -3057,16 +3508,10 @@ impl Runner {
     }
 
     #[cfg(feature = "opencl")]
-    fn sync_cl_state_from_gpu(&mut self, l: usize, is_output: bool) -> Array1<i8> {
+    fn sync_cl_state_from_gpu(&mut self, l: usize, is_output: bool) -> Option<Array1<i8>> {
         let cl = match self.cl.clone() {
             Some(c) => c,
-            None => {
-                return Array1::zeros(if is_output {
-                    self.net.num_output_neurons
-                } else {
-                    self.v_h.get(l).map(|v| v.len()).unwrap_or(0)
-                });
-            }
+            None => return None,
         };
         let size = if is_output {
             self.net.num_output_neurons
@@ -3074,155 +3519,265 @@ impl Runner {
             self.v_h.get(l).map(|v| v.len()).unwrap_or(0)
         };
         if size == 0 {
-            return Array1::zeros(0);
+            return Some(Array1::zeros(0));
         }
         let mut v_vec = vec![0.0; size];
         let mut spk_vec = vec![0i8; size];
 
-        {
-            let buf_opt = if is_output {
-                self.cl_buffer_o.as_mut()
+        // Read every state domain into temporary host storage first.  A
+        // failed read must leave the CPU reference untouched so the caller
+        // can replay this transition on CPU without mixing a partial device
+        // commit with the reference state.
+        let (u_vec, refr_vec, threshold_vec) = {
+            let buf = if is_output {
+                self.cl_buffer_o.as_ref()
             } else {
-                self.cl_buffers_h.get_mut(l).and_then(|o| o.as_mut())
+                self.cl_buffers_h.get(l).and_then(|entry| entry.as_ref())
             };
-            if let Some(buf) = buf_opt {
-                unsafe {
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_read_buffer(&buf.v, CL_TRUE, 0, &mut v_vec, &[])
-                    {
-                        nm_log!("[warn] OpenCL state sync v read failed: {:?}", e);
-                    }
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_read_buffer(&buf.spk, CL_TRUE, 0, &mut spk_vec, &[])
-                    {
-                        nm_log!("[warn] OpenCL state sync spk read failed: {:?}", e);
-                    }
-                }
-            }
-        }
+            let Some(buf) = buf else {
+                nm_log!("[warn] OpenCL state sync buffer is missing");
+                return None;
+            };
 
-        if is_output {
-            self.v_o = Array1::from_vec(v_vec);
-        } else {
-            if let Some(vh) = self.v_h.get_mut(l) {
-                *vh = Array1::from_vec(v_vec);
-            }
-        }
-
-        let buf_opt = if is_output {
-            self.cl_buffer_o.as_mut()
-        } else {
-            self.cl_buffers_h.get_mut(l).and_then(|o| o.as_mut())
-        };
-        if let Some(buf) = buf_opt {
-            if let Some(ubuf) = &buf.u {
-                let u_opt = if is_output {
-                    self.u_o.as_mut()
-                } else {
-                    self.u_h.as_mut().and_then(|uh| uh.get_mut(l))
-                };
-                if let Some(u) = u_opt {
-                    let mut u_vec = vec![0.0; size];
-                    unsafe {
-                        if let Err(e) =
-                            cl.queue
-                                .enqueue_read_buffer(&ubuf, CL_TRUE, 0, &mut u_vec, &[])
-                        {
-                            nm_log!("[warn] OpenCL state sync u read failed: {:?}", e);
-                        }
-                    }
-                    *u = Array1::from_vec(u_vec);
-                }
-            }
-
-            if let Some(rbuf) = &buf.refr {
-                let r_opt = if is_output {
-                    self.refr_o.as_mut()
-                } else {
-                    self.refr_h.as_mut().and_then(|rh| rh.get_mut(l))
-                };
-                if let Some(r) = r_opt {
-                    let mut r_vec = vec![0i32; size];
-                    unsafe {
-                        if let Err(e) =
-                            cl.queue
-                                .enqueue_read_buffer(&rbuf, CL_TRUE, 0, &mut r_vec, &[])
-                        {
-                            nm_log!("[warn] OpenCL state sync refr read failed: {:?}", e);
-                        }
-                    }
-                    *r = Array1::from_vec(r_vec);
-                }
-            }
-        }
-
-        Array1::from_vec(spk_vec)
-    }
-
-    #[cfg(feature = "opencl")]
-    fn sync_cl_w_in_to_gpu(&mut self) {
-        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_in) {
-            let size = self.w_in.len();
-            let need_recreate = self.cl_w_in_size != size;
-            if !need_recreate && !self.cl_w_in_dirty {
-                return;
-            }
-            if need_recreate {
-                if let Ok(new_buf) = unsafe {
-                    Buffer::create(
-                        &cl.context,
-                        CL_MEM_READ_WRITE,
-                        size * std::mem::size_of::<f64>(),
-                        ptr::null_mut(),
-                    )
-                } {
-                    *buf = new_buf;
-                    self.cl_w_in_size = size;
-                    self.cl_w_in_dirty = true;
-                }
-            }
-            unsafe {
-                if let Some(slice) = self.w_in.as_slice() {
-                    if let Err(e) = cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[]) {
-                        nm_log!("[warn] OpenCL sync_cl_w_in write failed: {:?}", e);
-                    }
-                }
-            }
-            self.cl_w_in_dirty = false;
-        }
-    }
-
-    #[cfg(feature = "opencl")]
-    fn sync_cl_w_in_from_gpu(&mut self) {
-        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_in) {
-            let mut w_vec = vec![0.0; self.w_in.len()];
             unsafe {
                 if let Err(e) = cl
                     .queue
-                    .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
+                    .enqueue_read_buffer(&buf.v, CL_TRUE, 0, &mut v_vec, &[])
                 {
-                    nm_log!("[warn] OpenCL sync_cl_w_in read failed: {:?}", e);
-                    return;
+                    nm_log!("[warn] OpenCL state sync v read failed: {:?}", e);
+                    return None;
+                }
+                if let Err(e) =
+                    cl.queue
+                        .enqueue_read_buffer(&buf.spk, CL_TRUE, 0, &mut spk_vec, &[])
+                {
+                    nm_log!("[warn] OpenCL state sync spk read failed: {:?}", e);
+                    return None;
                 }
             }
-            if let Ok(arr) = Array2::from_shape_vec(self.w_in.raw_dim(), w_vec) {
-                self.w_in = arr;
+
+            let mut u_vec = buf.u.as_ref().map(|_| vec![0.0; size]);
+            if let Some(u_buf) = buf.u.as_ref() {
+                let Some(u_values) = u_vec.as_mut() else {
+                    return None;
+                };
+                unsafe {
+                    if let Err(e) = cl
+                        .queue
+                        .enqueue_read_buffer(u_buf, CL_TRUE, 0, u_values, &[])
+                    {
+                        nm_log!("[warn] OpenCL state sync u read failed: {:?}", e);
+                        return None;
+                    }
+                }
+            }
+
+            let mut refr_vec = buf.refr.as_ref().map(|_| vec![0i32; size]);
+            if let Some(refr_buf) = buf.refr.as_ref() {
+                let Some(refr_values) = refr_vec.as_mut() else {
+                    return None;
+                };
+                unsafe {
+                    if let Err(e) =
+                        cl.queue
+                            .enqueue_read_buffer(refr_buf, CL_TRUE, 0, refr_values, &[])
+                    {
+                        nm_log!("[warn] OpenCL state sync refr read failed: {:?}", e);
+                        return None;
+                    }
+                }
+            }
+
+            let mut threshold_vec = vec![0.0; size];
+            unsafe {
+                if let Err(e) = cl.queue.enqueue_read_buffer(
+                    &buf.threshold_offset,
+                    CL_TRUE,
+                    0,
+                    &mut threshold_vec,
+                    &[],
+                ) {
+                    nm_log!(
+                        "[warn] OpenCL state sync threshold offset read failed: {:?}",
+                        e
+                    );
+                    return None;
+                }
+            }
+            (u_vec, refr_vec, threshold_vec)
+        };
+
+        // Validate every CPU destination before publishing any staged state.
+        // The caller can then replay the complete transition on CPU if an
+        // unexpected model/topology mismatch is found at this boundary.
+        if is_output {
+            if self.v_o.len() != size || self.thr_offset_o.len() != size {
+                return None;
+            }
+            if u_vec.is_some() && self.u_o.as_ref().map(|u| u.len()) != Some(size) {
+                return None;
+            }
+            if refr_vec.is_some() {
+                let target = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                    self.izh_refr_o.as_ref()
+                } else {
+                    self.refr_o.as_ref()
+                };
+                if target.map(|refr| refr.len()) != Some(size) {
+                    return None;
+                }
+            }
+        } else {
+            if self.v_h.get(l).map(|v| v.len()) != Some(size)
+                || self.thr_offset_h.get(l).map(|threshold| threshold.len()) != Some(size)
+            {
+                return None;
+            }
+            if u_vec.is_some()
+                && self.u_h.as_ref().and_then(|uh| uh.get(l)).map(|u| u.len()) != Some(size)
+            {
+                return None;
+            }
+            if refr_vec.is_some() {
+                let target = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                    self.izh_refr_h.as_ref().and_then(|rh| rh.get(l))
+                } else {
+                    self.refr_h.as_ref().and_then(|rh| rh.get(l))
+                };
+                if target.map(|refr| refr.len()) != Some(size) {
+                    return None;
+                }
+            }
+        }
+
+        // Publish only after every device read and every destination
+        // validation succeeded.
+        if is_output {
+            self.v_o = Array1::from_vec(v_vec);
+            self.thr_offset_o = Array1::from_vec(threshold_vec);
+            if let Some(values) = u_vec {
+                let u = self.u_o.as_mut().expect("u_o destination validated");
+                *u = Array1::from_vec(values);
+            }
+            if let Some(values) = refr_vec {
+                let target = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                    self.izh_refr_o.as_mut()
+                } else {
+                    self.refr_o.as_mut()
+                };
+                let target = target.expect("refr_o destination validated");
+                *target = Array1::from_vec(values);
+            }
+        } else {
+            let vh = self.v_h.get_mut(l).expect("v_h destination validated");
+            *vh = Array1::from_vec(v_vec);
+            let threshold = self
+                .thr_offset_h
+                .get_mut(l)
+                .expect("threshold destination validated");
+            *threshold = Array1::from_vec(threshold_vec);
+            if let Some(values) = u_vec {
+                let u = self
+                    .u_h
+                    .as_mut()
+                    .and_then(|uh| uh.get_mut(l))
+                    .expect("u_h destination validated");
+                *u = Array1::from_vec(values);
+            }
+            if let Some(values) = refr_vec {
+                let target = if matches!(self.neuron_model, NeuronModel::Aarnn) {
+                    self.izh_refr_h.as_mut().and_then(|rh| rh.get_mut(l))
+                } else {
+                    self.refr_h.as_mut().and_then(|rh| rh.get_mut(l))
+                };
+                let target = target.expect("refr_h destination validated");
+                *target = Array1::from_vec(values);
+            }
+        }
+
+        Some(Array1::from_vec(spk_vec))
+    }
+
+    #[cfg(feature = "opencl")]
+    fn sync_cl_w_in_to_gpu(&mut self) -> bool {
+        let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_in) else {
+            return false;
+        };
+        let size = self.w_in.len();
+        let need_recreate = self.cl_w_in_size != size;
+        if !need_recreate && !self.cl_w_in_dirty {
+            return true;
+        }
+        if need_recreate {
+            let Ok(new_buf) = (unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    size * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )
+            }) else {
+                return false;
+            };
+            *buf = new_buf;
+            self.cl_w_in_size = size;
+            self.cl_w_in_dirty = true;
+        }
+        let Some(slice) = self.w_in.as_slice() else {
+            return false;
+        };
+        let result = unsafe { cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[]) };
+        match result {
+            Ok(()) => {
+                self.cl_w_in_dirty = false;
+                true
+            }
+            Err(e) => {
+                nm_log!("[warn] OpenCL sync_cl_w_in write failed: {:?}", e);
+                false
             }
         }
     }
 
     #[cfg(feature = "opencl")]
-    fn sync_cl_w_hh_to_gpu(&mut self, l: usize) {
+    fn sync_cl_w_in_from_gpu(&mut self) -> bool {
+        let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_in) else {
+            return false;
+        };
+        let mut w_vec = vec![0.0; self.w_in.len()];
+        if let Err(e) = unsafe {
+            cl.queue
+                .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
+        } {
+            nm_log!("[warn] OpenCL sync_cl_w_in read failed: {:?}", e);
+            return false;
+        }
+        match Array2::from_shape_vec(self.w_in.raw_dim(), w_vec) {
+            Ok(arr) => {
+                self.w_in = arr;
+                true
+            }
+            Err(e) => {
+                nm_log!(
+                    "[warn] OpenCL sync_cl_w_in shape validation failed: {:?}",
+                    e
+                );
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    fn sync_cl_w_hh_to_gpu(&mut self, l: usize) -> bool {
         if let Some(ref cl) = self.cl {
             if l >= self.w_hh_fwd.len()
                 || l >= self.w_hh_bwd.len()
                 || l >= self.cl_w_hh_fwd.len()
                 || l >= self.cl_w_hh_bwd.len()
             {
-                return;
+                return false;
             }
+            let mut success = true;
             let size_fwd = self.w_hh_fwd[l].len();
             if self.cl_w_hh_fwd_sizes[l] != size_fwd {
                 if let Ok(new_buf) = unsafe {
@@ -3254,13 +3809,18 @@ impl Runner {
                                     l,
                                     e
                                 );
+                                success = false;
                             }
+                        } else {
+                            success = false;
                         }
                     }
-                    if l < self.cl_w_hh_fwd_dirty.len() {
+                    if success && l < self.cl_w_hh_fwd_dirty.len() {
                         self.cl_w_hh_fwd_dirty[l] = false;
                     }
                 }
+            } else {
+                success = false;
             }
 
             let size_bwd = self.w_hh_bwd[l].len();
@@ -3294,67 +3854,92 @@ impl Runner {
                                     l,
                                     e
                                 );
+                                success = false;
                             }
+                        } else {
+                            success = false;
                         }
                     }
-                    if l < self.cl_w_hh_bwd_dirty.len() {
+                    if success && l < self.cl_w_hh_bwd_dirty.len() {
                         self.cl_w_hh_bwd_dirty[l] = false;
                     }
+                } else {
+                    success = false;
                 }
+            } else {
+                success = false;
             }
+            return success;
         }
+        false
     }
 
     #[cfg(feature = "opencl")]
     #[allow(dead_code)]
-    fn sync_cl_w_hh_from_gpu(&mut self, l: usize) {
+    fn sync_cl_w_hh_from_gpu(&mut self, l: usize) -> bool {
         if let Some(ref cl) = self.cl {
             if l >= self.w_hh_fwd.len()
                 || l >= self.w_hh_bwd.len()
                 || l >= self.cl_w_hh_fwd.len()
                 || l >= self.cl_w_hh_bwd.len()
             {
-                return;
+                return false;
             }
+            let mut fwd_vec = vec![0.0; self.w_hh_fwd[l].len()];
+            let mut bwd_vec = vec![0.0; self.w_hh_bwd[l].len()];
             if let Some(buf) = &self.cl_w_hh_fwd[l] {
-                let mut w_vec = vec![0.0; self.w_hh_fwd[l].len()];
-                unsafe {
+                if let Err(e) = unsafe {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_read_buffer(&buf, CL_TRUE, 0, &mut w_vec, &[])
+                        .enqueue_read_buffer(buf, CL_TRUE, 0, &mut fwd_vec, &[])
                     {
-                        nm_log!("[warn] OpenCL sync_cl_w_hh_fwd[{}] read failed: {:?}", l, e);
+                        Err(e)
                     } else {
-                        if let Ok(arr) = Array2::from_shape_vec(self.w_hh_fwd[l].raw_dim(), w_vec) {
-                            self.w_hh_fwd[l] = arr;
-                        }
+                        Ok(())
                     }
+                } {
+                    nm_log!("[warn] OpenCL sync_cl_w_hh_fwd[{}] read failed: {:?}", l, e);
+                    return false;
                 }
+            } else {
+                return false;
             }
             if let Some(buf) = &self.cl_w_hh_bwd[l] {
-                let mut w_vec = vec![0.0; self.w_hh_bwd[l].len()];
-                unsafe {
+                if let Err(e) = unsafe {
                     if let Err(e) = cl
                         .queue
-                        .enqueue_read_buffer(&buf, CL_TRUE, 0, &mut w_vec, &[])
+                        .enqueue_read_buffer(buf, CL_TRUE, 0, &mut bwd_vec, &[])
                     {
-                        nm_log!("[warn] OpenCL sync_cl_w_hh_bwd[{}] read failed: {:?}", l, e);
+                        Err(e)
                     } else {
-                        if let Ok(arr) = Array2::from_shape_vec(self.w_hh_bwd[l].raw_dim(), w_vec) {
-                            self.w_hh_bwd[l] = arr;
-                        }
+                        Ok(())
                     }
+                } {
+                    nm_log!("[warn] OpenCL sync_cl_w_hh_bwd[{}] read failed: {:?}", l, e);
+                    return false;
                 }
+            } else {
+                return false;
             }
+            let Ok(fwd) = Array2::from_shape_vec(self.w_hh_fwd[l].raw_dim(), fwd_vec) else {
+                return false;
+            };
+            let Ok(bwd) = Array2::from_shape_vec(self.w_hh_bwd[l].raw_dim(), bwd_vec) else {
+                return false;
+            };
+            self.w_hh_fwd[l] = fwd;
+            self.w_hh_bwd[l] = bwd;
+            return true;
         }
+        false
     }
 
     #[cfg(feature = "opencl")]
-    fn sync_cl_w_out_to_gpu(&mut self) {
+    fn sync_cl_w_out_to_gpu(&mut self) -> bool {
         if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_out) {
             let size = self.w_out.len();
             if self.cl_w_out_size == size && !self.cl_w_out_dirty {
-                return;
+                return true;
             }
             if self.cl_w_out_size != size {
                 if let Ok(new_buf) = unsafe {
@@ -3368,16 +3953,25 @@ impl Runner {
                     *buf = new_buf;
                     self.cl_w_out_size = size;
                     self.cl_w_out_dirty = true;
+                } else {
+                    return false;
                 }
             }
-            unsafe {
-                if let Some(slice) = self.w_out.as_slice() {
-                    if let Err(e) = cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[]) {
-                        nm_log!("[warn] OpenCL sync_cl_w_out write failed: {:?}", e);
-                    }
+            let Some(slice) = self.w_out.as_slice() else {
+                return false;
+            };
+            match unsafe { cl.queue.enqueue_write_buffer(buf, CL_TRUE, 0, slice, &[]) } {
+                Ok(()) => {
+                    self.cl_w_out_dirty = false;
+                    true
+                }
+                Err(e) => {
+                    nm_log!("[warn] OpenCL sync_cl_w_out write failed: {:?}", e);
+                    false
                 }
             }
-            self.cl_w_out_dirty = false;
+        } else {
+            false
         }
     }
 
@@ -3515,29 +4109,76 @@ impl Runner {
     }
 
     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
-    fn sync_cl_sparse_in(&mut self) {
+    fn upload_cl_sparse_buffers(
+        cl: &OpenCLManager,
+        buffer: &mut crate::cl_compute::CLSparseBuffers,
+        row_ptr: &[i32],
+        col_indices: &[i32],
+        weights: &[f64],
+        delays: &[i32],
+    ) -> bool {
+        unsafe {
+            if cl
+                .queue
+                .enqueue_write_buffer(&mut buffer.row_ptr, CL_TRUE, 0, row_ptr, &[])
+                .is_err()
+            {
+                return false;
+            }
+            if cl
+                .queue
+                .enqueue_write_buffer(&mut buffer.col_indices, CL_TRUE, 0, col_indices, &[])
+                .is_err()
+            {
+                return false;
+            }
+            if cl
+                .queue
+                .enqueue_write_buffer(&mut buffer.weights, CL_TRUE, 0, weights, &[])
+                .is_err()
+            {
+                return false;
+            }
+            let Some(delay_buffer) = buffer.delays.as_mut() else {
+                return false;
+            };
+            if cl
+                .queue
+                .enqueue_write_buffer(delay_buffer, CL_TRUE, 0, delays, &[])
+                .is_err()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+    fn sync_cl_sparse_in(&mut self) -> bool {
         if self.cl.is_none() {
-            return;
+            return false;
         }
         let n_post = self.layer_size(0);
         let mut n_syn = 0;
         for j in 0..n_post {
-            n_syn += self.recv_in[j].len();
+            n_syn += self.recv_in.get(j).map_or(0, Vec::len);
         }
         if n_syn == 0 {
-            return;
+            return false;
         }
 
         let mut row_ptr = Vec::with_capacity(n_post + 1);
         let mut col_indices = Vec::with_capacity(n_syn);
         let mut weights = Vec::with_capacity(n_syn);
         let mut delays = Vec::with_capacity(n_syn);
+        let mut synapse_ids = Vec::with_capacity(n_syn);
 
         let mut current_offset = 0i32;
         row_ptr.push(0);
         for j in 0..n_post {
-            for &(i, syn_idx) in &self.recv_in[j] {
+            for &(i, syn_idx) in self.recv_in.get(j).into_iter().flatten() {
                 col_indices.push(i as i32);
+                synapse_ids.push(syn_idx);
                 let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                 weights.push(self.w_in[(j, i)] * atten);
                 delays.push(steps as i32);
@@ -3548,7 +4189,7 @@ impl Runner {
 
         let cl = match self.cl.as_ref() {
             Some(c) => c.clone(),
-            None => return,
+            None => return false,
         };
         let need_recreate = self
             .cl_sparse_in
@@ -3563,48 +4204,24 @@ impl Runner {
             }
         }
 
-        if let Some(buf) = self.cl_sparse_in.as_mut() {
-            unsafe {
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.row_ptr, CL_TRUE, 0, &row_ptr, &[])
-                {
-                    nm_log!("[warn] OpenCL sparse_in row_ptr write failed: {:?}", e);
-                }
-                if let Err(e) = cl.queue.enqueue_write_buffer(
-                    &mut buf.col_indices,
-                    CL_TRUE,
-                    0,
-                    &col_indices,
-                    &[],
-                ) {
-                    nm_log!("[warn] OpenCL sparse_in col_indices write failed: {:?}", e);
-                }
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.weights, CL_TRUE, 0, &weights, &[])
-                {
-                    nm_log!("[warn] OpenCL sparse_in weights write failed: {:?}", e);
-                }
-                if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
-                    {
-                        nm_log!("[warn] OpenCL sparse_in delays write failed: {:?}", e);
-                    }
-                }
-            }
+        let Some(buf) = self.cl_sparse_in.as_mut() else {
+            return false;
+        };
+        let upload_ok =
+            Self::upload_cl_sparse_buffers(&cl, buf, &row_ptr, &col_indices, &weights, &delays);
+        if upload_ok {
+            buf.synapse_ids = synapse_ids;
         }
+        upload_ok
     }
 
     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
-    fn sync_cl_sparse_fwd(&mut self, l: usize) {
+    fn sync_cl_sparse_fwd(&mut self, l: usize) -> bool {
         if self.cl.is_none() {
-            return;
+            return false;
         }
         if l >= self.recv_fwd.len() {
-            return;
+            return false;
         }
         let n_post = self.layer_size(l + 1);
         let mut n_syn = 0;
@@ -3614,13 +4231,14 @@ impl Runner {
             }
         }
         if n_syn == 0 {
-            return;
+            return false;
         }
 
         let mut row_ptr = Vec::with_capacity(n_post + 1);
         let mut col_indices = Vec::with_capacity(n_syn);
         let mut weights = Vec::with_capacity(n_syn);
         let mut delays = Vec::with_capacity(n_syn);
+        let mut synapse_ids = Vec::with_capacity(n_syn);
 
         let mut current_offset = 0i32;
         row_ptr.push(0);
@@ -3628,6 +4246,7 @@ impl Runner {
             if let Some(rf) = self.recv_fwd[l].get(j) {
                 for &(i, syn_idx) in rf {
                     col_indices.push(i as i32);
+                    synapse_ids.push(syn_idx);
                     let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                     let val = self.w_hh_fwd[l].get((j, i)).copied().unwrap_or_else(|| {
                         nm_log!(
@@ -3649,7 +4268,7 @@ impl Runner {
 
         let cl = match self.cl.as_ref() {
             Some(c) => c.clone(),
-            None => return,
+            None => return false,
         };
         let need_recreate = self
             .cl_sparse_fwd
@@ -3667,64 +4286,24 @@ impl Runner {
             }
         }
 
-        if let Some(Some(buf)) = self.cl_sparse_fwd.get_mut(l) {
-            unsafe {
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.row_ptr, CL_TRUE, 0, &row_ptr, &[])
-                {
-                    nm_log!(
-                        "[warn] OpenCL sparse_fwd[{}] row_ptr write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Err(e) = cl.queue.enqueue_write_buffer(
-                    &mut buf.col_indices,
-                    CL_TRUE,
-                    0,
-                    &col_indices,
-                    &[],
-                ) {
-                    nm_log!(
-                        "[warn] OpenCL sparse_fwd[{}] col_indices write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.weights, CL_TRUE, 0, &weights, &[])
-                {
-                    nm_log!(
-                        "[warn] OpenCL sparse_fwd[{}] weights write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
-                    {
-                        nm_log!(
-                            "[warn] OpenCL sparse_fwd[{}] delays write failed: {:?}",
-                            l,
-                            e
-                        );
-                    }
-                }
-            }
+        let Some(buf) = self.cl_sparse_fwd.get_mut(l).and_then(Option::as_mut) else {
+            return false;
+        };
+        let upload_ok =
+            Self::upload_cl_sparse_buffers(&cl, buf, &row_ptr, &col_indices, &weights, &delays);
+        if upload_ok {
+            buf.synapse_ids = synapse_ids;
         }
+        upload_ok
     }
 
     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
-    fn sync_cl_sparse_bwd(&mut self, l: usize) {
+    fn sync_cl_sparse_bwd(&mut self, l: usize) -> bool {
         if self.cl.is_none() {
-            return;
+            return false;
         }
         if l >= self.recv_bwd.len() {
-            return;
+            return false;
         }
         let n_post = self.layer_size(l);
         let mut n_syn = 0;
@@ -3734,13 +4313,14 @@ impl Runner {
             }
         }
         if n_syn == 0 {
-            return;
+            return false;
         }
 
         let mut row_ptr = Vec::with_capacity(n_post + 1);
         let mut col_indices = Vec::with_capacity(n_syn);
         let mut weights = Vec::with_capacity(n_syn);
         let mut delays = Vec::with_capacity(n_syn);
+        let mut synapse_ids = Vec::with_capacity(n_syn);
 
         let mut current_offset = 0i32;
         row_ptr.push(0);
@@ -3748,6 +4328,7 @@ impl Runner {
             if let Some(rb) = self.recv_bwd[l].get(j) {
                 for &(i, syn_idx) in rb {
                     col_indices.push(i as i32);
+                    synapse_ids.push(syn_idx);
                     let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                     let val = self.w_hh_bwd[l].get((j, i)).copied().unwrap_or_else(|| {
                         nm_log!(
@@ -3769,7 +4350,7 @@ impl Runner {
 
         let cl = match self.cl.as_ref() {
             Some(c) => c.clone(),
-            None => return,
+            None => return false,
         };
         let need_recreate = self
             .cl_sparse_bwd
@@ -3787,61 +4368,89 @@ impl Runner {
             }
         }
 
-        if let Some(Some(buf)) = self.cl_sparse_bwd.get_mut(l) {
-            unsafe {
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.row_ptr, CL_TRUE, 0, &row_ptr, &[])
-                {
-                    nm_log!(
-                        "[warn] OpenCL sparse_bwd[{}] row_ptr write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Err(e) = cl.queue.enqueue_write_buffer(
-                    &mut buf.col_indices,
-                    CL_TRUE,
-                    0,
-                    &col_indices,
-                    &[],
-                ) {
-                    nm_log!(
-                        "[warn] OpenCL sparse_bwd[{}] col_indices write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.weights, CL_TRUE, 0, &weights, &[])
-                {
-                    nm_log!(
-                        "[warn] OpenCL sparse_bwd[{}] weights write failed: {:?}",
-                        l,
-                        e
-                    );
-                }
-                if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
-                    {
-                        nm_log!(
-                            "[warn] OpenCL sparse_bwd[{}] delays write failed: {:?}",
-                            l,
-                            e
-                        );
-                    }
-                }
-            }
+        let Some(buf) = self.cl_sparse_bwd.get_mut(l).and_then(Option::as_mut) else {
+            return false;
+        };
+        let upload_ok =
+            Self::upload_cl_sparse_buffers(&cl, buf, &row_ptr, &col_indices, &weights, &delays);
+        if upload_ok {
+            buf.synapse_ids = synapse_ids;
         }
+        upload_ok
     }
 
     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
-    fn sync_cl_sparse_out(&mut self) {
+    fn sync_cl_sparse_rec(&mut self, l: usize) -> bool {
+        if self.cl.is_none() || l >= self.recv_rec.len() {
+            return false;
+        }
+        let n_post = self.layer_size(l);
+        let n_syn: usize = self.recv_rec[l].iter().map(Vec::len).sum();
+        if n_syn == 0 {
+            return false;
+        }
+
+        let mut row_ptr = Vec::with_capacity(n_post + 1);
+        let mut col_indices = Vec::with_capacity(n_syn);
+        let mut weights = Vec::with_capacity(n_syn);
+        let mut delays = Vec::with_capacity(n_syn);
+        let mut synapse_ids = Vec::with_capacity(n_syn);
+        let mut current_offset = 0i32;
+        row_ptr.push(0);
+        for j in 0..n_post {
+            if let Some(row) = self.recv_rec[l].get(j) {
+                for &(i, syn_idx) in row {
+                    col_indices.push(i as i32);
+                    synapse_ids.push(syn_idx);
+                    let (steps, atten) = self.syn_delay_and_atten(syn_idx);
+                    let value = self
+                        .w_hh_rec
+                        .get(l)
+                        .and_then(|matrix| matrix.get((j, i)))
+                        .copied()
+                        .unwrap_or(0.0);
+                    weights.push(value * atten);
+                    delays.push(steps as i32);
+                    current_offset += 1;
+                }
+            }
+            row_ptr.push(current_offset);
+        }
+
+        let cl = match self.cl.as_ref() {
+            Some(c) => c.clone(),
+            None => return false,
+        };
+        let need_recreate = self
+            .cl_sparse_rec
+            .get(l)
+            .and_then(Option::as_ref)
+            .map(|buffer| buffer.n_syn != n_syn || buffer.n_post != n_post)
+            .unwrap_or(true);
+        if need_recreate {
+            if let Ok(new_buf) =
+                crate::cl_compute::CLSparseBuffers::create(&cl.context, n_syn, n_post, true)
+            {
+                if let Some(slot) = self.cl_sparse_rec.get_mut(l) {
+                    *slot = Some(new_buf);
+                }
+            }
+        }
+        let Some(buffer) = self.cl_sparse_rec.get_mut(l).and_then(Option::as_mut) else {
+            return false;
+        };
+        let upload_ok =
+            Self::upload_cl_sparse_buffers(&cl, buffer, &row_ptr, &col_indices, &weights, &delays);
+        if upload_ok {
+            buffer.synapse_ids = synapse_ids;
+        }
+        upload_ok
+    }
+
+    #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+    fn sync_cl_sparse_out(&mut self) -> bool {
         if self.cl.is_none() {
-            return;
+            return false;
         }
         let n_post = self.net.num_output_neurons;
         let mut n_syn = 0;
@@ -3849,19 +4458,21 @@ impl Runner {
             n_syn += self.recv_out.get(j).map(|v| v.len()).unwrap_or(0);
         }
         if n_syn == 0 {
-            return;
+            return false;
         }
 
         let mut row_ptr = Vec::with_capacity(n_post + 1);
         let mut col_indices = Vec::with_capacity(n_syn);
         let mut weights = Vec::with_capacity(n_syn);
         let mut delays = Vec::with_capacity(n_syn);
+        let mut synapse_ids = Vec::with_capacity(n_syn);
 
         let mut current_offset = 0i32;
         row_ptr.push(0);
         for j in 0..n_post {
             for &(i, syn_idx) in self.recv_out.get(j).map(|v| v.as_slice()).unwrap_or(&[]) {
                 col_indices.push(i as i32);
+                synapse_ids.push(syn_idx);
                 let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                 weights.push(self.w_out[(j, i)] * atten);
                 delays.push(steps as i32);
@@ -3872,7 +4483,7 @@ impl Runner {
 
         let cl = match self.cl.as_ref() {
             Some(c) => c.clone(),
-            None => return,
+            None => return false,
         };
         let need_recreate = self
             .cl_sparse_out
@@ -3887,57 +4498,205 @@ impl Runner {
             }
         }
 
-        if let Some(buf) = self.cl_sparse_out.as_mut() {
-            unsafe {
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.row_ptr, CL_TRUE, 0, &row_ptr, &[])
-                {
-                    nm_log!("[warn] OpenCL sparse_out row_ptr write failed: {:?}", e);
-                }
-                if let Err(e) = cl.queue.enqueue_write_buffer(
-                    &mut buf.col_indices,
-                    CL_TRUE,
-                    0,
-                    &col_indices,
-                    &[],
-                ) {
-                    nm_log!("[warn] OpenCL sparse_out col_indices write failed: {:?}", e);
-                }
-                if let Err(e) =
-                    cl.queue
-                        .enqueue_write_buffer(&mut buf.weights, CL_TRUE, 0, &weights, &[])
-                {
-                    nm_log!("[warn] OpenCL sparse_out weights write failed: {:?}", e);
-                }
-                if let Some(d_buf) = buf.delays.as_mut() {
-                    if let Err(e) =
-                        cl.queue
-                            .enqueue_write_buffer(&mut *d_buf, CL_TRUE, 0, &delays, &[])
-                    {
-                        nm_log!("[warn] OpenCL sparse_out delays write failed: {:?}", e);
-                    }
-                }
+        let Some(buf) = self.cl_sparse_out.as_mut() else {
+            return false;
+        };
+        let upload_ok =
+            Self::upload_cl_sparse_buffers(&cl, buf, &row_ptr, &col_indices, &weights, &delays);
+        if upload_ok {
+            buf.synapse_ids = synapse_ids;
+        }
+        upload_ok
+    }
+
+    #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+    fn write_cl_sparse_release_mask(
+        cl: &OpenCLManager,
+        sparse: &mut crate::cl_compute::CLSparseBuffers,
+        decisions: Option<&[i8]>,
+    ) -> bool {
+        let Some(decisions) = decisions else {
+            return false;
+        };
+        if sparse.synapse_ids.len() != sparse.n_syn {
+            return false;
+        }
+        let mask: Vec<i8> = sparse
+            .synapse_ids
+            .iter()
+            .map(|synapse_id| decisions.get(*synapse_id).copied().unwrap_or(0))
+            .collect();
+        unsafe {
+            cl.queue
+                .enqueue_write_buffer(&mut sparse.release_mask, CL_TRUE, 0, &mask, &[])
+                .is_ok()
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    fn sync_cl_w_out_from_gpu(&mut self) -> bool {
+        let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_out) else {
+            return false;
+        };
+        let mut w_vec = vec![0.0; self.w_out.len()];
+        if let Err(e) = unsafe {
+            cl.queue
+                .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
+        } {
+            nm_log!("[warn] OpenCL sync_cl_w_out read failed: {:?}", e);
+            return false;
+        }
+        match Array2::from_shape_vec(self.w_out.raw_dim(), w_vec) {
+            Ok(arr) => {
+                self.w_out = arr;
+                true
+            }
+            Err(e) => {
+                nm_log!(
+                    "[warn] OpenCL sync_cl_w_out shape validation failed: {:?}",
+                    e
+                );
+                false
             }
         }
     }
 
     #[cfg(feature = "opencl")]
-    fn sync_cl_w_out_from_gpu(&mut self) {
-        if let (Some(cl), Some(buf)) = (&self.cl, &mut self.cl_w_out) {
-            let mut w_vec = vec![0.0; self.w_out.len()];
-            unsafe {
-                if let Err(e) = cl
-                    .queue
-                    .enqueue_read_buffer(buf, CL_TRUE, 0, &mut w_vec, &[])
-                {
-                    nm_log!("[warn] OpenCL sync_cl_w_out read failed: {:?}", e);
-                    return;
-                }
+    fn run_cl_plasticity_matrix(
+        cl: &OpenCLManager,
+        matrix: &mut Array2<f64>,
+        weight_buf: &mut Option<Buffer<f64>>,
+        weight_size: &mut usize,
+        weight_dirty: &mut bool,
+        pre_spikes: &mut Buffer<i8>,
+        post_spikes: &mut Buffer<i8>,
+        pre_trace: &mut Buffer<f64>,
+        post_trace: &mut Buffer<f64>,
+        pre_spikes_host: &[i8],
+        post_spikes_host: &[i8],
+        pre_trace_host: &[f64],
+        post_trace_host: &[f64],
+        eta: f64,
+        w_min: f64,
+        w_max: f64,
+        rule: i32,
+    ) -> bool {
+        let (n_post, n_pre) = matrix.dim();
+        if n_post == 0
+            || n_pre == 0
+            || pre_spikes_host.len() != n_pre
+            || post_spikes_host.len() != n_post
+            || pre_trace_host.len() != n_pre
+            || post_trace_host.len() != n_post
+        {
+            return false;
+        }
+        let count = matrix.len();
+        if *weight_size != count || weight_buf.is_none() {
+            let Ok(new_buf) = (unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_WRITE,
+                    count * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )
+            }) else {
+                return false;
+            };
+            *weight_buf = Some(new_buf);
+            *weight_size = count;
+            *weight_dirty = true;
+        }
+        let Some(weights) = weight_buf.as_mut() else {
+            return false;
+        };
+        if *weight_dirty {
+            let Some(values) = matrix.as_slice() else {
+                return false;
+            };
+            if let Err(error) = unsafe {
+                cl.queue
+                    .enqueue_write_buffer(weights, CL_TRUE, 0, values, &[])
+            } {
+                nm_log!("[warn] OpenCL plasticity weight upload failed: {:?}", error);
+                return false;
             }
-            if let Ok(arr) = Array2::from_shape_vec(self.w_out.raw_dim(), w_vec) {
-                self.w_out = arr;
-            }
+        }
+        // CUDA serialises access through a per-buffer mutex.  Recurrent
+        // plasticity intentionally uses one population for both sides of the
+        // rule, so stage the second logical argument in a temporary buffer to
+        // avoid locking the same device allocation twice during dispatch.
+        let mut post_spikes_scratch = if std::ptr::eq(pre_spikes, post_spikes) {
+            let Ok(buffer) = (unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_ONLY,
+                    n_post * std::mem::size_of::<i8>(),
+                    ptr::null_mut(),
+                )
+            }) else {
+                return false;
+            };
+            Some(buffer)
+        } else {
+            None
+        };
+        let mut post_trace_scratch = if std::ptr::eq(pre_trace, post_trace) {
+            let Ok(buffer) = (unsafe {
+                Buffer::create(
+                    &cl.context,
+                    CL_MEM_READ_ONLY,
+                    n_post * std::mem::size_of::<f64>(),
+                    ptr::null_mut(),
+                )
+            }) else {
+                return false;
+            };
+            Some(buffer)
+        } else {
+            None
+        };
+        let post_spikes_target = post_spikes_scratch.as_mut().unwrap_or(post_spikes);
+        let post_trace_target = post_trace_scratch.as_mut().unwrap_or(post_trace);
+        let Ok(staged) = cl.plasticity_update_matrix(
+            weights,
+            pre_spikes,
+            post_spikes_target,
+            pre_trace,
+            post_trace_target,
+            pre_spikes_host,
+            post_spikes_host,
+            pre_trace_host,
+            post_trace_host,
+            eta,
+            w_min,
+            w_max,
+            n_pre,
+            n_post,
+            rule,
+        ) else {
+            return false;
+        };
+        let Ok(next) = Array2::from_shape_vec(matrix.raw_dim(), staged) else {
+            return false;
+        };
+        *matrix = next;
+        *weight_dirty = false;
+        true
+    }
+
+    #[cfg(feature = "opencl")]
+    fn mark_cl_weight_matrices_dirty(&mut self) {
+        self.cl_w_in_dirty = true;
+        self.cl_w_out_dirty = true;
+        for dirty in &mut self.cl_w_hh_fwd_dirty {
+            *dirty = true;
+        }
+        for dirty in &mut self.cl_w_hh_bwd_dirty {
+            *dirty = true;
+        }
+        for dirty in &mut self.cl_w_hh_rec_dirty {
+            *dirty = true;
         }
     }
 
@@ -4371,6 +5130,8 @@ impl Runner {
             #[cfg(feature = "opencl")]
             cl_w_hh_bwd_dirty: (0..l_count.saturating_sub(1)).map(|_| true).collect(),
             #[cfg(feature = "opencl")]
+            cl_w_hh_rec_dirty: (0..l_count).map(|_| true).collect(),
+            #[cfg(feature = "opencl")]
             cl_w_out_dirty: true,
             #[cfg(feature = "opencl")]
             cl_sparse_in: None,
@@ -4428,6 +5189,12 @@ impl Runner {
             cl_stp_h_sizes: (0..l_count).map(|_| 0).collect(),
             #[cfg(feature = "opencl")]
             cl_stp_ok: true,
+            #[cfg(feature = "opencl")]
+            cl_release_decisions: None,
+            #[cfg(feature = "opencl")]
+            gpu_sparse_accumulation_count: 0,
+            #[cfg(feature = "opencl")]
+            gpu_sparse_recurrent_count: 0,
         };
 
         // AARNN-specific initial wiring policy (UI Runner):
@@ -4534,6 +5301,10 @@ impl Runner {
         #[cfg(feature = "growth3d")]
         {
             this.rebuild_default_topology();
+            // Default topology assigns cell-type labels.  Resolve those labels
+            // before any AARNN step or accelerator eligibility check so a fresh
+            // runner and its restored snapshot use the same per-neuron biology.
+            this.sync_bio_from_topo();
             if matches!(this.neuron_model, NeuronModel::Aarnn) && !this.net.use_morphology {
                 this.ensure_sparse_io_connectivity_floor();
             }
@@ -5493,6 +6264,11 @@ impl Runner {
 
         // Clear all runtime state after structural update
         self.reset();
+        #[cfg(feature = "growth3d")]
+        // reset clears dynamic values but does not rebuild per-neuron biology;
+        // restore it from the authoritative imported topology before applying
+        // the persisted runtime state.
+        self.sync_bio_from_topo();
         if let Some(runtime_state) = snapshot_runtime_state {
             self.apply_snapshot_runtime_state(runtime_state);
         }
@@ -6140,9 +6916,31 @@ impl Runner {
         self.sync_presence_sizes();
         self.x_pre_in = Array1::<f64>::zeros(n_s_new);
         self.pred_s = Array1::<f64>::zeros(n_s_new);
+        // Sensory populations can be formed dynamically for AARNN growth. Keep
+        // their persistent biological state aligned with the resized input
+        // population so a checkpoint/import and a live resize take the same
+        // STP transition on the next admitted sample.
+        let mut stp_u_s = Array1::<f64>::from_elem(n_s_new, self.net.aarnn_bio.stp_u);
+        let mut stp_x_s = Array1::<f64>::from_elem(n_s_new, 1.0);
+        let preserved = n_s_new.min(self.stp_u_s.len()).min(self.stp_x_s.len());
+        if preserved > 0 {
+            stp_u_s
+                .slice_mut(ndarray::s![..preserved])
+                .assign(&self.stp_u_s.slice(ndarray::s![..preserved]));
+            stp_x_s
+                .slice_mut(ndarray::s![..preserved])
+                .assign(&self.stp_x_s.slice(ndarray::s![..preserved]));
+        }
+        self.stp_u_s = stp_u_s;
+        self.stp_x_s = stp_x_s;
         self.net.num_sensory_neurons = n_s_new;
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
+        #[cfg(feature = "growth3d")]
+        {
+            let bio = self.net.aarnn_bio.clone();
+            self.bio_s.resize(n_s_new, bio);
+        }
         // clean feedback map
         for m in &mut self.feedback_map {
             if *m < 0 || (*m as usize) >= n_s_new {
@@ -6292,6 +7090,11 @@ impl Runner {
         Self::reset_i8_history(&mut self.spk_hist_o, n_o_new, self.hist_len);
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
+        #[cfg(feature = "growth3d")]
+        {
+            let bio = self.net.aarnn_bio.clone();
+            self.bio_o.resize(n_o_new, bio);
+        }
 
         // update feedback map
         let s_count = self.net.num_sensory_neurons;
@@ -7071,74 +7874,197 @@ impl Runner {
         use_homeostasis: bool,
         default_decays: AarnnDecays,
     ) {
-        if use_adaptive_threshold {
-            #[cfg(not(feature = "growth3d"))]
-            {
-                #[cfg(feature = "parallel")]
-                self.thr_offset_h
-                    .par_iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.thr_decay));
-                #[cfg(not(feature = "parallel"))]
-                self.thr_offset_h
-                    .iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.thr_decay));
-                self.thr_offset_o
-                    .mapv_inplace(|v| v * default_decays.thr_decay);
-            }
-            #[cfg(feature = "growth3d")]
-            {
-                let lif_dt = self.lif.dt;
-                for layer in 0..self.net.num_hidden_layers {
-                    let bio_l = &self.bio_h[layer];
-                    self.thr_offset_h[layer]
-                        .iter_mut()
-                        .zip(bio_l.iter())
-                        .for_each(|(value, bio)| {
-                            *value *= Self::get_decays_static(lif_dt, bio).thr_decay;
-                        });
+        #[cfg(feature = "opencl")]
+        let cl_manager = self.cl.clone();
+        #[cfg(feature = "opencl")]
+        let gpu_decay = |threshold: &mut [f64],
+                         rates: &mut [f64],
+                         threshold_decay: f64,
+                         homeostasis_decay: f64|
+         -> bool {
+            cl_manager
+                .as_ref()
+                .map(|cl| {
+                    cl.homeostasis_decay(
+                        threshold,
+                        rates,
+                        threshold_decay,
+                        homeostasis_decay,
+                        use_adaptive_threshold,
+                        use_homeostasis,
+                    )
+                    .is_ok()
+                })
+                .unwrap_or(false)
+        };
+
+        #[cfg(feature = "growth3d")]
+        {
+            let lif_dt = self.lif.dt;
+            for layer in 0..self.net.num_hidden_layers {
+                let homogeneous = self
+                    .bio_h
+                    .get(layer)
+                    .map(|values| values.iter().all(|bio| bio == &self.net.aarnn_bio))
+                    .unwrap_or(false);
+                let decays = self
+                    .bio_h
+                    .get(layer)
+                    .and_then(|values| values.first())
+                    .map(|bio| Self::get_decays_static(lif_dt, bio));
+                let used_gpu = if homogeneous {
+                    #[cfg(feature = "opencl")]
+                    {
+                        decays
+                            .map(|d| {
+                                // Stage both arrays so a device failure cannot leave a
+                                // population half-decayed before the reference fallback.
+                                let mut threshold = self.thr_offset_h[layer].to_vec();
+                                let mut rates = self.rate_ema_h[layer].to_vec();
+                                let ok = gpu_decay(
+                                    &mut threshold,
+                                    &mut rates,
+                                    d.thr_decay,
+                                    d.homeo_decay,
+                                );
+                                if ok {
+                                    self.thr_offset_h[layer].assign(&Array1::from_vec(threshold));
+                                    self.rate_ema_h[layer].assign(&Array1::from_vec(rates));
+                                }
+                                ok
+                            })
+                            .unwrap_or(false)
+                    }
+                    #[cfg(not(feature = "opencl"))]
+                    {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !used_gpu {
+                    if use_adaptive_threshold {
+                        self.thr_offset_h[layer]
+                            .iter_mut()
+                            .zip(self.bio_h[layer].iter())
+                            .for_each(|(value, bio)| {
+                                *value *= Self::get_decays_static(lif_dt, bio).thr_decay;
+                            });
+                    }
+                    if use_homeostasis {
+                        self.rate_ema_h[layer]
+                            .iter_mut()
+                            .zip(self.bio_h[layer].iter())
+                            .for_each(|(value, bio)| {
+                                *value *= Self::get_decays_static(lif_dt, bio).homeo_decay;
+                            });
+                    }
                 }
-                let bio_o = &self.bio_o;
-                self.thr_offset_o
-                    .iter_mut()
-                    .zip(bio_o.iter())
-                    .for_each(|(value, bio)| {
-                        *value *= Self::get_decays_static(lif_dt, bio).thr_decay;
-                    });
             }
+
+            let output_decays = Self::get_decays_static(lif_dt, &self.net.aarnn_bio);
+            let output_gpu = {
+                #[cfg(feature = "opencl")]
+                {
+                    let mut threshold = self.thr_offset_o.to_vec();
+                    let mut rates = self.rate_ema_o.to_vec();
+                    let ok = gpu_decay(
+                        &mut threshold,
+                        &mut rates,
+                        output_decays.thr_decay,
+                        output_decays.homeo_decay,
+                    );
+                    if ok {
+                        self.thr_offset_o.assign(&Array1::from_vec(threshold));
+                        self.rate_ema_o.assign(&Array1::from_vec(rates));
+                    }
+                    ok
+                }
+                #[cfg(not(feature = "opencl"))]
+                {
+                    false
+                }
+            };
+            if !output_gpu {
+                if use_adaptive_threshold {
+                    self.thr_offset_o
+                        .mapv_inplace(|value| value * output_decays.thr_decay);
+                }
+                if use_homeostasis {
+                    self.rate_ema_o
+                        .mapv_inplace(|value| value * output_decays.homeo_decay);
+                }
+            }
+            return;
         }
-        if use_homeostasis {
-            #[cfg(not(feature = "growth3d"))]
-            {
-                #[cfg(feature = "parallel")]
-                self.rate_ema_h
-                    .par_iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.homeo_decay));
-                #[cfg(not(feature = "parallel"))]
-                self.rate_ema_h
-                    .iter_mut()
-                    .for_each(|layer| layer.mapv_inplace(|v| v * default_decays.homeo_decay));
-                self.rate_ema_o
-                    .mapv_inplace(|v| v * default_decays.homeo_decay);
-            }
-            #[cfg(feature = "growth3d")]
-            {
-                let lif_dt = self.lif.dt;
-                for layer in 0..self.net.num_hidden_layers {
-                    let bio_l = &self.bio_h[layer];
-                    self.rate_ema_h[layer]
-                        .iter_mut()
-                        .zip(bio_l.iter())
-                        .for_each(|(value, bio)| {
-                            *value *= Self::get_decays_static(lif_dt, bio).homeo_decay;
-                        });
+
+        #[cfg(not(feature = "growth3d"))]
+        {
+            for layer in 0..self.thr_offset_h.len() {
+                let used_gpu = {
+                    #[cfg(feature = "opencl")]
+                    {
+                        let mut threshold = self.thr_offset_h[layer].to_vec();
+                        let mut rates = self.rate_ema_h[layer].to_vec();
+                        let ok = gpu_decay(
+                            &mut threshold,
+                            &mut rates,
+                            default_decays.thr_decay,
+                            default_decays.homeo_decay,
+                        );
+                        if ok {
+                            self.thr_offset_h[layer].assign(&Array1::from_vec(threshold));
+                            self.rate_ema_h[layer].assign(&Array1::from_vec(rates));
+                        }
+                        ok
+                    }
+                    #[cfg(not(feature = "opencl"))]
+                    {
+                        false
+                    }
+                };
+                if !used_gpu {
+                    if use_adaptive_threshold {
+                        self.thr_offset_h[layer]
+                            .mapv_inplace(|value| value * default_decays.thr_decay);
+                    }
+                    if use_homeostasis {
+                        self.rate_ema_h[layer]
+                            .mapv_inplace(|value| value * default_decays.homeo_decay);
+                    }
                 }
-                let bio_o = &self.bio_o;
-                self.rate_ema_o
-                    .iter_mut()
-                    .zip(bio_o.iter())
-                    .for_each(|(value, bio)| {
-                        *value *= Self::get_decays_static(lif_dt, bio).homeo_decay;
-                    });
+            }
+            let output_gpu = {
+                #[cfg(feature = "opencl")]
+                {
+                    let mut threshold = self.thr_offset_o.to_vec();
+                    let mut rates = self.rate_ema_o.to_vec();
+                    let ok = gpu_decay(
+                        &mut threshold,
+                        &mut rates,
+                        default_decays.thr_decay,
+                        default_decays.homeo_decay,
+                    );
+                    if ok {
+                        self.thr_offset_o.assign(&Array1::from_vec(threshold));
+                        self.rate_ema_o.assign(&Array1::from_vec(rates));
+                    }
+                    ok
+                }
+                #[cfg(not(feature = "opencl"))]
+                {
+                    false
+                }
+            };
+            if !output_gpu {
+                if use_adaptive_threshold {
+                    self.thr_offset_o
+                        .mapv_inplace(|value| value * default_decays.thr_decay);
+                }
+                if use_homeostasis {
+                    self.rate_ema_o
+                        .mapv_inplace(|value| value * default_decays.homeo_decay);
+                }
             }
         }
     }
@@ -7176,12 +8102,43 @@ impl Runner {
             }
         }
         if use_homeostasis {
-            for index in 0..neuron_count {
-                if spikes[index] != 0 {
-                    self.rate_ema_h[layer][index] += 1.0 - homeo_decay;
+            #[cfg(feature = "opencl")]
+            let used_gpu = if bio == &self.net.aarnn_bio {
+                self.cl
+                    .clone()
+                    .map(|cl| {
+                        let mut threshold = self.thr_offset_h[layer].to_vec();
+                        let mut rates = self.rate_ema_h[layer].to_vec();
+                        cl.homeostasis_spikes(
+                            &mut threshold,
+                            &mut rates,
+                            spikes.as_slice().unwrap_or(&[]),
+                            homeo_decay,
+                            base_homeo_target,
+                            bio.homeostasis_gain,
+                            true,
+                        )
+                        .map(|_| {
+                            self.thr_offset_h[layer].assign(&Array1::from_vec(threshold));
+                            self.rate_ema_h[layer].assign(&Array1::from_vec(rates));
+                            true
+                        })
+                        .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            #[cfg(not(feature = "opencl"))]
+            let used_gpu = false;
+            if !used_gpu {
+                for index in 0..neuron_count {
+                    if spikes[index] != 0 {
+                        self.rate_ema_h[layer][index] += 1.0 - homeo_decay;
+                    }
+                    let error = self.rate_ema_h[layer][index] - base_homeo_target;
+                    self.thr_offset_h[layer][index] += bio.homeostasis_gain * error;
                 }
-                let error = self.rate_ema_h[layer][index] - base_homeo_target;
-                self.thr_offset_h[layer][index] += bio.homeostasis_gain * error;
             }
         }
     }
@@ -7209,12 +8166,43 @@ impl Runner {
             }
         }
         if use_homeostasis {
-            for index in 0..neuron_count {
-                if spikes[index] != 0 {
-                    self.rate_ema_o[index] += 1.0 - homeo_decay;
+            #[cfg(feature = "opencl")]
+            let used_gpu = if bio == &self.net.aarnn_bio {
+                self.cl
+                    .clone()
+                    .map(|cl| {
+                        let mut threshold = self.thr_offset_o.to_vec();
+                        let mut rates = self.rate_ema_o.to_vec();
+                        cl.homeostasis_spikes(
+                            &mut threshold,
+                            &mut rates,
+                            spikes.as_slice().unwrap_or(&[]),
+                            homeo_decay,
+                            base_homeo_target,
+                            bio.homeostasis_gain,
+                            true,
+                        )
+                        .map(|_| {
+                            self.thr_offset_o.assign(&Array1::from_vec(threshold));
+                            self.rate_ema_o.assign(&Array1::from_vec(rates));
+                            true
+                        })
+                        .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            #[cfg(not(feature = "opencl"))]
+            let used_gpu = false;
+            if !used_gpu {
+                for index in 0..neuron_count {
+                    if spikes[index] != 0 {
+                        self.rate_ema_o[index] += 1.0 - homeo_decay;
+                    }
+                    let error = self.rate_ema_o[index] - base_homeo_target;
+                    self.thr_offset_o[index] += bio.homeostasis_gain * error;
                 }
-                let error = self.rate_ema_o[index] - base_homeo_target;
-                self.thr_offset_o[index] += bio.homeostasis_gain * error;
             }
         }
     }
@@ -7393,6 +8381,59 @@ impl Runner {
             }
             commit_weight_proposals(&mut self.w_hh_bwd[l], &bwd_proposals, w_min, w_max)
                 .expect("CPU backward plasticity proposals must commit atomically");
+            if l < self.w_hh_rec.len() {
+                let (rec_rows, rec_cols) = self.w_hh_rec[l].dim();
+                let mut rec_proposals = Vec::with_capacity(rec_rows.saturating_mul(rec_cols));
+                for row in 0..rec_rows {
+                    for col in 0..rec_cols {
+                        let pre = if self
+                            .last_spk_h
+                            .get(l)
+                            .and_then(|spikes| spikes.get(col))
+                            .copied()
+                            .unwrap_or(0)
+                            != 0
+                        {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        let post = if self
+                            .last_spk_h
+                            .get(l)
+                            .and_then(|spikes| spikes.get(row))
+                            .copied()
+                            .unwrap_or(0)
+                            != 0
+                        {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        let pre_trace = self
+                            .x_pre_h
+                            .get(l)
+                            .and_then(|trace| trace.get(col))
+                            .copied()
+                            .unwrap_or(0.0);
+                        let post_trace = self
+                            .x_post_h
+                            .get(l)
+                            .and_then(|trace| trace.get(row))
+                            .copied()
+                            .unwrap_or(0.0);
+                        let current = self.w_hh_rec[l][(row, col)];
+                        rec_proposals.push(WeightProposal::new(
+                            row,
+                            col,
+                            current,
+                            weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+                        ));
+                    }
+                }
+                commit_weight_proposals(&mut self.w_hh_rec[l], &rec_proposals, w_min, w_max)
+                    .expect("CPU recurrent plasticity proposals must commit atomically");
+            }
             #[cfg(feature = "opencl")]
             {
                 if l < self.cl_w_hh_fwd_dirty.len() {
@@ -7401,10 +8442,13 @@ impl Runner {
                 if l < self.cl_w_hh_bwd_dirty.len() {
                     self.cl_w_hh_bwd_dirty[l] = true;
                 }
+                if l < self.cl_w_hh_rec_dirty.len() {
+                    self.cl_w_hh_rec_dirty[l] = true;
+                }
             }
         }
 
-        if self.is_layer_assigned(num_hidden_layers) && out_l < self.net.num_hidden_layers + 1 {
+        if self.is_output_stage_assigned(out_l) && out_l < self.net.num_hidden_layers + 1 {
             let (rows, cols) = self.w_out.dim();
             let mut proposals = Vec::with_capacity(rows.saturating_mul(cols));
             for row in 0..rows {
@@ -7453,6 +8497,8 @@ impl Runner {
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         if is_aarnn && matches!(self.learning, Learning::Aarnn) {
             self.apply_dendritic_bouton_plasticity_overlay(eta, sensory_spikes);
+            #[cfg(feature = "opencl")]
+            self.mark_cl_weight_matrices_dirty();
         }
     }
 
@@ -7466,6 +8512,8 @@ impl Runner {
         // 1. Core structural sync: ensure dimensions match config before capturing locals
         let state_changed = self.ensure_state_dimensions();
         let weight_changed = self.ensure_weight_dimensions(in_l, out_l);
+        #[cfg(feature = "opencl")]
+        self.prepare_gpu_release_decisions();
 
         #[cfg(feature = "growth3d")]
         let (dt_ms, decay_rate) = {
@@ -7523,6 +8571,15 @@ impl Runner {
             }
         }
 
+        // Growth can change the biological dimensions after a previous step
+        // without changing the configuration fields used by the legacy
+        // dimension check.  Never let a stale morphology route cache reach a
+        // sparse accelerator upload or alter the meaning of a transition.
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if self.net.use_morphology && !self.morphology_route_cache_matches_topology() {
+            self.rebuild_syn_maps_from_morph();
+        }
+
         let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
         let depth = self.net.aarnn_layer_depth;
         let bio = self.net.aarnn_bio.clone();
@@ -7532,6 +8589,8 @@ impl Runner {
         let use_adaptive_threshold = use_aarnn_bio && depth >= 2 && bio.adaptive_threshold_enabled;
         let use_homeostasis = use_aarnn_bio && depth >= 2 && bio.homeostasis_gain > 0.0;
         let use_izh_refractory = use_aarnn_bio && depth >= 2 && bio.izh_refractory_ms > 0.0;
+        #[cfg(feature = "opencl")]
+        let aarnn_gpu_transition_supported = self.aarnn_gpu_transition_supported();
         let neuromod_state_d = self.neuromod_dopamine.max(0.0) as f64;
         let neuromod_state_s = self.neuromod_serotonin.max(0.0) as f64;
         let neuromod_state_a = self.neuromod_ach.max(0.0) as f64;
@@ -7588,6 +8647,8 @@ impl Runner {
             .iter()
             .map(|a: &Array1<i8>| a.clone())
             .collect::<Vec<_>>();
+        #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+        let pre_step_spk_hist_h = self.spk_hist_h.clone();
 
         let mut type_cache = HashMap::new();
         for ntype in &self.net.neuron_types {
@@ -7607,6 +8668,8 @@ impl Runner {
         let syn_decay_nmda = default_decays.syn_decay_nmda;
         #[allow(unused_variables)]
         let syn_decay_gaba = default_decays.syn_decay_gaba;
+        #[allow(unused_variables)]
+        let nmda_voltage_sensitivity = self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64;
         let homeo_decay = default_decays.homeo_decay;
         let base_homeo_target = default_decays.base_homeo_target;
         let izh_refractory_steps = default_decays.izh_refractory_steps;
@@ -7652,10 +8715,17 @@ impl Runner {
             let mut stp_gpu_updated_s = false;
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
             let mut stp_gpu_updated_h = vec![false; num_hidden_layers];
+            #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
+            let mut stp_gpu_release_s = vec![0.0; num_sensory_neurons];
+            #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
+            let mut stp_gpu_release_h = (0..num_hidden_layers)
+                .map(|l| vec![0.0; self.layer_size(l)])
+                .collect::<Vec<_>>();
             #[cfg(feature = "opencl")]
             let mut stp_gpu_failed = false;
             #[cfg(feature = "opencl")]
-            if self.cl_stp_ok && self.cl.is_some() {
+            if self.cl_stp_ok && self.cl.is_some() && (!is_aarnn || aarnn_gpu_transition_supported)
+            {
                 if self.sync_cl_stp_sensory() {
                     if let (Some(pre), Some(u), Some(x), Some(rel)) = (
                         &mut self.cl_stp_pre_s,
@@ -7694,7 +8764,7 @@ impl Runner {
                                         rel,
                                         CL_TRUE,
                                         0,
-                                        &mut stp_release_s,
+                                        &mut stp_gpu_release_s,
                                         &[],
                                     ) {
                                         nm_log!("[warn] OpenCL STP sensory read failed: {:?}", e);
@@ -7709,6 +8779,8 @@ impl Runner {
                             }
                         }
                     }
+                } else if num_sensory_neurons > 0 {
+                    stp_gpu_failed = true;
                 }
                 for l in 0..num_hidden_layers {
                     if stp_gpu_failed {
@@ -7719,7 +8791,8 @@ impl Runner {
                         continue;
                     }
                     if !self.sync_cl_stp_layer(l) {
-                        continue;
+                        stp_gpu_failed = true;
+                        break;
                     }
                     if let (Some(pre), Some(u), Some(x), Some(rel)) = (
                         self.cl_stp_pre_h.get_mut(l).and_then(|b| b.as_mut()),
@@ -7770,7 +8843,7 @@ impl Runner {
                                         rel,
                                         CL_TRUE,
                                         0,
-                                        &mut stp_release_h[l],
+                                        &mut stp_gpu_release_h[l],
                                         &[],
                                     ) {
                                         nm_log!(
@@ -7792,10 +8865,31 @@ impl Runner {
                 }
             }
             #[cfg(feature = "opencl")]
+            if !stp_gpu_failed
+                && (stp_gpu_updated_s || stp_gpu_updated_h.iter().any(|updated| *updated))
+                && !self.sync_stp_state_from_gpu()
+            {
+                stp_gpu_failed = true;
+            }
+            #[cfg(feature = "opencl")]
             if stp_gpu_failed {
-                self.sync_stp_state_from_gpu();
+                // Do not publish a partial device batch.  The CPU STP state is
+                // still at the pre-transition boundary, so replay the whole
+                // release phase there after disabling the failed accelerator
+                // path for subsequent steps.
+                stp_gpu_updated_s = false;
+                stp_gpu_updated_h.fill(false);
+                stp_gpu_release_s.fill(0.0);
+                for release in &mut stp_gpu_release_h {
+                    release.fill(0.0);
+                }
                 self.cl_stp_ok = false;
                 self.clear_cl_stp_buffers();
+            } else if stp_gpu_updated_s || stp_gpu_updated_h.iter().any(|updated| *updated) {
+                stp_release_s.copy_from_slice(&stp_gpu_release_s);
+                for (release, gpu_release) in stp_release_h.iter_mut().zip(&stp_gpu_release_h) {
+                    release.copy_from_slice(gpu_release);
+                }
             }
             self.apply_cpu_stp_release_phase(
                 &s_t,
@@ -7952,14 +9046,43 @@ impl Runner {
                 + self.net.aarnn_neuromod_stability_gain.max(0.0)
                     * signal_value(self.net.aarnn_neuromod_serotonin_signal))
             .clamp(0.0, 3.0);
-            self.neuromod_dopamine = self.neuromod_dopamine * retain + target_d * decay;
-            self.neuromod_ach = self.neuromod_ach * retain + target_a * decay;
-            self.neuromod_serotonin = self.neuromod_serotonin * retain + target_s * decay;
-
             let r_decay = self.net.aarnn_resonance_decay.clamp(0.0, 1.0);
-            let r_retain = 1.0 - r_decay;
             let r_target = hidden_rate.clamp(0.0, 1.0);
-            self.resonance_level = self.resonance_level * r_retain + r_target * r_decay;
+            let mut state = [
+                self.neuromod_dopamine as f64,
+                self.neuromod_ach as f64,
+                self.neuromod_serotonin as f64,
+                self.resonance_level as f64,
+            ];
+            let targets = [target_d as f64, target_a as f64, target_s as f64];
+            #[cfg(feature = "opencl")]
+            let used_gpu = self
+                .cl
+                .clone()
+                .map(|cl| {
+                    cl.neuromodulation_step(
+                        &mut state,
+                        targets,
+                        decay as f64,
+                        r_decay as f64,
+                        r_target as f64,
+                    )
+                    .is_ok()
+                })
+                .unwrap_or(false);
+            #[cfg(not(feature = "opencl"))]
+            let used_gpu = false;
+            if !used_gpu {
+                state[0] = state[0] * f64::from(retain) + f64::from(target_d) * f64::from(decay);
+                state[1] = state[1] * f64::from(retain) + f64::from(target_a) * f64::from(decay);
+                state[2] = state[2] * f64::from(retain) + f64::from(target_s) * f64::from(decay);
+                state[3] =
+                    state[3] * f64::from(1.0 - r_decay) + f64::from(r_target) * f64::from(r_decay);
+            }
+            self.neuromod_dopamine = state[0] as f32;
+            self.neuromod_ach = state[1] as f32;
+            self.neuromod_serotonin = state[2] as f32;
+            self.resonance_level = state[3] as f32;
         }
         let volume_transmission_factors = if is_aarnn {
             self.compute_volume_transmission_factors(&active_h_indices)
@@ -8184,10 +9307,16 @@ impl Runner {
                 let cl_mgr = self.cl.clone();
                 if let Some(ref cl) = cl_mgr {
                     let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                    if use_aarnn {
-                        // Keep AARNN sensory accumulation on CPU for correctness in realtime IPC workloads.
-                        gpu_success = false;
-                    } else if !use_aarnn || !self.net.use_morphology || !has_sparse_recv_in {
+                    // AARNN can use the dense device path when there is no
+                    // morphology or physical delay state to resolve.  The
+                    // morphology/delay path remains an ordered CPU commit
+                    // boundary because it must apply per-synapse release
+                    // outcomes and emit canonical topology events.
+                    if !use_aarnn
+                        || (aarnn_gpu_transition_supported
+                            && !self.net.use_morphology
+                            && !self.net.use_aarnn_delays)
+                    {
                         // Dense path acceleration
                         self.sync_cl_w_in_to_gpu();
                         // Need sensory spikes on GPU
@@ -8245,6 +9374,11 @@ impl Runner {
                         if let (Some(w_buf), Some(s_buf_ptr), Some(h0_buf_ptr)) =
                             (w_buf_opt, s_buf_ptr, h0_buf_ptr)
                         {
+                            // The buffer synchronisation above has prepared all
+                            // required device state.  Start the transaction in
+                            // the successful state; each enqueue below clears it
+                            // on error and the CPU reference path then takes over.
+                            gpu_success = true;
                             unsafe {
                                 let s_buf = &mut *s_buf_ptr;
                                 let h0_buf = &mut *h0_buf_ptr;
@@ -8323,6 +9457,8 @@ impl Runner {
                                             .set_arg(&mut *a_ptr)
                                             .set_arg(&mut *n_ptr)
                                             .set_arg(&mut *g_ptr)
+                                            .set_arg(&h0_buf.v)
+                                            .set_arg(&nmda_voltage_sensitivity)
                                             .set_arg(&syn_decay_ampa)
                                             .set_arg(&syn_decay_nmda)
                                             .set_arg(&syn_decay_gaba)
@@ -8361,12 +9497,28 @@ impl Runner {
                                 }
                             }
                         }
-                    } else {
+                    } else if !use_aarnn
+                        || (aarnn_gpu_transition_supported
+                            && self.net.use_morphology
+                            && has_sparse_recv_in)
+                    {
                         // Sparse path acceleration
                         #[cfg(all(feature = "morpho", feature = "growth3d"))]
                         {
-                            self.sync_cl_sparse_in();
+                            let sparse_in_ready = self.sync_cl_sparse_in();
+                            let mut sparse_rec_ready = !use_aarnn;
                             self.sync_cl_spk_hist_s();
+                            if use_aarnn {
+                                // Layer 0 has no preceding hidden-layer loop
+                                // to host its recurrent morphology route, so
+                                // accumulate that route in the same device
+                                // transaction as sensory -> H0.
+                                sparse_rec_ready = self.sync_cl_sparse_rec(0);
+                                self.sync_cl_spk_hist_h(0);
+                                if use_stp {
+                                    self.sync_cl_stp_layer(0);
+                                }
+                            }
                             self.sync_cl_buffers(0, false);
 
                             let s_len = num_sensory_neurons;
@@ -8404,12 +9556,30 @@ impl Runner {
                                 self.cl_spk_hist_s.as_mut(),
                                 self.cl_sparse_in.as_mut(),
                             ) {
+                                // As with the dense path, the first-layer
+                                // accumulation is an all-or-nothing device
+                                // transaction with CPU fallback on any enqueue
+                                // or readback failure.
+                                gpu_success = sparse_in_ready && (!use_aarnn || sparse_rec_ready);
                                 unsafe {
                                     let h0_buf = &mut *h0_buf_ptr;
                                     let s_hist_buf = &mut *hist_ptr;
                                     let sparse_in = &mut *sparse_ptr;
+                                    let use_release_kernel = use_aarnn;
                                     let mut use_stp_kernel = false;
                                     let mut rel_buf_opt: Option<&mut Buffer<f64>> = None;
+                                    if use_release_kernel
+                                        && !Self::write_cl_sparse_release_mask(
+                                            cl,
+                                            sparse_in,
+                                            self.cl_release_decisions.as_deref(),
+                                        )
+                                    {
+                                        nm_log!(
+                                            "[warn] OpenCL AARNN sparse release-mask upload failed"
+                                        );
+                                        gpu_success = false;
+                                    }
                                     if let Some(ptr) = rel_ptr {
                                         let rel = &mut *ptr;
                                         if let Err(e) = cl.queue.enqueue_write_buffer(
@@ -8434,24 +9604,46 @@ impl Runner {
                                             if let (Some(rel_buf), Some(delays)) =
                                                 (rel_buf_opt, sparse_in.delays.as_ref())
                                             {
-                                                let kernel_acc = cl
-                                                    .kernel_syn_acc_sparse_delay_stp
-                                                    .lock()
-                                                    .unwrap();
-                                                let launch = ExecuteKernel::new(&kernel_acc)
-                                                    .set_arg(&h0_buf.i_total)
-                                                    .set_arg(s_hist_buf)
-                                                    .set_arg(rel_buf)
-                                                    .set_arg(&sparse_in.row_ptr)
-                                                    .set_arg(&sparse_in.col_indices)
-                                                    .set_arg(delays)
-                                                    .set_arg(&sparse_in.weights)
-                                                    .set_arg(&(num_hidden_0_neurons as i32))
-                                                    .set_arg(&(hist_len as i32))
-                                                    .set_arg(&(s_len as i32))
-                                                    .set_arg(&0i32) // Mode: set
-                                                    .set_global_work_size(num_hidden_0_neurons)
-                                                    .enqueue_nd_range(&cl.queue);
+                                                let launch = if use_release_kernel {
+                                                    let kernel_acc = cl
+                                                        .kernel_syn_acc_sparse_delay_release_stp
+                                                        .lock()
+                                                        .unwrap();
+                                                    ExecuteKernel::new(&kernel_acc)
+                                                        .set_arg(&h0_buf.i_total)
+                                                        .set_arg(s_hist_buf)
+                                                        .set_arg(rel_buf)
+                                                        .set_arg(&sparse_in.release_mask)
+                                                        .set_arg(&sparse_in.row_ptr)
+                                                        .set_arg(&sparse_in.col_indices)
+                                                        .set_arg(delays)
+                                                        .set_arg(&sparse_in.weights)
+                                                        .set_arg(&(num_hidden_0_neurons as i32))
+                                                        .set_arg(&(hist_len as i32))
+                                                        .set_arg(&(s_len as i32))
+                                                        .set_arg(&0i32)
+                                                        .set_global_work_size(num_hidden_0_neurons)
+                                                        .enqueue_nd_range(&cl.queue)
+                                                } else {
+                                                    let kernel_acc = cl
+                                                        .kernel_syn_acc_sparse_delay_stp
+                                                        .lock()
+                                                        .unwrap();
+                                                    ExecuteKernel::new(&kernel_acc)
+                                                        .set_arg(&h0_buf.i_total)
+                                                        .set_arg(s_hist_buf)
+                                                        .set_arg(rel_buf)
+                                                        .set_arg(&sparse_in.row_ptr)
+                                                        .set_arg(&sparse_in.col_indices)
+                                                        .set_arg(delays)
+                                                        .set_arg(&sparse_in.weights)
+                                                        .set_arg(&(num_hidden_0_neurons as i32))
+                                                        .set_arg(&(hist_len as i32))
+                                                        .set_arg(&(s_len as i32))
+                                                        .set_arg(&0i32)
+                                                        .set_global_work_size(num_hidden_0_neurons)
+                                                        .enqueue_nd_range(&cl.queue)
+                                                };
                                                 if let Err(e) = launch {
                                                     nm_log!(
                                                         "[warn] OpenCL sparse acc stp failed: {:?}",
@@ -8464,21 +9656,44 @@ impl Runner {
                                             }
                                         } else {
                                             if let Some(delays) = sparse_in.delays.as_ref() {
-                                                let kernel_acc =
-                                                    cl.kernel_syn_acc_sparse_delay.lock().unwrap();
-                                                let launch = ExecuteKernel::new(&kernel_acc)
-                                                    .set_arg(&h0_buf.i_total)
-                                                    .set_arg(s_hist_buf)
-                                                    .set_arg(&sparse_in.row_ptr)
-                                                    .set_arg(&sparse_in.col_indices)
-                                                    .set_arg(delays)
-                                                    .set_arg(&sparse_in.weights)
-                                                    .set_arg(&(num_hidden_0_neurons as i32))
-                                                    .set_arg(&(hist_len as i32))
-                                                    .set_arg(&(s_len as i32))
-                                                    .set_arg(&0i32) // Mode: set
-                                                    .set_global_work_size(num_hidden_0_neurons)
-                                                    .enqueue_nd_range(&cl.queue);
+                                                let launch = if use_release_kernel {
+                                                    let kernel_acc = cl
+                                                        .kernel_syn_acc_sparse_delay_release
+                                                        .lock()
+                                                        .unwrap();
+                                                    ExecuteKernel::new(&kernel_acc)
+                                                        .set_arg(&h0_buf.i_total)
+                                                        .set_arg(s_hist_buf)
+                                                        .set_arg(&sparse_in.release_mask)
+                                                        .set_arg(&sparse_in.row_ptr)
+                                                        .set_arg(&sparse_in.col_indices)
+                                                        .set_arg(delays)
+                                                        .set_arg(&sparse_in.weights)
+                                                        .set_arg(&(num_hidden_0_neurons as i32))
+                                                        .set_arg(&(hist_len as i32))
+                                                        .set_arg(&(s_len as i32))
+                                                        .set_arg(&0i32)
+                                                        .set_global_work_size(num_hidden_0_neurons)
+                                                        .enqueue_nd_range(&cl.queue)
+                                                } else {
+                                                    let kernel_acc = cl
+                                                        .kernel_syn_acc_sparse_delay
+                                                        .lock()
+                                                        .unwrap();
+                                                    ExecuteKernel::new(&kernel_acc)
+                                                        .set_arg(&h0_buf.i_total)
+                                                        .set_arg(s_hist_buf)
+                                                        .set_arg(&sparse_in.row_ptr)
+                                                        .set_arg(&sparse_in.col_indices)
+                                                        .set_arg(delays)
+                                                        .set_arg(&sparse_in.weights)
+                                                        .set_arg(&(num_hidden_0_neurons as i32))
+                                                        .set_arg(&(hist_len as i32))
+                                                        .set_arg(&(s_len as i32))
+                                                        .set_arg(&0i32)
+                                                        .set_global_work_size(num_hidden_0_neurons)
+                                                        .enqueue_nd_range(&cl.queue)
+                                                };
                                                 if let Err(e) = launch {
                                                     nm_log!(
                                                         "[warn] OpenCL sparse acc failed: {:?}",
@@ -8493,6 +9708,148 @@ impl Runner {
                                     }
 
                                     if gpu_success {
+                                        if use_aarnn {
+                                            let rec_ptr = self
+                                                .cl_sparse_rec
+                                                .get_mut(0)
+                                                .and_then(|buffer| buffer.as_mut())
+                                                .map(|buffer| {
+                                                    buffer
+                                                        as *mut crate::cl_compute::CLSparseBuffers
+                                                });
+                                            let hist_rec_ptr = self
+                                                .cl_spk_hist_h
+                                                .get_mut(0)
+                                                .and_then(|buffer| buffer.as_mut())
+                                                .map(|buffer| buffer as *mut Buffer<i8>);
+                                            let rec_rel_ptr = if use_stp {
+                                                self.cl_stp_rel_h
+                                                    .get_mut(0)
+                                                    .and_then(|buffer| buffer.as_mut())
+                                                    .map(|buffer| buffer as *mut Buffer<f64>)
+                                            } else {
+                                                None
+                                            };
+                                            if rec_ptr.map(|ptr| (*ptr).n_syn > 0).unwrap_or(false)
+                                            {
+                                                if let (Some(rec_ptr), Some(hist_rec_ptr)) =
+                                                    (rec_ptr, hist_rec_ptr)
+                                                {
+                                                    let sparse_rec = &mut *rec_ptr;
+                                                    let hist_rec = &mut *hist_rec_ptr;
+                                                    if !Self::write_cl_sparse_release_mask(
+                                                        cl,
+                                                        sparse_rec,
+                                                        self.cl_release_decisions.as_deref(),
+                                                    ) {
+                                                        nm_log!(
+                                                            "[warn] OpenCL AARNN layer-0 recurrent release-mask upload failed"
+                                                        );
+                                                        gpu_success = false;
+                                                    } else if let Some(delays) =
+                                                        sparse_rec.delays.as_ref()
+                                                    {
+                                                        let rec_result = if let Some(rel_ptr) =
+                                                            rec_rel_ptr
+                                                        {
+                                                            let rel = &mut *rel_ptr;
+                                                            if let Err(error) =
+                                                                cl.queue.enqueue_write_buffer(
+                                                                    rel,
+                                                                    CL_TRUE,
+                                                                    0,
+                                                                    &stp_release_h[0],
+                                                                    &[],
+                                                                )
+                                                            {
+                                                                nm_log!(
+                                                                    "[warn] OpenCL layer-0 recurrent STP upload failed: {:?}",
+                                                                    error
+                                                                );
+                                                                Err(crate::cl_compute::ClError(-1))
+                                                            } else {
+                                                                let kernel = cl
+                                                                .kernel_syn_acc_sparse_delay_release_stp
+                                                                .lock()
+                                                                .unwrap();
+                                                                ExecuteKernel::new(&kernel)
+                                                                    .set_arg(&h0_buf.i_total)
+                                                                    .set_arg(hist_rec)
+                                                                    .set_arg(rel)
+                                                                    .set_arg(
+                                                                        &sparse_rec.release_mask,
+                                                                    )
+                                                                    .set_arg(&sparse_rec.row_ptr)
+                                                                    .set_arg(
+                                                                        &sparse_rec.col_indices,
+                                                                    )
+                                                                    .set_arg(delays)
+                                                                    .set_arg(&sparse_rec.weights)
+                                                                    .set_arg(
+                                                                        &(num_hidden_0_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(self.spk_hist_h[0].len()
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(num_hidden_0_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(&1i32)
+                                                                    .set_global_work_size(
+                                                                        num_hidden_0_neurons,
+                                                                    )
+                                                                    .enqueue_nd_range(&cl.queue)
+                                                            }
+                                                        } else {
+                                                            let kernel = cl
+                                                                .kernel_syn_acc_sparse_delay_release
+                                                                .lock()
+                                                                .unwrap();
+                                                            ExecuteKernel::new(&kernel)
+                                                                .set_arg(&h0_buf.i_total)
+                                                                .set_arg(hist_rec)
+                                                                .set_arg(&sparse_rec.release_mask)
+                                                                .set_arg(&sparse_rec.row_ptr)
+                                                                .set_arg(&sparse_rec.col_indices)
+                                                                .set_arg(delays)
+                                                                .set_arg(&sparse_rec.weights)
+                                                                .set_arg(
+                                                                    &(num_hidden_0_neurons as i32),
+                                                                )
+                                                                .set_arg(
+                                                                    &(self.spk_hist_h[0].len()
+                                                                        as i32),
+                                                                )
+                                                                .set_arg(
+                                                                    &(num_hidden_0_neurons as i32),
+                                                                )
+                                                                .set_arg(&1i32)
+                                                                .set_global_work_size(
+                                                                    num_hidden_0_neurons,
+                                                                )
+                                                                .enqueue_nd_range(&cl.queue)
+                                                        };
+                                                        if let Err(error) = rec_result {
+                                                            nm_log!(
+                                                                "[warn] OpenCL layer-0 recurrent kernel failed: {:?}",
+                                                                error
+                                                            );
+                                                            gpu_success = false;
+                                                        } else {
+                                                            self.gpu_sparse_recurrent_count = self
+                                                                .gpu_sparse_recurrent_count
+                                                                .saturating_add(1);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if gpu_success {
                                         if let Some((a_ptr, n_ptr, g_ptr)) = syn_ptrs {
                                             let kernel_filter =
                                                 cl.kernel_syn_filter.lock().unwrap();
@@ -8501,6 +9858,8 @@ impl Runner {
                                                 .set_arg(&mut *a_ptr)
                                                 .set_arg(&mut *n_ptr)
                                                 .set_arg(&mut *g_ptr)
+                                                .set_arg(&h0_buf.v)
+                                                .set_arg(&nmda_voltage_sensitivity)
                                                 .set_arg(&syn_decay_ampa)
                                                 .set_arg(&syn_decay_nmda)
                                                 .set_arg(&syn_decay_gaba)
@@ -8542,6 +9901,9 @@ impl Runner {
                                             {
                                                 *dst += src;
                                             }
+                                            self.gpu_sparse_accumulation_count = self
+                                                .gpu_sparse_accumulation_count
+                                                .saturating_add(1);
                                             if use_synaptic_filter {
                                                 self.sync_syn_state_from_gpu(0, false);
                                             }
@@ -8560,7 +9922,6 @@ impl Runner {
                     // Parallel over postsynaptic neurons j. Accumulate directly into i_h0[j].
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
-                        let released_cap = 256usize;
                         let events_tls: Vec<(usize, f64, Vec<ReleasedEvent>)> = (0..num_hidden_0_neurons)
                             .into_par_iter()
                             .map(|j| {
@@ -8584,10 +9945,9 @@ impl Runner {
                                             let s = self.hist_s_at(steps, i);
                                             if s != 0 {
                                                 let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
-                                                if fastrand::f32() <= self.release_probability(Some(syn_idx)) {
+                                                if self.should_release(syn_idx) {
                                                     acc += w_val * atten * stp_scale;
-                                                    if events.len() < released_cap {
-                                                        events.push(ReleasedEvent{
+                                                    events.push(ReleasedEvent{
                                                             kind: ReleasedKind::In,
                                                             pre_layer: -1,
                                                             post_layer: 0,
@@ -8595,7 +9955,6 @@ impl Runner {
                                                             post_id: j,
                                                             syn_idx: Some(syn_idx),
                                                         });
-                                                    }
                                                 }
                                             }
                                         }
@@ -8611,11 +9970,10 @@ impl Runner {
                                         let (steps, atten) = self.syn_delay_and_atten(si);
                                         if self.hist_h_at(0, steps, i) != 0 {
                                             let stp_scale = if use_stp { stp_release_h.get(0).and_then(|v| v.get(i)).copied().unwrap_or(0.0) } else { 1.0 };
-                                            if fastrand::f32() <= self.release_probability(Some(si)) {
+                                            if self.should_release(si) {
                                                 let w_val = self.w_hh_rec.get(0).and_then(|m| m.get((j, i))).copied().unwrap_or(0.0);
                                                 acc += w_val * atten * stp_scale;
-                                                if events.len() < released_cap {
-                                                    events.push(ReleasedEvent{
+                                                events.push(ReleasedEvent{
                                                         kind: ReleasedKind::HiddenRec { layer: 0 },
                                                         pre_layer: 0,
                                                         post_layer: 0,
@@ -8623,7 +9981,6 @@ impl Runner {
                                                         post_id: j,
                                                         syn_idx: Some(si),
                                                     });
-                                                }
                                             }
                                         }
                                     }
@@ -8661,15 +10018,9 @@ impl Runner {
                             .collect();
 
                         // Merge results
-                        let mut total = 0usize;
                         for (j, acc, ev) in events_tls.into_iter() {
                             i_h0[j] += acc;
-                            if total < released_cap {
-                                let room = released_cap - total;
-                                let take = ev.len().min(room);
-                                self.released_events.extend(ev.into_iter().take(take));
-                                total += take;
-                            }
+                            self.released_events.extend(ev);
                         }
                     }
                     #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
@@ -8800,20 +10151,16 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            if fastrand::f32()
-                                                <= self.release_probability(Some(syn_idx))
-                                            {
+                                            if self.should_release(syn_idx) {
                                                 acc += w_val * atten * stp_scale;
-                                                if self.released_events.len() < 256 {
-                                                    self.released_events.push(ReleasedEvent {
-                                                        kind: ReleasedKind::In,
-                                                        pre_layer: -1,
-                                                        post_layer: 0,
-                                                        pre_id: i,
-                                                        post_id: j,
-                                                        syn_idx: Some(syn_idx),
-                                                    });
-                                                }
+                                                self.released_events.push(ReleasedEvent {
+                                                    kind: ReleasedKind::In,
+                                                    pre_layer: -1,
+                                                    post_layer: 0,
+                                                    pre_id: i,
+                                                    post_id: j,
+                                                    syn_idx: Some(syn_idx),
+                                                });
                                             }
                                         }
                                     }
@@ -8924,8 +10271,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            if fastrand::f32() <= self.release_probability(Some(si))
-                                            {
+                                            if self.should_release(si) {
                                                 let w_val = self
                                                     .w_hh_rec
                                                     .get(0)
@@ -8933,16 +10279,14 @@ impl Runner {
                                                     .copied()
                                                     .unwrap_or(0.0);
                                                 acc += w_val * atten * stp_scale;
-                                                if self.released_events.len() < 256 {
-                                                    self.released_events.push(ReleasedEvent {
-                                                        kind: ReleasedKind::HiddenRec { layer: 0 },
-                                                        pre_layer: 0,
-                                                        post_layer: 0,
-                                                        pre_id: i,
-                                                        post_id: j,
-                                                        syn_idx: Some(si),
-                                                    });
-                                                }
+                                                self.released_events.push(ReleasedEvent {
+                                                    kind: ReleasedKind::HiddenRec { layer: 0 },
+                                                    pre_layer: 0,
+                                                    post_layer: 0,
+                                                    pre_id: i,
+                                                    post_id: j,
+                                                    syn_idx: Some(si),
+                                                });
                                             }
                                         }
                                     }
@@ -9031,7 +10375,11 @@ impl Runner {
                 {
                     let cl_mgr = self.cl.clone();
                     if let Some(ref cl) = cl_mgr {
-                        if !is_aarnn {
+                        // The AARNN transition has its own certified kernel;
+                        // morphology and synaptic preparation remain explicit
+                        // CPU-owned stages until their state buffers are also
+                        // committed by the parity gate.
+                        if !is_aarnn || aarnn_gpu_transition_supported {
                             self.sync_cl_buffers(0, false);
                             let izh_params = self.effective_izh_params();
                             if let Some(buf) = self.cl_buffers_h.get_mut(0).and_then(|o| o.as_mut())
@@ -9089,7 +10437,7 @@ impl Runner {
                                                 gpu_success = false;
                                             }
                                         }
-                                        NeuronModel::Izh(_) | NeuronModel::Aarnn => {
+                                        NeuronModel::Izh(_) => {
                                             let p = izh_params.expect("izh params for Izh/AARNN");
                                             if let Some(ref u_buf) = buf.u {
                                                 unsafe {
@@ -9118,6 +10466,47 @@ impl Runner {
                                                 gpu_success = false;
                                             }
                                         }
+                                        NeuronModel::Aarnn => {
+                                            let p = izh_params.expect("izh params for AARNN");
+                                            let kernel = cl.kernel_aarnn_step.lock().unwrap();
+                                            let adaptive = use_adaptive_threshold as i32;
+                                            let refractory = use_izh_refractory as i32;
+                                            let refractory_steps = if use_izh_refractory {
+                                                izh_refractory_steps
+                                            } else {
+                                                0
+                                            };
+                                            unsafe {
+                                                let launch = ExecuteKernel::new(&kernel)
+                                                    .set_arg(&buf.v)
+                                                    .set_arg(buf.u.as_ref().unwrap())
+                                                    .set_arg(&buf.i_total)
+                                                    .set_arg(&buf.threshold_offset)
+                                                    .set_arg(buf.refr.as_ref().unwrap())
+                                                    .set_arg(&p.dt)
+                                                    .set_arg(&p.recovery_time_constant_a)
+                                                    .set_arg(&p.recovery_sensitivity_b)
+                                                    .set_arg(&p.membrane_reset_potential_c)
+                                                    .set_arg(&p.recovery_increment_d)
+                                                    .set_arg(&p.v_th)
+                                                    .set_arg(&bio.adaptive_threshold_increment)
+                                                    .set_arg(&bio.adaptive_threshold_min)
+                                                    .set_arg(&bio.adaptive_threshold_max)
+                                                    .set_arg(&adaptive)
+                                                    .set_arg(&refractory)
+                                                    .set_arg(&refractory_steps)
+                                                    .set_arg(&buf.spk)
+                                                    .set_global_work_size(size)
+                                                    .enqueue_nd_range(&cl.queue);
+                                                if let Err(e) = launch {
+                                                    nm_log!(
+                                                        "[warn] OpenCL H0 aarnn_step failed: {:?}",
+                                                        e
+                                                    );
+                                                    gpu_success = false;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -9125,15 +10514,20 @@ impl Runner {
                     }
                 }
 
-                if gpu_success {
+                let gpu_spikes = if gpu_success {
                     #[cfg(feature = "opencl")]
                     {
                         self.sync_cl_state_from_gpu(0, false)
                     }
                     #[cfg(not(feature = "opencl"))]
                     {
-                        unreachable!()
+                        None
                     }
+                } else {
+                    None
+                };
+                if let Some(spikes) = gpu_spikes {
+                    spikes
                 } else {
                     match self.neuron_model {
                         NeuronModel::Lif => {
@@ -9300,10 +10694,11 @@ impl Runner {
                     let cl_mgr = self.cl.clone();
                     #[cfg(feature = "opencl")]
                     if let Some(ref cl) = cl_mgr {
-                        if use_aarnn {
-                            // Keep AARNN hidden-layer accumulation on CPU for correctness.
-                            gpu_success = false;
-                        } else if !use_aarnn {
+                        if !use_aarnn
+                            || (aarnn_gpu_transition_supported
+                                && !self.net.use_morphology
+                                && !self.net.use_aarnn_delays)
+                        {
                             self.sync_cl_w_hh_to_gpu(l - 1);
                             self.sync_cl_buffers(l - 1, false);
                             self.sync_cl_buffers(l, false);
@@ -9425,6 +10820,8 @@ impl Runner {
                                                 .set_arg(a)
                                                 .set_arg(n)
                                                 .set_arg(g)
+                                                .set_arg(&buf_cur.v)
+                                                .set_arg(&nmda_voltage_sensitivity)
                                                 .set_arg(&syn_decay_ampa)
                                                 .set_arg(&syn_decay_nmda)
                                                 .set_arg(&syn_decay_gaba)
@@ -9593,6 +10990,8 @@ impl Runner {
                                                         .set_arg(a)
                                                         .set_arg(n)
                                                         .set_arg(g)
+                                                        .set_arg(&buf_cur.v)
+                                                        .set_arg(&nmda_voltage_sensitivity)
                                                         .set_arg(&syn_decay_ampa)
                                                         .set_arg(&syn_decay_nmda)
                                                         .set_arg(&syn_decay_gaba)
@@ -9640,12 +11039,17 @@ impl Runner {
                                     }
                                 }
                             }
-                        } else if self.net.use_morphology && has_sparse_hidden_maps {
+                        } else if aarnn_gpu_transition_supported
+                            && self.net.use_morphology
+                            && has_sparse_hidden_maps
+                        {
                             // Sparse path acceleration
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             {
-                                self.sync_cl_sparse_fwd(l - 1);
+                                let sparse_fwd_ready = self.sync_cl_sparse_fwd(l - 1);
+                                let sparse_rec_ready = self.sync_cl_sparse_rec(l);
                                 self.sync_cl_spk_hist_h(l - 1);
+                                self.sync_cl_spk_hist_h(l);
                                 self.sync_cl_buffers(l, false);
 
                                 let prev_len = num_previous_hidden_neurons;
@@ -9662,6 +11066,7 @@ impl Runner {
 
                                 if use_stp {
                                     self.sync_cl_stp_layer(l - 1);
+                                    self.sync_cl_stp_layer(l);
                                 }
                                 let syn_ptrs = if use_synaptic_filter {
                                     self.sync_cl_syn_buffers(l, false);
@@ -9694,8 +11099,21 @@ impl Runner {
                                     buf_cur_ptr,
                                 ) {
                                     let buf_cur = unsafe { &mut *buf_cur_p };
-                                    let mut cl_ok = true;
+                                    let mut cl_ok = sparse_fwd_ready && sparse_rec_ready;
+                                    let use_release_kernel = use_aarnn;
                                     unsafe {
+                                        if use_release_kernel
+                                            && !Self::write_cl_sparse_release_mask(
+                                                cl,
+                                                sparse_fwd,
+                                                self.cl_release_decisions.as_deref(),
+                                            )
+                                        {
+                                            nm_log!(
+                                                "[warn] OpenCL AARNN sparse fwd release-mask upload failed"
+                                            );
+                                            cl_ok = false;
+                                        }
                                         // Forward
                                         let mut use_stp_kernel = false;
                                         let mut rel_buf_opt: Option<&mut Buffer<f64>> = None;
@@ -9723,54 +11141,109 @@ impl Runner {
                                                 if let (Some(rel_buf), Some(delays)) =
                                                     (rel_buf_opt, sparse_fwd.delays.as_ref())
                                                 {
-                                                    let kernel_acc = cl
-                                                        .kernel_syn_acc_sparse_delay_stp
-                                                        .lock()
-                                                        .unwrap();
-                                                    ExecuteKernel::new(&kernel_acc)
-                                                        .set_arg(&buf_cur.i_total)
-                                                        .set_arg(hist_buf)
-                                                        .set_arg(rel_buf)
-                                                        .set_arg(&sparse_fwd.row_ptr)
-                                                        .set_arg(&sparse_fwd.col_indices)
-                                                        .set_arg(delays)
-                                                        .set_arg(&sparse_fwd.weights)
-                                                        .set_arg(
-                                                            &(num_current_hidden_neurons as i32),
-                                                        )
-                                                        .set_arg(&(hist_len as i32))
-                                                        .set_arg(&(prev_len as i32))
-                                                        .set_arg(&0i32) // Mode: set
-                                                        .set_global_work_size(
-                                                            num_current_hidden_neurons,
-                                                        )
-                                                        .enqueue_nd_range(&cl.queue)
+                                                    if use_release_kernel {
+                                                        let kernel_acc = cl
+                                                            .kernel_syn_acc_sparse_delay_release_stp
+                                                            .lock()
+                                                            .unwrap();
+                                                        ExecuteKernel::new(&kernel_acc)
+                                                            .set_arg(&buf_cur.i_total)
+                                                            .set_arg(hist_buf)
+                                                            .set_arg(rel_buf)
+                                                            .set_arg(&sparse_fwd.release_mask)
+                                                            .set_arg(&sparse_fwd.row_ptr)
+                                                            .set_arg(&sparse_fwd.col_indices)
+                                                            .set_arg(delays)
+                                                            .set_arg(&sparse_fwd.weights)
+                                                            .set_arg(
+                                                                &(num_current_hidden_neurons
+                                                                    as i32),
+                                                            )
+                                                            .set_arg(&(hist_len as i32))
+                                                            .set_arg(&(prev_len as i32))
+                                                            .set_arg(&0i32)
+                                                            .set_global_work_size(
+                                                                num_current_hidden_neurons,
+                                                            )
+                                                            .enqueue_nd_range(&cl.queue)
+                                                    } else {
+                                                        let kernel_acc = cl
+                                                            .kernel_syn_acc_sparse_delay_stp
+                                                            .lock()
+                                                            .unwrap();
+                                                        ExecuteKernel::new(&kernel_acc)
+                                                            .set_arg(&buf_cur.i_total)
+                                                            .set_arg(hist_buf)
+                                                            .set_arg(rel_buf)
+                                                            .set_arg(&sparse_fwd.row_ptr)
+                                                            .set_arg(&sparse_fwd.col_indices)
+                                                            .set_arg(delays)
+                                                            .set_arg(&sparse_fwd.weights)
+                                                            .set_arg(
+                                                                &(num_current_hidden_neurons
+                                                                    as i32),
+                                                            )
+                                                            .set_arg(&(hist_len as i32))
+                                                            .set_arg(&(prev_len as i32))
+                                                            .set_arg(&0i32)
+                                                            .set_global_work_size(
+                                                                num_current_hidden_neurons,
+                                                            )
+                                                            .enqueue_nd_range(&cl.queue)
+                                                    }
                                                 } else {
                                                     Err(crate::cl_compute::ClError(-1))
                                                 }
                                             } else {
                                                 if let Some(delays) = sparse_fwd.delays.as_ref() {
-                                                    let kernel_acc = cl
-                                                        .kernel_syn_acc_sparse_delay
-                                                        .lock()
-                                                        .unwrap();
-                                                    ExecuteKernel::new(&kernel_acc)
-                                                        .set_arg(&buf_cur.i_total)
-                                                        .set_arg(hist_buf)
-                                                        .set_arg(&sparse_fwd.row_ptr)
-                                                        .set_arg(&sparse_fwd.col_indices)
-                                                        .set_arg(delays)
-                                                        .set_arg(&sparse_fwd.weights)
-                                                        .set_arg(
-                                                            &(num_current_hidden_neurons as i32),
-                                                        )
-                                                        .set_arg(&(hist_len as i32))
-                                                        .set_arg(&(prev_len as i32))
-                                                        .set_arg(&0i32) // Mode: set
-                                                        .set_global_work_size(
-                                                            num_current_hidden_neurons,
-                                                        )
-                                                        .enqueue_nd_range(&cl.queue)
+                                                    if use_release_kernel {
+                                                        let kernel_acc = cl
+                                                            .kernel_syn_acc_sparse_delay_release
+                                                            .lock()
+                                                            .unwrap();
+                                                        ExecuteKernel::new(&kernel_acc)
+                                                            .set_arg(&buf_cur.i_total)
+                                                            .set_arg(hist_buf)
+                                                            .set_arg(&sparse_fwd.release_mask)
+                                                            .set_arg(&sparse_fwd.row_ptr)
+                                                            .set_arg(&sparse_fwd.col_indices)
+                                                            .set_arg(delays)
+                                                            .set_arg(&sparse_fwd.weights)
+                                                            .set_arg(
+                                                                &(num_current_hidden_neurons
+                                                                    as i32),
+                                                            )
+                                                            .set_arg(&(hist_len as i32))
+                                                            .set_arg(&(prev_len as i32))
+                                                            .set_arg(&0i32)
+                                                            .set_global_work_size(
+                                                                num_current_hidden_neurons,
+                                                            )
+                                                            .enqueue_nd_range(&cl.queue)
+                                                    } else {
+                                                        let kernel_acc = cl
+                                                            .kernel_syn_acc_sparse_delay
+                                                            .lock()
+                                                            .unwrap();
+                                                        ExecuteKernel::new(&kernel_acc)
+                                                            .set_arg(&buf_cur.i_total)
+                                                            .set_arg(hist_buf)
+                                                            .set_arg(&sparse_fwd.row_ptr)
+                                                            .set_arg(&sparse_fwd.col_indices)
+                                                            .set_arg(delays)
+                                                            .set_arg(&sparse_fwd.weights)
+                                                            .set_arg(
+                                                                &(num_current_hidden_neurons
+                                                                    as i32),
+                                                            )
+                                                            .set_arg(&(hist_len as i32))
+                                                            .set_arg(&(prev_len as i32))
+                                                            .set_arg(&0i32)
+                                                            .set_global_work_size(
+                                                                num_current_hidden_neurons,
+                                                            )
+                                                            .enqueue_nd_range(&cl.queue)
+                                                    }
                                                 } else {
                                                     Err(crate::cl_compute::ClError(-1))
                                                 }
@@ -9793,6 +11266,8 @@ impl Runner {
                                                     .set_arg(&mut *a_ptr)
                                                     .set_arg(&mut *n_ptr)
                                                     .set_arg(&mut *g_ptr)
+                                                    .set_arg(&buf_cur.v)
+                                                    .set_arg(&nmda_voltage_sensitivity)
                                                     .set_arg(&syn_decay_ampa)
                                                     .set_arg(&syn_decay_nmda)
                                                     .set_arg(&syn_decay_gaba)
@@ -9838,7 +11313,7 @@ impl Runner {
 
                                         // Backward
                                         if cl_ok && l < num_hidden_layers - 1 {
-                                            self.sync_cl_sparse_bwd(l);
+                                            cl_ok = cl_ok && self.sync_cl_sparse_bwd(l);
                                             self.sync_cl_spk_hist_h(l + 1);
                                             let next_len = self.layer_size(l + 1);
                                             let hist_len_next = self.spk_hist_h[l + 1].len();
@@ -9858,6 +11333,18 @@ impl Runner {
                                                 self.cl_spk_hist_h[l + 1].as_mut(),
                                                 self.cl_sparse_bwd[l].as_mut(),
                                             ) {
+                                                if use_release_kernel
+                                                    && !Self::write_cl_sparse_release_mask(
+                                                        cl,
+                                                        sparse_bwd,
+                                                        self.cl_release_decisions.as_deref(),
+                                                    )
+                                                {
+                                                    nm_log!(
+                                                        "[warn] OpenCL AARNN sparse bwd release-mask upload failed"
+                                                    );
+                                                    cl_ok = false;
+                                                }
                                                 let mut use_stp_kernel = false;
                                                 let mut rel_buf_opt: Option<&mut Buffer<f64>> =
                                                     None;
@@ -9886,29 +11373,66 @@ impl Runner {
                                                             rel_buf_opt,
                                                             sparse_bwd.delays.as_ref(),
                                                         ) {
-                                                            let kernel_acc = cl
-                                                                .kernel_syn_acc_sparse_delay_stp
-                                                                .lock()
-                                                                .unwrap();
-                                                            ExecuteKernel::new(&kernel_acc)
-                                                                .set_arg(&buf_cur.i_total)
-                                                                .set_arg(hist_buf_next)
-                                                                .set_arg(rel_buf)
-                                                                .set_arg(&sparse_bwd.row_ptr)
-                                                                .set_arg(&sparse_bwd.col_indices)
-                                                                .set_arg(delays)
-                                                                .set_arg(&sparse_bwd.weights)
-                                                                .set_arg(
-                                                                    &(num_current_hidden_neurons
-                                                                        as i32),
-                                                                )
-                                                                .set_arg(&(hist_len_next as i32))
-                                                                .set_arg(&(next_len as i32))
-                                                                .set_arg(&1i32) // Mode: accumulate
-                                                                .set_global_work_size(
-                                                                    num_current_hidden_neurons,
-                                                                )
-                                                                .enqueue_nd_range(&cl.queue)
+                                                            if use_release_kernel {
+                                                                let kernel_acc = cl
+                                                                    .kernel_syn_acc_sparse_delay_release_stp
+                                                                    .lock()
+                                                                    .unwrap();
+                                                                ExecuteKernel::new(&kernel_acc)
+                                                                    .set_arg(&buf_cur.i_total)
+                                                                    .set_arg(hist_buf_next)
+                                                                    .set_arg(rel_buf)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.release_mask,
+                                                                    )
+                                                                    .set_arg(&sparse_bwd.row_ptr)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.col_indices,
+                                                                    )
+                                                                    .set_arg(delays)
+                                                                    .set_arg(&sparse_bwd.weights)
+                                                                    .set_arg(
+                                                                        &(num_current_hidden_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(hist_len_next as i32),
+                                                                    )
+                                                                    .set_arg(&(next_len as i32))
+                                                                    .set_arg(&1i32)
+                                                                    .set_global_work_size(
+                                                                        num_current_hidden_neurons,
+                                                                    )
+                                                                    .enqueue_nd_range(&cl.queue)
+                                                            } else {
+                                                                let kernel_acc = cl
+                                                                    .kernel_syn_acc_sparse_delay_stp
+                                                                    .lock()
+                                                                    .unwrap();
+                                                                ExecuteKernel::new(&kernel_acc)
+                                                                    .set_arg(&buf_cur.i_total)
+                                                                    .set_arg(hist_buf_next)
+                                                                    .set_arg(rel_buf)
+                                                                    .set_arg(&sparse_bwd.row_ptr)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.col_indices,
+                                                                    )
+                                                                    .set_arg(delays)
+                                                                    .set_arg(&sparse_bwd.weights)
+                                                                    .set_arg(
+                                                                        &(num_current_hidden_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(hist_len_next as i32),
+                                                                    )
+                                                                    .set_arg(&(next_len as i32))
+                                                                    .set_arg(&1i32)
+                                                                    .set_global_work_size(
+                                                                        num_current_hidden_neurons,
+                                                                    )
+                                                                    .enqueue_nd_range(&cl.queue)
+                                                            }
                                                         } else {
                                                             Err(crate::cl_compute::ClError(-1))
                                                         }
@@ -9916,28 +11440,64 @@ impl Runner {
                                                         if let Some(delays) =
                                                             sparse_bwd.delays.as_ref()
                                                         {
-                                                            let kernel_acc = cl
-                                                                .kernel_syn_acc_sparse_delay
-                                                                .lock()
-                                                                .unwrap();
-                                                            ExecuteKernel::new(&kernel_acc)
-                                                                .set_arg(&buf_cur.i_total)
-                                                                .set_arg(hist_buf_next)
-                                                                .set_arg(&sparse_bwd.row_ptr)
-                                                                .set_arg(&sparse_bwd.col_indices)
-                                                                .set_arg(delays)
-                                                                .set_arg(&sparse_bwd.weights)
-                                                                .set_arg(
-                                                                    &(num_current_hidden_neurons
-                                                                        as i32),
-                                                                )
-                                                                .set_arg(&(hist_len_next as i32))
-                                                                .set_arg(&(next_len as i32))
-                                                                .set_arg(&1i32) // Mode: accumulate
-                                                                .set_global_work_size(
-                                                                    num_current_hidden_neurons,
-                                                                )
-                                                                .enqueue_nd_range(&cl.queue)
+                                                            if use_release_kernel {
+                                                                let kernel_acc = cl
+                                                                    .kernel_syn_acc_sparse_delay_release
+                                                                    .lock()
+                                                                    .unwrap();
+                                                                ExecuteKernel::new(&kernel_acc)
+                                                                    .set_arg(&buf_cur.i_total)
+                                                                    .set_arg(hist_buf_next)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.release_mask,
+                                                                    )
+                                                                    .set_arg(&sparse_bwd.row_ptr)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.col_indices,
+                                                                    )
+                                                                    .set_arg(delays)
+                                                                    .set_arg(&sparse_bwd.weights)
+                                                                    .set_arg(
+                                                                        &(num_current_hidden_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(hist_len_next as i32),
+                                                                    )
+                                                                    .set_arg(&(next_len as i32))
+                                                                    .set_arg(&1i32)
+                                                                    .set_global_work_size(
+                                                                        num_current_hidden_neurons,
+                                                                    )
+                                                                    .enqueue_nd_range(&cl.queue)
+                                                            } else {
+                                                                let kernel_acc = cl
+                                                                    .kernel_syn_acc_sparse_delay
+                                                                    .lock()
+                                                                    .unwrap();
+                                                                ExecuteKernel::new(&kernel_acc)
+                                                                    .set_arg(&buf_cur.i_total)
+                                                                    .set_arg(hist_buf_next)
+                                                                    .set_arg(&sparse_bwd.row_ptr)
+                                                                    .set_arg(
+                                                                        &sparse_bwd.col_indices,
+                                                                    )
+                                                                    .set_arg(delays)
+                                                                    .set_arg(&sparse_bwd.weights)
+                                                                    .set_arg(
+                                                                        &(num_current_hidden_neurons
+                                                                            as i32),
+                                                                    )
+                                                                    .set_arg(
+                                                                        &(hist_len_next as i32),
+                                                                    )
+                                                                    .set_arg(&(next_len as i32))
+                                                                    .set_arg(&1i32)
+                                                                    .set_global_work_size(
+                                                                        num_current_hidden_neurons,
+                                                                    )
+                                                                    .enqueue_nd_range(&cl.queue)
+                                                            }
                                                         } else {
                                                             Err(crate::cl_compute::ClError(-1))
                                                         }
@@ -9948,6 +11508,118 @@ impl Runner {
                                                             e
                                                         );
                                                         cl_ok = false;
+                                                    }
+                                                }
+
+                                                if cl_ok {
+                                                    // Recurrent morphology routes share the same
+                                                    // current transaction.  They are accumulated
+                                                    // after forward/backward routes so the device
+                                                    // sees the same delayed history and the final
+                                                    // readback remains a single deterministic sum.
+                                                    if use_aarnn {
+                                                        if let (
+                                                            Some(hist_buf_rec),
+                                                            Some(sparse_rec),
+                                                        ) = (
+                                                            self.cl_spk_hist_h[l].as_mut(),
+                                                            self.cl_sparse_rec[l].as_mut(),
+                                                        ) {
+                                                            if !Self::write_cl_sparse_release_mask(
+                                                                cl,
+                                                                sparse_rec,
+                                                                self.cl_release_decisions
+                                                                    .as_deref(),
+                                                            ) {
+                                                                nm_log!(
+                                                                    "[warn] OpenCL AARNN sparse recurrent release-mask upload failed"
+                                                                );
+                                                                cl_ok = false;
+                                                            } else if let Some(delays) =
+                                                                sparse_rec.delays.as_ref()
+                                                            {
+                                                                let rec_result = if use_stp {
+                                                                    if let Some(rel_ptr) = self
+                                                                        .cl_stp_rel_h
+                                                                        .get_mut(l)
+                                                                        .and_then(|b| b.as_mut())
+                                                                        .map(|b| {
+                                                                            b as *mut Buffer<f64>
+                                                                        })
+                                                                    {
+                                                                        let rel_buf = &mut *rel_ptr;
+                                                                        if let Err(error) = cl
+                                                                            .queue
+                                                                            .enqueue_write_buffer(
+                                                                                rel_buf,
+                                                                                CL_TRUE,
+                                                                                0,
+                                                                                &stp_release_h[l],
+                                                                                &[],
+                                                                            )
+                                                                        {
+                                                                            nm_log!(
+                                                                                "[warn] OpenCL sparse recurrent STP upload failed: {:?}",
+                                                                                error
+                                                                            );
+                                                                            Err(crate::cl_compute::ClError(-1))
+                                                                        } else {
+                                                                            let kernel = cl
+                                                                                .kernel_syn_acc_sparse_delay_release_stp
+                                                                                .lock()
+                                                                                .unwrap();
+                                                                            ExecuteKernel::new(&kernel)
+                                                                                .set_arg(&buf_cur.i_total)
+                                                                                .set_arg(hist_buf_rec)
+                                                                                .set_arg(rel_buf)
+                                                                                .set_arg(&sparse_rec.release_mask)
+                                                                                .set_arg(&sparse_rec.row_ptr)
+                                                                                .set_arg(&sparse_rec.col_indices)
+                                                                                .set_arg(delays)
+                                                                                .set_arg(&sparse_rec.weights)
+                                                                                .set_arg(&(num_current_hidden_neurons as i32))
+                                                                                .set_arg(&(self.spk_hist_h[l].len() as i32))
+                                                                                .set_arg(&(num_current_hidden_neurons as i32))
+                                                                                .set_arg(&1i32)
+                                                                                .set_global_work_size(num_current_hidden_neurons)
+                                                                                .enqueue_nd_range(&cl.queue)
+                                                                        }
+                                                                    } else {
+                                                                        Err(crate::cl_compute::ClError(-1))
+                                                                    }
+                                                                } else {
+                                                                    let kernel = cl
+                                                                        .kernel_syn_acc_sparse_delay_release
+                                                                        .lock()
+                                                                        .unwrap();
+                                                                    ExecuteKernel::new(&kernel)
+                                                                        .set_arg(&buf_cur.i_total)
+                                                                        .set_arg(hist_buf_rec)
+                                                                        .set_arg(&sparse_rec.release_mask)
+                                                                        .set_arg(&sparse_rec.row_ptr)
+                                                                        .set_arg(&sparse_rec.col_indices)
+                                                                        .set_arg(delays)
+                                                                        .set_arg(&sparse_rec.weights)
+                                                                        .set_arg(&(num_current_hidden_neurons as i32))
+                                                                        .set_arg(&(self.spk_hist_h[l].len() as i32))
+                                                                        .set_arg(&(num_current_hidden_neurons as i32))
+                                                                        .set_arg(&1i32)
+                                                                        .set_global_work_size(num_current_hidden_neurons)
+                                                                        .enqueue_nd_range(&cl.queue)
+                                                                };
+                                                                if let Err(error) = rec_result {
+                                                                    nm_log!(
+                                                                        "[warn] OpenCL sparse recurrent kernel failed: {:?}",
+                                                                        error
+                                                                    );
+                                                                    cl_ok = false;
+                                                                } else {
+                                                                    self.gpu_sparse_recurrent_count = self
+                                                                        .gpu_sparse_recurrent_count
+                                                                        .saturating_add(1);
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
 
@@ -9967,6 +11639,8 @@ impl Runner {
                                                             .set_arg(&mut *a_ptr)
                                                             .set_arg(&mut *n_ptr)
                                                             .set_arg(&mut *g_ptr)
+                                                            .set_arg(&buf_cur.v)
+                                                            .set_arg(&nmda_voltage_sensitivity)
                                                             .set_arg(&syn_decay_ampa)
                                                             .set_arg(&syn_decay_nmda)
                                                             .set_arg(&syn_decay_gaba)
@@ -10018,6 +11692,10 @@ impl Runner {
                                             }
                                         }
                                     }
+                                    if cl_ok {
+                                        self.gpu_sparse_accumulation_count =
+                                            self.gpu_sparse_accumulation_count.saturating_add(1);
+                                    }
                                     gpu_success = cl_ok;
                                 }
                             }
@@ -10032,7 +11710,6 @@ impl Runner {
                     } else if can_parallel_light(num_current_hidden_neurons) {
                         #[cfg(all(feature = "morpho", feature = "growth3d"))]
                         {
-                            let released_cap = 256usize;
                             let results: Vec<(usize, f64, f64, f64, Vec<ReleasedEvent>)> = (0
                                 ..num_current_hidden_neurons)
                                 .into_par_iter()
@@ -10065,26 +11742,20 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                if fastrand::f32()
-                                                    <= self.release_probability(Some(syn_idx))
-                                                {
+                                                if self.should_release(syn_idx) {
                                                     let w_val = self.w_hh_fwd[l - 1]
                                                         .get((j, i))
                                                         .copied()
                                                         .unwrap_or(0.0);
                                                     acc_f += w_val * stp_scale;
-                                                    if events.len() < released_cap {
-                                                        events.push(ReleasedEvent {
-                                                            kind: ReleasedKind::Fwd {
-                                                                layer: l - 1,
-                                                            },
-                                                            pre_layer: l as isize - 1,
-                                                            post_layer: l as isize,
-                                                            pre_id: i,
-                                                            post_id: j,
-                                                            syn_idx: Some(syn_idx),
-                                                        });
-                                                    }
+                                                    events.push(ReleasedEvent {
+                                                        kind: ReleasedKind::Fwd { layer: l - 1 },
+                                                        pre_layer: l as isize - 1,
+                                                        post_layer: l as isize,
+                                                        pre_id: i,
+                                                        post_id: j,
+                                                        syn_idx: Some(syn_idx),
+                                                    });
                                                 }
                                             }
                                         }
@@ -10104,25 +11775,21 @@ impl Runner {
                                                     } else {
                                                         1.0
                                                     };
-                                                    if fastrand::f32()
-                                                        <= self.release_probability(Some(syn_idx))
-                                                    {
+                                                    if self.should_release(syn_idx) {
                                                         let w_val = self
                                                             .w_in
                                                             .get((j, i))
                                                             .copied()
                                                             .unwrap_or(0.0);
                                                         acc_f += w_val * stp_scale;
-                                                        if events.len() < released_cap {
-                                                            events.push(ReleasedEvent {
-                                                                kind: ReleasedKind::In,
-                                                                pre_layer: -1,
-                                                                post_layer: 1,
-                                                                pre_id: i,
-                                                                post_id: j,
-                                                                syn_idx: Some(syn_idx),
-                                                            });
-                                                        }
+                                                        events.push(ReleasedEvent {
+                                                            kind: ReleasedKind::In,
+                                                            pre_layer: -1,
+                                                            post_layer: 1,
+                                                            pre_id: i,
+                                                            post_id: j,
+                                                            syn_idx: Some(syn_idx),
+                                                        });
                                                     }
                                                 }
                                             }
@@ -10226,23 +11893,17 @@ impl Runner {
                                                     } else {
                                                         1.0
                                                     };
-                                                    if fastrand::f32()
-                                                        <= self.release_probability(Some(syn_idx))
-                                                    {
+                                                    if self.should_release(syn_idx) {
                                                         acc_b += self.w_hh_bwd[l][(j, next_j)]
                                                             * stp_scale;
-                                                        if events.len() < released_cap {
-                                                            events.push(ReleasedEvent {
-                                                                kind: ReleasedKind::Bwd {
-                                                                    layer: l,
-                                                                },
-                                                                pre_layer: l as isize + 1,
-                                                                post_layer: l as isize,
-                                                                pre_id: next_j,
-                                                                post_id: j,
-                                                                syn_idx: Some(syn_idx),
-                                                            });
-                                                        }
+                                                        events.push(ReleasedEvent {
+                                                            kind: ReleasedKind::Bwd { layer: l },
+                                                            pre_layer: l as isize + 1,
+                                                            post_layer: l as isize,
+                                                            pre_id: next_j,
+                                                            post_id: j,
+                                                            syn_idx: Some(syn_idx),
+                                                        });
                                                     }
                                                 }
                                             }
@@ -10283,9 +11944,7 @@ impl Runner {
                                                     } else {
                                                         1.0
                                                     };
-                                                    if fastrand::f32()
-                                                        <= self.release_probability(Some(syn_idx))
-                                                    {
+                                                    if self.should_release(syn_idx) {
                                                         let w_val = self
                                                             .w_hh_rec
                                                             .get(l)
@@ -10293,18 +11952,16 @@ impl Runner {
                                                             .copied()
                                                             .unwrap_or(0.0);
                                                         acc_r += w_val * stp_scale;
-                                                        if events.len() < released_cap {
-                                                            events.push(ReleasedEvent {
-                                                                kind: ReleasedKind::HiddenRec {
-                                                                    layer: l,
-                                                                },
-                                                                pre_layer: l as isize,
-                                                                post_layer: l as isize,
-                                                                pre_id,
-                                                                post_id: j,
-                                                                syn_idx: Some(syn_idx),
-                                                            });
-                                                        }
+                                                        events.push(ReleasedEvent {
+                                                            kind: ReleasedKind::HiddenRec {
+                                                                layer: l,
+                                                            },
+                                                            pre_layer: l as isize,
+                                                            post_layer: l as isize,
+                                                            pre_id,
+                                                            post_id: j,
+                                                            syn_idx: Some(syn_idx),
+                                                        });
                                                     }
                                                 }
                                             }
@@ -10336,16 +11993,11 @@ impl Runner {
                             let mut i_f = Array1::<f64>::zeros(num_current_hidden_neurons);
                             let mut i_b = Array1::<f64>::zeros(num_current_hidden_neurons);
                             let mut i_r = Array1::<f64>::zeros(num_current_hidden_neurons);
-                            let mut total_ev = 0usize;
                             for (j, af, ab, ar, ev) in results {
                                 i_f[j] = af;
                                 i_b[j] = ab;
                                 i_r[j] = ar;
-                                if total_ev < released_cap {
-                                    let take = ev.len().min(released_cap.saturating_sub(total_ev));
-                                    self.released_events.extend(ev.into_iter().take(take));
-                                    total_ev += take;
-                                }
+                                self.released_events.extend(ev);
                             }
                             (i_f + i_r, i_b)
                         }
@@ -10459,9 +12111,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            if fastrand::f32()
-                                                <= self.release_probability(Some(syn_idx))
-                                            {
+                                            if self.should_release(syn_idx) {
                                                 acc_f += self
                                                     .w_hh_fwd
                                                     .get(l - 1)
@@ -10469,16 +12119,14 @@ impl Runner {
                                                     .copied()
                                                     .unwrap_or(0.0)
                                                     * stp_scale;
-                                                if self.released_events.len() < 256 {
-                                                    self.released_events.push(ReleasedEvent {
-                                                        kind: ReleasedKind::Fwd { layer: l - 1 },
-                                                        pre_layer: l as isize - 1,
-                                                        post_layer: l as isize,
-                                                        pre_id: i,
-                                                        post_id: j,
-                                                        syn_idx: Some(syn_idx),
-                                                    });
-                                                }
+                                                self.released_events.push(ReleasedEvent {
+                                                    kind: ReleasedKind::Fwd { layer: l - 1 },
+                                                    pre_layer: l as isize - 1,
+                                                    post_layer: l as isize,
+                                                    pre_id: i,
+                                                    post_id: j,
+                                                    syn_idx: Some(syn_idx),
+                                                });
                                             }
                                         }
                                     }
@@ -10495,25 +12143,21 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                if fastrand::f32()
-                                                    <= self.release_probability(Some(syn_idx))
-                                                {
+                                                if self.should_release(syn_idx) {
                                                     let w_val = self
                                                         .w_in
                                                         .get((j, i))
                                                         .copied()
                                                         .unwrap_or(0.0);
                                                     acc_f += w_val * stp_scale;
-                                                    if self.released_events.len() < 256 {
-                                                        self.released_events.push(ReleasedEvent {
-                                                            kind: ReleasedKind::In,
-                                                            pre_layer: -1,
-                                                            post_layer: 1,
-                                                            pre_id: i,
-                                                            post_id: j,
-                                                            syn_idx: Some(syn_idx),
-                                                        });
-                                                    }
+                                                    self.released_events.push(ReleasedEvent {
+                                                        kind: ReleasedKind::In,
+                                                        pre_layer: -1,
+                                                        post_layer: 1,
+                                                        pre_id: i,
+                                                        post_id: j,
+                                                        syn_idx: Some(syn_idx),
+                                                    });
                                                 }
                                             }
                                         }
@@ -10707,21 +12351,17 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                if fastrand::f32()
-                                                    <= self.release_probability(Some(syn_idx))
-                                                {
+                                                if self.should_release(syn_idx) {
                                                     acc_b +=
                                                         self.w_hh_bwd[l][(j, next_j)] * stp_scale;
-                                                    if self.released_events.len() < 256 {
-                                                        self.released_events.push(ReleasedEvent {
-                                                            kind: ReleasedKind::Bwd { layer: l },
-                                                            pre_layer: l as isize + 1,
-                                                            post_layer: l as isize,
-                                                            pre_id: next_j,
-                                                            post_id: j,
-                                                            syn_idx: Some(syn_idx),
-                                                        });
-                                                    }
+                                                    self.released_events.push(ReleasedEvent {
+                                                        kind: ReleasedKind::Bwd { layer: l },
+                                                        pre_layer: l as isize + 1,
+                                                        post_layer: l as isize,
+                                                        pre_id: next_j,
+                                                        post_id: j,
+                                                        syn_idx: Some(syn_idx),
+                                                    });
                                                 }
                                             }
                                         }
@@ -10803,20 +12443,16 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            if fastrand::f32()
-                                                <= self.release_probability(Some(syn_idx))
-                                            {
+                                            if self.should_release(syn_idx) {
                                                 acc_r += self.w_hh_rec[l][(j, pre_id)] * stp_scale;
-                                                if self.released_events.len() < 256 {
-                                                    self.released_events.push(ReleasedEvent {
-                                                        kind: ReleasedKind::HiddenRec { layer: l },
-                                                        pre_layer: l as isize,
-                                                        post_layer: l as isize,
-                                                        pre_id,
-                                                        post_id: j,
-                                                        syn_idx: Some(syn_idx),
-                                                    });
-                                                }
+                                                self.released_events.push(ReleasedEvent {
+                                                    kind: ReleasedKind::HiddenRec { layer: l },
+                                                    pre_layer: l as isize,
+                                                    post_layer: l as isize,
+                                                    pre_id,
+                                                    post_id: j,
+                                                    syn_idx: Some(syn_idx),
+                                                });
                                             }
                                         }
                                     }
@@ -10916,7 +12552,7 @@ impl Runner {
                     {
                         let cl_mgr = self.cl.clone();
                         if let Some(ref cl) = cl_mgr {
-                            if !use_aarnn {
+                            if !use_aarnn || aarnn_gpu_transition_supported {
                                 self.sync_cl_buffers(l, false);
                                 let izh_params = self.effective_izh_params();
                                 if let Some(buf) =
@@ -10969,9 +12605,8 @@ impl Runner {
                                                     gpu_success = false;
                                                 }
                                             },
-                                            NeuronModel::Izh(_) | NeuronModel::Aarnn => {
-                                                let p =
-                                                    izh_params.expect("izh params for Izh/AARNN");
+                                            NeuronModel::Izh(_) => {
+                                                let p = izh_params.expect("izh params for Izh");
                                                 unsafe {
                                                     let launch = ExecuteKernel::new(&kernel_izh)
                                                         .set_arg(&buf.v)
@@ -10997,6 +12632,49 @@ impl Runner {
                                                     }
                                                 }
                                             }
+                                            NeuronModel::Aarnn => {
+                                                let p = izh_params.expect("izh params for AARNN");
+                                                let kernel = cl.kernel_aarnn_step.lock().unwrap();
+                                                let adaptive = use_adaptive_threshold as i32;
+                                                let refractory = use_izh_refractory as i32;
+                                                let refractory_steps = if use_izh_refractory {
+                                                    izh_refractory_steps
+                                                } else {
+                                                    0
+                                                };
+                                                unsafe {
+                                                    let launch = ExecuteKernel::new(&kernel)
+                                                        .set_arg(&buf.v)
+                                                        .set_arg(buf.u.as_ref().unwrap())
+                                                        .set_arg(&buf.i_total)
+                                                        .set_arg(&buf.threshold_offset)
+                                                        .set_arg(buf.refr.as_ref().unwrap())
+                                                        .set_arg(&p.dt)
+                                                        .set_arg(&p.recovery_time_constant_a)
+                                                        .set_arg(&p.recovery_sensitivity_b)
+                                                        .set_arg(&p.membrane_reset_potential_c)
+                                                        .set_arg(&p.recovery_increment_d)
+                                                        .set_arg(&p.v_th)
+                                                        .set_arg(&bio.adaptive_threshold_increment)
+                                                        .set_arg(&bio.adaptive_threshold_min)
+                                                        .set_arg(&bio.adaptive_threshold_max)
+                                                        .set_arg(&adaptive)
+                                                        .set_arg(&refractory)
+                                                        .set_arg(&refractory_steps)
+                                                        .set_arg(&buf.spk)
+                                                        .set_global_work_size(
+                                                            num_current_hidden_neurons,
+                                                        )
+                                                        .enqueue_nd_range(&cl.queue);
+                                                    if let Err(e) = launch {
+                                                        nm_log!(
+                                                            "[warn] OpenCL Hl aarnn_step failed: {:?}",
+                                                            e
+                                                        );
+                                                        gpu_success = false;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -11004,15 +12682,20 @@ impl Runner {
                         }
                     }
 
-                    if gpu_success {
+                    let gpu_spikes = if gpu_success {
                         #[cfg(feature = "opencl")]
                         {
                             self.sync_cl_state_from_gpu(l, false)
                         }
                         #[cfg(not(feature = "opencl"))]
                         {
-                            unreachable!()
+                            None
                         }
+                    } else {
+                        None
+                    };
+                    if let Some(spikes) = gpu_spikes {
+                        spikes
                     } else {
                         let mut spk = Array1::<i8>::zeros(num_current_hidden_neurons);
                         match self.neuron_model {
@@ -11294,10 +12977,11 @@ impl Runner {
             #[cfg(feature = "opencl")]
             if let Some(ref cl) = cl_mgr {
                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                if use_aarnn {
-                    // Keep AARNN output accumulation on CPU for correctness.
-                    gpu_success = false;
-                } else if !use_aarnn {
+                if !use_aarnn
+                    || (aarnn_gpu_transition_supported
+                        && !self.net.use_morphology
+                        && !self.net.use_aarnn_delays)
+                {
                     if num_hidden_layers > 0 {
                         self.sync_cl_w_out_to_gpu();
                         self.sync_cl_buffers(out_conn_layer, false);
@@ -11421,6 +13105,8 @@ impl Runner {
                                             .set_arg(&mut *a_ptr)
                                             .set_arg(&mut *n_ptr)
                                             .set_arg(&mut *g_ptr)
+                                            .set_arg(&buf_o.v)
+                                            .set_arg(&nmda_voltage_sensitivity)
                                             .set_arg(&syn_decay_ampa)
                                             .set_arg(&syn_decay_nmda)
                                             .set_arg(&syn_decay_gaba)
@@ -11465,11 +13151,14 @@ impl Runner {
                             }
                         }
                     }
-                } else if self.net.use_morphology && has_sparse_recv_out {
+                } else if aarnn_gpu_transition_supported
+                    && self.net.use_morphology
+                    && has_sparse_recv_out
+                {
                     // Sparse path acceleration
                     #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
                     if num_hidden_layers > 0 {
-                        self.sync_cl_sparse_out();
+                        let sparse_out_ready = self.sync_cl_sparse_out();
                         self.sync_cl_spk_hist_h(out_conn_layer);
                         self.sync_cl_buffers(0, true);
                         if use_synaptic_filter {
@@ -11514,13 +13203,26 @@ impl Runner {
                             self.cl_sparse_out.as_mut(),
                             self.cl_buffer_o.as_mut(),
                         ) {
-                            gpu_success = true;
+                            gpu_success = sparse_out_ready;
                             unsafe {
                                 let hist_buf = &mut *hist_ptr;
                                 let sparse_out = &mut *sparse_ptr;
                                 let o_buf = &mut *o_buf_ptr;
+                                let use_release_kernel = use_aarnn;
                                 let mut use_stp_kernel = false;
                                 let mut rel_buf_opt: Option<&mut Buffer<f64>> = None;
+                                if use_release_kernel
+                                    && !Self::write_cl_sparse_release_mask(
+                                        cl,
+                                        sparse_out,
+                                        self.cl_release_decisions.as_deref(),
+                                    )
+                                {
+                                    nm_log!(
+                                        "[warn] OpenCL AARNN sparse output release-mask upload failed"
+                                    );
+                                    gpu_success = false;
+                                }
                                 if let Some(ptr) = rel_ptr {
                                     let rel = &mut *ptr;
                                     if let Err(e) = cl.queue.enqueue_write_buffer(
@@ -11545,22 +13247,46 @@ impl Runner {
                                         if let (Some(rel_buf), Some(delays)) =
                                             (rel_buf_opt, sparse_out.delays.as_ref())
                                         {
-                                            let kernel_acc =
-                                                cl.kernel_syn_acc_sparse_delay_stp.lock().unwrap();
-                                            let launch = ExecuteKernel::new(&kernel_acc)
-                                                .set_arg(&o_buf.i_total)
-                                                .set_arg(hist_buf)
-                                                .set_arg(rel_buf)
-                                                .set_arg(&sparse_out.row_ptr)
-                                                .set_arg(&sparse_out.col_indices)
-                                                .set_arg(delays)
-                                                .set_arg(&sparse_out.weights)
-                                                .set_arg(&(num_output_neurons as i32))
-                                                .set_arg(&(hist_len as i32))
-                                                .set_arg(&(last_h_len as i32))
-                                                .set_arg(&0i32) // Mode: set
-                                                .set_global_work_size(num_output_neurons)
-                                                .enqueue_nd_range(&cl.queue);
+                                            let launch = if use_release_kernel {
+                                                let kernel_acc = cl
+                                                    .kernel_syn_acc_sparse_delay_release_stp
+                                                    .lock()
+                                                    .unwrap();
+                                                ExecuteKernel::new(&kernel_acc)
+                                                    .set_arg(&o_buf.i_total)
+                                                    .set_arg(hist_buf)
+                                                    .set_arg(rel_buf)
+                                                    .set_arg(&sparse_out.release_mask)
+                                                    .set_arg(&sparse_out.row_ptr)
+                                                    .set_arg(&sparse_out.col_indices)
+                                                    .set_arg(delays)
+                                                    .set_arg(&sparse_out.weights)
+                                                    .set_arg(&(num_output_neurons as i32))
+                                                    .set_arg(&(hist_len as i32))
+                                                    .set_arg(&(last_h_len as i32))
+                                                    .set_arg(&0i32)
+                                                    .set_global_work_size(num_output_neurons)
+                                                    .enqueue_nd_range(&cl.queue)
+                                            } else {
+                                                let kernel_acc = cl
+                                                    .kernel_syn_acc_sparse_delay_stp
+                                                    .lock()
+                                                    .unwrap();
+                                                ExecuteKernel::new(&kernel_acc)
+                                                    .set_arg(&o_buf.i_total)
+                                                    .set_arg(hist_buf)
+                                                    .set_arg(rel_buf)
+                                                    .set_arg(&sparse_out.row_ptr)
+                                                    .set_arg(&sparse_out.col_indices)
+                                                    .set_arg(delays)
+                                                    .set_arg(&sparse_out.weights)
+                                                    .set_arg(&(num_output_neurons as i32))
+                                                    .set_arg(&(hist_len as i32))
+                                                    .set_arg(&(last_h_len as i32))
+                                                    .set_arg(&0i32)
+                                                    .set_global_work_size(num_output_neurons)
+                                                    .enqueue_nd_range(&cl.queue)
+                                            };
                                             if let Err(e) = launch {
                                                 nm_log!(
                                                     "[warn] OpenCL sparse output acc stp failed: {:?}",
@@ -11573,21 +13299,42 @@ impl Runner {
                                         }
                                     } else {
                                         if let Some(delays) = sparse_out.delays.as_ref() {
-                                            let kernel_acc =
-                                                cl.kernel_syn_acc_sparse_delay.lock().unwrap();
-                                            let launch = ExecuteKernel::new(&kernel_acc)
-                                                .set_arg(&o_buf.i_total)
-                                                .set_arg(hist_buf)
-                                                .set_arg(&sparse_out.row_ptr)
-                                                .set_arg(&sparse_out.col_indices)
-                                                .set_arg(delays)
-                                                .set_arg(&sparse_out.weights)
-                                                .set_arg(&(num_output_neurons as i32))
-                                                .set_arg(&(hist_len as i32))
-                                                .set_arg(&(last_h_len as i32))
-                                                .set_arg(&0i32) // Mode: set
-                                                .set_global_work_size(num_output_neurons)
-                                                .enqueue_nd_range(&cl.queue);
+                                            let launch = if use_release_kernel {
+                                                let kernel_acc = cl
+                                                    .kernel_syn_acc_sparse_delay_release
+                                                    .lock()
+                                                    .unwrap();
+                                                ExecuteKernel::new(&kernel_acc)
+                                                    .set_arg(&o_buf.i_total)
+                                                    .set_arg(hist_buf)
+                                                    .set_arg(&sparse_out.release_mask)
+                                                    .set_arg(&sparse_out.row_ptr)
+                                                    .set_arg(&sparse_out.col_indices)
+                                                    .set_arg(delays)
+                                                    .set_arg(&sparse_out.weights)
+                                                    .set_arg(&(num_output_neurons as i32))
+                                                    .set_arg(&(hist_len as i32))
+                                                    .set_arg(&(last_h_len as i32))
+                                                    .set_arg(&0i32)
+                                                    .set_global_work_size(num_output_neurons)
+                                                    .enqueue_nd_range(&cl.queue)
+                                            } else {
+                                                let kernel_acc =
+                                                    cl.kernel_syn_acc_sparse_delay.lock().unwrap();
+                                                ExecuteKernel::new(&kernel_acc)
+                                                    .set_arg(&o_buf.i_total)
+                                                    .set_arg(hist_buf)
+                                                    .set_arg(&sparse_out.row_ptr)
+                                                    .set_arg(&sparse_out.col_indices)
+                                                    .set_arg(delays)
+                                                    .set_arg(&sparse_out.weights)
+                                                    .set_arg(&(num_output_neurons as i32))
+                                                    .set_arg(&(hist_len as i32))
+                                                    .set_arg(&(last_h_len as i32))
+                                                    .set_arg(&0i32)
+                                                    .set_global_work_size(num_output_neurons)
+                                                    .enqueue_nd_range(&cl.queue)
+                                            };
                                             if let Err(e) = launch {
                                                 nm_log!(
                                                     "[warn] OpenCL sparse output acc failed: {:?}",
@@ -11609,6 +13356,8 @@ impl Runner {
                                             .set_arg(&mut *a_ptr)
                                             .set_arg(&mut *n_ptr)
                                             .set_arg(&mut *g_ptr)
+                                            .set_arg(&o_buf.v)
+                                            .set_arg(&nmda_voltage_sensitivity)
                                             .set_arg(&syn_decay_ampa)
                                             .set_arg(&syn_decay_nmda)
                                             .set_arg(&syn_decay_gaba)
@@ -11645,6 +13394,8 @@ impl Runner {
                                         gpu_success = false;
                                     } else {
                                         i_o = Array1::from_vec(i_vec);
+                                        self.gpu_sparse_accumulation_count =
+                                            self.gpu_sparse_accumulation_count.saturating_add(1);
                                         if use_synaptic_filter {
                                             self.sync_syn_state_from_gpu(0, true);
                                         }
@@ -11660,7 +13411,6 @@ impl Runner {
                 if can_parallel_light(num_output_neurons) {
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
-                        let released_cap = 256usize;
                         let results: Vec<(usize, f64, Vec<ReleasedEvent>)> = (0
                             ..num_output_neurons)
                             .into_par_iter()
@@ -11690,20 +13440,16 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            if fastrand::f32()
-                                                <= self.release_probability(Some(syn_idx))
-                                            {
+                                            if self.should_release(syn_idx) {
                                                 acc += w_val * atten * stp_scale;
-                                                if events.len() < released_cap {
-                                                    events.push(ReleasedEvent {
-                                                        kind: ReleasedKind::Out,
-                                                        pre_layer: out_conn_layer as isize,
-                                                        post_layer: out_conn_layer as isize + 1,
-                                                        pre_id: j,
-                                                        post_id: k,
-                                                        syn_idx: Some(syn_idx),
-                                                    });
-                                                }
+                                                events.push(ReleasedEvent {
+                                                    kind: ReleasedKind::Out,
+                                                    pre_layer: out_conn_layer as isize,
+                                                    post_layer: out_conn_layer as isize + 1,
+                                                    pre_id: j,
+                                                    post_id: k,
+                                                    syn_idx: Some(syn_idx),
+                                                });
                                             }
                                         }
                                     }
@@ -11810,14 +13556,9 @@ impl Runner {
                             })
                             .collect();
 
-                        let mut total_ev = 0usize;
                         for (k, acc, ev) in results {
                             i_o[k] = acc;
-                            if total_ev < released_cap {
-                                let take = ev.len().min(released_cap - total_ev);
-                                self.released_events.extend(ev.into_iter().take(take));
-                                total_ev += take;
-                            }
+                            self.released_events.extend(ev);
                         }
                     }
                     #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
@@ -11936,9 +13677,7 @@ impl Runner {
                                     let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                     let s = self.hist_h_at(out_conn_layer, steps, j);
                                     if s != 0 {
-                                        if fastrand::f32()
-                                            <= self.release_probability(Some(syn_idx))
-                                        {
+                                        if self.should_release(syn_idx) {
                                             let stp_scale = if use_stp {
                                                 stp_release_h
                                                     .get(out_conn_layer)
@@ -11949,16 +13688,14 @@ impl Runner {
                                                 1.0
                                             };
                                             acc += w_val * atten * stp_scale;
-                                            if self.released_events.len() < 256 {
-                                                self.released_events.push(ReleasedEvent {
-                                                    kind: ReleasedKind::Out,
-                                                    pre_layer: out_conn_layer as isize,
-                                                    post_layer: out_conn_layer as isize + 1,
-                                                    pre_id: j,
-                                                    post_id: k,
-                                                    syn_idx: Some(syn_idx),
-                                                });
-                                            }
+                                            self.released_events.push(ReleasedEvent {
+                                                kind: ReleasedKind::Out,
+                                                pre_layer: out_conn_layer as isize,
+                                                post_layer: out_conn_layer as isize + 1,
+                                                pre_id: j,
+                                                post_id: k,
+                                                syn_idx: Some(syn_idx),
+                                            });
                                         }
                                     }
                                 }
@@ -12202,7 +13939,7 @@ impl Runner {
             {
                 let cl_mgr = self.cl.clone();
                 if let Some(ref cl) = cl_mgr {
-                    if !is_aarnn {
+                    if !is_aarnn || aarnn_gpu_transition_supported {
                         self.sync_cl_buffers(0, true);
                         let izh_params = self.effective_izh_params();
                         if let Some(buf) = self.cl_buffer_o.as_mut() {
@@ -12258,8 +13995,8 @@ impl Runner {
                                             gpu_success = false;
                                         }
                                     }
-                                    NeuronModel::Izh(_) | NeuronModel::Aarnn => {
-                                        let p = izh_params.expect("izh params for Izh/AARNN");
+                                    NeuronModel::Izh(_) => {
+                                        let p = izh_params.expect("izh params for Izh");
                                         if let Some(ref u_buf) = buf.u {
                                             unsafe {
                                                 let launch = ExecuteKernel::new(&kernel_izh)
@@ -12287,6 +14024,51 @@ impl Runner {
                                             gpu_success = false;
                                         }
                                     }
+                                    NeuronModel::Aarnn => {
+                                        let p = izh_params.expect("izh params for AARNN");
+                                        let kernel = cl.kernel_aarnn_step.lock().unwrap();
+                                        let adaptive = use_adaptive_threshold as i32;
+                                        let refractory = use_izh_refractory as i32;
+                                        let refractory_steps = if use_izh_refractory {
+                                            izh_refractory_steps
+                                        } else {
+                                            0
+                                        };
+                                        if buf.u.is_some() && buf.refr.is_some() {
+                                            unsafe {
+                                                let launch = ExecuteKernel::new(&kernel)
+                                                    .set_arg(&buf.v)
+                                                    .set_arg(buf.u.as_ref().unwrap())
+                                                    .set_arg(&buf.i_total)
+                                                    .set_arg(&buf.threshold_offset)
+                                                    .set_arg(buf.refr.as_ref().unwrap())
+                                                    .set_arg(&p.dt)
+                                                    .set_arg(&p.recovery_time_constant_a)
+                                                    .set_arg(&p.recovery_sensitivity_b)
+                                                    .set_arg(&p.membrane_reset_potential_c)
+                                                    .set_arg(&p.recovery_increment_d)
+                                                    .set_arg(&p.v_th)
+                                                    .set_arg(&bio.adaptive_threshold_increment)
+                                                    .set_arg(&bio.adaptive_threshold_min)
+                                                    .set_arg(&bio.adaptive_threshold_max)
+                                                    .set_arg(&adaptive)
+                                                    .set_arg(&refractory)
+                                                    .set_arg(&refractory_steps)
+                                                    .set_arg(&buf.spk)
+                                                    .set_global_work_size(num_output_neurons)
+                                                    .enqueue_nd_range(&cl.queue);
+                                                if let Err(e) = launch {
+                                                    nm_log!(
+                                                        "[warn] OpenCL output aarnn_step failed: {:?}",
+                                                        e
+                                                    );
+                                                    gpu_success = false;
+                                                }
+                                            }
+                                        } else {
+                                            gpu_success = false;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -12294,15 +14076,20 @@ impl Runner {
                 }
             }
 
-            if gpu_success {
+            let gpu_spikes = if gpu_success {
                 #[cfg(feature = "opencl")]
                 {
                     self.sync_cl_state_from_gpu(0, true)
                 }
                 #[cfg(not(feature = "opencl"))]
                 {
-                    unreachable!()
+                    None
                 }
+            } else {
+                None
+            };
+            if let Some(spikes) = gpu_spikes {
+                spikes
             } else {
                 match self.neuron_model {
                     NeuronModel::Lif => {
@@ -12478,6 +14265,10 @@ impl Runner {
             }
             if eta != 0.0 {
                 #[cfg(feature = "opencl")]
+                // AARNN now uses the same deterministic per-coordinate device
+                // kernel as the other learning modes.  Morphological and
+                // topology-specific proposals still fall back per matrix when
+                // their device representation is unavailable.
                 let use_cpu_reference_plasticity = self.cl.is_none();
                 #[cfg(not(feature = "opencl"))]
                 let use_cpu_reference_plasticity = true;
@@ -12501,7 +14292,7 @@ impl Runner {
                             let cl_mgr = self.cl.clone();
                             if let Some(ref cl) = cl_mgr {
                                 if matches!(self.learning, Learning::Stdp | Learning::Aarnn) {
-                                    self.sync_cl_w_in_to_gpu();
+                                    let weights_ready = self.sync_cl_w_in_to_gpu();
                                     // Need sensory trace and spikes on GPU
                                     let s_len = self.net.num_sensory_neurons;
                                     if self.cl_x_pre_in.is_none() || self.cl_x_pre_in_size != s_len
@@ -12553,7 +14344,7 @@ impl Runner {
                                             Some(h0_buf),
                                         ) = (w_buf_opt, x_pre_buf_opt, s_buf_opt, h0_buf_opt)
                                         {
-                                            gpu_success = true;
+                                            gpu_success = weights_ready;
                                             unsafe {
                                                 if let Some(slice) = self.x_pre_in.as_slice() {
                                                     if let Err(e) = cl.queue.enqueue_write_buffer(
@@ -12656,7 +14447,7 @@ impl Runner {
 
                                     #[cfg(feature = "opencl")]
                                     if gpu_success {
-                                        self.sync_cl_w_in_from_gpu();
+                                        gpu_success = self.sync_cl_w_in_from_gpu();
                                     }
                                 }
                             }
@@ -12781,7 +14572,162 @@ impl Runner {
                         if num_current_layer_neurons == 0 || num_next_layer_neurons == 0 {
                             continue;
                         }
-                        if can_parallel_matrix(num_current_layer_neurons, num_next_layer_neurons) {
+                        #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
+                        let mut hidden_gpu_complete = false;
+                        #[cfg(feature = "opencl")]
+                        if matches!(self.learning, Learning::Stdp | Learning::Aarnn)
+                            && self.cl.is_some()
+                            && !self.net.use_morphology
+                            && !self.net.use_aarnn_delays
+                        {
+                            let cl_mgr = self.cl.clone();
+                            let fwd_before = self.w_hh_fwd[l].clone();
+                            let bwd_before = self.w_hh_bwd[l].clone();
+                            let rec_before = self.w_hh_rec.get(l).cloned();
+                            self.sync_cl_buffers(l, false);
+                            self.sync_cl_buffers(l + 1, false);
+                            let cur_ptr = self
+                                .cl_buffers_h
+                                .get_mut(l)
+                                .and_then(|buffer| buffer.as_mut())
+                                .map(|buffer| buffer as *mut CLBuffers);
+                            let next_ptr = self
+                                .cl_buffers_h
+                                .get_mut(l + 1)
+                                .and_then(|buffer| buffer.as_mut())
+                                .map(|buffer| buffer as *mut CLBuffers);
+                            let fwd_matrix_ptr = &mut self.w_hh_fwd[l] as *mut Array2<f64>;
+                            let bwd_matrix_ptr = &mut self.w_hh_bwd[l] as *mut Array2<f64>;
+                            let fwd_buffer_ptr =
+                                &mut self.cl_w_hh_fwd[l] as *mut Option<Buffer<f64>>;
+                            let bwd_buffer_ptr =
+                                &mut self.cl_w_hh_bwd[l] as *mut Option<Buffer<f64>>;
+                            let fwd_size_ptr = &mut self.cl_w_hh_fwd_sizes[l] as *mut usize;
+                            let bwd_size_ptr = &mut self.cl_w_hh_bwd_sizes[l] as *mut usize;
+                            let fwd_dirty_ptr = &mut self.cl_w_hh_fwd_dirty[l] as *mut bool;
+                            let bwd_dirty_ptr = &mut self.cl_w_hh_bwd_dirty[l] as *mut bool;
+                            let mut fwd_ok = false;
+                            let mut bwd_ok = false;
+                            let mut rec_ok = true;
+                            if let (Some(cl), Some(cur_ptr), Some(next_ptr)) =
+                                (cl_mgr.as_ref(), cur_ptr, next_ptr)
+                            {
+                                let rule = match self.learning {
+                                    Learning::Stdp | Learning::Aarnn => 0,
+                                    Learning::Hebb => 1,
+                                    Learning::Oja => 2,
+                                };
+                                let pre_spikes = self.last_spk_h[l].as_slice().unwrap_or(&[]);
+                                let post_spikes = self.last_spk_h[l + 1].as_slice().unwrap_or(&[]);
+                                let pre_trace = self.x_pre_h[l].as_slice().unwrap_or(&[]);
+                                let post_trace = self.x_post_h[l + 1].as_slice().unwrap_or(&[]);
+                                fwd_ok = unsafe {
+                                    Self::run_cl_plasticity_matrix(
+                                        cl,
+                                        &mut *fwd_matrix_ptr,
+                                        &mut *fwd_buffer_ptr,
+                                        &mut *fwd_size_ptr,
+                                        &mut *fwd_dirty_ptr,
+                                        &mut (*cur_ptr).spk,
+                                        &mut (*next_ptr).spk,
+                                        &mut (*cur_ptr).x_trace,
+                                        &mut (*next_ptr).x_trace,
+                                        pre_spikes,
+                                        post_spikes,
+                                        pre_trace,
+                                        post_trace,
+                                        eta,
+                                        self.stdp.w_min,
+                                        self.stdp.w_max,
+                                        rule,
+                                    )
+                                };
+                                let pre_spikes = self.last_spk_h[l + 1].as_slice().unwrap_or(&[]);
+                                let post_spikes = self.last_spk_h[l].as_slice().unwrap_or(&[]);
+                                let pre_trace = self.x_pre_h[l + 1].as_slice().unwrap_or(&[]);
+                                let post_trace = self.x_post_h[l].as_slice().unwrap_or(&[]);
+                                bwd_ok = unsafe {
+                                    Self::run_cl_plasticity_matrix(
+                                        cl,
+                                        &mut *bwd_matrix_ptr,
+                                        &mut *bwd_buffer_ptr,
+                                        &mut *bwd_size_ptr,
+                                        &mut *bwd_dirty_ptr,
+                                        &mut (*next_ptr).spk,
+                                        &mut (*cur_ptr).spk,
+                                        &mut (*next_ptr).x_trace,
+                                        &mut (*cur_ptr).x_trace,
+                                        pre_spikes,
+                                        post_spikes,
+                                        pre_trace,
+                                        post_trace,
+                                        eta,
+                                        self.stdp.w_min,
+                                        self.stdp.w_max,
+                                        rule,
+                                    )
+                                };
+                                if rec_before.is_some() {
+                                    if l < self.cl_w_hh_rec.len() {
+                                        let rec_matrix_ptr =
+                                            &mut self.w_hh_rec[l] as *mut Array2<f64>;
+                                        let rec_buffer_ptr =
+                                            &mut self.cl_w_hh_rec[l] as *mut Option<Buffer<f64>>;
+                                        let rec_size_ptr =
+                                            &mut self.cl_w_hh_rec_sizes[l] as *mut usize;
+                                        let rec_dirty_ptr =
+                                            &mut self.cl_w_hh_rec_dirty[l] as *mut bool;
+                                        let spk_ptr =
+                                            unsafe { &mut (*cur_ptr).spk as *mut Buffer<i8> };
+                                        let trace_ptr =
+                                            unsafe { &mut (*cur_ptr).x_trace as *mut Buffer<f64> };
+                                        let spikes = self.last_spk_h[l].as_slice().unwrap_or(&[]);
+                                        let traces = self.x_pre_h[l].as_slice().unwrap_or(&[]);
+                                        let post_traces =
+                                            self.x_post_h[l].as_slice().unwrap_or(&[]);
+                                        rec_ok = unsafe {
+                                            Self::run_cl_plasticity_matrix(
+                                                cl,
+                                                &mut *rec_matrix_ptr,
+                                                &mut *rec_buffer_ptr,
+                                                &mut *rec_size_ptr,
+                                                &mut *rec_dirty_ptr,
+                                                &mut *spk_ptr,
+                                                &mut *spk_ptr,
+                                                &mut *trace_ptr,
+                                                &mut *trace_ptr,
+                                                spikes,
+                                                spikes,
+                                                traces,
+                                                post_traces,
+                                                eta,
+                                                self.stdp.w_min,
+                                                self.stdp.w_max,
+                                                rule,
+                                            )
+                                        };
+                                    }
+                                }
+                            }
+                            hidden_gpu_complete = fwd_ok && bwd_ok && rec_ok;
+                            if !hidden_gpu_complete {
+                                self.w_hh_fwd[l] = fwd_before;
+                                self.w_hh_bwd[l] = bwd_before;
+                                if let Some(rec) = rec_before {
+                                    self.w_hh_rec[l] = rec;
+                                }
+                                self.cl_w_hh_fwd_dirty[l] = true;
+                                self.cl_w_hh_bwd_dirty[l] = true;
+                                if l < self.cl_w_hh_rec_dirty.len() {
+                                    self.cl_w_hh_rec_dirty[l] = true;
+                                }
+                            }
+                        }
+                        if hidden_gpu_complete {
+                        } else if can_parallel_matrix(
+                            num_current_layer_neurons,
+                            num_next_layer_neurons,
+                        ) {
                             let learning = self.learning;
                             let w_min = self.stdp.w_min;
                             let w_max = self.stdp.w_max;
@@ -12939,18 +14885,53 @@ impl Runner {
                                 }
                             }
                         }
+                        if !hidden_gpu_complete && l < self.w_hh_rec.len() {
+                            let (rows, cols) = self.w_hh_rec[l].dim();
+                            for row in 0..rows {
+                                for col in 0..cols {
+                                    let pre = if self.last_spk_h[l][col] != 0 {
+                                        1.0
+                                    } else {
+                                        0.0
+                                    };
+                                    let post = if self.last_spk_h[l][row] != 0 {
+                                        1.0
+                                    } else {
+                                        0.0
+                                    };
+                                    let dw = weight_delta(
+                                        runner_plasticity_rule(self.learning),
+                                        eta,
+                                        pre,
+                                        post,
+                                        self.x_pre_h[l][col],
+                                        self.x_post_h[l][row],
+                                        self.w_hh_rec[l][(row, col)],
+                                    );
+                                    self.w_hh_rec[l][(row, col)] = apply_weight_delta(
+                                        self.w_hh_rec[l][(row, col)],
+                                        dw,
+                                        self.stdp.w_min,
+                                        self.stdp.w_max,
+                                    );
+                                }
+                            }
+                        }
                         #[cfg(feature = "opencl")]
-                        {
+                        if !hidden_gpu_complete {
                             if l < self.cl_w_hh_fwd_dirty.len() {
                                 self.cl_w_hh_fwd_dirty[l] = true;
                             }
                             if l < self.cl_w_hh_bwd_dirty.len() {
                                 self.cl_w_hh_bwd_dirty[l] = true;
                             }
+                            if l < self.cl_w_hh_rec_dirty.len() {
+                                self.cl_w_hh_rec_dirty[l] = true;
+                            }
                         }
                     }
                     // W_out uses out_l layer
-                    if self.is_layer_assigned(num_hidden_layers) {
+                    if self.is_output_stage_assigned(out_l) {
                         let out_conn_layer = out_l;
                         let num_last_layer_neurons = self.layer_size(out_conn_layer);
                         #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -12958,7 +14939,7 @@ impl Runner {
                         #[cfg(feature = "opencl")]
                         if self.cl.is_some() {
                             if num_last_layer_neurons > 0 && num_output_neurons > 0 {
-                                self.sync_cl_w_out_to_gpu();
+                                let weights_ready = self.sync_cl_w_out_to_gpu();
 
                                 if let Some(ref cl) = self.cl {
                                     let cl_out_opt = self.cl_w_out.as_ref();
@@ -12975,7 +14956,7 @@ impl Runner {
                                     if let (Some(cl_out), Some(buf_last_p), Some(buf_o_p)) =
                                         (cl_out_opt, buf_last_ptr, buf_o_ptr)
                                     {
-                                        gpu_success = true;
+                                        gpu_success = weights_ready;
                                         let buf_last = unsafe { &mut *buf_last_p };
                                         let buf_o = unsafe { &mut *buf_o_p };
 
@@ -13061,7 +15042,7 @@ impl Runner {
 
                         #[cfg(feature = "opencl")]
                         if gpu_success {
-                            self.sync_cl_w_out_from_gpu();
+                            gpu_success = self.sync_cl_w_out_from_gpu();
                         }
 
                         if !gpu_success {
@@ -13139,6 +15120,8 @@ impl Runner {
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     if is_aarnn && matches!(self.learning, Learning::Aarnn) {
                         self.apply_dendritic_bouton_plasticity_overlay(eta, &s_t);
+                        #[cfg(feature = "opencl")]
+                        self.mark_cl_weight_matrices_dirty();
                     }
                 }
             }
@@ -13290,6 +15273,11 @@ impl Runner {
                 self.released_events.clear();
             }
 
+            #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+            if !did_spawn {
+                self.record_gpu_sparse_released_events(&pre_step_spk_hist_h);
+            }
+            self.sort_released_events();
             if morpho_allowed {
                 // Update stimuli for synapses that released a spike this frame (Activity-dependent stabilization)
                 let boost = self.net.synaptic_stabilization_strength
@@ -14318,6 +16306,58 @@ impl Runner {
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn morphology_route_cache_matches_topology(&self) -> bool {
+        let (in_layer, out_layer) = self.get_io_layers();
+        if self.recv_in.len() != self.layer_size(in_layer)
+            || self.recv_out.len() != self.net.num_output_neurons
+            || self.recv_fwd.len() != self.net.num_hidden_layers.saturating_sub(1)
+            || self.recv_bwd.len() != self.net.num_hidden_layers.saturating_sub(1)
+            || self.recv_rec.len() != self.net.num_hidden_layers
+        {
+            return false;
+        }
+        if self
+            .recv_fwd
+            .iter()
+            .enumerate()
+            .any(|(l, rows)| rows.len() != self.layer_size(l + 1))
+            || self
+                .recv_bwd
+                .iter()
+                .enumerate()
+                .any(|(l, rows)| rows.len() != self.layer_size(l))
+            || self
+                .recv_rec
+                .iter()
+                .enumerate()
+                .any(|(l, rows)| rows.len() != self.layer_size(l))
+        {
+            return false;
+        }
+        self.syn_in_map.len() == self.layer_size(in_layer)
+            && self.syn_out_map.len() == self.net.num_output_neurons
+            && self.syn_fwd_map.len() == self.net.num_hidden_layers.saturating_sub(1)
+            && self.syn_bwd_map.len() == self.net.num_hidden_layers.saturating_sub(1)
+            && self.syn_rec_map.len() == self.net.num_hidden_layers
+            && self
+                .syn_fwd_map
+                .iter()
+                .enumerate()
+                .all(|(l, rows)| rows.len() == self.layer_size(l + 1))
+            && self
+                .syn_bwd_map
+                .iter()
+                .enumerate()
+                .all(|(l, rows)| rows.len() == self.layer_size(l))
+            && self
+                .syn_rec_map
+                .iter()
+                .enumerate()
+                .all(|(l, rows)| rows.len() == self.layer_size(l))
+            && out_layer < self.net.num_hidden_layers
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
     /// Rebuild the morphology snapshot and routing caches from current weights
     /// and topology. Also recalculates history length bounds for delays.
     fn rebuild_morphology(&mut self) {
@@ -14979,6 +17019,8 @@ impl Runner {
         let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
         let net_view = self.build_morpho_net_view(sleep_active);
         let morph = self.morph.clone();
+        #[cfg(feature = "opencl")]
+        let cl = self.cl.clone();
         let seq = self.morpho_async_seq.wrapping_add(1);
         self.morpho_async_seq = seq;
         let (tx, rx) = mpsc::channel::<MorphoAsyncResult>();
@@ -14989,7 +17031,7 @@ impl Runner {
             let res = {
                 #[cfg(feature = "opencl")]
                 {
-                    morph_local.evolve(&net_view, is_aarnn, dt, None)
+                    morph_local.evolve(&net_view, is_aarnn, dt, cl.as_ref())
                 }
                 #[cfg(not(feature = "opencl"))]
                 {
@@ -16163,11 +18205,16 @@ impl Runner {
     }
 
     pub fn total_neurons(&self) -> usize {
-        let mut total = self.net.num_sensory_neurons + self.net.num_output_neurons;
-        for l in 0..self.net.num_hidden_layers {
-            total += self.layer_size(l);
+        let hidden_total = (0..self.net.num_hidden_layers)
+            .map(|l| self.layer_size(l))
+            .sum::<usize>();
+        if self.net.io_channels_are_biological {
+            hidden_total
+                .saturating_add(self.net.num_sensory_neurons)
+                .saturating_add(self.net.num_output_neurons)
+        } else {
+            hidden_total
         }
-        total
     }
 
     #[allow(dead_code)]
@@ -17612,6 +19659,29 @@ impl Runner {
         let cooldown = self.net.growth_cooldown_ms.max(0.0);
         let max_layers = self.effective_max_layers();
         let num_hidden_layers = self.net.num_hidden_layers;
+        #[cfg(feature = "opencl")]
+        let gpu_candidate_masks: Vec<Option<Vec<i8>>> = (0..num_hidden_layers)
+            .map(|layer| {
+                let cl = self.cl.clone()?;
+                let rates = self.rate_h.get(layer)?;
+                let since = self.since_growth_ms.get(layer)?;
+                cl.growth_candidates(
+                    rates
+                        .iter()
+                        .map(|value| f64::from(*value))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    since
+                        .iter()
+                        .map(|value| f64::from(*value))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    f64::from(thr),
+                    f64::from(cooldown),
+                )
+                .ok()
+            })
+            .collect();
         // Limit to a single spawn per step globally to avoid bursts that can destabilize shapes early on
         let mut global_cap = 1usize;
         for l in 0..num_hidden_layers {
@@ -17625,7 +19695,13 @@ impl Runner {
             let num_current_layer_neurons = self.layer_size(l);
             let mut candidate: Option<usize> = None;
             for j in 0..num_current_layer_neurons {
-                if self.rate_h[l][j] >= thr && self.since_growth_ms[l][j] >= cooldown {
+                let eligible = gpu_candidate_masks
+                    .get(l)
+                    .and_then(|mask| mask.as_ref())
+                    .and_then(|mask| mask.get(j))
+                    .map(|value| *value != 0)
+                    .unwrap_or(self.rate_h[l][j] >= thr && self.since_growth_ms[l][j] >= cooldown);
+                if eligible {
                     candidate = Some(j);
                     break;
                 }
@@ -19654,6 +21730,745 @@ mod tests {
         net.growth_cooldown_ms = 0.0;
         net.global_growth_cooldown_ms = 0.0;
         Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn)
+    }
+
+    #[test]
+    #[cfg(feature = "opencl")]
+    fn aarnn_gpu_membrane_step_matches_reference_runner() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 4;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.use_aarnn_delays = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        // Exercise the voltage dependent NMDA branch through the actual runner
+        // dispatch, rather than only through the standalone kernel gate.
+        net.aarnn_nmda_voltage_sensitivity = 0.05;
+
+        let mut gpu = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        assert!(
+            gpu.cl.is_some(),
+            "opt-in parity test requires an accelerator"
+        );
+        let snapshot = gpu
+            .export_network_json()
+            .expect("GPU runner snapshot should serialize");
+        let mut cpu = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        cpu.import_network_json(&snapshot)
+            .expect("reference runner should import the GPU snapshot");
+        cpu.cl = None;
+        let input = [1i8, 0, 1, 0];
+        let gpu_out = gpu.step(Some(&input));
+        let cpu_out = cpu.step(Some(&input));
+        assert_eq!(gpu_out.spk_h, cpu_out.spk_h);
+        assert_eq!(gpu_out.spk_o, cpu_out.spk_o);
+        for (gpu_v, cpu_v) in gpu.v_h.iter().zip(cpu.v_h.iter()) {
+            for (a, b) in gpu_v.iter().zip(cpu_v.iter()) {
+                assert!(
+                    (a - b).abs() <= 1.0e-4,
+                    "hidden voltage diverged: {a} vs {b}"
+                );
+            }
+        }
+        for (layer, (gpu_u, cpu_u)) in gpu
+            .u_h
+            .as_ref()
+            .unwrap()
+            .iter()
+            .zip(cpu.u_h.as_ref().unwrap())
+            .enumerate()
+        {
+            for (index, (a, b)) in gpu_u.iter().zip(cpu_u.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() <= 1.0e-4,
+                    "hidden recovery diverged at ({layer},{index}): {a} vs {b}; currents {:?} / {:?}; spikes {:?} / {:?}",
+                    gpu.last_i_h0,
+                    cpu.last_i_h0,
+                    gpu.last_spk_h,
+                    cpu.last_spk_h
+                );
+            }
+        }
+        for (a, b) in gpu.thr_offset_h[0].iter().zip(cpu.thr_offset_h[0].iter()) {
+            assert!(
+                (a - b).abs() <= 1.0e-10,
+                "adaptive threshold diverged: {a} vs {b}"
+            );
+        }
+        assert_eq!(
+            gpu.izh_refr_h.as_ref().unwrap()[0],
+            cpu.izh_refr_h.as_ref().unwrap()[0]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "opencl")]
+    fn aarnn_gpu_preserves_cpu_owned_adaptation_and_neuromodulation() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 4;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.use_aarnn_delays = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        net.aarnn_layer_depth = 2;
+
+        let mut gpu = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        assert!(
+            gpu.cl.is_some(),
+            "opt-in parity test requires an accelerator"
+        );
+        let snapshot = gpu
+            .export_network_json()
+            .expect("GPU runner snapshot should serialize");
+        let mut cpu = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        cpu.import_network_json(&snapshot)
+            .expect("reference runner should import the GPU snapshot");
+        cpu.cl = None;
+
+        for input in [[1i8, 0, 1, 0], [0, 1, 0, 1], [1, 1, 0, 0]] {
+            let gpu_out = gpu.step(Some(&input));
+            let cpu_out = cpu.step(Some(&input));
+            assert_eq!(gpu_out.spk_h, cpu_out.spk_h);
+            assert_eq!(gpu_out.spk_o, cpu_out.spk_o);
+            for (gpu_thresholds, cpu_thresholds) in
+                gpu.thr_offset_h.iter().zip(cpu.thr_offset_h.iter())
+            {
+                for (a, b) in gpu_thresholds.iter().zip(cpu_thresholds.iter()) {
+                    assert!(
+                        (a - b).abs() <= 1.0e-4,
+                        "adaptive/homeostatic threshold diverged: {a} vs {b}"
+                    );
+                }
+            }
+            for (gpu_rates, cpu_rates) in gpu.rate_ema_h.iter().zip(cpu.rate_ema_h.iter()) {
+                for (a, b) in gpu_rates.iter().zip(cpu_rates.iter()) {
+                    assert!(
+                        (a - b).abs() <= 1.0e-4,
+                        "homeostatic rate diverged: {a} vs {b}"
+                    );
+                }
+            }
+            assert!((gpu.neuromod_dopamine - cpu.neuromod_dopamine).abs() <= 1.0e-4);
+            assert!((gpu.neuromod_ach - cpu.neuromod_ach).abs() <= 1.0e-4);
+            assert!((gpu.neuromod_serotonin - cpu.neuromod_serotonin).abs() <= 1.0e-4);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "opencl")]
+    fn aarnn_gpu_heterogeneous_profiles_use_reference_fallback() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 4;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.use_aarnn_delays = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        net.aarnn_layer_depth = 2;
+
+        let mut gpu = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        assert!(
+            gpu.cl.is_some(),
+            "opt-in fallback test requires an accelerator"
+        );
+        gpu.bio_h[0][1].adaptive_threshold_increment += 0.125;
+        assert!(
+            !gpu.aarnn_gpu_transition_supported(),
+            "heterogeneous cell profiles must remain on the certified reference path"
+        );
+
+        let snapshot = gpu
+            .export_network_json()
+            .expect("heterogeneous fallback snapshot should serialize");
+        let mut cpu = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        cpu.import_network_json(&snapshot)
+            .expect("reference runner should import the fallback snapshot");
+        cpu.cl = None;
+        cpu.net.aarnn_bio = gpu.net.aarnn_bio.clone();
+        cpu.bio_h[0] = gpu.bio_h[0].clone();
+
+        let inputs = [[1i8, 0, 1, 0], [0, 1, 0, 1], [1, 1, 0, 0]];
+        for (step, input) in inputs.iter().cycle().take(6).enumerate() {
+            let gpu_out = gpu.step(Some(input));
+            let cpu_out = cpu.step(Some(input));
+            assert_eq!(
+                gpu_out.spk_h, cpu_out.spk_h,
+                "fallback spikes at step {step}"
+            );
+            assert_eq!(
+                gpu_out.spk_o, cpu_out.spk_o,
+                "fallback output at step {step}"
+            );
+            for (gpu_v, cpu_v) in gpu.v_h[0].iter().zip(&cpu.v_h[0]) {
+                assert!((gpu_v - cpu_v).abs() <= 1.0e-9);
+            }
+            for (gpu_threshold, cpu_threshold) in
+                gpu.thr_offset_h[0].iter().zip(&cpu.thr_offset_h[0])
+            {
+                assert!((gpu_threshold - cpu_threshold).abs() <= 1.0e-9);
+            }
+        }
+        assert_eq!(
+            gpu.gpu_sparse_accumulation_count, 0,
+            "heterogeneous AARNN must not silently use an uncertified sparse device transition"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "opencl")]
+    fn aarnn_gpu_plasticity_covers_hidden_forward_backward_and_recurrent_matrices() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let lif = LIFParams::default();
+        let mut stdp = STDPParams::default();
+        stdp.eta = 0.02;
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.neuron_types.clear();
+        net.num_sensory_neurons = 4;
+        net.num_hidden_layers = 3;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_output_neurons = 2;
+        net.p_in = 1.0;
+        net.p_hidden = 1.0;
+        net.p_out = 1.0;
+        net.growth_enabled = false;
+        net.use_morphology = false;
+        net.use_aarnn_delays = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        net.aarnn_resonance_gain = 0.0;
+        net.aarnn_layer_depth = 2;
+
+        let mut gpu = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        assert!(
+            gpu.cl.is_some(),
+            "opt-in parity test requires an accelerator"
+        );
+        let snapshot = gpu
+            .export_network_json()
+            .expect("GPU runner snapshot should serialize");
+        let mut cpu = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        cpu.import_network_json(&snapshot)
+            .expect("reference runner should import the GPU snapshot");
+        cpu.cl = None;
+        cpu.net.aarnn_bio = gpu.net.aarnn_bio.clone();
+        for layer in &mut cpu.bio_h {
+            for bio in layer {
+                *bio = cpu.net.aarnn_bio.clone();
+            }
+        }
+
+        let inputs = [[1i8, 0, 1, 0], [0, 1, 0, 1], [1, 1, 0, 0], [0, 0, 1, 1]];
+        for (step, input) in inputs.iter().cycle().take(8).enumerate() {
+            let gpu_out = gpu.step(Some(input));
+            let cpu_out = cpu.step(Some(input));
+            assert_eq!(gpu_out.spk_h, cpu_out.spk_h, "hidden spikes at step {step}");
+            assert_eq!(gpu_out.spk_o, cpu_out.spk_o, "output spikes at step {step}");
+            for (layer, (gpu_matrix, cpu_matrix)) in
+                gpu.w_hh_fwd.iter().zip(&cpu.w_hh_fwd).enumerate()
+            {
+                for (index, (gpu_weight, cpu_weight)) in
+                    gpu_matrix.iter().zip(cpu_matrix).enumerate()
+                {
+                    assert!(
+                        (gpu_weight - cpu_weight).abs() <= 1.0e-12,
+                        "forward plasticity at layer {layer}, step {step}, index {index}: GPU={gpu_weight:.17e} CPU={cpu_weight:.17e}"
+                    );
+                }
+            }
+            for (layer, (gpu_matrix, cpu_matrix)) in
+                gpu.w_hh_bwd.iter().zip(&cpu.w_hh_bwd).enumerate()
+            {
+                for (index, (gpu_weight, cpu_weight)) in
+                    gpu_matrix.iter().zip(cpu_matrix).enumerate()
+                {
+                    assert!(
+                        (gpu_weight - cpu_weight).abs() <= 1.0e-12,
+                        "backward plasticity at layer {layer}, step {step}, index {index}: GPU={gpu_weight:.17e} CPU={cpu_weight:.17e}"
+                    );
+                }
+            }
+            for (layer, (gpu_matrix, cpu_matrix)) in
+                gpu.w_hh_rec.iter().zip(&cpu.w_hh_rec).enumerate()
+            {
+                for (index, (gpu_weight, cpu_weight)) in
+                    gpu_matrix.iter().zip(cpu_matrix).enumerate()
+                {
+                    assert!(
+                        (gpu_weight - cpu_weight).abs() <= 1.0e-12,
+                        "recurrent plasticity at layer {layer}, step {step}, index {index}: GPU={gpu_weight:.17e} CPU={cpu_weight:.17e}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "opencl", feature = "morpho", feature = "growth3d"))]
+    fn aarnn_gpu_full_parity_replays_morphology_delays_and_growth() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let lif = LIFParams::default();
+        let mut stdp = STDPParams::default();
+        stdp.eta = 0.01;
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 6;
+        net.num_hidden_layers = 3;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_output_neurons = 2;
+        net.p_in = 1.0;
+        net.p_hidden = 1.0;
+        net.p_out = 1.0;
+        net.max_total_neurons = 8;
+        net.growth_enabled = true;
+        net.saturation_threshold = 0.0;
+        net.saturation_window_ms = 1.0;
+        net.growth_cooldown_ms = 0.0;
+        net.global_growth_cooldown_ms = 0.0;
+        net.development_growth_interval_ms = 1.0;
+        net.spontaneous_neuron_interval_ms = 1.0e9;
+        net.layer_split_threshold = 100;
+        net.max_layers = 2;
+        net.migrate_in_prob = 0.0;
+        net.migrate_out_prob = 0.0;
+        net.new_edge_prob = 0.0;
+        net.use_morphology = true;
+        net.morpho_growth_enabled = true;
+        net.use_aarnn_delays = true;
+        net.aarnn_velocity = 0.25;
+        net.axon_velocity = 0.25;
+        net.dend_velocity = 0.25;
+        net.p_release_default = 0.61;
+        net.aarnn_release_prob_heterogeneity = 0.17;
+        net.aarnn_layer_depth = 2;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        net.aarnn_ambient_energy_level = 0.0;
+        net.aarnn_resonance_gain = 0.0;
+        net.aarnn_triplet_ltp_gain = 0.2;
+        net.aarnn_triplet_ltd_gain = 0.1;
+
+        let mut gpu = Runner::new(lif, stdp, net.clone(), NeuronModel::Aarnn, Learning::Aarnn);
+        gpu.target_num_sensory = net.num_sensory_neurons;
+        gpu.resize_sensory(net.num_sensory_neurons);
+        gpu.target_num_output = net.num_output_neurons;
+        gpu.resize_output(net.num_output_neurons);
+        gpu.rebuild_morphology();
+        {
+            use crate::morphology::{Point3, SynKind, Synapse};
+            let synapse = |kind, pre_layer, pre_id, post_layer, post_id| Synapse {
+                kind,
+                pre_layer,
+                pre_id,
+                post_layer,
+                post_id,
+                pre_site: Point3::default(),
+                post_site: Point3::default(),
+                axon_seg_idx: None,
+                dend_seg_idx: None,
+                bend: None,
+                weight: 0.5,
+                p_release: 1.0,
+                delay_ms: 1.0,
+                stimuli: 1.0,
+            };
+            gpu.morph.synapses = vec![
+                synapse(SynKind::In, -1, 0, 0, 0),
+                synapse(SynKind::HiddenFwd, 0, 0, 1, 0),
+                synapse(SynKind::HiddenBwd, 1, 0, 0, 0),
+                synapse(SynKind::HiddenFwd, 1, 0, 2, 0),
+                synapse(SynKind::HiddenBwd, 2, 0, 1, 0),
+                synapse(SynKind::HiddenRec, 1, 0, 1, 0),
+                synapse(SynKind::Out, 2, 0, 3, 0),
+                synapse(SynKind::Out, 2, 0, 3, 1),
+            ];
+            gpu.rebuild_syn_maps_from_morph();
+            gpu.w_in[(0, 0)] = 0.5;
+            gpu.w_hh_fwd[0][(0, 0)] = 0.5;
+            gpu.w_hh_fwd[1][(0, 0)] = 0.5;
+            gpu.w_hh_bwd[0][(0, 0)] = 0.5;
+            gpu.w_hh_rec[1][(0, 0)] = 0.5;
+            gpu.w_hh_bwd[1][(0, 0)] = 0.5;
+            gpu.w_out[(0, 0)] = 0.5;
+            gpu.w_out[(1, 0)] = 0.5;
+        }
+        // This fixture certifies the device route itself.  Remove the default
+        // topology type catalogue so every cell uses the shared AARNN profile;
+        // heterogeneous cell-type dispatch has its own reference-fallback gate.
+        gpu.net.neuron_types.clear();
+        for layer in &mut gpu.bio_h {
+            for bio in layer {
+                *bio = gpu.net.aarnn_bio.clone();
+            }
+        }
+        assert!(
+            gpu.cl.is_some(),
+            "opt-in parity test requires an accelerator"
+        );
+        let snapshot = gpu
+            .export_network_json()
+            .expect("GPU runner snapshot should serialize");
+        let mut cpu = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
+        cpu.import_network_json(&snapshot)
+            .expect("reference runner should import the GPU snapshot");
+        cpu.cl = None;
+        cpu.net.aarnn_bio = gpu.net.aarnn_bio.clone();
+        for layer in &mut cpu.bio_h {
+            for bio in layer {
+                *bio = cpu.net.aarnn_bio.clone();
+            }
+        }
+        assert_eq!(gpu.net.num_sensory_neurons, 6);
+        assert_eq!(cpu.net.num_sensory_neurons, gpu.net.num_sensory_neurons);
+        assert_eq!(cpu.w_in.dim(), gpu.w_in.dim());
+        assert_eq!(cpu.stp_u_s.len(), gpu.stp_u_s.len());
+        assert_eq!(cpu.bio_s.len(), gpu.bio_s.len());
+        assert_eq!(cpu.net.aarnn_bio.stp_enabled, gpu.net.aarnn_bio.stp_enabled);
+
+        let assert_close = |label: &str, left: &[f64], right: &[f64]| {
+            assert_eq!(left.len(), right.len(), "{label} length diverged");
+            for (index, (&a, &b)) in left.iter().zip(right).enumerate() {
+                assert!(
+                    (a - b).abs() <= 1.0e-9,
+                    "{label}[{index}] diverged: GPU={a:.17e}, CPU={b:.17e}"
+                );
+            }
+        };
+        let assert_matrix_close = |label: &str, left: &Array2<f64>, right: &Array2<f64>| {
+            assert_close(label, left.as_slice().unwrap(), right.as_slice().unwrap());
+        };
+        let released_event_key = |event: &ReleasedEvent| {
+            let kind_rank = match event.kind {
+                ReleasedKind::In => (0usize, 0usize),
+                ReleasedKind::Fwd { layer } => (1usize, layer),
+                ReleasedKind::Bwd { layer } => (2usize, layer),
+                ReleasedKind::HiddenRec { layer } => (3usize, layer),
+                ReleasedKind::Out => (4usize, 0usize),
+            };
+            (
+                event.syn_idx,
+                kind_rank,
+                event.pre_layer,
+                event.post_layer,
+                event.pre_id,
+                event.post_id,
+            )
+        };
+
+        let input_patterns = [
+            [1i8, 0, 1, 0, 1, 0],
+            [0, 1, 0, 1, 0, 1],
+            [1, 1, 0, 0, 1, 1],
+            [0, 0, 1, 1, 0, 0],
+            [1, 0, 0, 1, 1, 0],
+            [0, 1, 1, 0, 0, 1],
+            [1, 1, 1, 0, 0, 0],
+            [0, 0, 0, 1, 1, 1],
+        ];
+        let mut observed_growth = false;
+
+        // Early-cell maturation has a documented minimum of 25 ms.  Run past
+        // that boundary so this replay verifies a committed growth mutation,
+        // rather than only verifying candidate admission and migration.
+        for step in 0..32 {
+            let input = &input_patterns[step % input_patterns.len()];
+            let gpu_out = gpu.step(Some(input));
+            let cpu_out = cpu.step(Some(input));
+            assert_eq!(
+                gpu_out.spk_h, cpu_out.spk_h,
+                "hidden spikes diverged at step {step}"
+            );
+            assert_eq!(
+                gpu_out.spk_o, cpu_out.spk_o,
+                "output spikes diverged at step {step}"
+            );
+            assert_eq!(gpu.t, cpu.t, "logical step diverged at step {step}");
+            assert_eq!(
+                gpu.spk_hist_s, cpu.spk_hist_s,
+                "sensory delay history diverged at step {step}"
+            );
+            assert_eq!(
+                gpu.spk_hist_h, cpu.spk_hist_h,
+                "hidden delay history diverged at step {step}"
+            );
+
+            for (layer, (gpu_v, cpu_v)) in gpu.v_h.iter().zip(&cpu.v_h).enumerate() {
+                assert_close(
+                    &format!("v_h[{layer}] at step {step}"),
+                    gpu_v.as_slice().unwrap(),
+                    cpu_v.as_slice().unwrap(),
+                );
+            }
+            if let (Some(gpu_current), Some(cpu_current)) =
+                (gpu.last_i_h0.as_ref(), cpu.last_i_h0.as_ref())
+            {
+                assert_close(
+                    &format!("i_h0 at step {step}"),
+                    gpu_current.as_slice().unwrap(),
+                    cpu_current.as_slice().unwrap(),
+                );
+            } else {
+                assert_eq!(
+                    gpu.last_i_h0.is_some(),
+                    cpu.last_i_h0.is_some(),
+                    "layer-0 current presence diverged at step {step}"
+                );
+            }
+            assert_eq!(
+                gpu.last_i_f.len(),
+                cpu.last_i_f.len(),
+                "hidden current layer count diverged at step {step}"
+            );
+            for (layer, (gpu_current, cpu_current)) in
+                gpu.last_i_f.iter().zip(&cpu.last_i_f).enumerate()
+            {
+                assert_close(
+                    &format!("i_f[{layer}] at step {step}"),
+                    gpu_current.as_slice().unwrap(),
+                    cpu_current.as_slice().unwrap(),
+                );
+            }
+            for (layer, (gpu_u, cpu_u)) in gpu
+                .u_h
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(cpu.u_h.as_ref().unwrap())
+                .enumerate()
+            {
+                assert_close(
+                    &format!("u_h[{layer}] at step {step}"),
+                    gpu_u.as_slice().unwrap(),
+                    cpu_u.as_slice().unwrap(),
+                );
+            }
+            for (layer, (gpu_threshold, cpu_threshold)) in
+                gpu.thr_offset_h.iter().zip(&cpu.thr_offset_h).enumerate()
+            {
+                assert_close(
+                    &format!("threshold[{layer}] at step {step}"),
+                    gpu_threshold.as_slice().unwrap(),
+                    cpu_threshold.as_slice().unwrap(),
+                );
+                assert_close(
+                    &format!("homeostasis[{layer}] at step {step}"),
+                    gpu.rate_ema_h[layer].as_slice().unwrap(),
+                    cpu.rate_ema_h[layer].as_slice().unwrap(),
+                );
+                assert_close(
+                    &format!("stp_u[{layer}] at step {step}"),
+                    gpu.stp_u_h[layer].as_slice().unwrap(),
+                    cpu.stp_u_h[layer].as_slice().unwrap(),
+                );
+                assert_close(
+                    &format!("stp_x[{layer}] at step {step}"),
+                    gpu.stp_x_h[layer].as_slice().unwrap(),
+                    cpu.stp_x_h[layer].as_slice().unwrap(),
+                );
+            }
+            assert_close(
+                &format!("output threshold at step {step}"),
+                gpu.thr_offset_o.as_slice().unwrap(),
+                cpu.thr_offset_o.as_slice().unwrap(),
+            );
+            assert_close(
+                &format!("output homeostasis at step {step}"),
+                gpu.rate_ema_o.as_slice().unwrap(),
+                cpu.rate_ema_o.as_slice().unwrap(),
+            );
+            assert_close(
+                &format!("sensory stp_u at step {step}"),
+                gpu.stp_u_s.as_slice().unwrap(),
+                cpu.stp_u_s.as_slice().unwrap(),
+            );
+            assert_close(
+                &format!("sensory stp_x at step {step}"),
+                gpu.stp_x_s.as_slice().unwrap(),
+                cpu.stp_x_s.as_slice().unwrap(),
+            );
+            assert_close(
+                &format!("output voltage at step {step}"),
+                gpu.v_o.as_slice().unwrap(),
+                cpu.v_o.as_slice().unwrap(),
+            );
+            assert_close(
+                &format!("output recovery at step {step}"),
+                gpu.u_o.as_ref().unwrap().as_slice().unwrap(),
+                cpu.u_o.as_ref().unwrap().as_slice().unwrap(),
+            );
+
+            assert_matrix_close(&format!("w_in at step {step}"), &gpu.w_in, &cpu.w_in);
+            assert_matrix_close(&format!("w_out at step {step}"), &gpu.w_out, &cpu.w_out);
+            for (layer, (gpu_w, cpu_w)) in gpu.w_hh_fwd.iter().zip(&cpu.w_hh_fwd).enumerate() {
+                assert_matrix_close(&format!("w_hh_fwd[{layer}] at step {step}"), gpu_w, cpu_w);
+            }
+            for (layer, (gpu_w, cpu_w)) in gpu.w_hh_bwd.iter().zip(&cpu.w_hh_bwd).enumerate() {
+                assert_matrix_close(&format!("w_hh_bwd[{layer}] at step {step}"), gpu_w, cpu_w);
+            }
+            for (layer, (gpu_w, cpu_w)) in gpu.w_hh_rec.iter().zip(&cpu.w_hh_rec).enumerate() {
+                assert_matrix_close(&format!("w_hh_rec[{layer}] at step {step}"), gpu_w, cpu_w);
+            }
+            let gpu_events = gpu
+                .released_events
+                .iter()
+                .map(released_event_key)
+                .collect::<Vec<_>>();
+            let cpu_events = cpu
+                .released_events
+                .iter()
+                .map(released_event_key)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                gpu_events, cpu_events,
+                "released-event ordering/content diverged at step {step}"
+            );
+            assert_close(
+                &format!("rate growth state at step {step}"),
+                &gpu.rate_h
+                    .iter()
+                    .flat_map(|v| v.iter().map(|x| f64::from(*x)))
+                    .collect::<Vec<_>>(),
+                &cpu.rate_h
+                    .iter()
+                    .flat_map(|v| v.iter().map(|x| f64::from(*x)))
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                gpu.since_growth_ms, cpu.since_growth_ms,
+                "growth cooldown state diverged at step {step}"
+            );
+            assert_eq!(
+                serde_json::to_string(&gpu.morph).unwrap(),
+                serde_json::to_string(&cpu.morph).unwrap(),
+                "morphology diverged at step {step}"
+            );
+            observed_growth |= gpu.total_neurons() > 6;
+
+            assert!((gpu.neuromod_dopamine - cpu.neuromod_dopamine).abs() <= 1.0e-6);
+            assert!((gpu.neuromod_ach - cpu.neuromod_ach).abs() <= 1.0e-6);
+            assert!((gpu.neuromod_serotonin - cpu.neuromod_serotonin).abs() <= 1.0e-6);
+            assert!((gpu.resonance_level - cpu.resonance_level).abs() <= 1.0e-6);
+        }
+
+        assert!(
+            observed_growth,
+            "replay did not exercise a committed growth event"
+        );
+        assert!(
+            gpu.gpu_sparse_accumulation_count > 0,
+            "morphology/delay replay never executed a GPU sparse accumulation (in={}, fwd={}, bwd={}, rec={}, out={})",
+            gpu.recv_in.iter().map(Vec::len).sum::<usize>(),
+            gpu.recv_fwd.iter().flatten().map(Vec::len).sum::<usize>(),
+            gpu.recv_bwd.iter().flatten().map(Vec::len).sum::<usize>(),
+            gpu.recv_rec.iter().flatten().map(Vec::len).sum::<usize>(),
+            gpu.recv_out.iter().map(Vec::len).sum::<usize>()
+        );
+        assert!(
+            gpu.gpu_sparse_recurrent_count > 0,
+            "morphology/delay replay never executed a GPU recurrent accumulation (routes={}, buffers={}, sizes={:?})",
+            gpu.recv_rec.iter().flatten().map(Vec::len).sum::<usize>(),
+            gpu.cl_sparse_rec
+                .iter()
+                .filter(|buffer| buffer.is_some())
+                .count(),
+            gpu.cl_sparse_rec
+                .iter()
+                .map(|buffer| buffer.as_ref().map(|value| value.n_syn).unwrap_or(0))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn morphology_release_order_is_independent_of_producer_order() {
+        let mut runner = mk_aarnn_growth_runner();
+        runner.released_events = vec![
+            ReleasedEvent {
+                kind: ReleasedKind::Out,
+                pre_layer: 0,
+                post_layer: 1,
+                pre_id: 3,
+                post_id: 2,
+                syn_idx: Some(9),
+            },
+            ReleasedEvent {
+                kind: ReleasedKind::In,
+                pre_layer: -1,
+                post_layer: 0,
+                pre_id: 2,
+                post_id: 1,
+                syn_idx: Some(2),
+            },
+            ReleasedEvent {
+                kind: ReleasedKind::Fwd { layer: 0 },
+                pre_layer: 0,
+                post_layer: 1,
+                pre_id: 1,
+                post_id: 0,
+                syn_idx: Some(2),
+            },
+            ReleasedEvent {
+                kind: ReleasedKind::HiddenRec { layer: 0 },
+                pre_layer: 0,
+                post_layer: 0,
+                pre_id: 0,
+                post_id: 1,
+                syn_idx: Some(1),
+            },
+        ];
+        runner.sort_released_events();
+        let order: Vec<(usize, usize, usize)> = runner
+            .released_events
+            .iter()
+            .map(|event| {
+                let kind_rank = match event.kind {
+                    ReleasedKind::In => 0,
+                    ReleasedKind::Fwd { layer } => 1 + layer,
+                    ReleasedKind::Bwd { layer } => 1_024 + layer,
+                    ReleasedKind::HiddenRec { layer } => 2_048 + layer,
+                    ReleasedKind::Out => 3_072,
+                };
+                (event.syn_idx.unwrap_or(usize::MAX), kind_rank, event.pre_id)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![(1, 2_048, 0), (2, 0, 2), (2, 1, 1), (9, 3_072, 3)]
+        );
     }
 
     #[test]

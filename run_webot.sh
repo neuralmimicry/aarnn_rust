@@ -118,6 +118,9 @@ Options:
   --config-map <csv>       Per-brain NetworkConfig mapping, e.g. banc=/a.json,fafb=/b.json.
   --network-map <csv>      Per-brain snapshot mapping, e.g. banc=/a.json,fafb=/b.json.
   --orchestrator-port <n>  Fixed orchestrator gRPC port (default: auto-allocate).
+  --nodes <n>              Total cluster worker processes (default: 1). One IPC
+                           worker is started for each configured brain; remaining
+                           workers join the first brain without an IPC socket.
   --no-orchestrator-ui     In cluster runtime, start orchestrator without UI window.
   --no-node-ui             In cluster runtime, start nodes without UI (breaks IPC server bind).
   --node-ui-hidden         Keep node UI processes hidden (IPC still binds; orchestrator UI visible).
@@ -198,7 +201,8 @@ Environment overrides:
   NM_REMOTE_WEB_UI_PORT, NM_REMOTE_WEB_UI_API_PORT, NM_REMOTE_UI_MODE,
   NM_LOCAL_RUST_UI, NM_REMOTE_WEBOTS_HOST, NM_REMOTE_SSH_OPTS, NM_REMOTE_LOG_DIR,
   NM_REMOTE_PRE_CLEAN, NM_REMOTE_SYNC_DATA, NM_REMOTE_RSYNC_COMPRESS,
-  NM_DISTRIBUTE_STARTUP_SNAPSHOT, NM_DISTRIBUTED_AUTOSTART, NM_PRELOAD_NODE_NETWORK,
+  NM_CLUSTER_NODES, NM_DISTRIBUTE_STARTUP_SNAPSHOT, NM_DISTRIBUTED_AUTOSTART, NM_PRELOAD_NODE_NETWORK,
+  NM_WEBOTS_RUNTIME_FEATURES,
   NM_REMOTE_RUNTIME_FEATURES, NM_REALTIME_POLICY, NM_REALTIME_IPC, NM_REALTIME_DISABLE_GROWTH,
   NM_REALTIME_DISABLE_MORPHO, NM_REALTIME_DISABLE_METABOLIC,
   NM_REALTIME_DISABLE_PRUNING, NM_REALTIME_MORPHO_INTERVAL_MS,
@@ -255,6 +259,7 @@ NETWORK_FILE="${NM_NETWORK_FILE:-}"
 CONFIG_MAP_CSV="${NM_CONFIG_MAP:-}"
 NETWORK_MAP_CSV="${NM_NETWORK_MAP:-}"
 ORCHESTRATOR_PORT="${NM_ORCHESTRATOR_PORT:-}"
+NODE_COUNT="${NM_CLUSTER_NODES:-1}"
 NODE_UI_HIDDEN="${NM_NODE_UI_HIDDEN:-0}"
 SINGLE_ORCHESTRATOR_UI="${NM_SINGLE_ORCHESTRATOR_UI:-0}"
 DISTRIBUTE_STARTUP_SNAPSHOT="${NM_DISTRIBUTE_STARTUP_SNAPSHOT:-1}"
@@ -290,6 +295,7 @@ REALTIME_MORPHO_MAX_SYNAPSES="${NM_REALTIME_MORPHO_MAX_SYNAPSES:-}"
 MORPHO_ASYNC="${NM_MORPHO_ASYNC:-auto}"
 WEB_UI_RUNTIME_ROOT="${NM_WEB_UI_RUNTIME_ROOT:-$ROOT_DIR/data/runtime}"
 WEB_UI_DEFAULT_RUNTIME_USER="${NM_WEB_UI_DEFAULT_RUNTIME_USER:-}"
+LOCAL_RUNTIME_FEATURES="${NM_WEBOTS_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -419,6 +425,13 @@ while [ "$#" -gt 0 ]; do
         --orchestrator-port)
             shift
             ORCHESTRATOR_PORT="${1:-}"
+            ;;
+        --nodes)
+            shift
+            NODE_COUNT="${1:-}"
+            ;;
+        --nodes=*)
+            NODE_COUNT="${1#*=}"
             ;;
         --no-orchestrator-ui)
             ORCHESTRATOR_UI=0
@@ -580,6 +593,15 @@ done
 
 if [ "$RUNTIME" != "cluster" ] && [ "$RUNTIME" != "uds" ]; then
     echo "Invalid --runtime '$RUNTIME' (must be cluster or uds)."
+    exit 1
+fi
+
+if ! [[ "$NODE_COUNT" =~ ^[0-9]+$ ]] || [ "$NODE_COUNT" -lt 1 ]; then
+    echo "Invalid --nodes '$NODE_COUNT' (must be a positive integer)."
+    exit 1
+fi
+if [ "$RUNTIME" = "uds" ] && [ "$NODE_COUNT" -ne 1 ]; then
+    echo "--nodes is only supported with --runtime cluster."
     exit 1
 fi
 
@@ -1790,7 +1812,7 @@ start_local_rust_ui_client() {
     local bin="$ROOT_DIR/target/release/aarnn_rust"
     if [ ! -x "$bin" ]; then
         echo "Local rust_ui requested, but executable is missing: $bin"
-        echo "Build with: cargo build --release --bin aarnn_rust --all-features"
+        echo "Build with: cargo build --release --no-default-features --bin aarnn_rust --features $LOCAL_RUNTIME_FEATURES"
         return 1
     fi
 
@@ -1904,10 +1926,11 @@ EOF
 
 socket_for_brain() {
     local brain="$1"
+    local socket_dir="${NM_IPC_SOCKET_DIR:-$HOME}"
     if [ "$brain" = "default" ]; then
-        printf "%s/aarnn_rust.nn" "$HOME"
+        printf "%s/aarnn_rust.nn" "$socket_dir"
     else
-        printf "%s/aarnn_rust.%s.nn" "$HOME" "$brain"
+        printf "%s/aarnn_rust.%s.nn" "$socket_dir" "$brain"
     fi
 }
 
@@ -1945,6 +1968,27 @@ wait_for_socket() {
     local deadline=$((SECONDS + timeout_s))
     while [ "$SECONDS" -lt "$deadline" ]; do
         if [ -S "$path" ]; then
+            return 0
+        fi
+        if [ -n "$watched_pid" ] && ! kill -0 "$watched_pid" 2>/dev/null; then
+            return 1
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+wait_for_log_line() {
+    local path="$1"
+    local needle="$2"
+    local timeout_s="${3:-$WEBOTS_CONNECT_TIMEOUT}"
+    local watched_pid="${4:-}"
+    if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
+        timeout_s=60
+    fi
+    local deadline=$((SECONDS + timeout_s))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if [ -f "$path" ] && grep -Fq -- "$needle" "$path"; then
             return 0
         fi
         if [ -n "$watched_pid" ] && ! kill -0 "$watched_pid" 2>/dev/null; then
@@ -2246,7 +2290,7 @@ start_cluster_runtime() {
     local bin="$ROOT_DIR/target/release/aarnn_rust"
     if [ ! -x "$bin" ]; then
         echo "Missing executable: $bin"
-        echo "Build with: cargo build --release --bin aarnn_rust --all-features"
+        echo "Build with: cargo build --release --no-default-features --bin aarnn_rust --features $LOCAL_RUNTIME_FEATURES"
         exit 1
     fi
 
@@ -2429,8 +2473,70 @@ start_cluster_runtime() {
         echo "  virtual links in/out: $incoming_virtual/$outgoing_virtual"
     done
 
+    # Every configured brain needs one IPC-owning worker for its Webots
+    # controller. Additional workers are real distributed nodes for placement
+    # and shard execution, but deliberately have no IPC endpoint or UI.
+    local extra_workers=$((NODE_COUNT - ${#BRAINS[@]}))
+    local extra_index=1
+    local worker_brain="${BRAINS[0]}"
+    while [ "$extra_index" -le "$extra_workers" ]; do
+        local node_port
+        node_port="$(find_free_port "$node_port_start")" || {
+            echo "Failed to allocate port for extra worker $extra_index"
+            exit 1
+        }
+        reserve_port "$node_port"
+        node_port_start=$((node_port + 7))
+
+        local worker_id
+        worker_id="${worker_brain}_worker_$(printf '%02d' "$extra_index")"
+        local log_file="$LOG_DIR/webots_${worker_id}.log"
+        local node_cmd=(
+            env
+            "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK"
+            "NM_REALTIME_IPC=$REALTIME_IPC"
+            "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
+            "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
+            "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC"
+            "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING"
+            "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
+            "$bin"
+            --node
+            --node-id "$worker_id"
+            --brain-id "$worker_brain"
+            --grpc-addr "0.0.0.0:$node_port"
+            --orchestrator-addr "http://127.0.0.1:$orch_port"
+        )
+        local brain_config
+        brain_config="$(config_for_brain "$worker_brain")"
+        if [ -n "$brain_config" ]; then
+            node_cmd+=(--config "$brain_config")
+        fi
+        local brain_network
+        brain_network="$(network_for_brain "$worker_brain")"
+        if [ -n "$brain_network" ]; then
+            node_cmd+=(--network "$brain_network")
+        fi
+
+        "${node_cmd[@]}" >"$log_file" 2>&1 &
+        local node_pid="$!"
+        PIDS+=("$node_pid")
+        if ! wait_for_log_line "$log_file" "Successfully joined orchestrator" "$WEBOTS_CONNECT_TIMEOUT" "$node_pid"; then
+            echo "Extra worker '$worker_id' did not register with the orchestrator within ${WEBOTS_CONNECT_TIMEOUT}s"
+            echo "See log: $log_file"
+            tail -n 40 "$log_file" || true
+            exit 1
+        fi
+
+        echo "Worker '$worker_id' ready:"
+        echo "  node gRPC: $node_port"
+        echo "  log: $log_file"
+        extra_index=$((extra_index + 1))
+    done
+
     echo "Orchestrator ready:"
     echo "  gRPC: $orch_port"
+    echo "  worker processes: $NODE_COUNT (${#BRAINS[@]} IPC owner(s), $extra_workers additional worker(s))"
     echo "  log: $orch_log"
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
         echo "  UI: enabled"
@@ -2667,10 +2773,12 @@ start_remote_cluster_runtime() {
     fi
 
     local reachable_count=0
+    local -a reachable_hosts=()
     local host
     for host in "${REMOTE_HOST_LIST[@]}"; do
         if remote_reachable "$host"; then
             reachable_count=$((reachable_count + 1))
+            reachable_hosts+=("$host")
         fi
     done
     if [ "$reachable_count" -eq 0 ]; then
@@ -2792,80 +2900,96 @@ start_remote_cluster_runtime() {
 
     local node_port_start=50070
     local launched_nodes=0
+    local worker_index
     local brain
-    for brain in "${BRAINS[@]}"; do
+    for ((worker_index = 0; worker_index < NODE_COUNT; worker_index++)); do
+        if [ "$worker_index" -lt "${#BRAINS[@]}" ]; then
+            brain="${BRAINS[$worker_index]}"
+            local worker_id=""
+        else
+            brain="${BRAINS[0]}"
+            local extra_index=$((worker_index - ${#BRAINS[@]} + 1))
+            worker_id="${brain}_worker_$(printf '%02d' "$extra_index")"
+        fi
+
+        host="${reachable_hosts[$((worker_index % reachable_count))]}"
         local remote_network
         remote_network="$(remote_network_for_brain "$brain")"
         local remote_config
         remote_config="$(remote_config_for_brain "$brain")"
-        for host in "${REMOTE_HOST_LIST[@]}"; do
-            if ! remote_reachable "$host"; then
-                echo "Skipping remote node on $host (SSH unreachable)."
-                continue
-            fi
-            local node_port
-            node_port="$(find_remote_free_port "$host" "$node_port_start")" || {
-                echo "Failed to allocate remote node port on $host for brain '$brain'"
-                exit 1
-            }
-            node_port_start=$((node_port + 7))
-            local node_weight
-            node_weight="$(remote_weight_for_host "$host")"
-            local node_cmd=(
-                env "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
-                    "NM_REALTIME_IPC=$REALTIME_IPC" \
-                    "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
-                    "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
-                    "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
-                    "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
-                    "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
-                    "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
-                    "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
-                    "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES"
+        local node_port
+        node_port="$(find_remote_free_port "$host" "$node_port_start")" || {
+            echo "Failed to allocate remote node port on $host for brain '$brain'"
+            exit 1
+        }
+        node_port_start=$((node_port + 7))
+        local node_weight
+        node_weight="$(remote_weight_for_host "$host")"
+        local node_cmd=(
+            env "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
+                "NM_REALTIME_IPC=$REALTIME_IPC" \
+                "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
+                "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
+                "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
+                "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
+                "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
+                "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
+                "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
+                "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES"
+            target/release/aarnn_rust
+            --node
+            --brain-id "$brain"
+            --grpc-addr "0.0.0.0:$node_port"
+            --orchestrator-addr "$orchestrator_addr_public"
+        )
+        if [ -n "$worker_id" ]; then
+            node_cmd+=(--node-id "$worker_id")
+        fi
+        if [ -n "$remote_workspace_bindings_json" ]; then
+            node_cmd=("env" "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
+                "NM_REALTIME_IPC=$REALTIME_IPC" \
+                "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
+                "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
+                "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
+                "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
+                "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
+                "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
+                "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
+                "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES" \
+                "NM_RUNTIME_WORKSPACE_BINDINGS=$remote_workspace_bindings_json" \
                 target/release/aarnn_rust
                 --node
                 --brain-id "$brain"
                 --grpc-addr "0.0.0.0:$node_port"
-                --orchestrator-addr "$orchestrator_addr_public"
-            )
-            if [ -n "$remote_workspace_bindings_json" ]; then
-                node_cmd=("env" "NM_CAPACITY_MULTIPLIER=$node_weight" "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK" \
-                    "NM_REALTIME_IPC=$REALTIME_IPC" \
-                    "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH" \
-                    "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO" \
-                    "NM_REALTIME_DISABLE_METABOLIC=$REALTIME_DISABLE_METABOLIC" \
-                    "NM_REALTIME_DISABLE_PRUNING=$REALTIME_DISABLE_PRUNING" \
-                    "NM_MORPHO_ASYNC=$MORPHO_ASYNC" \
-                    "NM_REALTIME_MORPHO_INTERVAL_MS=$REALTIME_MORPHO_INTERVAL_MS" \
-                    "NM_REALTIME_METABOLIC_INTERVAL_MS=$REALTIME_METABOLIC_INTERVAL_MS" \
-                    "NM_REALTIME_MORPHO_MAX_SYNAPSES=$REALTIME_MORPHO_MAX_SYNAPSES" \
-                    "NM_RUNTIME_WORKSPACE_BINDINGS=$remote_workspace_bindings_json" \
-                    target/release/aarnn_rust
-                    --node
-                    --brain-id "$brain"
-                    --grpc-addr "0.0.0.0:$node_port"
-                    --orchestrator-addr "$orchestrator_addr_public")
+                --orchestrator-addr "$orchestrator_addr_public")
+            if [ -n "$worker_id" ]; then
+                node_cmd+=(--node-id "$worker_id")
             fi
-            if [ "$REMOTE_QUIET" -eq 1 ]; then
-                node_cmd+=(--quiet)
-            fi
-            if [ -n "$remote_config" ]; then
-                node_cmd+=(--config "$remote_config")
-            fi
-            if [ -n "$remote_network" ]; then
-                node_cmd+=(--network "$remote_network")
-            fi
-            local node_cmd_str
-            node_cmd_str="$(cmd_to_string "${node_cmd[@]}")"
-            remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
-            NODE_PORTS["${brain}@${host}"]="$node_port"
-            launched_nodes=$((launched_nodes + 1))
-        done
+        fi
+        if [ "$REMOTE_QUIET" -eq 1 ]; then
+            node_cmd+=(--quiet)
+        fi
+        if [ -n "$remote_config" ]; then
+            node_cmd+=(--config "$remote_config")
+        fi
+        if [ -n "$remote_network" ]; then
+            node_cmd+=(--network "$remote_network")
+        fi
+        local node_cmd_str
+        node_cmd_str="$(cmd_to_string "${node_cmd[@]}")"
+        remote_start_bg "$host" "remote_node_${brain}_${node_port}" "$node_cmd_str" "$REMOTE_LOG_DIR" >/dev/null
+        NODE_PORTS["${brain}@${host}"]="$node_port"
+        launched_nodes=$((launched_nodes + 1))
     done
     if [ "$launched_nodes" -eq 0 ]; then
         echo "No remote nodes were started."
         exit 1
     fi
+    if [ "$launched_nodes" -ne "$NODE_COUNT" ]; then
+        echo "Remote worker launch count mismatch: requested $NODE_COUNT, started $launched_nodes."
+        exit 1
+    fi
+    echo "Remote cluster workers started: $launched_nodes (requested $NODE_COUNT)"
 
     local web_ui_orchestrator_addr="$orchestrator_addr_public"
     local web_ui_cmd=()
@@ -3043,6 +3167,14 @@ if [ "${#BRAINS[@]}" -eq 0 ]; then
     echo "No brains configured; set --brains or NM_BRAINS."
     exit 1
 fi
+if [ "$NODE_COUNT" -lt "${#BRAINS[@]}" ]; then
+    echo "--nodes=$NODE_COUNT cannot host ${#BRAINS[@]} configured brains; use at least one worker per brain."
+    exit 1
+fi
+if [ "$SINGLE_ORCHESTRATOR_UI" -eq 1 ] && [ "$NODE_COUNT" -ne 1 ]; then
+    echo "--single-orchestrator-ui requires --nodes=1 because it runs the IPC owner in the orchestrator process."
+    exit 1
+fi
 
 if [ -n "$CONFIG_FILE" ]; then
     CONFIG_FILE="$(abs_path_from_root "$CONFIG_FILE")"
@@ -3103,7 +3235,7 @@ if [ "$REMOTE_COMPUTE" -eq 1 ] && [ "$RUNTIME" != "cluster" ]; then
     exit 1
 fi
 
-if [ "$RUNTIME" = "cluster" ] && [ "$REMOTE_COMPUTE" -eq 0 ] && [ "$NODE_UI" -eq 1 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+if [ "$RUNTIME" = "cluster" ] && [ "$START_WEBOTS" -eq 1 ] && [ "$REMOTE_COMPUTE" -eq 0 ] && [ "$NODE_UI" -eq 1 ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     echo "No display detected (DISPLAY/WAYLAND_DISPLAY unset)."
     echo "Falling back to --runtime uds for headless compatibility."
     RUNTIME="uds"
@@ -3171,6 +3303,8 @@ if [ "${#NETWORK_FILE_MAP[@]}" -gt 0 ]; then
     echo "  network map: $(map_to_csv NETWORK_FILE_MAP)"
 fi
 echo "  orchestrator port: ${ORCHESTRATOR_PORT:-auto}"
+echo "  cluster worker processes: $NODE_COUNT"
+echo "  local runtime features: $LOCAL_RUNTIME_FEATURES"
 echo "  node ui hidden: $NODE_UI_HIDDEN"
 echo "  realtime policy: $REALTIME_POLICY"
 echo "  realtime ipc policy: $REALTIME_IPC (growth=$REALTIME_DISABLE_GROWTH morpho=$REALTIME_DISABLE_MORPHO metabolic=$REALTIME_DISABLE_METABOLIC pruning=$REALTIME_DISABLE_PRUNING)"
@@ -3228,11 +3362,11 @@ if [ "$BUILD" -eq 1 ]; then
         echo "Remote compute mode selected: building on remote hosts during remote startup."
         if [ "$LOCAL_RUST_UI" -eq 1 ]; then
             echo "Building local rust_ui binary for native local display..."
-            cargo build --release --bin aarnn_rust --all-features
+            cargo build --release --no-default-features --bin aarnn_rust --features "$LOCAL_RUNTIME_FEATURES"
         fi
     elif [ "$RUNTIME" = "cluster" ]; then
         echo "Building aarnn_rust binary..."
-        cargo build --release --bin aarnn_rust --all-features
+        cargo build --release --no-default-features --bin aarnn_rust --features "$LOCAL_RUNTIME_FEATURES"
     else
         echo "Building nn_uds_server example..."
         cargo build --release --example nn_uds_server --features ui,robot_io

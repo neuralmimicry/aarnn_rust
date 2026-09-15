@@ -44,6 +44,9 @@ namespace NeuralMimicry
         [Tooltip("Automatically find all NmRobotBase instances in the scene on Start.")]
         public bool autoDiscoverRobots = true;
 
+        [Tooltip("Build the versioned species habitat around each robot group.")]
+        public bool buildSharedHabitats = true;
+
         // ------------------------------------------------------------------ //
         // Inspector — spec string (display / validation only)
         // ------------------------------------------------------------------ //
@@ -122,6 +125,47 @@ namespace NeuralMimicry
                 robots.AddRange(FindObjectsOfType<NmRobotBase>());
 #endif
                 Debug.Log($"[NmSimulationManager] Auto-discovered {robots.Count} robot(s).");
+            }
+
+            if (buildSharedHabitats)
+            {
+                var groups = new Dictionary<string, List<NmRobotBase>>();
+                foreach (var robot in robots)
+                {
+                    if (robot == null) continue;
+                    var profile = NmHabitat.Profile(robot);
+                    if (!groups.ContainsKey(profile.habitat)) groups[profile.habitat] = new List<NmRobotBase>();
+                    groups[profile.habitat].Add(robot);
+                }
+                foreach (var group in groups.Values)
+                {
+                    var profile = NmHabitat.Profile(group[0]);
+                    Vector3 centre = Vector3.zero;
+                    foreach (var robot in group) centre += robot.transform.position;
+                    centre /= group.Count;
+                    var colliders = group[0].GetComponentsInChildren<Collider>();
+                    Bounds bounds = colliders.Length > 0 ? colliders[0].bounds : new Bounds(centre, Vector3.one);
+                    foreach (var collider in colliders) bounds.Encapsulate(collider.bounds);
+                    float length = profile.kind == "nao" ? bounds.size.y : bounds.size.z;
+                    float radius = Mathf.Max(.1f, length / profile.body_length);
+                    float spread = 0;
+                    foreach (var robot in group)
+                    {
+                        Vector3 offset = robot.transform.position - centre;
+                        spread = Mathf.Max(spread, Mathf.Abs(offset.x), Mathf.Abs(offset.z));
+                    }
+                    radius += spread;
+                    centre.y = bounds.min.y - (profile.kind == "fish" ? radius * profile.body_height : 0);
+                    var go = new GameObject("Shared habitat: " + profile.habitat);
+                    go.transform.position = centre;
+                    var habitat = go.AddComponent<NmHabitat>();
+                    habitat.Build(profile, radius);
+                    foreach (var robot in group)
+                    {
+                        robot.Habitat = habitat;
+                        if (robot is NmZebrafishRobot fish) fish.SetWaterSurface(centre.y + radius * .625f);
+                    }
+                }
             }
         }
 

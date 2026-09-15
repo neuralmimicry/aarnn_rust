@@ -24,6 +24,7 @@ UI_MODE_SET_BY_USER=0
 ROBOT_SPEC="${ROBOT_SPEC:-celegans=1}"
 REMOTE_COMPUTE="${REMOTE_COMPUTE:-0}"
 ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-50051}"
+CLUSTER_NODE_COUNT="${NM_CLUSTER_NODES:-1}"
 WEB_UI_LISTEN="${WEB_UI_LISTEN:-0.0.0.0:8080}"
 WORLD_FILE="${WORLD_FILE:-$ROOT_DIR/webots_world/worlds/multi_neuroworld.wbt}"
 TMP_CELEGANS_WORLD="${TMP_CELEGANS_WORLD:-/tmp/aarnn_tmp_celegans_assets_ignore.wbt}"
@@ -269,6 +270,10 @@ Options:
   --hexapod <n>              Override hexapod count.
   --nao <n>                  Override Nao count.
   --world <path>             Output mixed world path.
+  --node <n>                 Alias for --nodes.
+  --nodes <n>                Total cluster worker processes; forwarded to
+                             run_webot.sh (default: 1). At least one worker
+                             is required per configured brain.
   --help                     Show this help.
 
 Environment:
@@ -341,6 +346,15 @@ while [ "$#" -gt 0 ]; do
       shift
       WORLD_FILE="${1:-$WORLD_FILE}"
       ;;
+    --node|--nodes)
+      shift
+      CLUSTER_NODE_COUNT="${1:-}"
+      PASS_THROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
+      ;;
+    --node=*|--nodes=*)
+      CLUSTER_NODE_COUNT="${1#*=}"
+      PASS_THROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
+      ;;
     --help|-h)
       usage
       exit 0
@@ -361,6 +375,11 @@ if [ "$UI_MODE" != "rust" ] && [ "$UI_MODE" != "web" ] && [ "$UI_MODE" != "cli" 
   echo "Invalid --ui-mode '$UI_MODE' (must be rust, web, or cli)."
   exit 1
 fi
+if ! [[ "$CLUSTER_NODE_COUNT" =~ ^[0-9]+$ ]] || [ "$CLUSTER_NODE_COUNT" -lt 1 ]; then
+  echo "Invalid --nodes '$CLUSTER_NODE_COUNT' (must be a positive integer)."
+  exit 1
+fi
+export NM_CLUSTER_NODES="$CLUSTER_NODE_COUNT"
 if webots_recording_requested && [ "$UI_MODE" != "cli" ]; then
   if [ "$UI_MODE_SET_BY_USER" -eq 1 ]; then
     echo "Webots recording enabled; overriding --ui-mode $UI_MODE with cli so AARNN runs headless during capture."
@@ -503,6 +522,8 @@ if output != 96:
     raise SystemExit(1)
 if layers != 1 or hidden != 302:
     raise SystemExit(1)
+if bool(net.get("io_channels_are_biological", True)):
+    raise SystemExit(1)
 if not bool(net.get("growth_enabled", False)):
     raise SystemExit(1)
 if not bool(net.get("use_morphology", False)):
@@ -521,6 +542,26 @@ if len({str(v) for v in sensory_nodes}) != len(sensory_nodes):
 hidden_nodes = labels.get("hidden_nodes")
 if not isinstance(hidden_nodes, list) or len(hidden_nodes) != hidden:
     raise SystemExit(1)
+if len({str(v) for v in hidden_nodes}) != hidden:
+    raise SystemExit(1)
+
+sensory_neuron_nodes = labels.get("sensory_neuron_nodes")
+if not isinstance(sensory_neuron_nodes, list) or not sensory_neuron_nodes:
+    raise SystemExit(1)
+if not set(map(str, sensory_neuron_nodes)).issubset(set(map(str, hidden_nodes))):
+    raise SystemExit(1)
+motor_neuron_nodes = labels.get("motor_neuron_nodes")
+if not isinstance(motor_neuron_nodes, list) or not motor_neuron_nodes:
+    raise SystemExit(1)
+if not set(map(str, motor_neuron_nodes)).issubset(set(map(str, hidden_nodes))):
+    raise SystemExit(1)
+if labels.get("motor_output_channels") != labels.get("output_nodes"):
+    raise SystemExit(1)
+io_semantics = labels.get("io_semantics") or {}
+if int(io_semantics.get("biological_neuron_count", 0) or 0) != hidden:
+    raise SystemExit(1)
+if int(io_semantics.get("motor_readout_channel_count", 0) or 0) != output:
+    raise SystemExit(1)
 
 projection = labels.get("sensory_projection") or {}
 if not isinstance(projection, dict):
@@ -537,6 +578,12 @@ flat = w_in.get("data")
 if rows <= 0 or cols != sensory:
     raise SystemExit(1)
 if not isinstance(flat, list) or len(flat) != rows * cols:
+    raise SystemExit(1)
+
+w_out = data.get("w_out") or {}
+if int(w_out.get("rows", 0) or 0) != output or int(w_out.get("cols", 0) or 0) != hidden:
+    raise SystemExit(1)
+if not isinstance(w_out.get("data"), list) or len(w_out["data"]) != output * hidden:
     raise SystemExit(1)
 
 for c in range(cols):
@@ -570,6 +617,12 @@ try:
 except Exception:
     raise SystemExit(1)
 if int((data.get("num_sensory_neurons", 0) or 0)) != expected_s:
+    raise SystemExit(1)
+if int((data.get("num_output_neurons", 0) or 0)) != 96:
+    raise SystemExit(1)
+if bool(data.get("io_channels_are_biological", True)):
+    raise SystemExit(1)
+if int((data.get("num_hidden_per_layer_initial", 0) or 0)) != 302:
     raise SystemExit(1)
 raise SystemExit(0)
 PY
@@ -1985,8 +2038,10 @@ trap cleanup EXIT
 
 if ! pass_through_has_arg "--no-build"; then
   echo "Prebuilding local web runtime binaries..."
-  cargo build --release --bin aarnn_rust --all-features
-  cargo build --release --bin web_ui
+  WEBOTS_RUNTIME_FEATURES="${NM_WEBOTS_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
+  export NM_WEBOTS_RUNTIME_FEATURES="$WEBOTS_RUNTIME_FEATURES"
+  cargo build --release --no-default-features --bin aarnn_rust --features "$WEBOTS_RUNTIME_FEATURES"
+  cargo build --release --no-default-features --bin web_ui --features "$WEBOTS_RUNTIME_FEATURES"
   PREBUILT_LOCAL_WEB_RUNTIME=1
 fi
 

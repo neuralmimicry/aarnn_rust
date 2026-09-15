@@ -130,6 +130,9 @@ fn run(root: &Path, program: &str, args: &[&str]) -> bool {
 }
 
 fn doctor(root: &Path, product: &str) -> bool {
+    if product == "minecraft" {
+        return run(root, "python3", &["scripts/minecraft.py", "doctor"]);
+    }
     let manifest_ok = root.join("Cargo.toml").is_file();
     let schema_ok = root.join("proto/management.proto").is_file()
         && root.join("proto/distributed.proto").is_file();
@@ -246,6 +249,66 @@ fn scenario_manifest_is_complete(root: &Path, id: &str) -> bool {
 
 fn qa_suite(root: &Path, suite: &str) -> bool {
     match suite {
+        "simulator-nao-bedrock" => {
+            scenario_manifest_is_complete(root, "SIM-NAO-INTERACTION-001")
+                && run(root, "python3", &["scripts/qa/probe_nao_bedrock.py"])
+        }
+        "simulator-nao-webots" | "simulator-nao-unreal" => {
+            let engine = if suite == "simulator-nao-webots" {
+                "webots"
+            } else {
+                "unreal"
+            };
+            scenario_manifest_is_complete(root, "SIM-NAO-INTERACTION-001")
+                && run(
+                    root,
+                    "python3",
+                    &["scripts/qa/probe_nao_native.py", "--engine", engine],
+                )
+        }
+        "simulator-nao" | "simulator-nao-browser" => {
+            let args = if suite == "simulator-nao-browser" {
+                vec!["scripts/qa/run_nao_social.py", "--browser"]
+            } else {
+                vec!["scripts/qa/run_nao_social.py"]
+            };
+            scenario_manifest_is_complete(root, "SIM-NAO-INTERACTION-001")
+                && run(root, "python3", &args)
+        }
+        "simulator-minecraft"
+        | "simulator-minecraft-bedrock"
+        | "simulator-minecraft-bedrock-native"
+        | "simulator-minecraft-world"
+        | "simulator-minecraft-visual"
+        | "simulator-minecraft-neural" => {
+            let lane = match suite {
+                "simulator-minecraft-bedrock" => "bedrock",
+                "simulator-minecraft-bedrock-native" => "bedrock-native",
+                "simulator-minecraft-world" => "world",
+                "simulator-minecraft-visual" => "visual",
+                "simulator-minecraft-neural" => "neural",
+                _ => "contract",
+            };
+            scenario_manifest_is_complete(root, "SIM-MINECRAFT-001")
+                && run(
+                    root,
+                    "python3",
+                    &["scripts/qa/run_minecraft.py", "--lane", lane],
+                )
+        }
+        "simulator-content" | "simulator-content-browser" | "simulator-content-webots" => {
+            let lane = match suite {
+                "simulator-content-browser" => "browser",
+                "simulator-content-webots" => "webots",
+                _ => "contract",
+            };
+            scenario_manifest_is_complete(root, "SIM-CONTENT-001")
+                && run(
+                    root,
+                    "python3",
+                    &["scripts/qa/run_simulator_content.py", "--lane", lane],
+                )
+        }
         "mobile-contract" => run(
             root,
             "cargo",

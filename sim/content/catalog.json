@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "seed": 481516,
+  "coordinate_system": "right-handed: X forward, Y left, Z up; habitat coordinates in units of half extent; robot coordinates in body lengths",
+  "scientific_status": "Idealised educational morphology and engineering sensory proxies; no quantitative biological validation or cross-engine physics certification.",
+  "habitats": [
+    {"id":"agar", "title":"Agar microhabitat", "substrate":[0.36,0.42,0.26], "half_extent_m":1.5, "wall_height":0.12, "cues":["bacterial lawn", "chemical gradient proxy", "thermal gradient proxy", "moisture refuge", "texture and touch"]},
+    {"id":"orchard", "title":"Orchard flight enclosure", "substrate":[0.19,0.25,0.12], "half_extent_m":1.5, "wall_height":0.8, "cues":["fermenting fruit", "leaves and landing stems", "optic-flow landmarks", "light and shade", "near-field obstacles"]},
+    {"id":"terrain", "title":"Sensorimotor terrain course", "substrate":[0.27,0.25,0.20], "half_extent_m":2.0, "wall_height":0.18, "cues":["graded steps", "rough gravel", "slalom gates", "contrasting visual targets", "foot contact and sonar"]},
+    {"id":"room", "title":"Embodied learning room", "substrate":[0.44,0.46,0.49], "half_extent_m":1.8, "wall_height":0.8, "cues":["reachable coloured objects", "navigation markers", "low steps", "doorway and furniture", "stereo vision and foot pressure"]},
+    {"id":"stream", "title":"Shallow freshwater habitat", "substrate":[0.35,0.32,0.20], "half_extent_m":0.375, "wall_height":0.65, "cues":["aquatic plants", "pebbles and shelter", "prey particles", "current proxy", "depth and illumination"]}
+  ],
+  "profiles": [
+    {"id":"celegans", "kind":"worm", "habitat":"agar", "body_length":0.24, "body_height":0.035, "anatomy":["tapered cuticle and annuli", "four longitudinal muscle quadrants", "pharyngeal bulbs", "nerve ring (schematic)", "intestine", "amphid and phasmid landmarks"], "biology_note":"Adult hermaphrodite schematic. No eyes. The imported 302 neurons and 96 muscle readouts are not positioned by this illustration."},
+    {"id":"drosophila_banc", "kind":"fly", "habitat":"orchard", "body_length":0.18, "body_height":0.07, "anatomy":["head, thorax and banded abdomen", "compound-eye facets", "antennae and aristae", "proboscis", "six articulated legs", "paired wings and veins", "halteres"], "biology_note":"Adult fruit-fly morphology. BANC and FAFB retain distinct network/output identities; visual anatomy is shared, not a connectome reconstruction."},
+    {"id":"drosophila_fafb", "kind":"fly", "habitat":"orchard", "body_length":0.18, "body_height":0.07, "anatomy":["head, thorax and banded abdomen", "compound-eye facets", "antennae and aristae", "proboscis", "six articulated legs", "paired wings and veins", "halteres"], "biology_note":"Adult fruit-fly morphology. BANC and FAFB retain distinct network/output identities; visual anatomy is shared, not a connectome reconstruction."},
+    {"id":"hexapod", "kind":"hexapod", "habitat":"terrain", "body_length":0.25, "body_height":0.1, "anatomy":["two chassis decks", "six three-joint legs", "servo housings", "rubber feet", "stereo ultrasonic transducers", "camera lens", "cable runs"], "biology_note":"Engineered robot. Joint, contact, inertial, event-camera and sonar channels retain their declared units and order."},
+    {"id":"nao", "kind":"nao", "habitat":"room", "body_length":0.32, "body_height":0.01, "anatomy":["humanoid shell panels", "head cameras", "joint covers", "palms and fingers", "foot pressure pads"], "biology_note":"NAO-inspired engineering schematic; upstream Webots NAO remains the physical robot definition."},
+    {"id":"zebrafish", "kind":"fish", "habitat":"stream", "body_length":0.24, "body_height":0.32, "anatomy":["tapered trunk and caudal peduncle", "eyes and opercula", "pectoral, dorsal and caudal fins", "longitudinal lateral-line neuromasts", "myomere landmarks"], "biology_note":"Larval-inspired translucent schematic. Myomeres are structural landmarks, not adult transverse pigment stripes; no adult zebra pigmentation is imposed on a larval network."}
+  ]
+}

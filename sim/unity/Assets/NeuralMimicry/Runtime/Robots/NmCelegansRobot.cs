@@ -1,16 +1,10 @@
 // NmCelegansRobot.cs — Unity C# MonoBehaviour for C. elegans nematode worm robot.
 // Compatible with Unity 2022.3 LTS+.
 //
-// Sensor channels (24 total):
-//   [00-11]  12 chemoreceptors — SphereCast distance from head (celegans_s_00_chem_* .. _s_11_*)
-//   [12-20]   9 mechanoreceptors — segment velocity magnitude (celegans_s_12_* .. _s_20_*)
-//   [21-23]   3 vibration axes — angular velocity XYZ of root body (celegans_s_21_vibration_accel.x/y/z)
-//
-// Actuator channels (96 total):
-//   Segment 0..23 each contribute 4 channels in order: MDL, MDR, MVL, MVR
-//   MDL/MDR → dorsal-ventral drive (Z-axis ArticulationDrive)
-//   MVL/MVR → lateral drive (Y-axis ArticulationDrive)
-//   Channel 96 = MVULVA (no joint mapped; reserved)
+// Canonical 24-channel order comes from the generated catalogue: inertial,
+// touch, light/heat, taste/chemical, flow and far-field proximity channels.
+// Outputs are grouped by named MDL/MDR/MVL/MVR muscles, not by segment.
+// MVL24 is absent; channel 95 is the separate MVULVA readout (no body-wall joint).
 
 using System;
 using UnityEngine;
@@ -20,10 +14,8 @@ namespace NeuralMimicry
     /// <summary>
     /// NeuralMimicry-controlled simulation of a <i>C. elegans</i> nematode worm.
     /// The robot body is a chain of 24 articulated cylindrical segments driven by
-    /// four muscle groups per segment (MDL, MDR, MVL, MVR) matching the nematode's
-    /// real motor neuron layout.  Sensor modalities mirror the Webots C. elegans
-    /// controller: 12 chemoreceptor distance channels, 9 mechanoreceptor velocity
-    /// channels, and 3 vibration / inertial channels.
+    /// named body-wall muscle groups. Geometry and sensory fields are engineering
+    /// proxies; anatomy landmarks do not assign positions to biological neurons.
     /// </summary>
     [RequireComponent(typeof(ArticulationBody))]
     public sealed class NmCelegansRobot : NmRobotBase
@@ -33,11 +25,8 @@ namespace NeuralMimicry
         // ------------------------------------------------------------------ //
 
         private const int NumSegments      = 24;
-        private const int NumChemSensors   = 12;
-        private const int NumMechSensors   = 9;
-        private const int NumVibSensors    = 3;
-        private const int TotalSensors     = NumChemSensors + NumMechSensors + NumVibSensors; // 24
-        private const int TotalActuators   = NumSegments * 4;  // 96 (channel 96 = MVULVA, unused)
+        private const int TotalSensors     = 24;
+        private const int TotalActuators   = 96;
 
         // ------------------------------------------------------------------ //
         // Inspector
@@ -102,35 +91,10 @@ namespace NeuralMimicry
         // ------------------------------------------------------------------ //
 
         /// <inheritdoc/>
-        public override string[] SensorNames
-        {
-            get
-            {
-                var names = new string[TotalSensors];
-                for (int i = 0; i < NumChemSensors; i++)
-                    names[i] = $"celegans_s_{i:D2}_chem_dist";
-                for (int i = 0; i < NumMechSensors; i++)
-                    names[NumChemSensors + i] = $"celegans_s_{NumChemSensors + i:D2}_mech_vel";
-                names[21] = "celegans_s_21_vibration_accel.x";
-                names[22] = "celegans_s_21_vibration_accel.y";
-                names[23] = "celegans_s_21_vibration_accel.z";
-                return names;
-            }
-        }
-
-        /// <inheritdoc/>
-        public override string[] ActuatorNames
-        {
-            get
-            {
-                var names = new string[TotalActuators];
-                string[] groups = { "MDL", "MDR", "MVL", "MVR" };
-                for (int seg = 0; seg < NumSegments; seg++)
-                    for (int g = 0; g < 4; g++)
-                        names[seg * 4 + g] = $"celegans_o_{seg:D2}_{groups[g]}";
-                return names;
-            }
-        }
+        public override string[] SensorNames => NmHabitat.Profile(this).sensor_names;
+        public override string[] ActuatorNames => NmHabitat.Profile(this).output_names;
+        private Vector3 previousVelocity;
+        private readonly RaycastHit[] probeHits = new RaycastHit[32];
 
         // ------------------------------------------------------------------ //
         // MonoBehaviour lifecycle
@@ -271,55 +235,38 @@ namespace NeuralMimicry
         protected override float[] CollectSensors()
         {
             if (_segments == null) return Array.Empty<float>();
-
-            var sensors = new float[TotalSensors];
-
-            // --- Chemoreceptors [0..11]: distance from head to nearest object.
-            //     Spread 12 rays in a cone around the head's forward axis.
-            Transform head = _segments[0].transform;
-            for (int i = 0; i < NumChemSensors; i++)
+            var values = new float[24];
+            var velocity = _segments[0].velocity;
+            var acceleration = transform.InverseTransformDirection((velocity - previousVelocity) / Mathf.Max(.001f, Time.fixedDeltaTime));
+            previousVelocity = velocity;
+            var angular = transform.InverseTransformDirection(_segments[0].angularVelocity);
+            Vector3 a = new Vector3(acceleration.z, -acceleration.x, acceleration.y);
+            Vector3 g = new Vector3(angular.z, -angular.x, angular.y);
+            for (int i = 0; i < 3; i++) { values[i] = Mathf.Clamp01(.5f + a[i] / 20f); values[3+i] = Mathf.Clamp01(.5f + g[i] / 20f); }
+            Vector3 head = _segments[0].transform.position;
+            Vector3 tail = _segments[23].transform.position;
+            values[6] = Probe(head, transform.forward, _segmentRadius * 2);
+            values[7] = Probe(tail, -transform.forward, _segmentRadius * 2);
+            if (Habitat != null)
             {
-                float angle = (i / (float)NumChemSensors) * 360f;
-                Vector3 dir = Quaternion.AngleAxis(angle, head.forward) * head.up;
-                float dist = _chemMaxDist;
-                if (Physics.SphereCast(head.position, _segmentRadius * 0.5f,
-                                       dir, out RaycastHit hit,
-                                       _chemMaxDist, _chemLayerMask,
-                                       QueryTriggerInteraction.Ignore))
-                {
-                    dist = hit.distance;
-                }
-                // Closer = stronger signal → invert and normalise.
-                sensors[i] = 1f - Mathf.Clamp01(dist / _chemMaxDist);
+                values[8] = Habitat.Sample("light", head - transform.right * _segmentRadius);
+                values[9] = Habitat.Sample("light", head + transform.right * _segmentRadius);
+                values[10] = Habitat.Sample("heat", head - transform.right * _segmentRadius);
+                values[11] = Habitat.Sample("heat", head + transform.right * _segmentRadius);
+                for (int i = 12; i <= 18; i++) values[i] = Habitat.Sample("chemical", (i >= 17 ? tail : head) + transform.right * ((i == 12 ? 0 : i % 2 == 0 ? 1 : -1) * _segmentRadius));
+                values[19] = Habitat.Sample("flow", head); values[20] = Habitat.Sample("flow", tail);
             }
-
-            // --- Mechanoreceptors [12..20]: velocity of 9 evenly-spaced segments.
-            float dt = Time.fixedDeltaTime;
-            if (dt <= 0f) dt = 0.02f;
-            for (int i = 0; i < NumMechSensors; i++)
-            {
-                // Map 9 receptors uniformly across 24 segments.
-                int segIdx = Mathf.RoundToInt(i * (NumSegments - 1) / (float)(NumMechSensors - 1));
-                segIdx = Mathf.Clamp(segIdx, 0, NumSegments - 1);
-
-                Vector3 cur = _segments[segIdx].transform.position;
-                Vector3 vel = (cur - _prevSegmentPos[segIdx]) / dt;
-                _prevSegmentPos[segIdx] = cur;
-
-                sensors[NumChemSensors + i] = Mathf.Clamp01(vel.magnitude / _mechVelMax);
-            }
-
-            // Update remaining prev positions (not sampled by mechanoreceptors).
-            for (int i = 0; i < NumSegments; i++)
-                _prevSegmentPos[i] = _segments[i].transform.position;
-
-            // --- Vibration [21..23]: root angular velocity XYZ.
-            Vector3 angVel = _segments[0].angularVelocity;
-            sensors[21] = Mathf.Clamp01((angVel.x + _vibAngVelMax) / (2f * _vibAngVelMax));
-            sensors[22] = Mathf.Clamp01((angVel.y + _vibAngVelMax) / (2f * _vibAngVelMax));
-            sensors[23] = Mathf.Clamp01((angVel.z + _vibAngVelMax) / (2f * _vibAngVelMax));
-
-            return sensors;
+            values[21] = Probe(head, transform.forward - transform.right * .4f, _chemMaxDist);
+            values[22] = Probe(head, transform.forward + transform.right * .4f, _chemMaxDist);
+            values[23] = Probe(tail, -transform.forward, _chemMaxDist);
+            return values;
+        }
+        private float Probe(Vector3 origin, Vector3 direction, float range)
+        {
+            int count = Physics.RaycastNonAlloc(origin, direction.normalized, probeHits, range, _chemLayerMask, QueryTriggerInteraction.Ignore);
+            float distance = range;
+            for (int i = 0; i < count; i++) if (!probeHits[i].transform.IsChildOf(transform)) distance = Mathf.Min(distance, probeHits[i].distance);
+            return 1f - Mathf.Clamp01(distance / range);
         }
 
         // ------------------------------------------------------------------ //
@@ -331,33 +278,32 @@ namespace NeuralMimicry
         {
             if (_segments == null || outputs == null) return;
 
-            // Each segment gets 4 outputs: MDL, MDR, MVL, MVR
-            // MDL + MDR → dorsal-ventral balance → Z-axis drive target.
-            //   net_dv = (MDR - MDL) → mapped symmetrically to [-limit, +limit]
-            // MVL + MVR → lateral balance → Y-axis drive target.
-            //   net_lat = (MVR - MVL) → mapped symmetrically to [-limit, +limit]
+            // Named body-wall quadrants determine opposing dorsal/ventral and
+            // left/right drives; MVULVA never participates in locomotion.
 
-            for (int seg = 0; seg < NumSegments; seg++)
+            for (int seg = 1; seg < NumSegments; seg++)
             {
                 if (_segments[seg] == null) continue;
 
-                int baseIdx = seg * 4;
-                if (baseIdx + 3 >= outputs.Length) break;
-
-                float mdl = Mathf.Clamp01(outputs[baseIdx + 0]); // MDL
-                float mdr = Mathf.Clamp01(outputs[baseIdx + 1]); // MDR
-                float mvl = Mathf.Clamp01(outputs[baseIdx + 2]); // MVL
-                float mvr = Mathf.Clamp01(outputs[baseIdx + 3]); // MVR
+                // The canonical vector is grouped by muscle labels; MVULVA is a
+                // separate readout. Missing MVL24 remains absent, never another muscle.
+                string[] names = ActuatorNames;
+                float Muscle(string group)
+                {
+                    int channel = Array.FindIndex(names, n => n.EndsWith($"_{group}{seg + 1:D2}"));
+                    return channel >= 0 && channel < outputs.Length ? Mathf.Clamp01(outputs[channel]) : 0f;
+                }
+                float mdl = Muscle("MDL"), mdr = Muscle("MDR"), mvl = Muscle("MVL"), mvr = Muscle("MVR");
 
                 // Dorsal-ventral drive (Z): 0.5 = neutral, >0.5 = dorsal bend.
-                float dvNorm = 0.5f + 0.5f * (mdr - mdl);
+                float dvNorm = 0.5f + 0.25f * (mvl + mvr - mdl - mdr);
                 DriveArticulationNorm(_segments[seg], Mathf.Clamp01(dvNorm), axis: 2);
 
                 // Lateral drive (Y): 0.5 = neutral, >0.5 = right bend.
-                float latNorm = 0.5f + 0.5f * (mvr - mvl);
+                float latNorm = 0.5f + 0.25f * (mdr + mvr - mdl - mvl);
                 DriveArticulationNorm(_segments[seg], Mathf.Clamp01(latNorm), axis: 1);
             }
-            // Channel 96 (MVULVA) is read but not applied to any joint.
+            // MVULVA is a separate readout and is not a body-wall joint.
         }
     }
 }

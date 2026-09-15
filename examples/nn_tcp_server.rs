@@ -450,6 +450,9 @@ fn handle_client(
     last_inputs: Arc<Mutex<Vec<f32>>>,
     last_outputs: Arc<Mutex<Vec<f32>>>,
 ) {
+    // Each frame is a short synchronous exchange. Avoid a delayed-ACK/Nagle
+    // stall between the separately written header and payload (interactive I/O).
+    let _ = stream.set_nodelay(true);
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())

@@ -7,6 +7,9 @@
 # Usage:
 #   ./run_unreal_sim.sh [--robots <spec>] [--tcp-host <host>] [--tcp-base-port <n>] [--no-build]
 #
+# `--node <count>` / `--nodes <count>` starts the distributed cluster runtime
+# and a TCP bridge for each brain, preserving the Unreal client protocol.
+#
 # Quick-start:
 #   # Launch one C. elegans brain for Unreal (listens on 127.0.0.1:7890):
 #   ./run_unreal_sim.sh
@@ -18,9 +21,9 @@
 # Unreal Engine project setup
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# This script starts one TCP server per AARNN brain instance.  Each server
-# accepts a single persistent connection from the corresponding robot actor in
-# Unreal.
+# This script starts one TCP endpoint per AARNN brain instance. With
+# `--node`/`--nodes`, those endpoints are bridges into distributed brain nodes;
+# without it, they remain the standalone TCP servers for compatibility.
 #
 # 1. No special socket plugin is required — the servers use plain TCP.
 #    The default OS socket API (FSocket / ISocketSubsystem) is sufficient.

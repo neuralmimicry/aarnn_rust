@@ -3220,7 +3220,16 @@ impl Morphology {
             }
         }
 
-        // Add ambient energy from skull membrane to encourage growth
+        total + self.skull_energy_at(p)
+    }
+
+    /// Return the ambient energy contribution that is independent of the
+    /// spatial synapse/entity index.  Keeping this as a separate pure helper
+    /// lets the GPU spatial kernel and the CPU reference compose the same
+    /// morphology field without silently dropping skull energy on the device
+    /// path.
+    fn skull_energy_at(&self, p: Point3) -> f32 {
+        let mut total = 0.0;
         if let Some(ref skull) = self.skull_membrane {
             let dx = p.x - skull.center.x;
             let dy = p.y - skull.center.y;
@@ -3809,7 +3818,10 @@ impl Morphology {
 
         let n_sources = entities.len();
         if n_sources == 0 {
-            return vec![0.0; n_pts];
+            return points
+                .iter()
+                .map(|&point| self.skull_energy_at(point))
+                .collect();
         }
 
         let points_f4: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
@@ -3882,6 +3894,14 @@ impl Morphology {
             unsafe {
                 cl.queue
                     .enqueue_read_buffer(&mut energy_buf, CL_TRUE, 0, &mut energies, &[])?;
+            }
+            // The accelerator computes the indexed synaptic/entity field.  The
+            // skull membrane is a separate analytic field, so add the same
+            // contribution used by `energy_at` before publishing the staged
+            // result.  This keeps GPU and CPU morphology semantics identical
+            // even when ambient energy is enabled.
+            for (energy, &point) in energies.iter_mut().zip(points) {
+                *energy += self.skull_energy_at(point);
             }
             Ok(energies)
         };
@@ -8032,6 +8052,108 @@ mod tests {
         let retrieved = grid.cell_entities(key);
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].pos.x, 1.5);
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_morphology_energy_matches_cpu_with_skull_ambient() {
+        if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        use crate::cl_compute::OpenCLManager;
+        use crate::config::NetworkConfig;
+        use crate::topology::Node3D;
+        use ndarray::Array2;
+
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 1;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 1;
+        config.num_output_neurons = 1;
+        config.energy_attraction_radius = 0.8;
+        config.energy_kernel_k = 0.7;
+        config.enforce_unique_geometry = false;
+
+        let hidden = vec![vec![Node3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            ..Default::default()
+        }]];
+        let sensory = vec![Node3D {
+            x: -0.25,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            ..Default::default()
+        }];
+        let output = vec![Node3D {
+            x: 0.25,
+            y: 0.0,
+            z: 0.0,
+            layer: 1,
+            ..Default::default()
+        }];
+        let w_in = Array2::from_elem((1, 1), 0.5);
+        let w_hh_fwd = Vec::new();
+        let w_hh_bwd = Vec::new();
+        let w_out = Array2::from_elem((1, 1), 0.5);
+        let mut morphology = Morphology::from_weights(
+            &hidden, &sensory, &output, &w_in, &w_hh_fwd, &w_hh_bwd, &w_out, &config, true,
+        );
+        morphology.skull_membrane = Some(SkullMembrane {
+            center: Point3::default(),
+            radius: 1.0,
+            radii: Some((1.0, 0.9, 0.8)),
+            alpha_radius: None,
+            energy_fluctuation: 0.37,
+        });
+        morphology.populate_grid(config.energy_attraction_radius);
+
+        let points = [
+            Point3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            Point3 {
+                x: 0.4,
+                y: 0.2,
+                z: -0.1,
+            },
+            Point3 {
+                x: 1.1,
+                y: 0.0,
+                z: 0.0,
+            },
+        ];
+        let sources = morphology
+            .spatial_index
+            .as_ref()
+            .map(|index| index.entities());
+        let cpu = morphology.energies_at_cpu(
+            &points,
+            config.energy_attraction_radius,
+            config.energy_kernel_k,
+        );
+        let manager = OpenCLManager::new_with_preferred_device_index(0)
+            .expect("opt-in morphology parity requires a usable accelerator");
+        let gpu = morphology.energies_at_gpu(
+            &points,
+            sources,
+            config.energy_attraction_radius,
+            config.energy_kernel_k,
+            &manager,
+        );
+
+        for (index, (&actual, &expected)) in gpu.iter().zip(&cpu).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 1.0e-5,
+                "morphology energy diverged at {index}: GPU={actual:.8}, CPU={expected:.8}"
+            );
+        }
     }
 
     #[test]

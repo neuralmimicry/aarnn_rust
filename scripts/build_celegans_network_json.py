@@ -8,8 +8,10 @@ The generated file follows the `Snapshot` schema used by `Runner::import_network
   - p_in / p_fwd / p_bwd / p_rec / p_out
 
 Mapping strategy:
-  - Presynaptic neuron functions (uppercase names) -> hidden neurons (single hidden layer)
-  - Postsynaptic targets that are never presynaptic functions -> output neurons (muscles)
+  - Presynaptic neuron functions (uppercase names) -> the 302 biological neurons
+    in a single hidden layer
+  - Postsynaptic targets that are never presynaptic functions -> external muscle
+    readout channels; they are not additional biological neurons
   - Webots Celegans sensory channels (24) -> label-aware projections into known
     C. elegans sensory/interneuronal hidden nodes (not index-only remapping).
 """
@@ -901,6 +903,9 @@ def main() -> None:
     net["num_hidden_layers"] = 1
     net["num_hidden_per_layer_initial"] = hidden_count
     net["num_output_neurons"] = output_count
+    # Sensory inputs and muscle targets are external adapter/readout channels.
+    # The biological population is exactly the imported 302-neuron connectome.
+    net["io_channels_are_biological"] = False
     sensory_target_layer, output_source_layer = aarnn_laminar_io_layers(net["num_hidden_layers"])
     net["sensory_target_layer"] = sensory_target_layer
     net["output_source_layer"] = output_source_layer
@@ -953,7 +958,8 @@ def main() -> None:
     net["aarnn_import_topology_rewire_keep_fraction"] = 0.74
     net["aarnn_import_topology_rewire_region_bias"] = 0.30
     net["clumping_design"] = "NematodeWorm"
-    # Keep connectome size unconstrained so imported outputs are not capped out by preset limits.
+    # Reserve the historical 398-cell budget as biological growth headroom;
+    # external sensory/muscle channels are not part of this count.
     net["max_total_neurons"] = max(hidden_count + output_count, int(net.get("max_total_neurons", 0) or 0))
     net["brain_regions"] = build_nematode_regions()
     net["neuron_types"] = [
@@ -987,6 +993,20 @@ def main() -> None:
             "hidden_nodes": hidden_nodes,
             "output_nodes": output_nodes,
             "sensory_projection": sensory_target_map,
+            "sensory_neuron_nodes": sorted(
+                {node for targets in sensory_target_map.values() for node in targets}
+            ),
+            "motor_neuron_nodes": sorted(
+                {src for (src, dst), weight in edges.items() if dst in output_index and weight > 0}
+            ),
+            "motor_output_channels": output_nodes,
+            "io_semantics": {
+                "biological_neuron_count": hidden_count,
+                "sensory_input_channel_count": sensory_count,
+                "motor_readout_channel_count": output_count,
+                "io_channels_are_biological": False,
+                "output_targets_are": "muscle_endpoints",
+            },
             "laminar_mapping": {
                 "hidden_layer_count": int(net.get("num_hidden_layers", 1)),
                 "sensory_target_layer": sensory_target_layer,

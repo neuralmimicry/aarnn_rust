@@ -1,0 +1,133 @@
+{
+  "schema": "NAO-SOCIAL/1",
+  "profile": "nao_social_v1",
+  "base_sensory": 250,
+  "base_output": 40,
+  "sensory": 282,
+  "output": 49,
+  "dt_ms": 1,
+  "max_utf8_bytes": 256,
+  "max_players": 16,
+  "max_pending_turns": 8,
+  "turn_frames": 320,
+  "quiet_frames": 128,
+  "model_note": "Engineered social reflex circuit with a finite phrase decoder; no learned general language understanding. All replies require Rust neural output.",
+  "sensory_extension": [
+    "social.lexical.greeting",
+    "social.lexical.identity",
+    "social.lexical.help",
+    "social.lexical.thanks",
+    "social.lexical.goodbye",
+    "social.lexical.affirmation",
+    "social.lexical.negation",
+    "social.lexical.unrecognised",
+    "social.utf8.bit0",
+    "social.utf8.bit1",
+    "social.utf8.bit2",
+    "social.utf8.bit3",
+    "social.utf8.bit4",
+    "social.utf8.bit5",
+    "social.utf8.bit6",
+    "social.utf8.bit7",
+    "social.message.start",
+    "social.message.end",
+    "social.modality.typed",
+    "social.modality.transcript",
+    "social.player.present",
+    "social.transcript.confident",
+    "social.player.near",
+    "social.player.left",
+    "social.player.right",
+    "social.player.above",
+    "social.player.below",
+    "social.utf8.valid",
+    "social.addressed",
+    "social.encounter.novel",
+    "social.feedback.negative",
+    "social.cancel"
+  ],
+  "acts": [
+    {
+      "id": "greeting",
+      "words": [
+        "hello",
+        "hi",
+        "hey",
+        "greetings"
+      ],
+      "text": "Hello! I am NAO.",
+      "gesture": "greet"
+    },
+    {
+      "id": "identity",
+      "words": [
+        "name",
+        "who",
+        "yourself"
+      ],
+      "text": "I am NAO, a simulated robot connected to AARNN.",
+      "gesture": "attend"
+    },
+    {
+      "id": "help",
+      "words": [
+        "help",
+        "can",
+        "commands"
+      ],
+      "text": "Try hello, your name, thanks, yes, no or goodbye. My current social circuit has a small vocabulary.",
+      "gesture": "attend"
+    },
+    {
+      "id": "thanks",
+      "words": [
+        "thanks",
+        "thank"
+      ],
+      "text": "You are welcome.",
+      "gesture": "nod"
+    },
+    {
+      "id": "goodbye",
+      "words": [
+        "bye",
+        "goodbye",
+        "farewell"
+      ],
+      "text": "Goodbye!",
+      "gesture": "greet"
+    },
+    {
+      "id": "affirmation",
+      "words": [
+        "yes",
+        "yeah",
+        "okay",
+        "ok"
+      ],
+      "text": "Yes acknowledged.",
+      "gesture": "nod"
+    },
+    {
+      "id": "negation",
+      "words": [
+        "no",
+        "nope"
+      ],
+      "text": "No acknowledged.",
+      "gesture": "shake"
+    },
+    {
+      "id": "unrecognised",
+      "words": [],
+      "text": "I received your words. My current social circuit does not understand that yet.",
+      "gesture": "attend"
+    },
+    {
+      "id": "inquiry",
+      "words": [],
+      "text": "Hello! What can you teach me about this place? Try hello, name or help; I am still learning to communicate.",
+      "gesture": "attend"
+    }
+  ]
+}

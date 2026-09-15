@@ -1,0 +1,24 @@
+id = "SIM-CONTENT-001"
+version = 1
+title = "Shared sensory habitats and illustrative morphology across simulators"
+requirements = ["INV-002", "INV-008", "INV-015", "INV-016", "INV-017", "spec-16.17-16.24"]
+products = ["host", "web", "workstation"]
+mode = "content-contract; optional real-browser and native scene-construction lanes"
+seed = 481516
+logical_stop = "all six profiles checked; no neural execution or biological-time advancement"
+oracle = "exact generated assets; bounded geometry; spatial ray/field and retinal-history fixtures; declared channel identities"
+required_artifacts = ["result.json", "run.log", "browser screenshots when browser lane requested", "supervisor report and engine log when Webots lane requested"]
+model_fixture_digest = "generated:sim/content/compiled.generated.json digest field"
+config_fixture_digest = "sha256:sim/content/catalog.json; recorded per run"
+input_fixture_digest = "sha256:scripts/qa/test_simulator_sensors.cjs; recorded per run"
+target_triples = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+capabilities = ["python3", "nodejs", "local-filesystem"]
+device_requirement = "contract lane needs no hardware; browser lane requires Playwright/Chromium; Webots lane requires Webots/display; requested unavailable lanes fail"
+resource_bounds = "five habitats, at most 256 primitives per habitat and 512 parts per profile; browser mesh oracle below two million float elements"
+latency_bounds = "120 seconds contract; 150 seconds browser; 180 seconds Webots; no production latency claim"
+reference_profile = "IllustrativeSimulatorContentV1"
+expected_digest_procedure = "compile sorted canonical payload with scripts/sim_content.py; compare every export and Webots robot/world to regeneration"
+admission_loss_policy = "no live brain admission; mock inference only; disconnect rejects stale visual output explicitly"
+
+# Independent acceptance still required: Unity editor/build/play mode, all native
+# renderer views, biological transducer/motor calibration and long-run physics.

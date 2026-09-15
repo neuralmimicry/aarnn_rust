@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "aarnn",
+  "version": "${version}",
+  "name": "AARNN Sensory Worlds",
+  "description": "Shared sensory habitats and six robot equivalents for the AARNN Rust neural runtime.",
+  "environment": "*",
+  "license": "MIT",
+  "entrypoints": {
+    "main": ["org.neuralmimicry.minecraft.AarnnMod"],
+    "client": ["org.neuralmimicry.minecraft.AarnnClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.3",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

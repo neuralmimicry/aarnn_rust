@@ -30,7 +30,7 @@ namespace NeuralMimicry
         /// </summary>
         [SerializeField]
         [Tooltip("Brain configuration asset (host, port, encoding).")]
-        protected NmBrainConnector brainConnector;
+        public NmBrainConnector brainConnector;
 
         /// <summary>
         /// When <c>true</c> the component will attempt to reconnect on the next
@@ -38,6 +38,7 @@ namespace NeuralMimicry
         /// </summary>
         [Tooltip("Automatically reconnect when the TCP link drops.")]
         public bool autoReconnect = true;
+        public NmHabitat Habitat { get; set; }
 
         /// <summary>
         /// Multiplier applied to the physics <c>Time.fixedDeltaTime</c> when
@@ -111,6 +112,8 @@ namespace NeuralMimicry
         /// </summary>
         protected virtual void Start()
         {
+            var appearance = GetComponent<NmRobotAppearance>() ?? gameObject.AddComponent<NmRobotAppearance>();
+            appearance.Build(this);
             if (brainConnector == null)
             {
                 Debug.LogError($"[NmRobotBase] {name}: brainConnector is not assigned.", this);

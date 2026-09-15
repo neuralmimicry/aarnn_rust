@@ -17,6 +17,11 @@ Additional hardware-offload documentation:
 - `../docs/aarnn_fpaa_partitioning.md`: design rationale for which AARNN kernels are realistic FPAA targets
 - `../docs/llm_mirror.md`: sparse LLM stimulation, real neural-output decoding, and memory controls
 
+Headless simulator operations:
+
+- headless-simulation-observation.md: remote observation and teleport handoff
+  for the Bedrock, Webots, Unreal, and Unity environments
+
 Runtime FPAA support in the Rust application includes:
 
 - startup autodetection for Pi.HAT GPIO/SPI and USB-style endpoints

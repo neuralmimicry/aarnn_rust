@@ -39,6 +39,85 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [x] `2026-09-14` Fresh automatic backend verification on the reported NVIDIA
+  GeForce RTX 2080 stack passed all three AARNN parity tests with
+  `NM_ENABLE_OPENCL_IN_TESTS=1 NM_GPU_BACKEND=auto cargo test --locked
+  --no-default-features --features 'engine_runtime,ui,cuda' --lib
+  'runner::tests::aarnn_gpu' -- --nocapture`. The startup probe measured
+  OpenCL at `0.844 ms` and CUDA at `0.374 ms`, selected CUDA, and the three
+  morphology/delay/growth and adaptation/neuromodulation tests passed. NVRTC
+  PTX loading reported the installed driver's unsupported PTX version; the
+  device-matched `nvcc` CUBIN fallback succeeded, so this remains a verified
+  local compatibility path rather than an ignored CUDA failure.
+
+- [x] `2026-09-14 12:20Z` Closed the CUDA dispatch gap found during the
+  cross-backend audit. `src/gpu_api.rs` now dispatches the full `aarnn_step`
+  signature and the voltage-gated `syn_filter` signature used by
+  `CUDA_PROGRAM_SOURCE`; CUDA release, homeostasis, neuromodulation and growth
+  dispatches are covered by the same argument contract. Release-mask kernels
+  now perform their final comparison in `f32`, matching the Rust reference cast
+  points and preventing precision-dependent event admission. `cargo check
+  --locked --no-default-features --features engine_runtime,ui,cuda`, the
+  OpenCL hardware gate, and all three opt-in AARNN runner parity tests passed.
+  CUDA hardware execution remains unverified on this host and is still a
+  required production gate.
+
+- [x] `2026-09-14 12:28Z` Repository-wide verification after the CUDA and
+  release-mask fixes passed: `cargo test --locked --workspace` (286 library
+  tests plus all integration suites), `cargo check --locked --all-features
+  --all-targets`, `cargo check --locked --no-default-features
+  --features engine_runtime,ui,cuda`, `cargo fmt --all --check`, and
+  `git diff --check`. The existing warnings remain non-fatal and unrelated to
+  the backend contract changes.
+
+- [x] `2026-09-14` Extended the AARNN accelerator gate and runner to cover the
+  remaining numeric biology stages on the local NVIDIA GeForce RTX 2080
+  OpenCL device. `src/cl_compute.rs` now certifies deterministic release
+  masks, adaptive-threshold/homeostatic decay and spike feedback,
+  neuromodulator/resonance EMA, growth eligibility, morphology energy, STP,
+  delayed sparse accumulation, filtering, plasticity, and the AARNN membrane
+  transition against CPU reference vectors before a device is admitted.
+  `Runner` uses those stages transactionally with CPU fallback on any device
+  error; GPU release/growth results are proposal inputs only, while topology
+  publication and canonical morphology event ordering remain ordered CPU
+  commit boundaries required by `INV-009` and `INV-014`. Negative delays are
+  guarded before history indexing by both OpenCL and CUDA delayed kernels.
+  The opt-in constructor gate and multi-step AARNN runner tests pass on the
+  RTX 2080, as does the morphology/growth deterministic ordering test with
+  `growth3d,morpho`. Broader device/driver coverage and long replay evidence
+  remain required before production cutover.
+
+- [x] `2026-09-14 10:44Z` Fixed the cluster input/control mismatch found in the
+  native launcher. `src/ui.rs` now routes the selected audio-file or selected
+  microphone provider into the managed network after cluster Start/Repeat,
+  without stepping the UI's standalone Runner; `src/distributed.rs` admits a
+  shape-checked external sensory batch with bounded single-entry backpressure
+  and forwards it through the existing shard transport. Cluster GPU status now
+  reports the selected managed view's playing state and distinguishes worker
+  GPU reporting from the local standalone runner. The focused admission test,
+  launcher contract tests, shell/Python checks and the live `run_examples.sh`
+  relocation/growth probe passed. The WAV launcher run decoded
+  `/home/pbisaacs/Downloads/message.wav` and produced the expected EQ/spike
+  diagnostics. The later accelerator parity gate extends the managed AARNN
+  numeric stages as recorded below; the launcher retains CPU fallback when a
+  device/profile equivalence check fails.
+
+- [x] `2026-09-14` Rebuilt after the parity extension and verified the focused
+  OpenCL hardware gate with both `opencl` and `opencl,growth3d,morpho`, plus
+  `runner::tests::aarnn_gpu*` on the RTX 2080. `cargo check --locked
+  --no-default-features --features engine_runtime,ui,opencl` and formatting
+  passed. Heterogeneous biological profiles still select the documented CPU
+  reference fallback until per-neuron device parameter buffers are certified;
+  this preserves equivalence rather than silently changing the model.
+
+- [x] `2026-09-14` The requested GPU/microphone review was closed in the
+  canonical `src/runner.rs`, `src/cl_compute.rs`, `src/ui.rs` and
+  `src/providers.rs` paths. The native UI reports paused/model/fallback state
+  separately, the certified LIF/Izh and AARNN paths select the GPU when their
+  equivalence gate passes, and CPAL exposes stable microphone enumeration and
+  selection. Unsupported heterogeneous AARNN profiles retain the CPU
+  reference fallback rather than silently substituting Izhikevich dynamics.
+
 - [~] `2026-09-11` Live distributed AARNN logs showed early-cell formation followed
   by repeated interface counters returning to `1/32` and `1/16`. The heartbeat
   path treated every larger layer count as a placement change and reissued a
@@ -438,6 +517,95 @@ peripheral or scientific gate.
   external platform evidence.
 
 ## Outcomes & Retrospective
+
+## WebGL browser simulator milestone — 2026-09-15
+
+This milestone extends the existing Web product with a browser-runnable WebGL
+simulation surface. It is scoped to the established `web_ui` gateway and
+cluster runtime: the browser owns rendering and robot sensor/actuator adapters;
+Rust remains the sole neural executor and authoritative AER admission path.
+
+Traceability: specification sections 16.12, 16.20, 16.21 and 21.11;
+`INV-002`, `INV-003`, `INV-005`, `INV-007`, `INV-008`, `INV-010`, `INV-015`,
+`INV-016`, `INV-017`; browser capability and permission rules in
+`APP-INV-002`–`APP-INV-004` where applicable. The launcher uses the existing
+cluster worker/shard path, so `--node/--nodes` remains an operational placement
+parameter rather than a browser semantic.
+
+Canonical files after discovery:
+
+- `src/bin/web_ui.rs`: authenticated browser gateway and AER inference route.
+- `web_ui/webgl-sim.html`, `web_ui/webgl-sim.js`: browser scene and robot
+  adapters, served as static embedded assets by `web_ui`.
+- `scripts/run_webgl_sim.sh` and `scripts/run_sim.sh`: browser simulator
+  launcher and shared robot/node configuration.
+- `scripts/robot_profiles.py`: single source for robot sensory/output counts.
+- `tests/web_ui_browser_compat.rs` and `tests/run_examples_launcher.rs`:
+  browser asset and launcher contract checks.
+
+Milestones:
+
+- [x] Browser scene and six profile adapters render through WebGL and expose
+  explicit sensor/actuator counts matching `scripts/robot_profiles.py`.
+- [x] The gateway accepts a bounded inference request, forwards it through the
+  same distributed AER path, and returns post-admission output spikes without
+  exposing TCP or Unix sockets to the browser.
+- [x] `scripts/run_sim.sh --sim webgl --robots ... --nodes N` starts the shared
+  cluster and web gateway, prints the browser URL, and preserves cleanup.
+- [x] Browser compatibility, launcher contract, shell/Python syntax and a live
+  gateway round trip pass; unavailable WebGL is reported as a capability error.
+
+Rollback boundary: remove the additive WebGL assets, route, and launcher. No
+persisted schema or biological runtime semantics change. The browser remains a
+management-only client if the simulator surface is unavailable.
+
+## Progress update — 2026-09-15: WebGL browser simulator
+
+- [x] `2026-09-15 07:30Z` Added the WebGL page, native WebGL renderer, six shared
+  robot profile adapters, explicit capability messaging, and the authenticated
+  `/api/aer/infer` gateway. The browser sends profile-sized sensory frames and
+  maps returned output spikes to the visible actuator state; it never opens a
+  TCP or Unix socket and does not claim global HID or media access.
+- [x] `2026-09-15 07:35Z` Extended `scripts/run_sim.sh` with `--sim webgl`,
+  `--web-port`, and `--orchestrator-port`; the launcher starts the existing
+  `run_webot.sh` cluster with an isolated IPC directory and the release
+  `web_ui`, preserving `--node/--nodes` shard distribution and cleanup.
+- [x] `2026-09-15 07:42Z` Focused and live evidence passed: `cargo test --locked
+  --test web_ui_browser_compat --test run_examples_launcher` (all tests
+  passed), `cargo check --locked --bin web_ui --no-default-features --features
+  engine_runtime,ui`, `cargo fmt --all --check`, `git diff --check`, shell/
+  Python/Node syntax checks, and a live `--nodes 2` WebGL run. The live page
+  and asset loaded, inference returned HTTP 200 with `accepted_batches: 1` and
+  a worker target, and 8,193 input values were rejected with HTTP 413.
+- [x] `2026-09-15` Diagnosed the reported one-minute control-plane failure in
+  `logs/webgl_sim_109366`: the cluster node binary had been built by the WebGL
+  launcher with only `engine_runtime,ui`, so `--ipc` could not bind the
+  `robot_io` Unix socket. `run_webot.sh` then waited its 60-second socket
+  deadline and shut down the cluster; the web UI was a casualty of launcher
+  teardown, not the initiating crash. WebGL now builds `aarnn_rust` with
+  `engine_runtime,ui,robot_io,cuda`, builds `web_ui` separately, and rejects an
+  incompatible `--no-build` binary with an actionable error. A 35-second live
+  `--no-build --nodes 2` run reached the gateway URL and logged both brain and
+  worker IPC readiness.
+- [x] `2026-09-15` Explained and corrected the apparent native/browser output
+  raster mismatch: both labels count active cells across a sliding history
+  window, rather than reporting only the latest simulation step, but the web
+  window was 180 columns while the Rust UI retains 240. The browser window now
+  matches the native `raster_cols` value. Cross-node comparisons still require
+  selecting the same node because Rust `Local managed` reads its local runner
+  while web `Auto` resolves the currently ranked active worker.
+- [x] `2026-09-15` Corrected distributed activity semantics for the WebGL/control
+  plane. Placement layer numbering excludes the sensory vector, so layer 0 is
+  the imported 302-neuron hidden layer and the final layer is the 96-neuron
+  output layer. The browser had used the separate sensory envelope for layer 0
+  and shifted hidden activity onto the output shard, producing the reported
+  `0/302` and misleading `16/96` display. The activity RPC now also publishes
+  the current sensory history frame, allowing the browser graph/probes to show
+  the actual 24-channel input independently. The focused browser compatibility
+  suite (8 tests), distributed activity RPC regression, release builds for both
+  binaries, and a live two-node gateway probe passed. The live activity samples
+  showed 14/302 and 9/302 hidden spikes, confirming that the original layer is
+  active.
 
 ## Progress update — 2026-08-31
 
@@ -1487,3 +1655,681 @@ multi-shard WAL/output actor path remains intentionally gated.
   remained proposal-only and reported `applied=false`.
 - [x] `continuum_tenant_aarnn_site.yml --syntax-check` passed. No remote files,
   services or orchestrator state were changed by these probes.
+
+## Verification update — 2026-09-14: local shard relocation and growth probe
+
+- [x] Added the opt-in `AARNN_VERIFY_SHARD_GROWTH=1` mode to `run_examples.sh`
+  and the bounded `scripts/qa/verify_example_sharding.py` helper. It copies
+  the supplied snapshot into the selected runtime root, adds finite growth
+  headroom and same-layer growth settings, verifies complete two-node active
+  layer coverage, stops the current active owner, waits for automatic
+  relocation, reads the surviving worker's actual snapshot, and requires
+  further neuron growth after relocation. The checked-in `network.json` is
+  never modified.
+- [x] The local end-to-end run passed with
+  `AARNN_VERIFY_SHARD_GROWTH=1 AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0`; it
+  observed a two-owner `cluster_master` assignment, stopped the owner of
+  layer 0, observed relocation to the remaining node, and saw the destination
+  snapshot retain 567 neurons and grow to 571 after relocation. Cleanup left
+  no launcher-owned process.
+- [x] `bash -n run_examples.sh`, Python syntax compilation, `cargo fmt --all
+  --check` and `git diff --check` passed. The launcher contract suite now has
+  four tests and remains separate from the stable-executor path.
+- [!] This is live evidence for the current legacy layer-assignment
+  compatibility path. It does not promote that path to authoritative stable
+  shard ownership or close the production quorum, durable migration, identity,
+  multi-host RPO/RTO or scientific parity gates.
+
+## Verification update — 2026-09-14: WAV-backed Rust UI EQ and sensory admission
+
+- [x] The canonical `src/providers.rs` audio provider now rejects zero sensory
+  capacity, rejects empty or non-finite decoded audio, reports sample metadata,
+  and fails on packet decode errors instead of silently accepting a bad source.
+  Audio-to-spike dithering uses a counter-based frame/neuron coordinate, so the
+  same decoded source produces the same sensory raster across provider runs.
+- [x] The native Rust UI accepts an explicit `AARNN_AUDIO_FILE` startup source
+  and bounded `AARNN_AUDIO_SENSORY_NEURONS` count. When a supplied snapshot has
+  zero sensory neurons, the UI provisions the requested bounded input layer
+  before loading the source. The UI displays the file metadata and last
+  sensory spike count, enables the Graphic EQ, and autoplays an explicit source
+  by default (`AARNN_AUDIO_AUTOPLAY=0` disables that behaviour).
+- [x] Provider tests passed with `cargo test --locked --features ui --lib
+  providers::tests -- --nocapture`: WAV decode/EQ energy, repeatable nonzero
+  spikes, silence-to-zero policy, and zero-sensory rejection all passed.
+- [x] The exact launcher release profile passed:
+  `cargo build --release --locked --no-default-features --bin aarnn_rust
+  --bin web_ui --features "engine_runtime,ui"`.
+- [x] The supplied `/home/pbisaacs/Downloads/message.wav` was exercised through
+  `run_examples.sh` with the native UI enabled. The orchestrator reached the
+  dashboard at `http://127.0.0.1:8081`; its audio log recorded `8000 Hz`,
+  `192160` mono samples, `8 EQ bands`, `S=64`, then
+  `frame=60 eq_peak=0.7723 sensory_spikes=9/64` and
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`. The bounded run exited by
+  timeout and launcher cleanup completed; no launcher-owned process remained.
+- [!] This proves the local Rust UI/reference audio path and its visible EQ and
+  sensory spike response. It does not promote the UI's direct provider into the
+  specification's governed peripheral-session/transducer media plane, and it
+  does not close the repository's separate production quorum, identity,
+  durability, migration, or scientific validation gates.
+
+## Verification update — 2026-09-14: isolated final launcher evidence
+
+- [x] Added bounded launcher port-start overrides and an opt-out for default
+  discovery targets. The local example now keeps explicit test endpoints
+  isolated from stale nodes that may still reconnect to the historical
+  broadcast port; normal discovery defaults remain unchanged outside the
+  launcher override.
+- [x] Rebuilt the exact locked release profile after the discovery isolation
+  change:
+  `cargo build --release --locked --no-default-features --bin aarnn_rust
+  --bin web_ui --features "engine_runtime,ui"`.
+- [x] The final isolated sharding run used ports 52051/52075/52087/8280 and
+  `AARNN_VERIFY_SHARD_GROWTH=1`. It observed two intended owners, stopped the
+  layer-0 owner, relocated all layers to the survivor, retained the snapshot,
+  and observed growth from 551 to 555 after relocation. Launcher cleanup
+  completed successfully.
+- [x] The final isolated WAV run used ports 53051/53075/53087/8380 with
+  `/home/pbisaacs/Downloads/message.wav`, `S=64`, and autoplay. The native UI
+  log recorded `8000 Hz`, `192160` samples, `8 EQ bands`, then
+  `frame=60 eq_peak=0.7723 sensory_spikes=9/64` and
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`.
+- [x] The five-test launcher contract suite, four provider tests, shell/Python
+  syntax checks, formatting check and diff check passed after the final edits.
+
+## Verification update — 2026-09-14: production microphone stream conversion
+
+- [x] Replaced the selected microphone's typed `f32` fallback with CPAL's raw
+  callback and explicit conversion for signed/unsigned 8/16/24/32/64-bit and
+  f32/f64 PCM formats. DSD and unknown formats fail closed instead of being
+  reinterpreted as floating-point samples. Non-finite callback samples are
+  discarded before admission to the bounded analysis buffer.
+- [x] The locked release profile rebuilt successfully after this change:
+  `cargo build --release --locked --no-default-features --bin aarnn_rust
+  --bin web_ui --features "engine_runtime,ui"`.
+- [x] Provider tests passed: five tests covering microphone enumeration, WAV
+  decode/Graphic EQ energy, repeatable nonzero sensory spikes, silence, and
+  bounded sensory admission.
+- [x] The final native UI launcher run used the supplied
+  `/home/pbisaacs/Downloads/message.wav` with `AARNN_UI_NEURON_MODEL=lif`,
+  autoplay, and isolated ports. It initialized the NVIDIA GeForce RTX 2080
+  OpenCL backend and recorded `8000 Hz`, `192160` samples, `8 EQ bands`, then
+  `frame=60 eq_peak=0.7723 sensory_spikes=9/64` and
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`. Launcher cleanup left no
+  launched runtime process.
+- [x] The final focused hardware gate passed with
+  `NM_ENABLE_OPENCL_IN_TESTS=1`; this validates accelerator initialization and
+  reference equivalence on the detected GPU. LIF/Izh and homogeneous AARNN
+  runs select the GPU when active; unsupported heterogeneous profiles retain
+  the certified CPU reference fallback until per-neuron parameter buffers are
+  proven across the device matrix.
+
+## Verification update — 2026-09-14 11:45Z: full AARNN accelerator parity and end-to-end closure
+
+- [x] The certified OpenCL constructor gate passed on the local NVIDIA GeForce
+  RTX 2080 with `opencl,growth3d,morpho`. Its reference vectors cover the
+  AARNN membrane transition, morphology energy, delayed sparse accumulation,
+  release probability, STP, synaptic filtering, plasticity, adaptive
+  threshold, homeostasis, neuromodulation/resonance and growth eligibility.
+  CUDA parity code also compiles with `cargo check --locked
+  --no-default-features --features 'engine_runtime,ui,cuda'` against the
+  installed CUDA toolkit.
+- [x] The focused AARNN runner tests passed:
+  `cargo test --locked --no-default-features --features
+  'engine_runtime,ui,opencl,growth3d,morpho' --lib 'runner::tests::aarnn_gpu'
+  -- --nocapture`. CPU commit boundaries remain authoritative for topology
+  publication and canonical event ordering; GPU release and growth outputs are
+  admission proposals, preserving `INV-009`, `INV-014` and replay ordering.
+- [x] The explicit morphology ordering regression passed:
+  `runner::tests::morphology_release_order_is_independent_of_producer_order`.
+  This verifies that producer/work-group order cannot change the canonical
+  released-event sequence even when accelerated numeric stages are enabled.
+- [x] The tightened relocation helper now requires both a snapshot increase
+  after relocation and a second increase afterward, so it cannot pass solely
+  because the pre-relocation count was retained or the growth cap was reached.
+  The rebuilt `run_examples.sh` probe passed with native UI and audio enabled:
+  the survivor grew from `542` to `547` after relocation. The CPU-only probe
+  also passed (`567` to `571`).
+- [x] The native Rust UI run with
+  `/home/pbisaacs/Downloads/message.wav`, `AARNN_AUDIO_AUTOPLAY=1` and
+  `AARNN_AUDIO_SENSORY_NEURONS=64` logged `OpenCL GPU device: NVIDIA GeForce
+  RTX 2080`, decoded `8000 Hz`, `192160` samples and `8 EQ bands`, and emitted
+  nonzero sensory activity: `frame=60 eq_peak=0.7723 sensory_spikes=9/64`,
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`, and
+  `frame=180 eq_peak=0.8470 sensory_spikes=14/64`.
+- [x] Final repository checks passed: `cargo check --locked --all-features
+  --all-targets`, `cargo test --locked --workspace` (all executed tests passed),
+  `cargo fmt --all --check`, `git diff --check`, shell/Python syntax checks,
+  and the five launcher contract tests. Warnings remain in the pre-existing
+  broad codebase; no new compile or test failure remains.
+- [!] The local evidence closes repository-level implementation and regression
+  checks for this change. It does not claim the separate normative production
+  gates for multi-host device matrices, durable authoritative shard ownership,
+  quorum migration, identity/security deployment or scientific validation.
+
+## Verification update — 2026-09-14 11:59Z: post-growth accelerator cache barrier
+
+- [x] The extended replay initially exposed a stale sparse morphology receiver
+  cache after the first committed AARNN growth event. The OpenCL upload path
+  could index the old row count when the hidden layer had already grown.
+  `Runner` now validates morphology route-cache dimensions against the live
+  topology at each biological-kernel boundary and rebuilds the cache before
+  accelerator use; sparse input upload also fails safely on a transiently
+  short cache instead of panicking.
+- [x] The replay fixture now runs 32 one-millisecond transitions, crossing the
+  documented 25 ms minimum early-cell maturation period. It compares CPU and
+  OpenCL state through a committed neuron growth event, including voltages,
+  recovery, adaptive/homeostatic thresholds, STP, weights, growth cooldowns,
+  morphology, neuromodulation/resonance and ordered release events.
+  `NM_ENABLE_OPENCL_IN_TESTS=1 cargo test --locked --no-default-features
+  --features 'engine_runtime,ui,opencl,growth3d,morpho' --lib
+  runner::tests::aarnn_gpu -- --nocapture` passed all three focused tests on
+  the NVIDIA GeForce RTX 2080.
+- [x] The same feature set passed
+  `cl_compute::tests::hardware_reference_gate_is_opt_in` with the opt-in
+  OpenCL hardware gate, and the deterministic morphology release-order
+  regression passed. `cargo check --locked --all-features --all-targets`,
+  `cargo test --locked --workspace`, `cargo fmt --all --check` and
+  `git diff --check` also passed after the barrier change.
+- [x] The rebuilt release binaries passed the live headless launcher probe:
+  `AARNN_VERIFY_SHARD_GROWTH=1 AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0
+  AARNN_VERIFY_TIMEOUT_S=45 ./run_examples.sh` sharded 396 neurons across two
+  workers, relocated the stopped owner, retained a 558-neuron survivor
+  snapshot and continued growth to 563 before clean shutdown. The explicit
+  CUDA feature compile also passed with
+  `cargo check --locked --no-default-features --features
+  'engine_runtime,ui,cuda'`.
+- [!] This remains local device evidence. Multi-device/driver coverage,
+  multi-host authoritative ownership, durability/fencing, security deployment
+  and scientific validation remain separate production gates.
+
+## Verification update — 2026-09-14: voltage-gated filtering and morphology safety audit
+
+- [x] Closed the remaining AARNN kernel parity gap in `src/cl_compute.rs` and
+  `src/runner.rs`: OpenCL and CUDA `syn_filter` now receive the pre-transition
+  membrane voltage and apply the same bounded voltage-dependent NMDA gate as
+  `aarnn::dynamics::apply_synaptic_filter`. The standalone device gate tests
+  this branch with nonzero sensitivity, and
+  `aarnn_gpu_membrane_step_matches_reference_runner` exercises it through the
+  real runner dispatch.
+- [x] Corrected an unsafe morphology/delay dispatch path. AARNN sparse GPU
+  accumulation could bypass per-synapse release decisions and omit committed
+  release-event records. AARNN morphology and physical-delay routing now stays
+  on the ordered CPU accumulation/event path; certified GPU transition,
+  filtering where applicable, STP, adaptive threshold, homeostasis,
+  neuromodulation, plasticity, release/growth proposals and deterministic
+  reference gates remain available without allowing structural divergence.
+  This preserves `INV-009`, `INV-014` and canonical event ordering.
+- [x] The no-default-features AARNN lane passed all three focused GPU tests and
+  the OpenCL hardware gate on the NVIDIA GeForce RTX 2080:
+  `NM_ENABLE_OPENCL_IN_TESTS=1 cargo test --locked --no-default-features
+  --features 'engine_runtime,ui,opencl,growth3d,morpho' --lib
+  'runner::tests::aarnn_gpu_' -- --nocapture` and the corresponding
+  `cl_compute::tests::hardware_reference_gate_is_opt_in` invocation.
+  `cargo check --locked --no-default-features --features
+  'engine_runtime,ui,cuda'` also passed.
+- [x] `cargo test --locked --workspace` passed, as did
+  `cargo check --locked --all-features --all-targets`, formatting, diff and
+  launcher syntax checks. The live relocation probe sharded 396 neurons across
+  two workers, relocated the stopped owner, retained 559 neurons on the
+  survivor and continued growth to 563. The live WAV probe logged GPU
+  initialization, `8000 Hz`, `192160` samples, `8 EQ bands`,
+  `frame=60 eq_peak=0.7723 sensory_spikes=9/64` and
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`; cleanup left no launched
+  runtime processes.
+- [!] The evidence remains local RTX 2080/OpenCL plus CUDA compilation. CUDA
+  hardware execution, multi-device/driver equivalence, durable authoritative
+  shard ownership, quorum migration, identity/security deployment and
+  scientific validation remain separate production gates.
+
+## Verification update — 2026-09-14: CUDA hardware execution and automatic latency selection
+
+- [x] CUDA hardware initialization now passes on the local NVIDIA GeForce RTX
+  2080. The installed CUDA 13.3 NVRTC emits PTX rejected by the installed
+  595.84 driver's CUDA 13.2 compatibility level; `src/gpu_api.rs` reports the
+  real driver/NVRTC diagnostic and falls back to a device-matched `sm_75`
+  CUBIN compiled by `nvcc`. The resulting CUDA module passes the same full
+  reference-equivalence gate as OpenCL.
+- [x] Forced CUDA execution passed all three focused AARNN runner tests,
+  including morphology, delays, release, STP, adaptive threshold, homeostasis,
+  neuromodulation, plasticity, growth and ordered replay. Forced OpenCL passed
+  the same suite afterward.
+- [x] Automatic selection passed with both devices available. The measured
+  startup transactions were OpenCL `0.828 ms` and CUDA `0.372 ms` in focused
+  tests, selecting CUDA. The release `run_examples.sh` profile now includes
+  `cuda`, so the launched orchestrator and workers can perform that selection
+  rather than being compiled OpenCL-only.
+- [x] The rebuilt launcher selected CUDA in all three local processes. Its
+  WAV-backed native UI run decoded `/home/pbisaacs/Downloads/message.wav` at
+  `8000 Hz` with `8 EQ bands`, and emitted `frame=60 eq_peak=0.7723
+  sensory_spikes=9/64` and `frame=120 eq_peak=0.7662 sensory_spikes=14/64`.
+- [x] The rebuilt launcher relocation probe passed after the CUDA profile
+  change: it stopped the layer-0 owner, observed relocation, retained the
+  survivor snapshot at `534`, and observed post-relocation growth to `539`.
+- [!] CUDA CUBIN fallback requires a usable `nvcc` installation when a driver
+  rejects the runtime-generated PTX. If neither compatible NVRTC PTX nor
+  `nvcc` CUBIN compilation is available, the certified CPU/OpenCL fallback is
+  retained and the diagnostic is logged.
+
+## Verification update — 2026-09-14 13:44Z: hardware-gated parity recheck and UI status correction
+
+- [x] Re-ran the focused AARNN parity suite with the hardware gate enabled,
+  rather than relying on the opt-in test's skip behavior. Forced CUDA passed
+  all three tests on the RTX 2080, including the 32-step morphology/delay/
+  release/STP/adaptation/homeostasis/neuromodulation/plasticity/growth and
+  ordered-event replay. Forced OpenCL passed the same three tests.
+  Commands were `NM_ENABLE_OPENCL_IN_TESTS=1 NM_GPU_BACKEND=cuda cargo test
+  --locked --no-default-features --features 'engine_runtime,ui,cuda' --lib
+  'runner::tests::aarnn_gpu' -- --nocapture` and the corresponding
+  `NM_GPU_BACKEND=opencl` invocation.
+- [x] The Rust UI no longer claims that AARNN GPU parity is pending. It now
+  reports the certified AARNN accelerator path when the runner's homogeneous
+  profile gate is true, and explicitly identifies the CPU reference fallback
+  for heterogeneous cell profiles. `Runner::aarnn_gpu_transition_supported`
+  is exposed as a crate-local status query so the display reflects the actual
+  execution route.
+- [!] The certified execution evidence remains local to the RTX 2080 and its
+  installed OpenCL/CUDA stack. Multi-device/driver equivalence and the broader
+  distributed production gates remain outside this focused parity objective.
+
+## Verification update — 2026-09-14: transactional accelerator fallback recheck
+
+- [x] Staged OpenCL/CUDA neuron readback now validates every CPU destination
+  before publishing any voltage, recovery, refractory, adaptive-threshold or
+  STP state. A missing manager, failed read, missing buffer or shape mismatch
+  selects the complete CPU reference replay path instead of committing a
+  partial or zero-filled state. STP publication uses the same all-populations
+  transaction boundary.
+- [x] The post-change forced OpenCL AARNN suite passed all three parity tests on
+  the NVIDIA GeForce RTX 2080. The post-change automatic suite also passed all
+  three tests, measured OpenCL at `0.857 ms` and CUDA at `0.340 ms`, and
+  selected CUDA. CUDA initialization used the installed `nvcc` `sm_75` CUBIN
+  fallback after the driver rejected CUDA 13.3-generated PTX.
+- [x] `cargo check --locked --no-default-features --features
+  'engine_runtime,ui,cuda'`, `cargo test --locked --workspace`,
+  `cargo fmt --all --check` and `git diff --check` passed. The workspace suite
+  completed both library and binary unit suites, integration suites, launcher,
+  migration, failover, mobile and doc tests without failures.
+- [!] Evidence remains local to the RTX 2080 and installed OpenCL/CUDA stack;
+  multi-device/driver equivalence and the broader distributed production gates
+  remain separate acceptance work.
+
+## Verification update — 2026-09-14: final rebuilt launcher acceptance
+
+- [x] The release launcher was rebuilt with the explicit `engine_runtime,ui,cuda`
+  profile and then exercised with
+  `/home/pbisaacs/Downloads/message.wav`, `AARNN_AUDIO_AUTOPLAY=1` and
+  `AARNN_AUDIO_SENSORY_NEURONS=64`. With both accelerators available, the
+  runtime measured OpenCL at `1.545 ms` and CUDA at `0.409 ms`, selected CUDA,
+  and initialized the NVIDIA device through the device-matched `sm_75` CUBIN
+  fallback after the expected CUDA 13.3 PTX versus driver 13.2 mismatch.
+- [x] The native UI audio diagnostic recorded `8000 Hz`, `192160` samples and
+  `8 EQ bands`; its deterministic sensory raster produced
+  `frame=60 eq_peak=0.7723 sensory_spikes=9/64` and
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`. This verifies the graphic
+  EQ path and nonzero sensory admission in the current CUDA-selected run.
+- [x] The rebuilt headless launcher probe sharded `cluster_master` across two
+  workers, stopped the layer-0 owner, relocated all active layers to the
+  survivor, retained a snapshot of `559` neurons, and observed continued
+  growth to `563`. The probe exited successfully and launcher cleanup left no
+  launched runtime process.
+- [x] The full workspace test, formatting check and `git diff --check` passed
+  after the transactional accelerator, hidden-plasticity, CUDA recurrent-buffer
+  and automatic backend-selection changes.
+
+## Verification update — 2026-09-14 14:25Z: close morphology and fallback gaps
+
+- [x] Asynchronous morphology evolution now passes the selected accelerator
+  into `Morphology::evolve`; it no longer silently disables the GPU energy
+  transaction when morphology runs on its worker thread.
+- [x] GPU morphology energy now composes the same skull ambient field as the
+  CPU reference, including the no-entity case. The new
+  `morphology::tests::gpu_morphology_energy_matches_cpu_with_skull_ambient`
+  test passed with forced OpenCL and forced CUDA.
+- [x] The complete `runner::tests::aarnn_gpu_full_parity_replays_morphology_delays_and_growth`
+  replay passed with forced OpenCL and forced CUDA. It compared delayed
+  histories, currents, membrane/recovery state, adaptive threshold,
+  homeostasis, STP, release records, all plasticity matrices, neuromodulation,
+  morphology, growth cooldowns, committed growth and canonical event order.
+- [x] The new heterogeneous-profile fallback test passed with automatic
+  selection. A per-cell biology mismatch rejects the scalar GPU transition,
+  keeps sparse accumulation off the uncertified route, and matches the CPU
+  reference over six transitions.
+- [!] GPU morphology and event computation remains transactional: the device
+  computes spatial energy, delayed sparse accumulation, release masks and
+  growth eligibility; CPU state publication, topology generation changes and
+  canonical event sorting remain the authoritative commit boundary. Any
+  unsupported profile or device/readback failure replays through the CPU
+  reference path.
+
+## Verification update — 2026-09-14: final workspace and automatic-route checks
+
+- [x] The current tree passed `cargo test --locked --workspace`: 286 library
+  tests passed, along with all enabled binary, integration and documentation
+  suites. `cargo fmt --all --check`, `git diff --check`, `bash -n
+  run_examples.sh` and `python3 -m py_compile
+  scripts/qa/verify_example_sharding.py` also passed.
+- [x] The current hardware-gated automatic AARNN run passed all five focused
+  parity tests with `NM_ENABLE_OPENCL_IN_TESTS=1 NM_GPU_BACKEND=auto cargo test
+  --locked --no-default-features --features 'engine_runtime,ui,cuda' --lib
+  'runner::tests::aarnn_gpu' -- --nocapture`. On the RTX 2080 it measured
+  OpenCL at `1.172 ms` and CUDA at `0.416 ms`, selected CUDA, and passed
+  morphology, delays, release probability, STP, adaptive threshold,
+  homeostasis, neuromodulation, plasticity, growth, heterogeneous-profile
+  CPU fallback and deterministic event-order replay. CUDA used the
+  device-matched `sm_75` CUBIN fallback because the installed CUDA 13.3 PTX is
+  rejected by the CUDA 13.2-compatible driver.
+- [x] Backend choice is automatic for every process startup when both GPU
+  candidates are available: `OpenCLManager::new_with_preferred_device_index`
+  initializes and equivalence-gates both candidates, measures the same
+  synchronized auxiliary transaction including readback, and retains the
+  lower-latency candidate. `NM_GPU_BACKEND=opencl` or `cuda` remains an
+  explicit diagnostic override; absent that override, the measured route is
+  selected. Device failure falls back through the certified alternative or
+  CPU reference path.
+- [!] Production scope remains bounded by the recorded evidence: the tested
+  accelerator hardware is this local RTX 2080 stack, and heterogeneous
+  per-cell AARNN profiles intentionally use the certified CPU reference path
+  until per-neuron device parameter buffers receive equivalent replay
+  evidence.
+
+## Verification update — 2026-09-14 14:42Z: lossless event and upload fallback audit
+
+- [x] Homeostatic threshold/rate decay and post-spike homeostasis now run on
+  staged host arrays. A device error leaves the live population untouched and
+  selects the CPU reference update for that population; a successful readback
+  is published as one host commit. This closes the partial-mutation fallback
+  risk while preserving the existing CPU-owned state boundary.
+- [x] Sparse morphology CSR uploads now return success explicitly. Row
+  pointers, indices, weights and delays are all uploaded before the host
+  synapse-ID mapping is published; any failed write makes the complete sparse
+  transaction ineligible and the caller takes the CPU path. All input,
+  forward, backward, recurrent and output sparse callers now propagate this
+  result.
+- [x] Removed the fixed 256-record morphology event limit and GPU-side
+  deduplication. Every released synapse event is retained and then sorted by
+  the canonical key, preventing high fan-in/fan-out activity from being
+  silently discarded under `INV-007` and keeping CPU/GPU replay equivalent.
+- [x] With both accelerator features enabled, the hardware-gated suite passed:
+  `NM_ENABLE_OPENCL_IN_TESTS=1 NM_GPU_BACKEND=auto cargo test --locked
+  --no-default-features --features 'engine_runtime,ui,opencl,cuda,growth3d,morpho'
+  --lib 'runner::tests::aarnn_gpu' -- --nocapture`. All five tests passed;
+  OpenCL measured `0.974 ms`, CUDA `0.406 ms`, and CUDA was selected through
+  the `sm_75` CUBIN fallback.
+- [x] After final event-path cleanup, the same five-test command passed again;
+  the fresh probe measured OpenCL `0.833 ms`, CUDA `0.351 ms`, and selected
+  CUDA.
+- [x] The rebuilt release `run_examples.sh` relocation mode passed with
+  `AARNN_VERIFY_SHARD_GROWTH=1`: it sharded 396 neurons across two workers,
+  stopped the layer-0 owner, relocated to the survivor, retained 560 neurons
+  and continued growth to 563. The WAV-backed native UI run selected CUDA
+  after measuring OpenCL `0.845 ms` and CUDA `0.346 ms`, decoded
+  `/home/pbisaacs/Downloads/message.wav` at `8000 Hz` with 8 EQ bands, and
+  logged `frame=60 eq_peak=0.7723 sensory_spikes=9/64`,
+  `frame=120 eq_peak=0.7662 sensory_spikes=14/64`, and
+  `frame=180 eq_peak=0.8470 sensory_spikes=14/64`.
+- [!] Remaining production gates are unchanged: multi-device/driver replay,
+  authoritative durable shard ownership and recovery, security/deployment
+  acceptance, and scientific validation still require their separate evidence.
+
+## Verification update — 2026-09-14: independent backend and launcher recheck
+
+- [x] The current tree passed `cargo test --locked --workspace`: 286 library
+  tests passed, along with all binary, integration and documentation suites.
+  The focused provider checks also passed: the WAV decoder/graphic-EQ test
+  emitted repeatable nonzero bands and sensory spikes, and microphone
+  enumeration returned a stable selectable device list (or an explicit error
+  if the host provides none). `cargo fmt --all --check`, `git diff --check`,
+  `bash -n run_examples.sh` and Python bytecode validation passed again.
+- [x] Forced OpenCL and forced CUDA each passed all five
+  `runner::tests::aarnn_gpu` tests with `growth3d,morpho` enabled. This
+  independently verified the AARNN route for morphology, delays, release
+  probability, STP, adaptive threshold, homeostasis, neuromodulation,
+  plasticity, growth, heterogeneous-profile fallback and deterministic event
+  ordering. CUDA again used the device-matched `sm_75` CUBIN fallback after
+  the installed driver rejected CUDA 13.3 PTX.
+- [x] Automatic selection with both candidates available measured OpenCL at
+  `0.842 ms` and CUDA at `0.389 ms`, selected CUDA, and passed all five tests.
+  The selector is therefore exercised in the same process that executes the
+  full parity fixture; the forced runs separately prove each candidate.
+- [x] A fresh headless `run_examples.sh` verification with
+  `AARNN_VERIFY_SHARD_GROWTH=1`, `AARNN_NATIVE_UI=0` and the requested WAV
+  path sharded 396 neurons across two workers, stopped the layer-0 owner,
+  relocated to the survivor, retained 566 neurons and continued growth to
+  571. Launcher cleanup completed without leaving a launched process.
+- [!] The local production evidence remains bounded to the RTX 2080 and its
+  installed OpenCL/CUDA stack. Multi-device/driver replay, durable
+  authoritative shard migration/recovery, security/deployment acceptance and
+  scientific validation remain separate production gates.
+
+## Verification update — 2026-09-14 15:04Z: parameterized local cluster launcher
+
+- [x] Added `scripts/run_cluster.sh` as the reusable process launcher for a
+  standalone brain, a single-worker orchestrator cluster (`--nodes 1`) and a
+  multi-worker cluster (`--nodes N`). It supports optional web startup,
+  config/network snapshots, release binary reuse, dynamic or explicit ports,
+  per-process logs, bounded readiness checks and signal cleanup. The launcher
+  keeps the same `aarnn_rust` and `web_ui` binaries used by the existing local
+  examples, so this operational path does not create a second runtime.
+- [x] Port allocation now rejects occupied or duplicate explicit orchestrator
+  and web ports before starting children. Readiness checks verify the child is
+  still alive before accepting a listener, closing the startup race where an
+  unrelated listener could make a failed child appear ready.
+- [x] Live bounded checks passed from the repository root using the existing
+  release binaries: `--standalone --no-web` remained healthy for 8 seconds;
+  `--nodes 1 --no-web` reached orchestrator and worker readiness; and
+  `--nodes 3` reached all three worker listeners plus `/api/config`. Each
+  timed run exited with the expected `timeout` status and cleanup removed its
+  launched processes. An occupied explicit orchestrator port was rejected
+  with status 2 before any child started.
+- [x] `bash -n scripts/*.sh scripts/qa/*.sh`, `shellcheck scripts/run_cluster.sh
+  run_examples.sh run_webcluster.sh`, `cargo test --locked
+  --test run_examples_launcher`
+  (6 passed), `cargo fmt --all --check` and `git diff --check` passed. The
+  launcher contract test now covers standalone, single-worker and multi-worker
+  modes, readiness ordering and explicit-port validation.
+- [x] The existing `run_webcluster.sh` profile was aligned with the same
+  automatic accelerator policy by adding `cuda` to its explicit
+  `engine_runtime,ui,cuda` build. A bounded `AARNN_SKIP_BUILD=1` run reached
+  the orchestrator, both workers and the dashboard, then cleaned up on TERM.
+- [!] Automatically selected ports are intended for one launcher instance at a
+  time. Concurrent independent launchers can still race between port discovery
+  and child bind; a losing child is detected and reported rather than being
+  falsely reported ready. Operators needing concurrent instances should use
+  distinct explicit port ranges.
+
+## Verification update — 2026-09-14 15:28Z: placement expands to late workers
+
+- [x] Reproduced the reported `scripts/run_cluster.sh --nodes 3` behavior:
+  `/api/status` showed three connected workers, while `cluster_master` retained
+  the two-node assignment created before the third worker registered. The
+  cause was `preserve_sharded_node_assignments`, which treated complete active
+  and backup coverage as sufficient and never admitted a newly eligible target.
+- [x] Updated `src/distributed.rs` so preservation remains stable during
+  ordinary telemetry changes but returns to deterministic assignment building
+  when the policy-approved target set grows. This keeps `desired_shards` and
+  single-target policies authoritative while allowing a late worker to receive
+  an actual shard command and appear in placement.
+- [x] Added a regression test for a complete two-node assignment expanding
+  when a third eligible worker joins. The distributed unit suite passed all 46
+  tests.
+- [x] Rebuilt the release `engine_runtime,ui,cuda` binaries and reran the
+  three-worker launcher. The live API reported three connected workers and
+  three `cluster_master` placement nodes; after another interval it still
+  reported three placement nodes and continued neuron accounting (`211` total
+  in the bounded run). Cleanup completed on interrupt.
+
+## Verification update — 2026-09-14 17:52Z: Webots `--nodes` forwarding and worker registration
+
+- [x] Fixed the original `scripts/run_celegans_web_ui_webots.sh --nodes 3`
+  failure. The multi-robot wrapper now parses `--nodes`, validates it, exports
+  `NM_CLUSTER_NODES`, and forwards the option to `run_webot.sh`; `run_webot.sh`
+  now creates the requested total worker count instead of reporting
+  `Unknown option: --nodes`.
+- [x] In local cluster mode, each configured brain receives one IPC-owning
+  worker for its Webots controller. Remaining workers receive unique IDs such
+  as `celegans_01_worker_01`, bind distinct gRPC ports, join the orchestrator,
+  and run without a duplicate IPC socket or UI. In remote mode, the same
+  requested worker count is distributed round-robin across reachable hosts and
+  the launcher rejects a count mismatch.
+- [x] The Webots build profile is explicit and production-reproducible:
+  `engine_runtime,ui,robot_io,cuda`. `robot_io` is required for the primary
+  worker's IPC endpoint, while `cuda` keeps CUDA available for the measured
+  OpenCL/CUDA latency selector. The previous `--all-features` build is not
+  used by this launcher because it enables management behavior that requires
+  credentials unrelated to the local example path.
+- [x] Static launcher coverage now checks option forwarding, unique extra
+  worker IDs, registration readiness, worker-count reporting, and the explicit
+  feature profile. `bash -n`, the launcher contract tests, formatting, and
+  diff checks passed. A bounded live run of
+  `scripts/run_celegans_web_ui_webots.sh --ui-mode rust --nodes 3 --no-build
+  --no-webots --no-diag --node-ui-hidden` registered three workers; the
+  orchestrator reported `Nodes connected: 3` and all launched processes were
+  cleaned up afterward.
+- [!] The worker-count fix proves process registration and placement input for
+  the Webots launcher. Biological shard ownership, durable migration, quorum
+  fencing, and the remaining production gates retain the status recorded
+  above; a worker process count alone does not claim those semantics.
+
+## Verification update — 2026-09-14 18:08Z: stable native dashboard spacing
+
+- [x] Stabilized the native egui dashboard layout in `src/ui.rs`. The controls
+  rail now has a 288 px minimum width on the dashboard, volatile status rows
+  use fixed 18 px heights with truncation and hover text, and the GPU status
+  no longer changes the vertical position of the resource sections when its
+  backend or activity text changes.
+- [x] Quantized the network canvas layout dimensions to 4 px before deciding
+  whether to recompute node spacing. Subpixel panel-size fluctuations therefore
+  cannot trigger a full layout rebuild and visible network jump.
+- [x] `cargo fmt --all --check`, `git diff --check`, all launcher shell syntax
+  checks, and `cargo check --locked --no-default-features --features
+  'engine_runtime,ui,robot_io,cuda'` passed. The check retains the repository's
+  existing non-fatal warning set.
+
+## Verification update — 2026-09-14 18:24Z: narrow-dashboard spacing capture
+
+- [x] Rebuilt the exact screenshot-enabled release binary with
+  `cargo build --release --locked --no-default-features --bin aarnn_rust
+  --features 'engine_runtime,ui,robot_io,cuda,ui_screenshot'`; the build
+  completed successfully with warnings only. Startup selected CUDA on the
+  local RTX 2080 after measuring OpenCL at `0.829 ms` and CUDA at `0.355 ms`.
+- [x] Captured `/tmp/aarnn-spacing-fixed.png` at `1100x700` using
+  `NM_UI_CAPTURE_DELAY_FRAMES=30` and `NM_UI_CAPTURE_CLOSE=1`. Visual review
+  confirms the output-path diagnostic and probe hint remain separated, the
+  oscilloscope and output raster have a stable gap without overlap, and the
+  right controls rail remains vertically stable while status text is truncated
+  within its fixed row.
+- [x] `cargo test --locked --test run_examples_launcher` passed all 7 launcher
+  contract tests, including explicit audio forwarding and the sharding/growth/
+  relocation probe. No generated `.multi_neuroworld.wbproj` file was recreated.
+
+## Verification update — 2026-09-15 06:57Z: simulator node-count forwarding
+
+- [x] Added `--node <n>` as an alias for the existing distributed Webots worker
+  count, with `--nodes` and `--node=<n>` forms accepted by `run_sim.sh` and
+  `scripts/run_multi_robot_webots.sh`. The unified launcher forwards the value
+  to `run_webot.sh`, preserving one IPC-owning worker per configured brain and
+  using additional workers for shard placement.
+- [x] Unreal and Unity now reject an explicitly requested `--node`/`--nodes`
+  count because their current TCP path starts one standalone `nn_tcp_server`
+  per brain and has no distributed TCP bridge. This prevents a requested shard
+  placement from being silently ignored.
+- [x] Updated the simulator wrappers, `sim/README.md`, and launcher contract
+  coverage. `bash -n` passed for all affected shell scripts, and the help/error
+  probes confirmed Webots forwarding and clear TCP-backend rejection.
+- [!] This launcher change does not promote the Unreal/Unity TCP compatibility
+  path to distributed execution. A future distributed TCP bridge must connect
+  the simulator endpoint to the authenticated node/brain data plane before
+  those backends can accept this option.
+
+## Verification update — 2026-09-15: distributed Unreal and Unity TCP parity
+
+- [x] Added `scripts/tcp_aer_ipc_bridge.py`, a bounded per-brain TCP bridge
+  that forwards the existing length-prefixed handshake, raw-float and AER1
+  client traffic to the distributed node IPC socket. AER output timestamps are
+  derived from the input logical timestamp and negotiated frame duration; the
+  bridge never uses packet arrival time.
+- [x] `run_sim.sh --sim unreal|unity --node N` now starts the same distributed
+  `run_webot.sh --runtime cluster` backend used by Webots, creates one TCP
+  bridge per configured brain, waits for every IPC socket and TCP listener, and
+  preserves the existing standalone TCP mode when no node count is requested.
+  `--sim all --node N` uses a separate IPC namespace for the second cluster so
+  Webots and Unreal do not contend for one active IPC peer.
+- [x] Added the `NM_IPC_SOCKET_DIR` namespace hook to the distributed runtime,
+  updated simulator documentation/wrappers and added launcher contract
+  coverage. Shell syntax, Python compilation, mock TCP/UDS
+  handshake/raw/AER exchange and a live two-worker Unity launcher readiness
+  run passed.
+- [!] The bridge exposes the existing Webots-compatible IPC compatibility path;
+  authoritative biological ownership, durable migration, quorum fencing and
+  the remaining production gates retain their separate status above.
+
+## Verification update — 2026-09-15 09:31Z: C. elegans biological I/O accounting
+
+- [x] Corrected the C. elegans import semantics. The 302 uppercase connectome
+  functions, including `CANL` and `CANR`, remain the sole initial biological
+  neuron population. The 24 sensory values are external input channels and the
+  96 post-synaptic muscle targets are external motor readout channels driven by
+  the `96 x 302` `w_out` matrix.
+- [x] Added the backward-compatible `NetworkConfig.io_channels_are_biological`
+  field. Legacy profiles retain their historical accounting; the C. elegans
+  profile defaults and generated snapshot set it false. `Runner::total_neurons`,
+  growth limits, output plasticity assignment, distributed layer counts and
+  resource accounting now use the biological-only population for that profile.
+- [x] Extended `connectome_labels` with inferred `sensory_neuron_nodes`,
+  `motor_neuron_nodes`, `motor_output_channels` and explicit `io_semantics`
+  metadata. The Webots validator checks the 302-node population, role subsets,
+  matrix shapes and external-I/O flag.
+- [x] Regenerated the tracked Webots config and ignored local connectome
+  snapshot from `scripts/build_celegans_network_json.py`; the import assertions
+  passed. Default-feature Rust focused tests passed for the runner count and
+  distributed placement projection. The standalone `growth3d` feature check
+  remains blocked by pre-existing `gpu_candidate_masks` type-inference errors
+  in `src/runner.rs:19663-19698`, unrelated to this change.
+
+
+## Simulator content review — 2026-09-15 11:10Z
+
+The requested Webots/Unity/Unreal/WebGL evaluation and shared sensory-world/model
+upgrade is tracked in [the simulator content ExecPlan](simulator-content-parity.md)
+and [the content evaluation](../../sim/content/README.md). One catalogue/compiler
+now supplies five habitats and six profiles, with morphology landmarks, browser
+spatial/retinal sensing, canonical worm/hexapod map corrections and visual-only
+regeneration. The SIM-CONTENT-001 contract, browser and Webots construction lanes
+pass; Unreal builds and an agar view has been rendered. Unity Editor evidence,
+remaining native fly/fish mappings and calibrated visual/physics parity remain open.
+Existing unrelated dirty work is preserved. No production migration flag, neural
+kernel, persistence schema or phase safety gate was changed or promoted.
+
+## Minecraft Java/Bedrock and water verification — 2026-09-15 13:37Z
+
+The follow-on [NAO interaction and autonomous communication plan](nao-player-interaction.md)
+tracks the opt-in reference social model, same-world participant cues, chat adapters
+and refreshed Minecraft validation. It does not enable the production Phase 8 gate.
+
+The final simulator evidence now includes nine engineered Rust speech acts,
+browser interaction, native Webots/Unreal body exchange and an actual native
+Bedrock villager-triggered inquiry/name-tag bubble. The Minecraft adapters wait
+for validated body output before starting encounters. Native world creation uses
+complete BDS metadata; vanilla NPC identity is checked before/after reload.
+Final six-network BDS acceptance is `bedrock-native-82l2875w/`, with refreshed
+Java acceptance in `world-tlmb7e_5/`. Unity and Bedrock client rendering remain
+not-run, and scientific/physics calibration remains separate from content parity.
+
+The [Minecraft delivery plan](minecraft-simulator-parity.md) and
+[validation index](../../sim/minecraft/VALIDATION.md) record the native adapters,
+companion JAR, Java/Bedrock saved worlds and install instructions. The shared
+catalogue now contains 602 objects with explicit water above the fish in every
+export. Java's 13 JVM tests, native GameTest/clean world export and 12 rendered
+views pass. All six real Rust snapshots pass companion round trips; BDS 1.26.45.1
+also passes four native frames per profile, water, disarming, save/reload of the
+same 12 entities and clean shutdown. Native TCP and both RakNet UDP port collisions
+are resolved automatically without changing original server.properties. Detection
+finds versioned Developer installations and rejects a second writer on an open
+world. The user's running BDS, Minecraft profiles, mods and saves are preserved.
+
+Final native evidence: `target/qa/minecraft/bedrock-native-j68cl4mh/`; Bedrock API,
+socket/detection fixtures and type checks: `target/qa/minecraft/bedrock-77tl8lpm/`.
+Distribution is `dist/minecraft/` with SHA256SUMS. Unity Editor and Bedrock client
+rendering remain unavailable, and native mapping/calibration/physics gates remain
+open. The opt-in legacy AER1 sandbox preserves the closed production I/O gate;
+no native engine content hash is presented as biological or physics equivalence.

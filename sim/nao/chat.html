@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Talk to NAO</title>
+<style>
+:root{color-scheme:dark;font:15px system-ui;background:#101a29;color:#edf3fa}body{margin:0;padding:18px;max-width:700px}h1{font-size:23px;margin:0 0 8px}p{line-height:1.5;color:#b9c9da}label{display:block;margin:12px 0}input,textarea,button{font:inherit;border:1px solid #526a84;border-radius:6px;padding:10px;background:#18283a;color:inherit}textarea{box-sizing:border-box;width:100%;resize:vertical}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #7dd3fc;outline-offset:2px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}#history{min-height:100px;max-height:260px;overflow:auto;list-style:none;padding:0}#history li{margin:8px 0;padding:10px 12px;border-radius:12px;background:#21384c;overflow-wrap:anywhere;white-space:pre-wrap}#history .nao{background:#163e3e}#state{min-height:24px;color:#8ee3df}small{color:#b9c9da}#stop{border-color:#fca5a5}#invite{flex:1;min-width:100px}
+</style></head><body>
+<h1>Talk to NAO</h1>
+<p>Say hello, ask my name, or try “help”. This NAO has a small social vocabulary, with replies selected by its neural circuit.</p>
+<section id="join"><label for="invite">World invitation</label><div class="row"><input id="invite" type="password" autocomplete="off" spellcheck="false"><button id="connect">Join conversation</button></div></section>
+<p id="state" role="status">Join while NAO is connected to the simulation.</p>
+<ol id="history" role="log" aria-label="Conversation" aria-live="polite"></ol>
+<form id="form"><label for="message">Message to NAO</label><textarea id="message" rows="3" maxlength="256" disabled placeholder="Hello NAO"></textarea>
+<div class="row"><button id="send" type="submit" disabled>Send</button><button id="mic" type="button" disabled>Dictate</button><button id="stop" type="button">Stop conversation</button></div></form>
+<label><input id="voice-consent" type="checkbox"> Enable dictation. My browser may send audio to its speech service; I will review the transcript before sending.</label>
+<small id="voice-capability"></small>
+<label><input id="speak" type="checkbox"> Read NAO’s replies aloud</label>
+<script src="/chat.js"></script></body></html>

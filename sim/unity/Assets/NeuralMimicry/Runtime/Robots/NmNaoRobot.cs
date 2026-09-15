@@ -49,6 +49,11 @@ namespace NeuralMimicry
     [RequireComponent(typeof(ArticulationBody))]
     public sealed class NmNaoRobot : NmRobotBase
     {
+        protected override void Start()
+        {
+            NmNaoChat.Attach(this);
+            base.Start();
+        }
         // ------------------------------------------------------------------ //
         // Constants
         // ------------------------------------------------------------------ //

@@ -1,532 +1,140 @@
 #VRML_SIM R2025a utf8
-
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+# Generated shared habitat; source sim/content/catalog.json; 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
 EXTERNPROTO "../protos/CelegansRobot.proto"
-
-WorldInfo {
-}
-Viewpoint {
-  orientation 0.01305170466665628 -0.9999027911309566 0.005232327632668971 4.698053854211715
-  position 0.0010716134103770597 1.2199874709707863 1.9439949804831262
-}
-TexturedBackground {
-}
-TexturedBackgroundLight {
-}
-PointLight {
-  location 1.25 0.42 0.75
-  color 0.78 0.90 1.00
-  intensity 1.8
-  attenuation 0 0 0.0434
-  radius 4.8
-  castShadows TRUE
-}
-PointLight {
-  location -1.35 0.35 -0.85
-  color 1.00 0.60 0.28
-  intensity 2.3
-  attenuation 0 0 0.0657
-  radius 3.9
-  castShadows TRUE
-}
-RectangleArena {
-  floorSize 10 10
-  wallHeight 0.35
-}
-# Static landmarks and corridors.
-Solid {
-  translation 0.0 0.08 0.0
-  name "pillar_center"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.83 0.37 0.24
-        roughness 0.5
-      }
-      geometry Cylinder {
-        radius 0.22
-        height 0.16
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.22
-    height 0.16
-  }
-}
-Solid {
-  translation 0.0 0.06 0.55
-  name "near_pillar_north"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.93 0.76 0.36
-        roughness 0.5
-      }
-      geometry Cylinder {
-        radius 0.08
-        height 0.12
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.08
-    height 0.12
-  }
-}
-Solid {
-  translation 0.0 0.06 -0.55
-  name "near_pillar_south"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.93 0.76 0.36
-        roughness 0.5
-      }
-      geometry Cylinder {
-        radius 0.08
-        height 0.12
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.08
-    height 0.12
-  }
-}
-Solid {
-  translation 0.55 0.06 0.0
-  name "near_pillar_east"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.93 0.76 0.36
-        roughness 0.5
-      }
-      geometry Cylinder {
-        radius 0.08
-        height 0.12
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.08
-    height 0.12
-  }
-}
-Solid {
-  translation -0.55 0.06 0.0
-  name "near_pillar_west"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.93 0.76 0.36
-        roughness 0.5
-      }
-      geometry Cylinder {
-        radius 0.08
-        height 0.12
-      }
-    }
-  ]
-  boundingObject Cylinder {
-    radius 0.08
-    height 0.12
-  }
-}
-# Taste/chemical patches near spawn so front chemosensors receive immediate gradients.
-Solid {
-  translation 0.22 0.022 0.00
-  name "taste_patch_center"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.92 0.74 0.30
-        roughness 0.44
-      }
-      geometry Sphere {
-        radius 0.030
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.030
-  }
-}
-Solid {
-  translation 0.20 0.022 0.09
-  name "taste_patch_left"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.78 0.54 0.22
-        roughness 0.48
-      }
-      geometry Sphere {
-        radius 0.028
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.028
-  }
-}
-Solid {
-  translation 0.20 0.022 -0.09
-  name "taste_patch_right"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.74 0.47 0.20
-        roughness 0.50
-      }
-      geometry Sphere {
-        radius 0.028
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.028
-  }
-}
-Solid {
-  translation 2.1 0.09 1.1
-  rotation 0 1 0 0.42
-  name "maze_wall_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.27 0.62 0.36
-        roughness 0.6
-      }
-      geometry Box {
-        size 2.8 0.18 0.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 2.8 0.18 0.2
-  }
-}
-Solid {
-  translation -2.2 0.09 -1.3
-  rotation 0 1 0 -0.62
-  name "maze_wall_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.21 0.51 0.74
-        roughness 0.55
-      }
-      geometry Box {
-        size 2.9 0.18 0.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 2.9 0.18 0.2
-  }
-}
-Solid {
-  translation 0.0 0.09 2.6
-  rotation 0 1 0 1.12
-  name "maze_wall_c"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.78 0.66 0.31
-        roughness 0.6
-      }
-      geometry Box {
-        size 2.4 0.18 0.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 2.4 0.18 0.2
-  }
-}
-Solid {
-  translation -0.3 0.09 -2.4
-  rotation 0 1 0 -1.05
-  name "maze_wall_d"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.64 0.32 0.24
-        roughness 0.56
-      }
-      geometry Box {
-        size 2.0 0.18 0.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 2.0 0.18 0.2
-  }
-}
-Solid {
-  translation 2.7 0.09 -0.3
-  rotation 0 1 0 0.15
-  name "maze_wall_e"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.41 0.49 0.83
-        roughness 0.57
-      }
-      geometry Box {
-        size 1.6 0.18 0.2
-      }
-    }
-  ]
-  boundingObject Box {
-    size 1.6 0.18 0.2
-  }
-}
-# Sloped platforms trigger IMU variation when climbed.
-Solid {
-  translation -2.7 0.11 2.2
-  rotation 0 0 1 -0.25
-  name "ramp_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.72 0.56 0.29
-        roughness 0.6
-      }
-      geometry Box {
-        size 1.2 0.18 0.8
-      }
-    }
-  ]
-  boundingObject Box {
-    size 1.2 0.18 0.8
-  }
-}
-Solid {
-  translation 2.5 0.11 -2.1
-  rotation 0 0 1 0.27
-  name "ramp_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.52 0.62 0.29
-        roughness 0.6
-      }
-      geometry Box {
-        size 1.2 0.18 0.8
-      }
-    }
-  ]
-  boundingObject Box {
-    size 1.2 0.18 0.8
-  }
-}
-# Dynamic objects create continuously changing proximity/contact stimuli.
-Solid {
-  translation 1.4 0.06 -1.7
-  linearVelocity 1.9 0 1.2
-  angularVelocity 0 2.4 0
-  name "dynamic_pellet_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.95 0.91 0.28
-        roughness 0.3
-      }
-      geometry Sphere {
-        radius 0.08
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.08
-  }
-  physics Physics {
-    density -1
-    mass 0.07
-  }
-}
-Solid {
-  translation -1.8 0.06 1.5
-  linearVelocity -1.5 0 -1.9
-  angularVelocity 0 1.8 0
-  name "dynamic_pellet_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.88 0.42 0.18
-        roughness 0.35
-      }
-      geometry Sphere {
-        radius 0.09
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.09
-  }
-  physics Physics {
-    density -1
-    mass 0.08
-  }
-}
-Solid {
-  translation 2.2 0.07 0.1
-  linearVelocity -1.8 0 0.9
-  angularVelocity 0 1.5 0
-  name "dynamic_pellet_c"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.34 0.86 0.63
-        roughness 0.4
-      }
-      geometry Sphere {
-        radius 0.1
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.1
-  }
-  physics Physics {
-    density -1
-    mass 0.09
-  }
-}
-Solid {
-  translation -0.9 0.06 -2.2
-  linearVelocity 2.1 0 0.8
-  angularVelocity 0 2.1 0
-  name "dynamic_pellet_d"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.86 0.55 0.20
-        roughness 0.37
-      }
-      geometry Sphere {
-        radius 0.07
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.07
-  }
-  physics Physics {
-    density -1
-    mass 0.06
-  }
-}
-Solid {
-  translation 0.7 0.06 2.1
-  linearVelocity -0.8 0 -2.0
-  angularVelocity 0 2.6 0
-  name "dynamic_pellet_e"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.28 0.79 0.86
-        roughness 0.34
-      }
-      geometry Sphere {
-        radius 0.085
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.085
-  }
-  physics Physics {
-    density -1
-    mass 0.07
-  }
-}
-Solid {
-  translation -2.4 0.06 -0.4
-  linearVelocity 1.6 0 1.6
-  angularVelocity 0 1.9 0
-  name "dynamic_pellet_f"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.91 0.33 0.49
-        roughness 0.35
-      }
-      geometry Sphere {
-        radius 0.075
-      }
-    }
-  ]
-  boundingObject Sphere {
-    radius 0.075
-  }
-  physics Physics {
-    density -1
-    mass 0.06
-  }
-}
-Solid {
-  translation 0.0 0.07 -1.1
-  rotation 0 1 0 0.6
-  linearVelocity 0.7 0 1.4
-  angularVelocity 0.3 3.1 0.1
-  name "dynamic_bar_a"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.40 0.74 0.34
-        roughness 0.42
-      }
-      geometry Box {
-        size 0.7 0.14 0.18
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.7 0.14 0.18
-  }
-  physics Physics {
-    density -1
-    mass 0.12
-  }
-}
-Solid {
-  translation -0.2 0.07 1.1
-  rotation 0 1 0 -0.55
-  linearVelocity -0.9 0 -1.2
-  angularVelocity -0.2 2.9 -0.1
-  name "dynamic_bar_b"
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.78 0.31 0.32
-        roughness 0.41
-      }
-      geometry Box {
-        size 0.75 0.14 0.18
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.75 0.14 0.18
-  }
-  physics Physics {
-    density -1
-    mass 0.13
-  }
-}
-CelegansRobot {
-  translation 0 0.038 0
-  name "C_Elegans"
-  controller "nao_nn_controller_uds"
-  controllerArgs [
-    "NM_BRAINS=default"
-    "NM_SENSORS_default=^celegans_s_[0-9]{2}_.*$"
-    "NM_ACTUATORS_default=^celegans_o_[0-9]{3}_.*$"
-  ]
-}
+WorldInfo { basicTimeStep 32 }
+Viewpoint { orientation 1 0 0 0.64 position 0 -3.00000 2.40000 }
+Background { skyColor [ 0.12 0.17 0.2 ] }
+DirectionalLight { direction -0.35 -0.5 -1 intensity 1 ambientIntensity 0.35 castShadows TRUE }
+# Shared habitat agar; content 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
+Solid { name "nm_agar_substrate" translation 0.000000 0.000000 -0.037500 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Box { size 3.000000 3.000000 0.075000 } } ] } ] boundingObject Box { size 3.000000 3.000000 0.075000 } }
+Solid { name "nm_agar_rim_0" translation 0.000000 1.500000 0.090000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 3.000000 0.037500 0.180000 } } ] } ] boundingObject Box { size 3.000000 0.037500 0.180000 } }
+Solid { name "nm_agar_rim_1" translation 0.000000 -1.500000 0.052500 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 3.000000 0.037500 0.105000 } } ] } ] boundingObject Box { size 3.000000 0.037500 0.105000 } }
+Solid { name "nm_agar_rim_2" translation 1.500000 0.000000 0.090000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.037500 3.000000 0.180000 } } ] } ] boundingObject Box { size 0.037500 3.000000 0.180000 } }
+Solid { name "nm_agar_rim_3" translation -1.500000 0.000000 0.090000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.037500 3.000000 0.180000 } } ] } ] boundingObject Box { size 0.037500 3.000000 0.180000 } }
+Solid { name "nm_agar_grain_00" translation -1.380000 -1.380000 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_01" translation -0.368911 0.254563 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_02" translation 0.642178 -0.870874 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_03" translation -1.106733 0.763689 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_04" translation -0.095644 -0.361748 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_05" translation 0.915446 1.272816 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_06" translation -0.833465 0.147379 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_07" translation 0.177624 -0.978058 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_08" translation 1.188713 0.656505 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_09" translation -0.560198 -0.468932 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_10" translation 0.450891 1.165631 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_11" translation -1.298020 0.040194 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_12" translation -0.286931 -1.085243 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_13" translation 0.724158 0.549320 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_14" translation -1.024752 -0.576117 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_15" translation -0.013663 1.058447 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_16" translation 0.997426 -0.066990 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_17" translation -0.751485 -1.192427 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_18" translation 0.259604 0.442136 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_19" translation 1.270693 -0.683301 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_20" translation -0.478218 0.951262 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_21" translation 0.532871 -0.174175 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_22" translation -1.216040 -1.299612 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_23" translation -0.204950 0.334951 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_24" translation 0.806139 -0.790485 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_25" translation -0.942772 0.844078 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_26" translation 0.068317 -0.281359 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_27" translation 1.079406 1.353204 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_28" translation -0.669505 0.227767 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_29" translation 0.341584 -0.897670 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_30" translation 1.352673 0.736893 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_31" translation -0.396238 -0.388544 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_32" translation 0.614851 1.246019 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_33" translation -1.134059 0.120583 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_34" translation -0.122970 -1.004854 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_35" translation 0.888119 0.629709 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_36" translation -0.860792 -0.495728 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_37" translation 0.150297 1.138835 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_38" translation 1.161386 0.013398 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_39" translation -0.587525 -1.112039 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_40" translation 0.423564 0.522524 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_41" translation -1.325347 -0.602913 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_42" translation -0.314257 1.031650 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_43" translation 0.696832 -0.093786 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_44" translation -1.052079 -1.219223 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_45" translation -0.040990 0.415340 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_46" translation 0.970099 -0.710097 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_47" translation -0.778812 0.924466 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_48" translation 0.232277 -0.200971 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_49" translation 1.243366 -1.326408 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_50" translation -0.505545 0.308155 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_51" translation 0.505545 -0.817282 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_52" translation -1.243366 0.817282 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_53" translation -0.232277 -0.308155 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_54" translation 0.778812 1.326408 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.3744 0.4368 0.27040000000000003 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_grain_55" translation -0.970099 0.200971 0.004500 rotation 0 0 1 0.000000 children [ Transform { scale 0.022500 0.016500 0.009000 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_bacterial_lawn_0" translation 0.630000 0.300000 0.013500 rotation 0 0 1 0.000000 children [ Transform { scale 0.690000 0.552000 0.021000 children [ Shape { appearance PBRAppearance { baseColor 0.59 0.66 0.24 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_0" translation 0.703764 0.300000 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_1" translation 0.553079 0.370466 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_2" translation 0.641169 0.172726 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_3" translation 0.719763 0.417078 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_4" translation 0.467579 0.271272 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_5" translation 0.782452 0.203019 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_6" translation 0.579339 0.488471 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_7" translation 0.533834 0.114848 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_8" translation 0.837867 0.375906 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_9" translation 0.414387 0.389009 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_10" translation 0.733686 0.078411 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_11" translation 0.706484 0.543811 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_0_12" translation 0.399883 0.166654 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_bacterial_lawn_1" translation -0.720000 -0.360000 0.013500 rotation 0 0 1 0.000000 children [ Transform { scale 0.480000 0.384000 0.021000 children [ Shape { appearance PBRAppearance { baseColor 0.59 0.66 0.24 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_0" translation -0.668686 -0.360000 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_1" translation -0.773510 -0.310980 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_2" translation -0.712230 -0.448538 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_3" translation -0.657556 -0.278555 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_4" translation -0.832988 -0.379985 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_5" translation -0.613947 -0.427465 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_6" translation -0.755243 -0.228889 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_7" translation -0.786898 -0.488801 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_8" translation -0.575397 -0.307196 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_9" translation -0.869991 -0.298081 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_10" translation -0.647871 -0.514149 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_11" translation -0.666794 -0.190392 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_1_12" translation -0.880081 -0.452762 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_bacterial_lawn_2" translation 0.375000 -0.975000 0.013500 rotation 0 0 1 0.000000 children [ Transform { scale 0.390000 0.312000 0.021000 children [ Shape { appearance PBRAppearance { baseColor 0.59 0.66 0.24 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_0" translation 0.416693 -0.975000 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_1" translation 0.331523 -0.935171 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_2" translation 0.381313 -1.046938 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_3" translation 0.425736 -0.908826 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_4" translation 0.283197 -0.991237 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_5" translation 0.461168 -1.029815 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_6" translation 0.346365 -0.868473 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_7" translation 0.320645 -1.079651 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_8" translation 0.492490 -0.932096 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_9" translation 0.253132 -0.924691 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_10" translation 0.433605 -1.100246 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_11" translation 0.418230 -0.837194 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_colony_2_12" translation 0.244934 -1.050369 0.028500 rotation 0 0 1 0.000000 children [ Transform { scale 0.040500 0.025500 0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.75 0.77 0.35 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_warm_patch" translation -1.080000 0.780000 0.012000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.72 0.35 0.2 roughness 0.65 metalness 0  } geometry Box { size 0.450000 0.525000 0.018000 } } ] } ]  }
+Solid { name "nm_agar_cool_moist_refuge" translation 1.050000 -0.600000 0.022500 rotation 0 0 1 0.000000 children [ Transform { scale 0.600000 0.480000 0.037500 children [ Shape { appearance PBRAppearance { baseColor 0.25 0.44 0.4 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+Solid { name "nm_agar_touch_ridge_0" translation -0.525000 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_1" translation -0.382500 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_2" translation -0.240000 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_3" translation -0.097500 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_4" translation 0.045000 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_5" translation 0.187500 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_6" translation 0.330000 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_touch_ridge_7" translation 0.472500 0.870000 0.030000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.43 0.39 0.25 roughness 0.65 metalness 0  } geometry Box { size 0.037500 0.330000 0.052500 } } ] } ] boundingObject Box { size 0.037500 0.330000 0.052500 } }
+Solid { name "nm_agar_optic_flow_panel_0" translation -1.350000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_1" translation -1.170000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_2" translation -0.990000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_3" translation -0.810000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_4" translation -0.630000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_5" translation -0.450000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_6" translation -0.270000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_7" translation -0.090000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_8" translation 0.090000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_9" translation 0.270000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_10" translation 0.450000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_11" translation 0.630000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_12" translation 0.810000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_13" translation 0.990000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_14" translation 1.170000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.075 0.1 0.13 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_optic_flow_panel_15" translation 1.350000 1.468500 0.099000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.090000 0.018000 0.117000 } } ] } ]  }
+Solid { name "nm_agar_light_beacon" translation 1.095000 1.095000 0.300000 rotation 0 0 1 0.000000 children [ Transform { scale 0.112500 0.112500 0.112500 children [ Shape { appearance PBRAppearance { baseColor 0.99 0.86 0.52 roughness 0.65 metalness 0 emissiveColor 0.99 0.86 0.52 } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
+PointLight { location 1.09500 1.09500 0.30000 color 1 0.86 0.52 intensity 0.8 radius 4.5000 attenuation 0 0 1 }
+CelegansRobot { translation 0 0 0.038 rotation 1 0 0 1.570796 controller "nao_nn_controller_uds" controllerArgs [ "NM_BRAINS=default" "NM_SENSORS_default=^celegans_s_[0-9]{2}_.*$" "NM_ACTUATORS_default=^celegans_o_[0-9]{3}_.*$" ] }
