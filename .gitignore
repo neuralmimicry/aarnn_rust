@@ -82,3 +82,23 @@ apps/android/build/
 apps/android/app/build/
 apps/android/local.properties
 aer_fabric_bridge/target/
+
+# project_solver ignore additions
+.refiner/
+.research_cache/
+project_solver_output/
+delivery_pipeline_output/
+node_modules/
+build/
+.cache/
+.next/
+.nuxt/
+.turbo/
+coverage/
+venv/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
