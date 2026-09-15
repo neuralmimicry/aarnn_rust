@@ -38,6 +38,21 @@ public final class LabWorld {
         if(!level.dimension().equals(KEY)) throw new IllegalArgumentException("World generation is restricted to aarnn:lab");
         buildPlots(level);
     }
+    /** Explicitly acknowledges a catalogue upgrade for the existing disarmed lab. */
+    public static int reviewContent(ServerLevel level) {
+        if(!level.dimension().equals(KEY)) throw new IllegalArgumentException("Content review is restricted to aarnn:lab");
+        if(!ready(level)) throw new IllegalStateException("Lab chunks are loading; repeat the command shortly");
+        var existing=scenes(level);
+        if(existing.size()!=Content.DATA.profiles().size()*2)
+            throw new IllegalStateException("Lab is incomplete; run /aarnn world before reviewing content");
+        for(var p:Content.DATA.profiles()) {
+            if(existing.stream().noneMatch(e->e.profile().id().equals(p.id()) && e.habitatEntity())
+                    || existing.stream().noneMatch(e->e.profile().id().equals(p.id()) && !e.habitatEntity()))
+                throw new IllegalStateException("Lab profile set is incomplete; run /aarnn world before reviewing content");
+        }
+        existing.forEach(SceneEntity::reviewContent);
+        return existing.size();
+    }
     /** Entity region files load asynchronously after block chunks. Never create replacement
      * entities until that load completes, or reopening a save duplicates every body. */
     public static boolean ready(ServerLevel level) {

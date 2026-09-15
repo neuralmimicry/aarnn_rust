@@ -156,7 +156,7 @@ def main():
                 bridge=None
                 try:
                     ready(rust,number,180)
-                    bridge=subprocess.Popen([java_path,'-jar',str(ROOT/'sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar'),'--port','62620','--base-port',str(number),'--profiles',name],cwd=output,env=env,stdout=bridge_log,stderr=subprocess.STDOUT)
+                    bridge=subprocess.Popen([java_path,'-jar',str(ROOT/'sim/minecraft/build/libs/aarnn-minecraft-1.21.1-0.1.0-bridge.jar'),'--port','62620','--base-port',str(number),'--profiles',name],cwd=output,env=env,stdout=bridge_log,stderr=subprocess.STDOUT)
                     ready(bridge,62620,75)
                     request=urllib.request.Request('http://127.0.0.1:62620/api/aarnn/health',headers={'Authorization':'Bearer '+token})
                     with urllib.request.urlopen(request,timeout=5) as response:

@@ -19,6 +19,8 @@ public final class Gateway {
     public record Binding(String networkId, String nodeId, int sensory, int output, long firstStep) {}
     public record Reply(long step, int[] spikes) {}
     public record Capture(long sequence, long captureNanos, long step, String contentDigest) {}
+    public record Metrics(long inputFrames, long outputFrames, long lastInputStep,
+                          long lastOutputStep, int lastOutputSpikes, double lastInputMean) {}
     private static final Gson JSON = new Gson();
     public static final int MAX_RESPONSE = 65536;
 
@@ -40,6 +42,9 @@ public final class Gateway {
         private final HttpClient client;
         private CompletableFuture<HttpResponse<byte[]>> pending;
         private long nextStep, sequence, lastOutput = -1;
+        private long inputFrames, outputFrames, lastInputStep = -1, lastOutputStep = -1;
+        private int lastOutputSpikes;
+        private double lastInputMean;
         private boolean active = true;
         private Capture capture;
         private String status = "armed: legacy sandbox";
@@ -60,12 +65,18 @@ public final class Gateway {
         public String status() { return status; }
         public Capture capture() { return capture; }
         public Binding binding() { return binding; }
+        public Metrics metrics() {
+            return new Metrics(inputFrames, outputFrames, lastInputStep, lastOutputStep,
+                    lastOutputSpikes, lastInputMean);
+        }
         CompletionStage<?> completion() { return pending; }
         public void submit(double[] input, long captureNanos) {
             if (!active || pending!=null) throw new IllegalStateException("Session disarmed or credit occupied");
             if (input.length!=profile.sensory() || nextStep>16000000) throw new IllegalArgumentException("Frame bounds");
             for (double v:input) if (!Double.isFinite(v) || v<0 || v>1) throw new IllegalArgumentException("Sensory range");
             capture=new Capture(sequence++,captureNanos,nextStep,Content.DATA.digest());
+            inputFrames++; lastInputStep=nextStep;
+            lastInputMean=java.util.Arrays.stream(input).average().orElse(0.0);
             JsonObject body=new JsonObject();
             body.addProperty("content_digest",Content.DATA.digest());
             body.addProperty("capture_sequence",capture.sequence());
@@ -79,7 +90,10 @@ public final class Gateway {
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.toJson(body))).build();
             pending=client.sendAsync(request, ignored -> new BoundedBody());
             pending.orTimeout(timeout+500L,java.util.concurrent.TimeUnit.MILLISECONDS);
-            status="pending: legacy sandbox";
+            // A healthy session deliberately keeps one bounded request in flight.
+            // Do not label every normal frame as a connection that is still
+            // pending; that made an active robot look disconnected in status.
+            status=lastOutput<0 ? "pending: first neural frame" : "active: legacy sandbox (frame pending)";
         }
         /** Called on the server tick only; never waits for network I/O. */
         public Reply poll() {
@@ -89,7 +103,9 @@ public final class Gateway {
                 var response=completed.join();
                 if (response.statusCode()!=200) throw new IllegalArgumentException("HTTP "+response.statusCode());
                 Reply reply=decode(response.body(),profile,binding.networkId(),lastOutput);
-                lastOutput=reply.step(); nextStep=Math.max(nextStep+1,lastOutput+1);
+                lastOutput=reply.step(); lastOutputStep=lastOutput;
+                outputFrames++; lastOutputSpikes=reply.spikes().length;
+                nextStep=Math.max(nextStep+1,lastOutput+1);
                 status="active: legacy sandbox";
                 return reply;
             } catch (RuntimeException error) {

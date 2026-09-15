@@ -2371,9 +2371,14 @@ start_cluster_runtime() {
         echo "Failed to build orchestrator startup network map."
         exit 1
     }
+    local ipc_node_ids=""
+    for brain in "${BRAINS[@]}"; do
+        ipc_node_ids="${ipc_node_ids:+$ipc_node_ids,}${brain}_ipc"
+    done
     local orch_cmd=(
         env
         "NM_ORCHESTRATOR_NETWORK_SPECS=$orch_specs_json"
+        "NM_IPC_NODE_IDS=$ipc_node_ids"
         "NM_DISTRIBUTE_STARTUP_SNAPSHOT=$DISTRIBUTE_STARTUP_SNAPSHOT"
         "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
         "NM_REALTIME_IPC=$REALTIME_IPC"
@@ -2423,6 +2428,7 @@ start_cluster_runtime() {
             "NM_MORPHO_ASYNC=$MORPHO_ASYNC"
             "$bin"
             --node
+            --node-id "${brain}_ipc"
             --brain-id "$brain"
             --grpc-addr "0.0.0.0:$node_port"
             --orchestrator-addr "http://127.0.0.1:$orch_port"
@@ -2537,6 +2543,7 @@ start_cluster_runtime() {
     echo "Orchestrator ready:"
     echo "  gRPC: $orch_port"
     echo "  worker processes: $NODE_COUNT (${#BRAINS[@]} IPC owner(s), $extra_workers additional worker(s))"
+    echo "  IPC owner IDs: $ipc_node_ids"
     echo "  log: $orch_log"
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
         echo "  UI: enabled"

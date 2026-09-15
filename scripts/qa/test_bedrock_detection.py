@@ -62,6 +62,19 @@ class BedrockDetectionTests(unittest.TestCase):
             self.assertEqual(bedrock.detect(root)['status'],'unavailable')
 
     @patch.dict(os.environ,{},clear=True)
+    def test_available_java_frontend_precedes_bedrock_even_before_mod_preflight(self):
+        java_report = dict(
+            launcher='/usr/bin/minecraft-launcher',
+            java=dict(available=True, major=25, path='/usr/lib/jvm/java-25/bin/java'),
+            compatible_loader_profiles=[dict(profile_id='26.2')],
+            compatible_profiles=[dict(profile_id='26.2')],
+            compatible_fabric_api=True,
+            compatible_aarnn_mod=False,
+            errors=[],
+        )
+        self.assertEqual(minecraft.select_edition('auto', java_report, {'server': '/bds'}), 'java')
+
+    @patch.dict(os.environ,{},clear=True)
     def test_malformed_and_stale_pack_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.configured(root)

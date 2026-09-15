@@ -34,6 +34,7 @@ public final class AarnnMod implements ModInitializer {
             root.then(Commands.literal("world").executes(c->run(c.getSource(),"world",null)));
             root.then(Commands.literal("stop").executes(c->run(c.getSource(),"stop",null)));
             root.then(Commands.literal("status").executes(c->run(c.getSource(),"status",null)));
+            root.then(Commands.literal("review").executes(c->run(c.getSource(),"review",null)));
             for(String action:new String[]{"visit","connect","disconnect","anatomy","senses"}) {
                 root.then(Commands.literal(action).then(Commands.argument("profile",StringArgumentType.word())
                     .suggests((context,builder)-> { Content.DATA.profiles().forEach(p->builder.suggest(p.id())); return builder.buildFuture(); })
@@ -83,7 +84,11 @@ public final class AarnnMod implements ModInitializer {
                 case "status" -> {
                     source.sendSuccess(()->Component.literal("Content "+Content.DATA.digest()+" · reference sandbox"),false);
                     for(var e:LabWorld.scenes(level)) if(!e.habitatEntity())
-                        source.sendSuccess(()->Component.literal(e.profile().id()+": "+e.profile().sensory()+" / "+e.profile().output()+" · "+e.status()),false);
+                        source.sendSuccess(()->Component.literal(e.profile().id()+": "+e.profile().sensory()+" / "+e.profile().output()+" · "+e.status()+" · "+e.contentStatus()+" · "+e.telemetry()),false);
+                }
+                case "review" -> {
+                    int count=LabWorld.reviewContent(level);
+                    source.sendSuccess(()->Component.literal("Reviewed "+count+" saved lab entities for content "+Content.DATA.digest()+"; all remain disarmed"),true);
                 }
                 case "visit" -> {
                     LabWorld.build(level);

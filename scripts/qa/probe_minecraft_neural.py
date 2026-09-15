@@ -90,7 +90,7 @@ def main():
                 bridge = None
                 try:
                     ready(rust, backend_port, 180)
-                    bridge = subprocess.Popen([java_path, '-jar', str(ROOT / 'sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar'),
+                    bridge = subprocess.Popen([java_path, '-jar', str(ROOT / 'sim/minecraft/build/libs/aarnn-minecraft-1.21.1-0.1.0-bridge.jar'),
                         '--port', str(bridge_port), '--base-port', str(backend_port), '--profiles', name],
                         cwd=output, env=env, stdout=bridge_log, stderr=subprocess.STDOUT)
                     ready(bridge, bridge_port, 75)

@@ -5,13 +5,32 @@ Both editions have native adapters. This guide covers **Java/Fabric**; see
 bundle) for the native behaviour/resource packs, server requirements and commands.
 `--minecraft-edition auto|java|bedrock` controls detection or forces an edition.
 
-Minecraft **Java Edition 1.21.1**, **Java 21+**, **Fabric Loader 0.17.3+** and
-**Fabric API 0.107.0+1.21.1** are the pinned environment. AARNN supplies a Fabric
-mod, a standalone companion JAR and a saved lab world. The Rust runtime owns
-every neural network; neither JAR contains a Java neural simulator.
+The Java adapter supports isolated compatibility profiles. Each profile has its
+own mod build and launcher game directory; never put jars from different rows in
+the same `mods/` directory.
 
-Minecraft 26.2 and Fabric API `0.160.0+26.2` are a different target. Use a separate
-1.21.1 launcher installation and game directory. Do not mix their mods.
+| Minecraft | Fabric Loader | Fabric API | Java | Build mode |
+|---|---:|---:|---:|---|
+| 1.21.1 | 0.17.3+ | 0.107.0+1.21.1 | 21+ | remapped official mappings |
+| 26.2 | 0.19.5+ | 0.160.0+26.2 | 25+ | named Mojang classes, no remap |
+
+AARNN supplies a profile-specific Fabric mod, a standalone companion JAR and a
+saved lab world. The Rust runtime owns every neural network; neither JAR contains
+a Java neural simulator.
+
+For the installed 26.2 profile, build its artifacts with Java 25:
+
+```sh
+cd sim/minecraft
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 ./gradlew --no-daemon build \
+  -Pminecraft_version=26.2 -Ploader_version=0.19.5 \
+  -Pfabric_version=0.160.0+26.2 -Pno_remap=true -Pjava_release=25
+```
+
+This produces `aarnn-minecraft-26.2-0.1.0.jar` and
+`aarnn-minecraft-26.2-0.1.0-bridge.jar`. Copy the first jar into the installed
+26.2 profile's `mods/` directory alongside its existing Fabric API jar. The
+1.21.1 build produces correspondingly named `aarnn-minecraft-1.21.1-*` artifacts.
 
 ## Installation
 
@@ -21,17 +40,18 @@ It also includes a native Bedrock saved world, offline/server add-ons and a BDS 
 Recreate it after building and validating with `python3 scripts/package_minecraft.py`.
 
 
-1. Install/open Minecraft Java Edition 1.21.1 once using your licensed launcher.
-2. Run the supplied official Fabric installer, select **Client**, Minecraft
-   **1.21.1**, Loader **0.17.3**, and your launcher directory. Alternatively use
-   the installer from <https://fabricmc.net/use/installer/>. Install matching
+1. Install/open the selected Minecraft Java profile once using your licensed launcher.
+2. Run the supplied official Fabric installer for the selected row above. For
+   1.21.1 select Loader **0.17.3**; for 26.2 select Loader **0.19.5**. Alternatively
+   use the installer from <https://fabricmc.net/use/installer/>. Install matching
    Fabric server software separately if you want a dedicated server; review and
    accept Mojang's terms yourself.
-3. In the Minecraft launcher, create/select the Fabric **1.21.1** installation.
-   Give it a separate game directory, for example `~/Games/AARNN-Minecraft-1.21.1`.
-   Configure its Java executable to a Java 21 installation and allocate 4 GiB.
-4. Copy **aarnn-minecraft-0.1.0.jar** and
-   **fabric-api-0.107.0+1.21.1.jar** into that game directory's `mods/`.
+3. In the Minecraft launcher, create/select the Fabric installation and give each
+   row a separate game directory, for example `~/Games/AARNN-Minecraft-1.21.1`
+   and `~/Games/AARNN-Minecraft-26.2`. Configure Java 21 for 1.21.1 or Java 25
+   for 26.2, and allocate 4 GiB.
+4. Copy the matching `aarnn-minecraft-<minecraft>-0.1.0.jar` and Fabric API jar
+   into that game directory's `mods/`.
    Install both on clients and the dedicated server when using multiplayer.
    The **bridge JAR is a separate executable**, not a Minecraft mod.
 5. Extract **AARNN-Sensory-Lab.zip** into the game directory's `saves/`, so that
@@ -51,15 +71,20 @@ From the repository root:
 
 ```sh
 cargo xtask doctor --product minecraft
-python3 scripts/minecraft.py doctor --game-dir "$HOME/Games/AARNN-Minecraft-1.21.1"
+python3 scripts/minecraft.py doctor --minecraft-version 26.2 \
+  --game-dir "$HOME/Games/AARNN-Minecraft-26.2"
 ```
 
 Detection reads version manifests, Fabric mod metadata and launcher game-directory
 settings. It does not read account files. Missing Java, launcher, compatible
 Fabric/profile/API/mod produces a structured `unavailable` result and exit **3**.
 Malformed mod metadata is reported. `NM_MINECRAFT_DIR` selects a non-default
-launcher directory; `NM_MINECRAFT_JAVA_HOME` selects Java 21+.
-`NM_MINECRAFT_GAME_DIR` selects the separate game directory for launcher scripts.
+launcher directory; `NM_MINECRAFT_JAVA_HOME` selects the Java installation.
+`NM_MINECRAFT_GAME_DIR` selects the separate game directory for launcher scripts;
+`NM_MINECRAFT_VERSION=26.2` selects the 26.2 compatibility profile. Without an
+explicit version, detection selects the complete installed profile and reports
+its game directory. The detector checks Java, Fabric Loader, Fabric API and the
+AARNN mod as one profile, so a 1.21.1 jar is never accepted for 26.2 or vice versa.
 Duplicate mod IDs, corrupt metadata and an occupied companion port are rejected.
 Only a verified, authenticated companion readiness response permits client launch.
 
@@ -101,6 +126,25 @@ Leave `nodeId` empty/null. Preserve the generated content digest and dimensions.
 Then run `/aarnn connect celegans`. `/aarnn stop` disarms all lab robots locally;
 `/aarnn disconnect celegans` disarms only that robot.
 
+If `/aarnn status` reports `content=review-required`, the saved lab was created
+with an earlier catalogue digest. Inspect the updated catalogue, then run
+`/aarnn review` once; this updates only the saved lab content marker and keeps
+all entities disarmed. Run `/aarnn connect celegans` afterwards. The mod refuses
+to connect a mismatched saved lab until that explicit review is completed.
+
+Confirm the live exchange from Minecraft chat with `/aarnn status`. Each robot
+reports `frames in/out`, the last input/output step, the number of spikes in the
+last neural reply and the mean sensory input. A working exchange has increasing
+input and output counts, usually equal counts, and advancing step numbers; a
+zero spike count is valid and means that the last reply contained no output
+spikes. The first request is shown as `pending: first neural frame`. After the
+first reply, `active: legacy sandbox (frame pending)` is normal because the
+adapter keeps one bounded request in flight; the counts and advancing steps
+confirm the exchange. If input increases while output stays behind for the
+response budget, the route has faulted and the robot disarms. `/aarnn senses
+<profile>` only samples the Minecraft world locally; it does not prove that a
+frame reached Rust.
+
 To run all six local networks, use:
 
 ```sh
@@ -112,7 +156,7 @@ The launcher prints the TCP allocation. The companion also prints each profile's
 route. For an independently managed Rust setup, run the companion directly:
 
 ```sh
-java -jar sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar \
+java -jar sim/minecraft/build/libs/aarnn-minecraft-<minecraft>-0.1.0-bridge.jar \
   --profiles celegans --base-port 7890 --port 62620
 ```
 

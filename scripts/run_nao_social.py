@@ -100,7 +100,7 @@ def main():
         if not minecraft_java:
             p.error('Java 21+ is required by the Minecraft companion')
         minecraft_edition = select_edition(args.minecraft_edition, detect(minecraft_home()), detect_bedrock(args.bedrock_dir))
-        if not (ROOT/'sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar').is_file():
+        if not (ROOT/'sim/minecraft/build/libs/aarnn-minecraft-1.21.1-0.1.0-bridge.jar').is_file():
             p.error('Build the Minecraft JARs first; see sim/minecraft/README.md')
     parent = ROOT/'target/nao-social'
     parent.mkdir(parents=True, exist_ok=True)
@@ -183,7 +183,7 @@ def main():
             companion_reservation = listener(62620)
             companion_port = companion_reservation.getsockname()[1]
             companion_reservation.close()
-            bridge = child([minecraft_java, '-jar', ROOT/'sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar', '--port', str(companion_port), '--base-port', str(body_port), '--profiles', 'nao'], 'minecraft-bridge', env)
+            bridge = child([minecraft_java, '-jar', ROOT/'sim/minecraft/build/libs/aarnn-minecraft-1.21.1-0.1.0-bridge.jar', '--port', str(companion_port), '--base-port', str(body_port), '--profiles', 'nao'], 'minecraft-bridge', env)
             wait_port(bridge, companion_port)
             settings.update(minecraft_edition=minecraft_edition, minecraft_port=companion_port, minecraft_token=token)
             session_file.write_text(json.dumps(settings, indent=2)+'\n')

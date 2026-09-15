@@ -42,7 +42,7 @@ def prepare_minecraft(run, settings, edition, bedrock_source=None):
     directory.mkdir(mode=0o700)
     if edition=='java':
         (directory/'mods').mkdir();(directory/'config').mkdir()
-        for source in (ROOT/'sim/minecraft/build/libs/aarnn-minecraft-0.1.0.jar',ROOT/'dist/minecraft/fabric-api-0.107.0+1.21.1.jar'):
+        for source in (ROOT/'sim/minecraft/build/libs/aarnn-minecraft-1.21.1-0.1.0.jar',ROOT/'dist/minecraft/fabric-api-0.107.0+1.21.1.jar'):
             if not source.is_file():raise ValueError('Build/package Minecraft prerequisites first')
             shutil.copy2(source,directory/'mods'/source.name)
         extract_world(ROOT/'sim/minecraft/build/distributions/AARNN-Sensory-Lab.zip',directory/'saves/AARNN-Sensory-Lab',True)

@@ -135,6 +135,61 @@ on retry. Only a proved startup bind race gets up to three fresh port attempts.
 
 ## Progress
 
+- [x] `2026-09-15 20:00Z` User requested additive Java-version support for the
+  installed Minecraft 26.2 profile. Discovery confirms the current detector,
+  Fabric metadata and Gradle build are pinned to 1.21.1; the installed profile
+  uses Fabric Loader 0.19.5, Fabric API 0.160.0+26.2 and Java 25. A parameterised
+  26.2 compile currently reaches Loom but fails because Loom 1.12.7 cannot find
+  official Mojang mappings for 26.2. The next milestone is a real versioned
+  profile/build path, with the existing 1.21.1 path retained.
+- [x] `2026-09-15` Versioned Java profiles are implemented. The 1.21.1 baseline
+  builds with Java 21 and remapped Loom sources; 26.2 builds with Java 25, Loom
+  no-remap sources and the new client render-state submission API. Artifacts are
+  named with their Minecraft version. Detection selects isolated launcher game
+  directories, enforces each profile's loader/API/mod/Java tuple and recognizes
+  this laptop's 26.2 installation. Both Gradle builds and the six profile
+  detector tests pass. The installed profile still needs the built AARNN mod jar
+  copied into its `mods/` directory before engine launch.
+- [x] `2026-09-15` Auto frontend selection now prefers an available Java
+  launcher/profile over a detected Bedrock server. Java engine preflight remains
+  authoritative and reports missing Fabric/API/AARNN artifacts instead of
+  silently launching the Bedrock frontend.
+- [x] `2026-09-15` Minecraft `/aarnn status` now exposes per-robot neural
+  exchange telemetry: submitted and returned frame counts, logical steps, last
+  output spike count and sensory mean. This makes a live Java-to-Rust exchange
+  verifiable in Minecraft chat; local `/aarnn senses` remains explicitly
+  separate from transport verification.
+- [x] `2026-09-15 21:08Z` Live Minecraft launch verification found that
+  `--node 3` reached `run_webot.sh` and started three workers, but the one-layer
+  C. elegans placement retained only two active primary/backup targets. The
+  rebalancer then unloaded the unnamed IPC owner after replacement readiness,
+  leaving two connected workers and breaking the frontend's third-node
+  expectation. The fix gives each IPC owner a stable `<brain>_ipc` identity,
+  prefers it in target selection and protects it from the unload handoff. The
+  bounded Rust placement test and shell checks pass against the updated source;
+  the rebuilt live run is recorded below.
+- [x] `2026-09-15 23:15Z` Rebuilt the Rust runtime and reran the live command
+  `scripts/run_sim.sh --sim minecraft --robots "celegans=1" --node 3`. The
+  fresh runtime reports three connected nodes, retains `celegans_0_ipc`, and
+  keeps the IPC owner through startup placement. A bounded authenticated
+  `celegans` request returned all 96 validated output addresses in under one
+  second; the probe run was discarded and the final run was restarted so the
+  frontend sequence begins at its configured step.
+- [x] `2026-09-15 23:16Z` Rebuilt the installed 26.2 mod after correcting the
+  status wording. `pending: first neural frame` now identifies the initial
+  reply; `active: legacy sandbox (frame pending)` identifies normal one-credit
+  operation after a successful reply. `/aarnn status` telemetry is present in
+  the installed JAR. Java 26.2 Gradle tests/build and Python detection tests
+  pass after regenerating Bedrock fixtures.
+- [x] `2026-09-15 22:26Z` Resolved the saved-lab connection failure shown by the
+  operator. A catalogue digest mismatch now reports the exact recovery command
+  instead of combining configuration and saved-content failures. Added explicit
+  `/aarnn review`, which requires a complete six-profile disarmed lab and
+  acknowledges the current content digest without migrating neural state or
+  arming a session. Status exposes `content=match` or `content=review-required`.
+  Both 26.2 and 1.21.1 Java test/build lanes pass; the rebuilt 26.2 JAR is
+  installed at the detected game directory.
+
 - [x] `2026-09-15 11:42Z` Repository/inspiration/toolchain discovery complete.
 - [x] `2026-09-15 12:40Z` Shared water catalogue reaches 602 objects, digest
   `4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8`.
@@ -235,7 +290,9 @@ render probe is rendering evidence only, never clean-exit acceptance.
 Install Java in a separate compatible Fabric game directory. Install Bedrock packs
 and scoped settings into a dedicated lab server/world; no Fabric JAR runs inside
 Bedrock. Keep the companion beside Rust on the BDS host. Default auto detection
-prefers compatible Java, then BDS; forced editions never silently switch.
+prefers an available Java launcher/profile, then BDS; Java engine preflight
+reports missing Fabric/API/mod artifacts instead of silently switching frontends.
+Forced editions never silently switch.
 `--no-engine` permits brain/companion hosts without a game installation.
 
 Generated artefacts are additive. Remove the adapter from a backed-up test instance
@@ -273,6 +330,12 @@ is independent of port availability and must never be bypassed.
   entities before counting them. Preload/600-tick bounds avoid duplicate creation.
 - Modern BDS can lack a LevelDB LOCK file. Linux process/world-directory checks
   supplement advisory locks; free listener ports never prove world availability.
+- `run_sim.sh --node 3` was parsed and forwarded correctly. A one-layer network
+  can have at most one active layer owner plus one distinct backup under the
+  compatibility placement model, but the IPC owner is still a required live
+  frontend service. Treating it as an ordinary removable source caused the
+  observed connected-node count to fall from three to two after warm-copy
+  handoff.
 
 ## Decision Log
 
@@ -287,6 +350,22 @@ is independent of port availability and must never be bypassed.
 - `2026-09-15 MC-005`: User requires automatic port collision resolution each run.
   Reserve ports and isolate runtime settings; refuse a second writer on open worlds.
   Rollback consists of normal stop and selecting the original settings next run.
+- `2026-09-15 MC-006`: Treat Java Minecraft targets as explicit compatibility
+  profiles rather than accepting arbitrary version strings. A profile is usable
+  only when its game version, loader/API/mod metadata, Java requirement and
+  version-specific build artifact all agree. Keep 1.21.1 as the certified
+  baseline while adding 26.2 only after the adapter compiles and its metadata is
+  detected in the selected game directory.
+- `2026-09-15 MC-007`: Preserve local IPC owners as named cluster workers during
+  compatibility placement handoff. `--nodes` counts worker processes, while
+  biological layer placement may use fewer active targets; the frontend owner
+  must remain connected and addressable even when its topology cannot receive a
+  distinct active layer. This changes lifecycle protection and observability,
+  not logical time, event ordering or neural state semantics.
+- `2026-09-15 MC-008`: Catalogue changes require explicit operator review before
+  a saved lab can arm legacy sandbox inference. The review updates only the
+  entity content marker after validating the complete profile set; it never
+  silently retags a partial lab or restores neural state.
 
 ## Outcomes & Retrospective
 

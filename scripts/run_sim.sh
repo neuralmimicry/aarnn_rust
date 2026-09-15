@@ -18,7 +18,7 @@
 #                       webgl   — start the distributed AARNN runtime and authenticated
 #                                 web gateway; open the printed URL in a browser
 #                       all     — launch Webots AND (Unreal + brains) concurrently
-#                       minecraft — detected Fabric 1.21.1 client + local authenticated TCP companion
+#                       minecraft — detected Fabric client + local authenticated TCP companion
 #   --robots <spec>   Robot spec, e.g. "celegans=1,hexapod=2,nao=1"
 #                     (default: celegans=1).
 #                     Supported types: celegans, drosophila_banc, drosophila_fafb,
@@ -1001,6 +1001,7 @@ case "$SIM_BACKEND" in
     if [ "$LAUNCH_ENGINE" -eq 1 ]; then
       python3 "$ROOT_DIR/scripts/minecraft.py" doctor --require engine --edition "$minecraft_edition"
     fi
+    minecraft_bridge_jar="$(python3 "$ROOT_DIR/scripts/minecraft.py" artifact --kind bridge --edition "$minecraft_edition")"
     resolve_brain_arrays
     minecraft_profiles="$(IFS=,; echo "${BRAIN_TYPES[*]}")"
     if [ "${#BRAIN_TYPES[@]}" -gt 6 ] || [ "$(printf '%s\n' "${BRAIN_TYPES[@]}" | sort -u | wc -l)" -ne "${#BRAIN_TYPES[@]}" ]; then
@@ -1013,7 +1014,7 @@ case "$SIM_BACKEND" in
     fi
     if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then start_distributed_tcp_servers; else start_tcp_servers; fi
     minecraft_java="$(python3 "$ROOT_DIR/scripts/minecraft.py" java)"
-    "$minecraft_java" -jar "$ROOT_DIR/sim/minecraft/build/libs/aarnn-minecraft-0.1.0-bridge.jar" \
+    "$minecraft_java" -jar "$minecraft_bridge_jar" \
       --base-port "$TCP_BASE_PORT" --profiles "$minecraft_profiles" &
     minecraft_bridge_pid="$!"
     TCP_PIDS+=("$minecraft_bridge_pid")

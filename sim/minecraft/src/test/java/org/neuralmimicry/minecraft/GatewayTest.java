@@ -41,11 +41,17 @@ final class GatewayTest {
                 try {
                     assertFalse(session.ready());
                     session.submit(new double[p.sensory()],123456);
+                    assertEquals("pending: first neural frame",session.status());
                     assertThrows(IllegalStateException.class,()->session.submit(new double[p.sensory()],0));
                     session.completion().toCompletableFuture().get(4,TimeUnit.SECONDS);
                     assertFalse(session.ready());
                     var output=session.poll();assertNotNull(output);assertEquals(42,output.step());
                     assertTrue(session.ready());
+                    assertEquals("active: legacy sandbox",session.status());
+                    var metrics=session.metrics();
+                    assertEquals(1,metrics.inputFrames()); assertEquals(1,metrics.outputFrames());
+                    assertEquals(4,metrics.lastInputStep()); assertEquals(42,metrics.lastOutputStep());
+                    assertEquals(1,metrics.lastOutputSpikes()); assertEquals(0.0,metrics.lastInputMean());
                     assertNull(session.poll()); assertEquals("Bearer fixture-token",auth.get());
                     var request=JsonParser.parseString(received.get()).getAsJsonObject();
                     assertEquals(p.sensory(),request.getAsJsonArray("input_values").size());

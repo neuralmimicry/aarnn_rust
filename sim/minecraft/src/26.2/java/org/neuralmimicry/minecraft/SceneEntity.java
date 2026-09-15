@@ -7,7 +7,11 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -16,7 +20,7 @@ import java.util.Map;
 public final class SceneEntity extends Entity {
     private static final EntityDataAccessor<String> PROFILE=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.STRING);
     private static final EntityDataAccessor<Boolean> ANATOMY=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.BOOLEAN);
-    private static final EntityDataAccessor<CompoundTag> OUTPUTS=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.COMPOUND_TAG);
+    private static final EntityDataAccessor<String> OUTPUTS=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.STRING);
     private static final EntityDataAccessor<String> STATUS=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.STRING);
     private static final EntityDataAccessor<String> CHAT=SynchedEntityData.defineId(SceneEntity.class,EntityDataSerializers.STRING);
     private int chatTicks;
@@ -26,6 +30,7 @@ public final class SceneEntity extends Entity {
     private Gateway.Session session;
     private String savedDigest=Content.DATA.digest();
     public SceneEntity(EntityType<?> type,Level world) { super(type,world); noPhysics=true; setNoGravity(true); }
+    @Override public boolean hurtServer(ServerLevel level,DamageSource source,float amount) { return false; }
     public boolean habitatEntity() { return getType()==AarnnMod.HABITAT; }
     public Content.Profile profile() { return Content.profile(entityData.get(PROFILE)); }
     public String status() { return entityData.get(STATUS); }
@@ -37,9 +42,14 @@ public final class SceneEntity extends Entity {
     public double originY() { return originY; }
     public double originZ() { return originZ; }
     public double[] visualOutputs() {
-        int[] encoded=entityData.get(OUTPUTS).getIntArray("values");
+        String encoded=entityData.get(OUTPUTS);
         double[] result=new double[profile().output()];
-        for(int i=0;i<Math.min(encoded.length,result.length);i++) result[i]=Senses.clamp(encoded[i]/255.0,0,1);
+        if(!encoded.isEmpty()) {
+            String[] values=encoded.split(",",-1);
+            for(int i=0;i<Math.min(values.length,result.length);i++)
+                try { result[i]=Senses.clamp(Integer.parseInt(values[i])/255.0,0,1); }
+                catch(NumberFormatException ignored) { }
+        }
         return result;
     }
     public void configure(String id,double x,double y,double z) {
@@ -62,15 +72,33 @@ public final class SceneEntity extends Entity {
     public boolean connected() { return session!=null && session.active(); }
     public boolean neuralReady() { return session!=null && session.ready(); }
     public String boundNetwork() { return connected()?session.binding().networkId():null; }
+    public boolean contentMatches() { return Content.DATA.digest().equals(savedDigest); }
+    public String contentStatus() { return contentMatches()?"content=match":"content=review-required"; }
+    public String telemetry() {
+        if(session==null) return "frames in/out=0/0 last steps=-1/-1 spikes=0 input mean=0.0000";
+        var m=session.metrics();
+        return String.format(java.util.Locale.ROOT,
+                "frames in/out=%d/%d last steps=%d/%d spikes=%d input mean=%.4f",
+                m.inputFrames(),m.outputFrames(),m.lastInputStep(),m.lastOutputStep(),
+                m.lastOutputSpikes(),m.lastInputMean());
+    }
     public void connect(AdapterConfig config) {
         stop("disarmed");
-        if(!config.allowLegacySandboxInference || !Content.DATA.digest().equals(savedDigest))
-            throw new IllegalArgumentException("Legacy sandbox disabled or saved content needs review");
+        if(!config.allowLegacySandboxInference)
+            throw new IllegalArgumentException("Legacy sandbox disabled in aarnn.json");
+        if(!contentMatches())
+            throw new IllegalArgumentException("Saved lab content needs review; run /aarnn review after inspecting the current catalogue");
         var binding=config.bindings.get(profile().id());
         if(binding==null||!profile().id().equals(binding.networkId()))
             throw new IllegalArgumentException("Binding must select this robot's own profile route");
         session=new Gateway.Session(profile(),binding,Gateway.endpoint(config.endpoint),System.getenv(config.tokenEnvironment));
         history.clear(); entityData.set(STATUS,session.status());
+    }
+    /** Explicitly acknowledges the current catalogue for this disarmed lab entity. */
+    public void reviewContent() {
+        if(connected()) throw new IllegalStateException("Disconnect the robot before reviewing saved content");
+        savedDigest=Content.DATA.digest();
+        stop("disarmed after content review");
     }
     public void stop(String reason) {
         chatBubble("",0);
@@ -97,16 +125,19 @@ public final class SceneEntity extends Entity {
         syncOutputs();
     }
     private void syncOutputs() {
-        var tag=new CompoundTag(); int[] values=new int[actuators.length];
-        for(int i=0;i<values.length;i++) values[i]=(int)Math.round(actuators[i]*255);
-        tag.putIntArray("values",values); entityData.set(OUTPUTS,tag);
+        var values=new StringBuilder();
+        for(int i=0;i<actuators.length;i++) {
+            if(i>0) values.append(',');
+            values.append((int)Math.round(actuators[i]*255));
+        }
+        entityData.set(OUTPUTS,values.toString());
     }
     @Override public void tick() {
-        if(!level().isClientSide && chatTicks>0 && --chatTicks==0)entityData.set(CHAT,"");
+        if(!level().isClientSide() && chatTicks>0 && --chatTicks==0)entityData.set(CHAT,"");
         // These are persistent procedural displays with our own bounded motion. Vanilla
         // baseTick scans the entire 32 x 16 x 32 habitat box for fluids every tick;
         // portals, fire and fluid pushing are not part of this reference transducer.
-        if(level().isClientSide || habitatEntity() || session==null) return;
+        if(level().isClientSide() || habitatEntity() || session==null) return;
         var reply=session.poll();
         if(reply!=null) apply(reply);
         if(!session.active()) { String fault=session.status(); stop(fault); }
@@ -119,22 +150,22 @@ public final class SceneEntity extends Entity {
     }
     @Override protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(PROFILE,"celegans"); builder.define(ANATOMY,false);
-        builder.define(OUTPUTS,new CompoundTag()); builder.define(STATUS,"disarmed");
+        builder.define(OUTPUTS,""); builder.define(STATUS,"disarmed");
         builder.define(CHAT,"");
     }
-    @Override protected void addAdditionalSaveData(CompoundTag tag) {
+    @Override protected void addAdditionalSaveData(ValueOutput tag) {
         tag.putInt("Schema",1); tag.putString("ContentDigest",savedDigest);
         tag.putString("Profile",profile().id()); tag.putBoolean("Anatomy",anatomy());
         tag.putDouble("OriginX",originX); tag.putDouble("OriginY",originY); tag.putDouble("OriginZ",originZ);
         tag.putDouble("Heading",heading);
     }
-    @Override protected void readAdditionalSaveData(CompoundTag tag) {
-        if(tag.getInt("Schema")!=1) throw new IllegalArgumentException("Unsupported AARNN entity schema");
-        entityData.set(PROFILE,Content.profile(tag.getString("Profile")).id());
-        originX=tag.getDouble("OriginX"); originY=tag.getDouble("OriginY"); originZ=tag.getDouble("OriginZ");
-        heading=tag.getDouble("Heading"); savedDigest=tag.getString("ContentDigest");
+    @Override protected void readAdditionalSaveData(ValueInput tag) {
+        if(tag.getIntOr("Schema",0)!=1) throw new IllegalArgumentException("Unsupported AARNN entity schema");
+        entityData.set(PROFILE,Content.profile(tag.getStringOr("Profile","celegans")).id());
+        originX=tag.getDoubleOr("OriginX",0); originY=tag.getDoubleOr("OriginY",64); originZ=tag.getDoubleOr("OriginZ",0);
+        heading=tag.getDoubleOr("Heading",0); savedDigest=tag.getStringOr("ContentDigest","");
         if(!Double.isFinite(originX+originY+originZ+heading)) throw new IllegalArgumentException("Invalid saved pose");
-        anatomy(tag.getBoolean("Anatomy")); actuators=new double[profile().output()];
+        anatomy(tag.getBooleanOr("Anatomy",false)); actuators=new double[profile().output()];
         stop(Content.DATA.digest().equals(savedDigest)?"disarmed after load":"disarmed: content mismatch");
     }
     @Override public boolean shouldRenderAtSqrDistance(double distance) { return distance<256*256; }

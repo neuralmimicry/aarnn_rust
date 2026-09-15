@@ -27,7 +27,7 @@ public final class BridgeMain {
     private BridgeMain() {}
     public static void main(String[] args) throws Exception {
         if(args.length==1&&args[0].equals("--help")) {
-            System.out.println("java -jar aarnn-minecraft-0.1.0-bridge.jar [--port 62620] [--base-port 7890] [--profiles celegans,...]\nRequires AARNN_MINECRAFT_TOKEN (24+ characters). TCP ports follow profile order. Loopback only.");return;
+            System.out.println("java -jar aarnn-minecraft-<minecraft>-0.1.0-bridge.jar [--port 62620] [--base-port 7890] [--profiles celegans,...]\nRequires AARNN_MINECRAFT_TOKEN (24+ characters). TCP ports follow profile order. Loopback only.");return;
         }
         int port=62620,base=7890;String profiles=String.join(",",Content.DATA.profiles().stream().map(Content.Profile::id).toList());
         for(int i=0;i<args.length;i+=2) {

@@ -23,8 +23,8 @@ def digest(path):
 def main():
     dist = ROOT / 'dist/minecraft'
     dist.mkdir(parents=True, exist_ok=True)
-    files = [PROJECT / 'build/libs/aarnn-minecraft-0.1.0.jar',
-             PROJECT / 'build/libs/aarnn-minecraft-0.1.0-bridge.jar',
+    files = [PROJECT / 'build/libs/aarnn-minecraft-1.21.1-0.1.0.jar',
+             PROJECT / 'build/libs/aarnn-minecraft-1.21.1-0.1.0-bridge.jar',
              PROJECT / 'build/distributions/AARNN-Sensory-Lab.zip',
              PROJECT / 'README.md', PROJECT / 'NOTICE.md', PROJECT / 'LICENSE',
              PROJECT / 'dependencies.lock.json']

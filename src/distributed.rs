@@ -2581,12 +2581,29 @@ fn build_sharded_node_assignments(
     target_node_capacities: &[(String, f32)],
     total_layers: u32,
 ) -> Vec<(String, Vec<u32>, Vec<u32>)> {
+    build_sharded_node_assignments_preferred(target_node_capacities, total_layers, None)
+}
+
+fn build_sharded_node_assignments_preferred(
+    target_node_capacities: &[(String, f32)],
+    total_layers: u32,
+    preferred_node: Option<&str>,
+) -> Vec<(String, Vec<u32>, Vec<u32>)> {
     if target_node_capacities.is_empty() || total_layers == 0 {
         return Vec::new();
     }
 
     let mut sorted_targets = target_node_capacities.to_vec();
-    sorted_targets.sort_by(|lhs, rhs| rhs.1.total_cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+    sorted_targets.sort_by(|lhs, rhs| {
+        match (
+            preferred_node == Some(lhs.0.as_str()),
+            preferred_node == Some(rhs.0.as_str()),
+        ) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => rhs.1.total_cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)),
+        }
+    });
 
     // First give each layer exactly one active owner.  The old implementation
     // expanded every range by one layer on both sides and then marked that
@@ -2872,6 +2889,50 @@ fn limit_target_nodes_for_deployment(
     });
     filtered.truncate(target_count);
     filtered
+}
+
+/// Keep a brain's IPC owner in the placement candidate set and rank it first.
+///
+/// Cluster launchers may start more worker processes than the biological
+/// topology can use as active primary/backup placements. The IPC owner still
+/// has to remain available for the frontend, so a capacity-only placement
+/// decision must not evict it during the warm-copy handoff.
+fn prioritize_ipc_node(
+    candidates: &mut Vec<(String, f32)>,
+    owner_id: &str,
+    all_capacities: &HashMap<String, f32>,
+) {
+    let Some(owner_capacity) = all_capacities.get(owner_id).copied() else {
+        return;
+    };
+
+    if let Some(index) = candidates
+        .iter()
+        .position(|(node_id, _)| node_id == owner_id)
+    {
+        let owner = candidates.remove(index);
+        candidates.insert(0, owner);
+        return;
+    }
+
+    // The deployment policy may have truncated the candidate set. Replace its
+    // weakest retained target so the IPC owner remains represented without
+    // changing the requested shard count.
+    if let Some(last) = candidates.last_mut() {
+        *last = (owner_id.to_owned(), owner_capacity);
+        candidates.sort_by(|left, right| {
+            if left.0 == owner_id {
+                std::cmp::Ordering::Less
+            } else if right.0 == owner_id {
+                std::cmp::Ordering::Greater
+            } else {
+                right
+                    .1
+                    .total_cmp(&left.1)
+                    .then_with(|| left.0.cmp(&right.0))
+            }
+        });
+    }
 }
 
 /// Represents a partial or whole neural network running on this node.
@@ -6775,6 +6836,18 @@ impl DistributedNode {
         if node_ids.is_empty() {
             return;
         }
+        let ipc_node_ids = std::env::var("NM_IPC_NODE_IDS")
+            .ok()
+            .into_iter()
+            .flat_map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>();
 
         for plan in autonomous_transition_plans {
             let updated_payload = autonomous_transition_payloads
@@ -7010,6 +7083,14 @@ impl DistributedNode {
             if target_node_capacities.is_empty() {
                 continue;
             }
+            let ipc_owner_id = format!("{net_id}_ipc");
+            if ipc_node_ids.contains(&ipc_owner_id) {
+                prioritize_ipc_node(
+                    &mut target_node_capacities,
+                    &ipc_owner_id,
+                    &node_capacity_map,
+                );
+            }
             let mut target_capacity_sum: f32 =
                 target_node_capacities.iter().map(|(_, cap)| *cap).sum();
             if target_capacity_sum <= 0.0 {
@@ -7062,13 +7143,19 @@ impl DistributedNode {
             net_status.distribution.clear();
 
             if !shard_across_nodes {
-                let Some(node_id) = choose_single_node_target(
+                let node_id = if ipc_node_ids.contains(&ipc_owner_id)
+                    && node_capacity_map.contains_key(&ipc_owner_id)
+                {
+                    ipc_owner_id.clone()
+                } else if let Some(node_id) = choose_single_node_target(
                     net_id,
                     &target_node_capacities,
                     &deployment,
                     &deployment_by_network,
                     &existing_primary_nodes,
-                ) else {
+                ) {
+                    node_id
+                } else {
                     continue;
                 };
 
@@ -7112,13 +7199,20 @@ impl DistributedNode {
                     .iter()
                     .map(|(node_id, _)| node_id.clone())
                     .collect::<HashSet<_>>();
+                let preferred_ipc_node = ipc_node_ids
+                    .contains(&ipc_owner_id)
+                    .then_some(ipc_owner_id.as_str());
                 let node_assignments = preserve_sharded_node_assignments(
                     &previous_distribution,
                     &eligible_nodes,
                     total_layers,
                 )
                 .unwrap_or_else(|| {
-                    build_sharded_node_assignments(&target_node_capacities, total_layers)
+                    build_sharded_node_assignments_preferred(
+                        &target_node_capacities,
+                        total_layers,
+                        preferred_ipc_node,
+                    )
                 });
 
                 for (node_id, layers, redundant) in node_assignments {
@@ -7183,6 +7277,13 @@ impl DistributedNode {
                 .collect::<Vec<_>>();
             if not_ready_replacements.is_empty() {
                 for removed_node in previous_nodes.difference(&new_nodes) {
+                    if ipc_node_ids.contains(removed_node) {
+                        nm_log!(
+                            "[info] Keeping IPC owner {} loaded while its replacement placement is active",
+                            removed_node
+                        );
+                        continue;
+                    }
                     let unload_cmd = NetworkCommand {
                         r#type: proto::network_command::CommandType::UnloadNetwork as i32,
                         network_id: net_id.clone(),
@@ -11135,6 +11236,28 @@ mod tests {
             selected,
             vec![("node-c".to_string(), 3.0), ("node-b".to_string(), 2.0),]
         );
+    }
+
+    #[test]
+    fn ipc_owner_is_retained_when_policy_truncates_targets() {
+        let mut selected = vec![
+            ("worker-02".to_string(), 3.0),
+            ("worker-01".to_string(), 2.0),
+        ];
+        let capacities = HashMap::from([
+            ("ipc".to_string(), 0.5),
+            ("worker-01".to_string(), 2.0),
+            ("worker-02".to_string(), 3.0),
+        ]);
+
+        prioritize_ipc_node(&mut selected, "ipc", &capacities);
+
+        assert_eq!(selected[0], ("ipc".to_string(), 0.5));
+        assert_eq!(selected.len(), 2);
+        assert!(!selected.iter().any(|(node_id, _)| node_id == "worker-01"));
+
+        let assignments = build_sharded_node_assignments_preferred(&selected, 1, Some("ipc"));
+        assert_eq!(assignments[0].0, "ipc");
     }
 
     #[tokio::test]

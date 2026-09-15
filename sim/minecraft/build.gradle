@@ -1,16 +1,30 @@
-plugins {
-    id 'fabric-loom' version '1.12.7'
+buildscript {
+    repositories {
+        maven { url = 'https://maven.fabricmc.net/' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies { classpath "net.fabricmc:fabric-loom:${loom_version}" }
+}
+if (project.findProperty('no_remap') == 'true') {
+    apply plugin: 'net.fabricmc.fabric-loom'
+} else {
+    apply plugin: 'fabric-loom'
 }
 version = project.mod_version
 group = 'org.neuralmimicry'
-base { archivesName = 'aarnn-minecraft' }
+// Keep jars from incompatible Minecraft APIs distinct in build/libs and in
+// staged installations. Building one profile must never overwrite another.
+base { archivesName = "aarnn-minecraft-${minecraft_version}" }
 repositories { mavenCentral() }
+def minecraftSourceProfile = project.findProperty('minecraft_version') == '26.2' ? '26.2' : '1.21.1'
 sourceSets {
     gametest {
         compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
         runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
     }
 }
+sourceSets.main.java.srcDir("src/${minecraftSourceProfile}/java")
 loom {
     splitEnvironmentSourceSets()
     mods {
@@ -28,6 +42,7 @@ loom {
         }
     }
 }
+afterEvaluate { sourceSets.client.java.srcDir("src/${minecraftSourceProfile}/client") }
 sourceSets {
     visualtest {
         compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output + sourceSets.client.compileClasspath + sourceSets.client.output
@@ -60,9 +75,12 @@ tasks.named('runGameTest') {
 }
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+    if (project.findProperty('no_remap') != 'true') {
+        mappings loom.officialMojangMappings()
+    }
+    def fabricConfiguration = project.findProperty('no_remap') == 'true' ? 'implementation' : 'modImplementation'
+    add(fabricConfiguration, "net.fabricmc:fabric-loader:${loader_version}")
+    add(fabricConfiguration, "net.fabricmc.fabric-api:fabric-api:${fabric_version}")
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -87,13 +105,21 @@ tasks.register('bridgeJar', Jar) {
 }
 build.dependsOn bridgeJar
 java {
-    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    toolchain { languageVersion = JavaLanguageVersion.of(Integer.parseInt(project.findProperty('java_release') ?: '21')) }
     withSourcesJar()
 }
-tasks.withType(JavaCompile).configureEach { options.release = 21 }
+tasks.withType(JavaCompile).configureEach {
+    options.release = Integer.parseInt(project.findProperty('java_release') ?: '21')
+}
 processResources {
     inputs.property 'version', project.version
-    filesMatching('fabric.mod.json') { expand version: project.version }
+    inputs.property 'minecraft_version', minecraft_version
+    inputs.property 'loader_version', loader_version
+    inputs.property 'java_release', java_release
+    filesMatching('fabric.mod.json') {
+        expand version: project.version, minecraft_version: minecraft_version,
+            loader_version: loader_version, java_release: java_release
+    }
 }
 test {
     dependsOn 'referenceFixtures'
