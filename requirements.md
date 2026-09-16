@@ -27,24 +27,31 @@ Authoritative delivery constraints (mandatory; implement and verify these, do no
 - No structured delivery constraints were supplied; follow the work-item summary exactly.
 
 Plan JSON:
-{"action":"externalize_aarnn_sessions","finding_id":"473d733b-7cb5-470f-b4e4-692ce6e8883a","finding_key":"aarnn_singleton_web_ui"}
+{"action":"externalize_aarnn_sessions","finding_id":"1ce9f0ad-0f8d-4f36-bdef-beee67e23d0c","finding_key":"aarnn_singleton_web_ui"}
 
 Planner guidance (advisory; it must not weaken or contradict the authoritative work-item requirements):
-Overview: This work item addresses the architectural constraint of AARNN being a singleton web UI by externalising session and runtime coordination. The approach prioritises minimising risk through incremental refactoring, rigorous testing, and a canary rollout strategy to ensure operational resilience.
+Overview: This work item addresses the singleton configuration of AARNN, which limits horizontal scaling and introduces operational risk. The objective is to verify current runtime and repository state, confirm service health, and select the smallest safe operation to externalize session and runtime coordination.
 
 Requirements Register:
-- REQ-001: Inspect repository state at /srv/neuralmimicry/aarnn_rust to identify singleton dependencies and shared state locks.
-- REQ-002: Document observed evidence regarding session management bottlenecks and uncertainty levels in the current architecture.
-- REQ-003: Formulate a hypothesis for the scaling limitation and propose a stateless session abstraction layer.
-- REQ-004: Execute the smallest safe operation by refactoring the session handler to utilise an external store.
-- REQ-005: Introduce a minimal regression test baseline to verify session persistence and isolation across multiple worker instances.
-- REQ-006: Execute the new tests using cargo test to confirm the baseline is stable and non-destructive.
-- REQ-007: Apply the code changes to the canary host 'spirit' using the Ansible playbook continuum_tenant_aarnn_site.yml.
-- REQ-008: Monitor the canary rollout for a health window, verifying that session coordination functions correctly under load.
-- REQ-009: Ensure automatic rollback on degradation if health checks fail during the canary phase.
-- REQ-010: Verify rollback readiness and recovery procedures before finalising the deployment.
-- REQ-011: Leave unrelated files untouched and avoid destructive commands during the implementation phase.
-- REQ-012: Confirm post-rollout readiness health window is passed before marking the work item as complete.
+- REQ-001: Inspect the current repository state at /srv/neuralmimicry/aarnn_rust to confirm path accessibility, branch state, and file structure.
+- REQ-002: Query the local K3s cluster status using kubectl get nodes to verify control-plane connectivity and worker node probes.
+- REQ-003: Review service health logs and metrics on host 'spirit' to identify specific degradation causes before proceeding with remediation.
+- REQ-004: Execute ansible-playbook /srv/swarmhpc/ansible/playbooks/continuum_tenant_aarnn_site.yml --check to validate Ansible syntax and inventory without applying changes.
+- REQ-005: Examine Conductor execution traces and alert history to understand the impact of the current singleton configuration on downstream decision-making.
+- REQ-006: Assess the scope for externalizing session and runtime coordination based on verified evidence, prioritizing non-destructive job updates or configuration changes.
+- REQ-007: Prepare a canary rollout strategy that monitors for degradation and triggers automatic rollback if key health signals are compromised.
+- REQ-008: Execute the selected implementation steps, then perform post-rollout readiness checks to confirm stable operation before full promotion.
+
+Notes:
+- The repository path /srv/neuralmimicry/aarnn_rust must be accessible for source-driven improvements.
+- Control-plane connectivity and worker node probes should be verified before attempting runtime modifications.
+- The Ansible playbook syntax and inventory must be validated without applying changes to ensure safe execution.
+- Service health logs and metrics on host 'spirit' are the primary source for identifying degradation causes.
+- Conductor execution traces and alert history provide context for the impact of the current configuration.
+- The scope for externalization should be limited to the smallest safe operation supported by current evidence.
+- Non-destructive job updates or configuration changes are preferred over runtime intervention.
+- A canary rollout strategy must include monitoring for degradation and automatic rollback capability.
+- Post-rollout readiness checks should confirm stable operation before full promotion.
 
 
 Protected rollout contract (mandatory): capture a fresh readiness baseline before any change; use the selected canary or red_green strategy; verify health throughout the post-rollout window; if health or verification degrades, automatically revert the exact produced commit without rewriting history, rerun tests and GitHub Actions, and verify recovery.
