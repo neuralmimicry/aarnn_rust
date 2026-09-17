@@ -237,12 +237,18 @@ CONFIG_ARGS=()
 [[ -f "$CONFIG_PATH" ]] && CONFIG_ARGS=(--config "$CONFIG_PATH")
 NETWORK_ARGS=()
 [[ -n "$NETWORK_PATH" ]] && NETWORK_ARGS=(--network "$NETWORK_PATH")
+EXECUTION_ARGS=(
+    --execution-mode distributed,sharded
+    --execution-scope cluster
+    --execution-desired-shards "$NODE_COUNT"
+)
 
 export NMD_TFLITE_ALLOW_LARGE=1
 echo "Starting orchestrator '$BRAIN_ID' on 127.0.0.1:$ORCH_PORT"
+env NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 NM_DISTRIBUTED_AUTOSTART=1 \
 "$AARNN_BIN" --orchestrator --brain-id "$BRAIN_ID" \
     --grpc-addr "0.0.0.0:$ORCH_PORT" --advertise-addr "127.0.0.1:$ORCH_PORT" \
-    "${CONFIG_ARGS[@]}" "${NETWORK_ARGS[@]}" \
+    "${CONFIG_ARGS[@]}" "${NETWORK_ARGS[@]}" "${EXECUTION_ARGS[@]}" \
     >"$LOG_DIR/orchestrator.log" 2>&1 &
 PIDS+=("$!")
 
@@ -268,6 +274,7 @@ for ((index=1; index<=NODE_COUNT; index++)); do
     "$AARNN_BIN" --node --brain-id "node_${index}" \
         --grpc-addr "0.0.0.0:$node_port" --advertise-addr "127.0.0.1:$node_port" \
         --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" \
+        "${EXECUTION_ARGS[@]}" \
         >"$LOG_DIR/node_${index}.log" 2>&1 &
     node_pid="$!"
     PIDS+=("$node_pid")

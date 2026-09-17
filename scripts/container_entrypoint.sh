@@ -20,6 +20,8 @@ case "$workload" in
             --orchestrator
             --grpc-addr "${AARNN_GRPC_ADDR:-0.0.0.0:50051}"
             --brain-id "${AARNN_BRAIN_ID:-orchestrator}"
+            --execution-mode distributed,sharded
+            --execution-scope cluster
         )
         ;;
     node|stable-node)
@@ -29,6 +31,8 @@ case "$workload" in
             --grpc-addr "${AARNN_GRPC_ADDR:-0.0.0.0:50051}"
             --orchestrator-addr "${AARNN_ORCHESTRATOR_ADDR:-http://orchestrator:50051}"
             --brain-id "${AARNN_BRAIN_ID:-node}"
+            --execution-mode distributed,sharded
+            --execution-scope cluster
         )
         ;;
     web-ui)
@@ -50,6 +54,10 @@ case "$workload" in
         exit 64
         ;;
 esac
+
+if [[ "$workload" == "node" || "$workload" == "stable-node" || "$workload" == "orchestrator" || "$workload" == "stable-orchestrator" ]] && [[ -n "${AARNN_EXECUTION_DESIRED_SHARDS:-}" ]]; then
+    default_args+=(--execution-desired-shards "${AARNN_EXECUTION_DESIRED_SHARDS}")
+fi
 
 # A deployment may provide a host- or provider-bound identity.  Keep the
 # default compatibility workloads unchanged when it is absent, but never

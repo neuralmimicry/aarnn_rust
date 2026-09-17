@@ -39,6 +39,27 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [x] `2026-09-17` Cross-checked the former `scripts/tcp_aer_ipc_bridge.py`;
+  its only
+  launcher use is one per Unreal/Unity distributed brain from
+  `scripts/run_sim.sh`; `scripts/nao_social_server.py` imports only the
+  length-prefixed frame and legacy AER codec helpers. The simulator bridge is
+  now implemented in `src/tcp_aer_ipc_bridge.rs` plus the
+  `tcp_aer_ipc_bridge` binary, with the NAO helpers isolated in
+  `scripts/aer_legacy_codec.py`. The Rust path retains bounded framing,
+  asynchronous TCP/Unix-datagram I/O, logical AER timestamps, atomic
+  environment readiness and the neural arm gate. The optimized release build,
+  three Rust protocol tests, ten launcher contract tests, shell/Python syntax,
+  and a live TCP/Unix-datagram loopback probe all pass.
+
+- [x] `2026-09-17` Replaced the simulator Python bridge with the modular Rust
+  `tcp_aer_ipc_bridge` binary. `run_sim.sh` builds or validates the release
+  binary, and the NAO proxy's three legacy codec imports now come from
+  `scripts/aer_legacy_codec.py`; no launcher imports or executes the removed
+  Python bridge remain. The old Python bridge file is deleted; the legacy NAO
+  codec remains isolated and intentionally Python because its owning proxy is
+  Python.
+
 - [x] `2026-09-14` Fresh automatic backend verification on the reported NVIDIA
   GeForce RTX 2080 stack passed all three AARNN parity tests with
   `NM_ENABLE_OPENCL_IN_TESTS=1 NM_GPU_BACKEND=auto cargo test --locked
@@ -2243,11 +2264,12 @@ multi-shard WAL/output actor path remains intentionally gated.
 
 ## Verification update — 2026-09-15: distributed Unreal and Unity TCP parity
 
-- [x] Added `scripts/tcp_aer_ipc_bridge.py`, a bounded per-brain TCP bridge
-  that forwards the existing length-prefixed handshake, raw-float and AER1
-  client traffic to the distributed node IPC socket. AER output timestamps are
-  derived from the input logical timestamp and negotiated frame duration; the
-  bridge never uses packet arrival time.
+- [x] Added the bounded per-brain TCP bridge, initially as
+  `scripts/tcp_aer_ipc_bridge.py`, and later replaced it with the Rust
+  `tcp_aer_ipc_bridge` binary. It forwards the existing length-prefixed
+  handshake, raw-float and AER1 client traffic to the distributed node IPC
+  socket. AER output timestamps are derived from the input logical timestamp
+  and negotiated frame duration; the bridge never uses packet arrival time.
 - [x] `run_sim.sh --sim unreal|unity --node N` now starts the same distributed
   `run_webot.sh --runtime cluster` backend used by Webots, creates one TCP
   bridge per configured brain, waits for every IPC socket and TCP listener, and
@@ -2334,6 +2356,26 @@ rendering remain unavailable, and native mapping/calibration/physics gates remai
 open. The opt-in legacy AER1 sandbox preserves the closed production I/O gate;
 no native engine content hash is presented as biological or physics equivalence.
 
+## Verification update — 2026-09-17: simulator launcher readiness and Java token bootstrap
+
+- [x] Reproduced the reported `scripts/run_sim.sh --sim unreal --robots
+  "celegans=2" --nodes 3 --no-engine` path. The retained runtime log
+  `logs/sim_cluster_15275/runtime.log` records three registered nodes
+  (`celegans_0_ipc`, `celegans_1_ipc` and `celegans_0_worker_01`); the terminal
+  previously exposed only the two TCP bridge rows and did not wait for the
+  worker-registration line. `run_sim.sh` now waits for that line and prints the
+  cluster log before starting bridges.
+- [x] Confirmed the Unreal command's `--no-engine` flag was the direct reason
+  no Unreal process appeared. The launcher now states this explicitly and fails
+  if an engine or project path is requested but missing, instead of silently
+  falling back to server-only mode.
+- [x] Confirmed Java Minecraft preflight stopped before brain startup solely
+  because `AARNN_MINECRAFT_TOKEN` was absent. Java runs now create an ephemeral
+  private token when none is supplied; it is inherited by the companion and the
+  launcher-started Java client. Bedrock continues to require its documented
+  scoped `secrets.json` because the dedicated server does not consume the Java
+  process environment token.
+
 ## Verification update — 2026-09-15 18:53Z: all-feature active-dendrite fixture
 
 - [x] Investigated GitHub Actions run `35006958890`, job `104512616535`, with
@@ -2353,3 +2395,130 @@ no native engine content hash is presented as biological or physics equivalence.
   `NM_DISABLE_OPENCL=1 cargo test --locked --all-features --lib --bin web_ui
   --test '*'` (402 library tests plus all integration suites). `cargo fmt
   --all --check` and `git diff --check` also pass.
+
+## Verification update — 2026-09-17: Unreal C. elegans causal locomotion
+
+- [x] Reproduced the source of movement with zero or sparse motor output. The
+  Unreal C. elegans adapter contained an explicit anti-flatline traveling-wave
+  fallback that added a sinusoidal drive after eight low-drive applications.
+  This path was independent of neural output and violated the requirement that
+  locomotion originate from committed motor output.
+- [x] Removed the fallback and its twitch state. The adapter now derives all
+  dorsal/ventral and left/right joint targets from the decoded 96-channel
+  actuator frame. A motor response is consumed once; when no newer response is
+  available, the base bridge submits a neutral frame so muscle traces decay
+  rather than replaying a stale spike.
+- [x] Rechecked the shared C. elegans I/O catalogue: 24 ordered sensors match
+  the Unreal collector (inertial, touch, light, heat, taste/chemical, flow and
+  proximity); 96 ordered outputs match the handshake. `MDL01..24`,
+  `MDR01..24`, `MVL01..23`, `MVR01..24` are body-wall mappings, while the
+  catalogue's final `MVULVA` channel is intentionally not included in the
+  body-wall muscle map. Sensory values above the AER threshold are the only
+  external events sent to the brain; they can cause movement only through the
+  resulting neural output.
+- [x] The Unreal module build succeeded with `Build.sh NeuralMimicrySimEditor
+  Linux Development`. A bounded empty-AER run spawned two worms, completed both
+  24-sensor/96-output handshakes, and returned repeated
+  `NmCelegansDrive: abs_mean=0.0000 abs_max=0.0000 max_target_deg=0.00` with
+  `NmCelegansMotion` head/tail speeds at `0.00`. This verifies that empty motor
+  frames do not inject locomotion. The run was then terminated cleanly and left
+  no Unreal or bridge process running.
+
+## Verification update — 2026-09-17: distributed simulator startup barrier
+
+- [x] Traced the initial-spike loss to distributed startup: the orchestrator
+  and preloaded workers were created with `playing=true`, and
+  `DistributedNode::run_simulation` therefore advanced `step(None)` while
+  Unreal was still loading. The TCP bridge handshake did not previously pause
+  or arm that runtime.
+- [x] Added a simulator-only readiness barrier. `run_sim.sh` forces the
+  distributed runtime to load paused, each TCP bridge publishes an atomic
+  readiness marker only after the Unreal handshake has completed its IPC
+  round-trip, and the launcher sends the existing cluster `start` control only
+  after every requested environment bridge is ready.
+- [x] Worker preloads and `LoadNetwork` command-created networks now honour the
+  same `NM_DISTRIBUTED_AUTOSTART` gate. The bridge holds the first sensory frame
+  until every distributed worker has logged the applied `Start`, then publishes
+  the arm marker. This preserves the first sensory sample through bounded TCP
+  backpressure and prevents a paused IPC owner from deadlocking the response.
+- [x] `bash -n`, Python compilation, `cargo fmt --all --check`, `git diff
+  --check`, `cargo check --locked --no-default-features --features
+  engine_runtime,ui,robot_io --bin aarnn_rust`, and all 10
+  `run_examples_launcher` tests passed. A fake TCP/Unix-datagram integration
+  probe confirmed that the handshake marker is published, the sensory frame is
+  withheld before arm, and the exact frame is forwarded after arm.
+- [x] A live Unreal run was completed with the rebuilt release binary using
+  `TCP_READY_TIMEOUT=30 ./scripts/run_sim.sh --sim unreal --robots
+  'celegans=2' --nodes 3 --no-build`. In
+  `logs/sim_cluster_64784/runtime.log`, the cluster reports
+  `distributed autostart: 0`; the terminal then records both environment
+  handshakes, both `Sent start` commands, `Start reached all 3 distributed
+  worker(s)` and `distributed neural processing armed` in that order. The
+  worker logs show each `[distributed] simulator network ... armed
+  (playing=true)` line before the first `Runner::step` profile, confirming the
+  initial neural activity is held until Unreal is ready.
+
+## Verification update — 2026-09-17: simulator worker visibility
+
+- [x] Reproduced the reported visual mismatch with
+  `./scripts/run_sim.sh --sim unreal --robots 'celegans=2' --nodes 3
+  --no-engine --no-build`. Three worker processes registered with distinct IDs:
+  `celegans_0_ipc`, `celegans_1_ipc` and `celegans_0_worker_01`. The previous
+  simulator command suppressed the orchestrator dashboard and showed only the
+  two configured brain IPC surfaces, making the third headless worker easy to
+  miss.
+- [x] Simulator distributed launches now keep the single orchestrator dashboard
+  visible while hiding per-brain IPC UIs. Startup prints the complete registered
+  node ID list, and the dashboard reports all connected workers. WebGL retains
+  its browser-only dashboard path.
+- [x] Closed the placement visibility gap for the one-layer C. elegans profile.
+  The compatibility projection keeps one active owner and adds warm copies on
+  otherwise unused policy-selected workers, so `desired_shards=3` reports all
+  three selected placement hosts without fabricating multiple active writers.
+  Finer neuron/sub-shard active execution remains a later executor boundary.
+- [x] Validation passed: `bash -n scripts/run_sim.sh run_webot.sh`,
+  `cargo fmt --all --check`, `git diff --check`, the focused launcher contract
+  test, and the bounded live startup above. The live orchestrator log reports
+  `Nodes connected: 3` and all three node IDs.
+
+## Verification update — 2026-09-17 21:40Z: three-node placement confirmation and GAIL AER cross-check
+
+- [x] Corrected the distributed launcher placement barrier. Placement lines
+  are emitted by the authoritative `webots_orchestrator.log`, while
+  `runtime.log` contains the wrapper output; `scripts/run_sim.sh` now waits on
+  and prints the orchestrator placement evidence. A live
+  `TCP_READY_TIMEOUT=30 ./scripts/run_sim.sh --sim unreal --robots
+  'celegans=2' --nodes 3 --no-engine --no-build` run registered exactly three
+  workers: `celegans_0_ipc`, `celegans_1_ipc`, and
+  `celegans_0_worker_01`. It then confirmed both `celegans_0` and
+  `celegans_1` distributed across three nodes before starting both Rust TCP
+  bridges.
+- [x] Kept the one-writer invariant for the one-layer C. elegans profile.
+  The third placement is a warm compatibility copy; it is visible in node
+  placement and resource telemetry but is excluded from authoritative global
+  snapshot assembly. `src/distributed.rs` now filters empty active-layer
+  assignments from cluster snapshot participants, and the cluster snapshot
+  regression test covers a warm worker with a backup layer. This removes the
+  prior empty-assignment and duplicate-layer failures without creating a
+  second active writer.
+- [x] Corrected the orchestrator UI projection to request the global snapshot
+  without selecting a nonexistent shard named `orchestrator`. The final live
+  run showed the three nodes and both placements; the only snapshot connection
+  warnings occurred during intentional Ctrl-C shutdown after the orchestrator
+  loop stopped. No persistent participant, empty-assignment, duplicate-layer,
+  or missing-orchestrator-shard errors remained during the live interval.
+- [x] Cross-checked GAIL at `/home/pbisaacs/Developer/neuralmimicry/gail`.
+  Both implementations use the same `AER1` format: little-endian `u64`
+  timestamp followed by varint timestamp delta, address, and value triplets;
+  defaults remain sensory base `4096` and output base `16384`. GAIL's
+  authenticated `POST /api/llm/mirror` request fields match AARNN's current
+  DTO, and a live local web UI loopback accepted a GAIL-shaped request and
+  returned a valid AER1 response. `cargo +stable test --locked` in GAIL
+  passed 481 library tests plus the QLoRA shard test. The repository default
+  Rust 1.92 toolchain cannot build GAIL's locked `sysinfo 0.39.6` dependency,
+  which requires Rust 1.95; this is a toolchain constraint, not an AER
+  compatibility failure.
+- [x] AARNN validation for this slice passed: release build with
+  `engine_runtime,ui,robot_io,cuda`; focused distributed snapshot, Rust bridge,
+  and spike transport tests; `run_examples_launcher` (10/10); shell syntax;
+  and `git diff --check` on the touched launcher/distributed/UI files.

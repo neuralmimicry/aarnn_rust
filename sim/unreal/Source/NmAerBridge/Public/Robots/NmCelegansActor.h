@@ -56,12 +56,6 @@ private:
     TArray<float> FilteredDvDrive;
     TArray<float> FilteredLrDrive;
 
-    // Flatline fallback state: inject a mild undulation if the decoded drive
-    // stays near-neutral for too long.
-    int32 FlatSteps = 0;
-    int32 TwitchHoldRemaining = 0;
-    float TwitchPhase = 0.0f;
-
     // Low-rate diagnostics so runtime logs can confirm actuator activity.
     int32 DriveDiagDecimator = 0;
 };

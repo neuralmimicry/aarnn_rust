@@ -9,9 +9,11 @@
 //! - **Compute Node**: A participant that executes a subset of the neural network
 //!   layers. It communicates with the Orchestrator via gRPC (heartbeats, commands)
 //!   and with other compute nodes via spike streaming.
-//! - **Network Partitioning**: The network is divided by layers. Each node is
-//!   assigned a range of layers to simulate. Boundary layers may be duplicated
-//!   for synchronization and redundancy.
+//! - **Network Partitioning**: The active hierarchical planner selects
+//!   communication groups, physical area shards, layer sub-shards and their
+//!   measured-latency host placement. The legacy layer range remains the
+//!   worker wire projection while finer neuron-owned state moves through the
+//!   stable shard executor.
 //!
 //! ## Communication
 //! - **Discovery**: Nodes find the Orchestrator using UDP broadcast/multicast beacons.
@@ -113,6 +115,17 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
+
+/// Whether a distributed network may begin stepping as soon as it is loaded.
+/// Simulator launchers set this to false until their environment has completed
+/// its input/output handshake; ordinary distributed launches retain the
+/// historical autostart default.
+pub(crate) fn distributed_autostart_enabled() -> bool {
+    std::env::var("NM_DISTRIBUTED_AUTOSTART")
+        .ok()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
+}
 
 // Include the generated gRPC code
 pub mod proto {
@@ -1412,6 +1425,69 @@ fn configured_total_neurons(payload: &str) -> u64 {
         .fold(0u64, u64::saturating_add)
 }
 
+/// Convert the validated startup/import payload and the monotonic worker
+/// counts into deterministic physical area/layer planning units. Topology and
+/// morphology coordinates are persisted with snapshots when enabled; a
+/// worker that has grown beyond that payload is still assigned by the stable
+/// topology-block fallback until its next snapshot is published.
+fn placement_units_from_payload(
+    network_id: &str,
+    payload: &str,
+    known_counts: &HashMap<u32, u64>,
+) -> Vec<crate::hierarchical_sharding::NeuralUnit> {
+    #[cfg(not(feature = "growth3d"))]
+    let _ = payload;
+    #[cfg(feature = "growth3d")]
+    use crate::hierarchical_sharding::PhysicalNeuronLocation;
+    use crate::hierarchical_sharding::area_layer_units;
+
+    let layer_counts = known_counts
+        .iter()
+        .map(|(&layer, &count)| (layer, count.max(1)))
+        .collect::<BTreeMap<_, _>>();
+    #[cfg(feature = "growth3d")]
+    let mut locations = Vec::new();
+    #[cfg(not(feature = "growth3d"))]
+    let locations = Vec::new();
+
+    #[cfg(feature = "growth3d")]
+    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+        if let Some(topology) = snapshot.topo.as_ref() {
+            for (layer, nodes) in topology.layers.iter().enumerate() {
+                for (index, node) in nodes.iter().enumerate() {
+                    locations.push(PhysicalNeuronLocation {
+                        layer: layer as u32,
+                        index: index as u64,
+                        x: Some(node.x),
+                        y: Some(node.y),
+                        z: Some(node.z),
+                        region_label: node.region_name.clone(),
+                    });
+                }
+            }
+        }
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if let Some(runtime) = snapshot.runtime_state.as_ref() {
+            if let Some(morphology) = runtime.morph.as_ref() {
+                for (layer, somas) in morphology.somas.iter().enumerate() {
+                    for soma in somas {
+                        locations.push(PhysicalNeuronLocation {
+                            layer: layer as u32,
+                            index: soma.id as u64,
+                            x: Some(soma.pos.x),
+                            y: Some(soma.pos.y),
+                            z: Some(soma.pos.z),
+                            region_label: soma.region_name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    area_layer_units(network_id, &layer_counts, &locations, 8)
+}
+
 /// Build bounded, deterministic placement telemetry from two immutable
 /// placement projections.
 ///
@@ -1525,6 +1601,315 @@ fn build_shard_placement_movements(
         }
     }
     records
+}
+
+/// Project the currently published compatibility distribution into the
+/// additive area -> layer -> sub-shard telemetry contract. The legacy runner
+/// still owns execution, so this source is labelled explicitly; it must not
+/// be mistaken for a shard lease or a hierarchical cutover acknowledgement.
+pub(crate) fn hierarchical_placement_from_distribution(
+    network_id: &str,
+    distribution: &HashMap<String, LayerRange>,
+) -> Vec<proto::HierarchicalPlacementShard> {
+    let mut placements = Vec::new();
+    for (role, backup) in [("active", false), ("backup", true)] {
+        let parent_shard_id = format!("{network_id}:area-0:{role}");
+        let mut layers = BTreeMap::<u32, proto::HierarchicalPlacementLayer>::new();
+        let mut sub_shards = Vec::new();
+        let mut node_ids: Vec<&String> = distribution.keys().collect();
+        node_ids.sort();
+        for node_id in node_ids {
+            let Some(range) = distribution.get(node_id) else {
+                continue;
+            };
+            let selected_layers = if backup {
+                &range.backup_layers
+            } else {
+                &range.layers
+            };
+            for layer in selected_layers {
+                let neuron_count = range
+                    .layer_neuron_counts
+                    .get(layer)
+                    .copied()
+                    .unwrap_or_default();
+                let sub_shard_id = format!("{parent_shard_id}:layer-{layer}:node-{node_id}");
+                layers
+                    .entry(*layer)
+                    .or_insert_with(|| proto::HierarchicalPlacementLayer {
+                        layer: *layer,
+                        neuron_count,
+                        sub_shard_ids: Vec::new(),
+                    })
+                    .sub_shard_ids
+                    .push(sub_shard_id.clone());
+                if let Some(layer_record) = layers.get_mut(layer) {
+                    layer_record.neuron_count = layer_record.neuron_count.max(neuron_count);
+                }
+                sub_shards.push(proto::HierarchicalPlacementSubShard {
+                    sub_shard_id,
+                    parent_shard_id: parent_shard_id.clone(),
+                    layer: *layer,
+                    active_node: node_id.clone(),
+                    neuron_count,
+                    // The compatibility distribution has no measured work or
+                    // state byte counters. Keep those values zero rather than
+                    // inventing a capacity measurement for the UI.
+                    work_units: 0,
+                    state_bytes: 0,
+                    latency_to_group_anchor_us: 0,
+                    role: role.to_string(),
+                });
+            }
+        }
+        if sub_shards.is_empty() {
+            continue;
+        }
+        let total_work_units = sub_shards
+            .iter()
+            .map(|sub_shard| sub_shard.neuron_count)
+            .sum();
+        placements.push(proto::HierarchicalPlacementShard {
+            shard_id: parent_shard_id,
+            network_id: network_id.to_owned(),
+            group_id: network_id.to_owned(),
+            area_id: 0,
+            area_label: "legacy:layer-projection".to_owned(),
+            active_node: sub_shards
+                .first()
+                .map(|sub_shard| sub_shard.active_node.clone())
+                .unwrap_or_default(),
+            role: role.to_string(),
+            total_work_units,
+            total_state_bytes: 0,
+            latency_to_group_anchor_us: 0,
+            layers: layers.into_values().collect(),
+            sub_shards,
+            source: "legacy-layer-projection".to_owned(),
+        });
+    }
+    placements
+}
+
+/// Convert a measured hierarchical planner result into status telemetry. The
+/// conversion stays in the distributed adapter so the planner remains
+/// independent of protobuf, transport and UI concerns.
+pub(crate) fn hierarchical_placement_from_plan(
+    plan: &crate::hierarchical_sharding::HierarchicalShardPlan,
+) -> Vec<proto::HierarchicalPlacementShard> {
+    plan.shards
+        .iter()
+        .map(|shard| {
+            let layers = shard
+                .layers
+                .iter()
+                .map(|layer| proto::HierarchicalPlacementLayer {
+                    layer: layer.layer,
+                    neuron_count: layer
+                        .sub_shards
+                        .iter()
+                        .map(|sub_shard| sub_shard.work_units)
+                        .sum(),
+                    sub_shard_ids: layer
+                        .sub_shards
+                        .iter()
+                        .map(|sub_shard| sub_shard.sub_shard_id.raw().to_string())
+                        .collect(),
+                })
+                .collect();
+            let sub_shards = shard
+                .layers
+                .iter()
+                .flat_map(|layer| layer.sub_shards.iter())
+                .map(|sub_shard| proto::HierarchicalPlacementSubShard {
+                    sub_shard_id: sub_shard.sub_shard_id.raw().to_string(),
+                    parent_shard_id: sub_shard.parent_shard_id.raw().to_string(),
+                    layer: sub_shard.layer,
+                    active_node: sub_shard.active_node.clone(),
+                    neuron_count: sub_shard.work_units,
+                    work_units: sub_shard.work_units,
+                    state_bytes: sub_shard.state_bytes,
+                    latency_to_group_anchor_us: sub_shard.latency_to_group_anchor_us,
+                    role: "active".to_owned(),
+                })
+                .collect::<Vec<_>>();
+            proto::HierarchicalPlacementShard {
+                shard_id: shard.shard_id.raw().to_string(),
+                network_id: shard.network_id.clone(),
+                group_id: shard.group_id.clone(),
+                area_id: shard.area_id,
+                area_label: shard.area_label.clone(),
+                active_node: sub_shards
+                    .first()
+                    .map(|sub_shard| sub_shard.active_node.clone())
+                    .unwrap_or_default(),
+                role: "active".to_owned(),
+                total_work_units: shard.total_work_units,
+                total_state_bytes: shard.total_state_bytes,
+                latency_to_group_anchor_us: sub_shards
+                    .iter()
+                    .map(|sub_shard| sub_shard.latency_to_group_anchor_us)
+                    .min()
+                    .unwrap_or_default(),
+                layers,
+                sub_shards,
+                source: "planner".to_owned(),
+            }
+        })
+        .collect()
+}
+
+/// Project a planner result onto the layer-sized ownership boundary accepted
+/// by the compatibility worker. The planner may split one biological layer
+/// into several physical area sub-shards, but the legacy LoadNetwork command
+/// can only make the complete layer active on one node. Keep the area/layer
+/// hierarchy visible while moving each planner sub-shard to that executable
+/// layer owner and materialising a warm backup copy at the selected backup
+/// owner.
+pub(crate) fn hierarchical_placement_from_plan_with_layer_assignments(
+    plan: &crate::hierarchical_sharding::HierarchicalShardPlan,
+    active_layer_hosts: &BTreeMap<u32, String>,
+    backup_layer_hosts: &BTreeMap<u32, String>,
+) -> Vec<proto::HierarchicalPlacementShard> {
+    let mut placements = Vec::new();
+    for shard in &plan.shards {
+        let mut active_layers = BTreeMap::<u32, proto::HierarchicalPlacementLayer>::new();
+        let mut active_sub_shards = Vec::new();
+        let mut backups_by_host =
+            BTreeMap::<String, Vec<proto::HierarchicalPlacementSubShard>>::new();
+
+        for layer in &shard.layers {
+            for sub_shard in &layer.sub_shards {
+                let active_node = active_layer_hosts
+                    .get(&sub_shard.layer)
+                    .cloned()
+                    .unwrap_or_else(|| sub_shard.active_node.clone());
+                let sub_shard_id = sub_shard.sub_shard_id.raw().to_string();
+                active_layers
+                    .entry(sub_shard.layer)
+                    .or_insert_with(|| proto::HierarchicalPlacementLayer {
+                        layer: sub_shard.layer,
+                        neuron_count: 0,
+                        sub_shard_ids: Vec::new(),
+                    })
+                    .sub_shard_ids
+                    .push(sub_shard_id.clone());
+                if let Some(layer_record) = active_layers.get_mut(&sub_shard.layer) {
+                    layer_record.neuron_count = layer_record
+                        .neuron_count
+                        .saturating_add(sub_shard.work_units);
+                }
+                active_sub_shards.push(proto::HierarchicalPlacementSubShard {
+                    sub_shard_id: sub_shard_id.clone(),
+                    parent_shard_id: sub_shard.parent_shard_id.raw().to_string(),
+                    layer: sub_shard.layer,
+                    active_node: active_node.clone(),
+                    neuron_count: sub_shard.work_units,
+                    work_units: sub_shard.work_units,
+                    state_bytes: sub_shard.state_bytes,
+                    latency_to_group_anchor_us: sub_shard.latency_to_group_anchor_us,
+                    role: "active".to_owned(),
+                });
+
+                if let Some(backup_node) = backup_layer_hosts.get(&sub_shard.layer) {
+                    let backup_parent_id =
+                        format!("{}:backup:node-{}", shard.shard_id.raw(), backup_node);
+                    let backup_sub_shard_id = format!("{}:sub-{}", backup_parent_id, sub_shard_id);
+                    backups_by_host
+                        .entry(backup_node.clone())
+                        .or_default()
+                        .push(proto::HierarchicalPlacementSubShard {
+                            sub_shard_id: backup_sub_shard_id,
+                            parent_shard_id: backup_parent_id,
+                            layer: sub_shard.layer,
+                            active_node: backup_node.clone(),
+                            neuron_count: sub_shard.work_units,
+                            work_units: sub_shard.work_units,
+                            state_bytes: sub_shard.state_bytes,
+                            latency_to_group_anchor_us: sub_shard.latency_to_group_anchor_us,
+                            role: "backup".to_owned(),
+                        });
+                }
+            }
+        }
+
+        let active_total_work_units = active_sub_shards
+            .iter()
+            .map(|sub_shard| sub_shard.work_units)
+            .sum();
+        placements.push(proto::HierarchicalPlacementShard {
+            shard_id: shard.shard_id.raw().to_string(),
+            network_id: shard.network_id.clone(),
+            group_id: shard.group_id.clone(),
+            area_id: shard.area_id,
+            area_label: shard.area_label.clone(),
+            active_node: active_sub_shards
+                .first()
+                .map(|sub_shard| sub_shard.active_node.clone())
+                .unwrap_or_default(),
+            role: "active".to_owned(),
+            total_work_units: active_total_work_units,
+            total_state_bytes: active_sub_shards
+                .iter()
+                .map(|sub_shard| sub_shard.state_bytes)
+                .sum(),
+            latency_to_group_anchor_us: active_sub_shards
+                .iter()
+                .map(|sub_shard| sub_shard.latency_to_group_anchor_us)
+                .min()
+                .unwrap_or_default(),
+            layers: active_layers.into_values().collect(),
+            sub_shards: active_sub_shards,
+            source: "planner".to_owned(),
+        });
+
+        for (backup_node, sub_shards) in backups_by_host {
+            let parent_shard_id = format!("{}:backup:node-{}", shard.shard_id.raw(), backup_node);
+            let mut layers = BTreeMap::<u32, proto::HierarchicalPlacementLayer>::new();
+            for sub_shard in &sub_shards {
+                layers
+                    .entry(sub_shard.layer)
+                    .or_insert_with(|| proto::HierarchicalPlacementLayer {
+                        layer: sub_shard.layer,
+                        neuron_count: 0,
+                        sub_shard_ids: Vec::new(),
+                    })
+                    .sub_shard_ids
+                    .push(sub_shard.sub_shard_id.clone());
+                if let Some(layer_record) = layers.get_mut(&sub_shard.layer) {
+                    layer_record.neuron_count = layer_record
+                        .neuron_count
+                        .saturating_add(sub_shard.work_units);
+                }
+            }
+            placements.push(proto::HierarchicalPlacementShard {
+                shard_id: parent_shard_id,
+                network_id: shard.network_id.clone(),
+                group_id: shard.group_id.clone(),
+                area_id: shard.area_id,
+                area_label: shard.area_label.clone(),
+                active_node: backup_node,
+                role: "backup".to_owned(),
+                total_work_units: sub_shards
+                    .iter()
+                    .map(|sub_shard| sub_shard.work_units)
+                    .sum(),
+                total_state_bytes: sub_shards
+                    .iter()
+                    .map(|sub_shard| sub_shard.state_bytes)
+                    .sum(),
+                latency_to_group_anchor_us: sub_shards
+                    .iter()
+                    .map(|sub_shard| sub_shard.latency_to_group_anchor_us)
+                    .min()
+                    .unwrap_or_default(),
+                layers: layers.into_values().collect(),
+                sub_shards,
+                source: "planner".to_owned(),
+            });
+        }
+    }
+    placements
 }
 
 fn snapshot_with_network_config(snapshot_payload: &str, net_cfg: &NetworkConfig) -> Option<String> {
@@ -2584,6 +2969,298 @@ fn build_sharded_node_assignments(
     build_sharded_node_assignments_preferred(target_node_capacities, total_layers, None)
 }
 
+/// Run the hierarchical planner for the currently executable layer
+/// compatibility worker. Each assigned layer is an executable physical
+/// sub-shard; the worker protocol still accepts whole layer ranges, so a
+/// layer is not split into multiple biological writers until the stable
+/// shard executor owns that finer-grained state boundary.
+fn plan_active_layer_assignments(
+    network_id: &str,
+    home_node: &str,
+    total_layers: u32,
+    payload: &str,
+    known_counts: &HashMap<u32, u64>,
+    target_nodes: &[(String, f32)],
+    node_statuses: &HashMap<String, NodeStatus>,
+    transport_stats: &HashMap<String, SpikeTransportStats>,
+) -> Option<(
+    Vec<(String, Vec<u32>, Vec<u32>)>,
+    Vec<proto::HierarchicalPlacementShard>,
+)> {
+    use crate::hierarchical_sharding::{
+        HierarchicalShardingRequest, HostCapacity, LatencyMatrix, NeuralNetworkInput,
+        plan_hierarchical_shards,
+    };
+
+    if total_layers == 0 || target_nodes.is_empty() {
+        return None;
+    }
+    let mut nodes = target_nodes.to_vec();
+    nodes.sort_by(|left, right| left.0.cmp(&right.0));
+    let home_node = nodes
+        .iter()
+        .find(|(node_id, _)| node_id == home_node)
+        .map(|(node_id, _)| node_id.as_str())
+        .unwrap_or(nodes[0].0.as_str());
+    let total_work = (0..total_layers)
+        .map(|layer| known_counts.get(&layer).copied().unwrap_or(1).max(1))
+        .sum::<u64>();
+    let total_state = total_work.saturating_mul(8).max(1);
+    let target_sub_shard_work_units = (total_work / (nodes.len().saturating_mul(2) as u64)).max(1);
+    // Area blocks are indivisible planning units. Reserve one target-sized
+    // fragment on each host so latency-first placement does not strand the
+    // final block when proportional capacities divide the total exactly.
+    let placement_fragment_headroom = target_sub_shard_work_units;
+    let capacity_sum = nodes
+        .iter()
+        .map(|(_, capacity)| capacity.max(0.001))
+        .sum::<f32>();
+    let hosts = nodes
+        .iter()
+        .map(|(node_id, capacity)| {
+            let proportional = (total_work as f32 * capacity.max(0.001) / capacity_sum)
+                .ceil()
+                .max(1.0) as u64;
+            let memory_bytes = node_statuses
+                .get(node_id)
+                .and_then(|node| node.resources.as_ref())
+                .map(|resources| resources.available_ram.max(resources.total_ram / 2))
+                .unwrap_or(total_state)
+                .max(total_state);
+            HostCapacity {
+                node_id: node_id.clone(),
+                capacity_units: proportional.saturating_add(placement_fragment_headroom),
+                memory_bytes,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut latency_measurements = Vec::new();
+    for (node_id, _) in &nodes {
+        let latency_us = if node_id == home_node {
+            0
+        } else if let Some(stats) = transport_stats.get(node_id) {
+            [stats.mpi_ewma_us, stats.stream_ewma_us, stats.burst_ewma_us]
+                .into_iter()
+                .flatten()
+                .filter(|sample| sample.is_finite() && *sample >= 0.0)
+                .fold(None, |best: Option<f64>, sample| {
+                    Some(best.map_or(sample, |current| current.min(sample)))
+                })
+                .map(|sample| sample.round().min(u64::MAX as f64) as u64)
+                .unwrap_or_else(|| {
+                    node_statuses
+                        .get(node_id)
+                        .and_then(|node| node.resources.as_ref())
+                        .map(|resources| (resources.avg_step_time_ms.max(0.001) * 1_000.0) as u64)
+                        .unwrap_or(1_000_000)
+                })
+        } else {
+            node_statuses
+                .get(node_id)
+                .and_then(|node| node.resources.as_ref())
+                .map(|resources| (resources.avg_step_time_ms.max(0.001) * 1_000.0) as u64)
+                .unwrap_or(1_000_000)
+        };
+        latency_measurements.push((home_node.to_owned(), node_id.clone(), latency_us));
+    }
+    let units = placement_units_from_payload(network_id, payload, known_counts);
+    if units.is_empty() {
+        return None;
+    }
+    let latency = LatencyMatrix::new(
+        nodes.iter().map(|(node_id, _)| node_id.clone()).collect(),
+        latency_measurements,
+    );
+    let plan = match plan_hierarchical_shards(HierarchicalShardingRequest {
+        networks: vec![NeuralNetworkInput {
+            network_id: network_id.to_owned(),
+            home_node: home_node.to_owned(),
+            units,
+        }],
+        interactions: Vec::new(),
+        hosts: hosts.clone(),
+        latency: latency.clone(),
+        // Area/layer units are the planner's physical slices. The compatibility
+        // worker still receives one complete layer, so the layer assignment
+        // below coalesces any same-layer area slices onto one selected host.
+        // Stable executor workers can consume the finer sub-shards directly.
+        target_sub_shard_work_units,
+    }) {
+        Ok(plan) => plan,
+        Err(error) => {
+            nm_log!(
+                "[warn] hierarchical placement planner fell back for {}: {}; total_work={} target={} hosts={:?}",
+                network_id,
+                error,
+                total_work,
+                (total_work / (nodes.len().saturating_mul(2) as u64)).max(1),
+                hosts
+                    .iter()
+                    .map(|host| (host.node_id.clone(), host.capacity_units, host.memory_bytes))
+                    .collect::<Vec<_>>()
+            );
+            return None;
+        }
+    };
+    let mut layer_hosts = BTreeMap::<u32, (u64, String)>::new();
+    let mut layer_candidate_hosts = BTreeMap::<u32, BTreeSet<String>>::new();
+    for shard in &plan.shards {
+        for layer in &shard.layers {
+            for sub_shard in &layer.sub_shards {
+                layer_candidate_hosts
+                    .entry(sub_shard.layer)
+                    .or_default()
+                    .insert(sub_shard.active_node.clone());
+                let candidate = (
+                    sub_shard.latency_to_group_anchor_us,
+                    sub_shard.active_node.clone(),
+                );
+                if layer_hosts
+                    .get(&sub_shard.layer)
+                    .is_none_or(|current| candidate < *current)
+                {
+                    layer_hosts.insert(sub_shard.layer, candidate);
+                }
+            }
+        }
+    }
+    let mut active_layer_hosts = layer_hosts
+        .iter()
+        .map(|(&layer, (_, node))| (layer, node.clone()))
+        .collect::<BTreeMap<_, _>>();
+    // The compatibility worker executes a complete layer at one host. When
+    // the finer planner has found capacity on more than one host but its
+    // latency-first layer coalescing would otherwise place every complete
+    // layer on the home host, retain a second executable owner. Choose the
+    // lowest-latency planner candidate that can hold the moved layer; this is
+    // a bounded compatibility projection and does not change biological
+    // ordering or ownership semantics.
+    if nodes.len() > 1 && active_layer_hosts.values().collect::<BTreeSet<_>>().len() == 1 {
+        let current_node = active_layer_hosts.values().next().cloned();
+        let mut target_candidates = nodes
+            .iter()
+            .filter(|(node_id, _)| Some(node_id) != current_node.as_ref())
+            .filter_map(|(node_id, _)| {
+                latency
+                    .latency(home_node, node_id)
+                    .map(|measured_latency| (measured_latency, node_id.clone()))
+            })
+            .collect::<Vec<_>>();
+        target_candidates.sort();
+        for (_, target_node) in target_candidates {
+            let Some(target_capacity) = hosts
+                .iter()
+                .find(|host| host.node_id == target_node)
+                .map(|host| host.capacity_units)
+            else {
+                continue;
+            };
+            let mut layer_work = BTreeMap::<u32, u64>::new();
+            for shard in &plan.shards {
+                for layer in &shard.layers {
+                    let work = layer
+                        .sub_shards
+                        .iter()
+                        .map(|sub_shard| sub_shard.work_units)
+                        .sum::<u64>();
+                    *layer_work.entry(layer.layer).or_default() += work;
+                }
+            }
+            let candidate_layer = layer_candidate_hosts
+                .iter()
+                .filter(|(layer, candidates)| {
+                    candidates.contains(&target_node)
+                        && active_layer_hosts.get(layer) == current_node.as_ref()
+                })
+                .filter_map(|(layer, _)| {
+                    let work = layer_work.get(layer).copied().unwrap_or(1).max(1);
+                    (work <= target_capacity).then_some((*layer, work))
+                })
+                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)));
+            if let Some((layer, _)) = candidate_layer {
+                active_layer_hosts.insert(layer, target_node);
+                break;
+            }
+        }
+    }
+    let mut active_by_node = BTreeMap::<String, Vec<u32>>::new();
+    for (layer, node) in &active_layer_hosts {
+        active_by_node.entry(node.clone()).or_default().push(*layer);
+    }
+    if active_by_node.values().map(Vec::len).sum::<usize>() != total_layers as usize {
+        return None;
+    }
+    // Backups must mirror the layers the latency planner actually selected.
+    // Re-running the old proportional layer splitter here was incorrect when
+    // latency co-located every active layer on one host: it could omit a
+    // layer from the backup set. Select one destination for each real active
+    // range, preferring the lowest measured latency to the network home and
+    // using capacity/load/node identity as deterministic tie-breaks.
+    let mut backup_by_node = BTreeMap::<String, Vec<u32>>::new();
+    let mut backup_load = HashMap::<String, usize>::new();
+    for (source_node, active_layers) in &active_by_node {
+        let destination = nodes
+            .iter()
+            .filter(|(node_id, _)| nodes.len() == 1 || node_id != source_node)
+            .filter_map(|(node_id, capacity)| {
+                latency.latency(home_node, node_id).map(|measured_latency| {
+                    let load = *backup_load.get(node_id).unwrap_or(&0) as u64;
+                    (
+                        measured_latency,
+                        load,
+                        std::cmp::Reverse(capacity.to_bits()),
+                        node_id,
+                    )
+                })
+            })
+            .min_by(|left, right| {
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+                    .then_with(|| left.2.cmp(&right.2))
+                    .then_with(|| left.3.cmp(right.3))
+            })
+            .map(|(_, _, _, node_id)| node_id.clone());
+        if let Some(destination) = destination {
+            backup_by_node
+                .entry(destination.clone())
+                .or_default()
+                .extend(active_layers.iter().copied());
+            *backup_load.entry(destination).or_default() += active_layers.len();
+        }
+    }
+    let mut backup_layer_hosts = BTreeMap::<u32, String>::new();
+    for (backup_node, layers) in &backup_by_node {
+        for layer in layers {
+            backup_layer_hosts.insert(*layer, backup_node.clone());
+        }
+    }
+    let mut assignments = Vec::new();
+    // Retain a deterministic union so a host that holds only a warm backup is
+    // still represented in the executable distribution.
+    let mut assignment_nodes = active_by_node
+        .keys()
+        .chain(backup_by_node.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for node_id in assignment_nodes {
+        let mut layers = active_by_node.remove(&node_id).unwrap_or_default();
+        layers.sort_unstable();
+        layers.dedup();
+        let mut backups = backup_by_node.remove(&node_id).unwrap_or_default();
+        backups.sort_unstable();
+        backups.dedup();
+        assignments.push((node_id, layers, backups));
+    }
+    assignments.sort_by(|left, right| left.0.cmp(&right.0));
+    let plan_telemetry = hierarchical_placement_from_plan_with_layer_assignments(
+        &plan,
+        &active_layer_hosts,
+        &backup_layer_hosts,
+    );
+    Some((assignments, plan_telemetry))
+}
+
 fn build_sharded_node_assignments_preferred(
     target_node_capacities: &[(String, f32)],
     total_layers: u32,
@@ -2791,6 +3468,58 @@ fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) ->
     layers.sort_unstable();
     layers.dedup();
     layers
+}
+
+/// Make every policy-selected worker visible in the executable placement.
+///
+/// The compatibility LoadNetwork command owns complete biological layers. A
+/// profile with fewer executable layers than requested workers therefore
+/// cannot give every worker a distinct active layer. Keep one active owner per
+/// layer, and place an additional warm copy on any selected worker that would
+/// otherwise disappear from the placement. Redundant workers never become
+/// active owners or emit external effects.
+fn ensure_selected_targets_represented(
+    assignments: &mut Vec<(String, Vec<u32>, Vec<u32>)>,
+    selected_targets: &[(String, f32)],
+    total_layers: u32,
+) {
+    if assignments.is_empty() || selected_targets.is_empty() || total_layers == 0 {
+        return;
+    }
+
+    let Some((active_owner, active_layers, _)) = assignments
+        .iter()
+        .find(|(_, active_layers, _)| !active_layers.is_empty())
+    else {
+        return;
+    };
+    let backup_layer = active_layers
+        .iter()
+        .copied()
+        .find(|layer| *layer < total_layers)
+        .unwrap_or(0);
+    let active_owner = active_owner.clone();
+    let mut represented = assignments
+        .iter()
+        .map(|(node_id, _, _)| node_id.clone())
+        .collect::<HashSet<_>>();
+
+    for (node_id, _) in selected_targets {
+        if represented.contains(node_id) {
+            continue;
+        }
+        // The selected target is absent from the assignment, so it cannot be
+        // the active owner of this layer. Add a warm copy only.
+        assignments.push((node_id.clone(), Vec::new(), vec![backup_layer]));
+        represented.insert(node_id.clone());
+        nm_log!(
+            "[info] Adding warm compatibility copy of layer {} on selected worker {} (active owner {})",
+            backup_layer,
+            node_id,
+            active_owner
+        );
+    }
+    assignments.sort_by(|left, right| left.0.cmp(&right.0));
 }
 
 fn reported_layers_for_resources(active_layers: &[u32], backup_layers: &[u32]) -> Vec<u32> {
@@ -6950,6 +7679,8 @@ impl DistributedNode {
         // the latest worker observations first so count hydration does not
         // borrow the state through two incompatible paths.
         let runtime_metrics_snapshot = state.network_runtime_metrics.clone();
+        let node_statuses_snapshot = state.nodes.clone();
+        let transport_stats_snapshot = state.spike_transport_stats.clone();
         let (network_registry, network_snapshots) = {
             let state = &mut *state;
             (&mut state.network_registry, &mut state.network_snapshots)
@@ -7139,6 +7870,7 @@ impl DistributedNode {
                 &mut known_counts,
                 &configured_layer_neuron_counts(&config_json),
             );
+            let mut hierarchical_plan_telemetry = None;
 
             net_status.distribution.clear();
 
@@ -7202,18 +7934,51 @@ impl DistributedNode {
                 let preferred_ipc_node = ipc_node_ids
                     .contains(&ipc_owner_id)
                     .then_some(ipc_owner_id.as_str());
-                let node_assignments = preserve_sharded_node_assignments(
-                    &previous_distribution,
-                    &eligible_nodes,
+                let planner_home = existing_primary_nodes
+                    .get(net_id)
+                    .map(String::as_str)
+                    .or(preferred_ipc_node)
+                    .or_else(|| {
+                        target_node_capacities
+                            .first()
+                            .map(|(node_id, _)| node_id.as_str())
+                    })
+                    .unwrap_or_default();
+                let planner_result = plan_active_layer_assignments(
+                    net_id,
+                    planner_home,
                     total_layers,
-                )
-                .unwrap_or_else(|| {
-                    build_sharded_node_assignments_preferred(
-                        &target_node_capacities,
-                        total_layers,
-                        preferred_ipc_node,
-                    )
-                });
+                    &config_json,
+                    &known_counts,
+                    &target_node_capacities,
+                    &node_statuses_snapshot,
+                    &transport_stats_snapshot,
+                );
+                let mut node_assignments = planner_result
+                    .as_ref()
+                    .map(|(assignments, _)| assignments.clone())
+                    .or_else(|| {
+                        preserve_sharded_node_assignments(
+                            &previous_distribution,
+                            &eligible_nodes,
+                            total_layers,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        build_sharded_node_assignments_preferred(
+                            &target_node_capacities,
+                            total_layers,
+                            preferred_ipc_node,
+                        )
+                    });
+                ensure_selected_targets_represented(
+                    &mut node_assignments,
+                    &target_node_capacities,
+                    total_layers,
+                );
+                if let Some((_, telemetry)) = planner_result {
+                    hierarchical_plan_telemetry = Some(telemetry);
+                }
 
                 for (node_id, layers, redundant) in node_assignments {
                     let hosted_layers = hosted_layers_for_assignment(&layers, &redundant);
@@ -7312,6 +8077,23 @@ impl DistributedNode {
             // biological resize and must not be published as one.
             let rebuilt_total = total_neurons_from_distribution(&net_status.distribution);
             net_status.total_neurons = previous_total_neurons.max(rebuilt_total);
+            let mut hierarchical_shards = hierarchical_plan_telemetry.unwrap_or_else(|| {
+                hierarchical_placement_from_distribution(net_id, &net_status.distribution)
+            });
+            if hierarchical_shards
+                .iter()
+                .any(|shard| shard.source == "planner")
+                && !hierarchical_shards
+                    .iter()
+                    .any(|shard| shard.role == "backup")
+            {
+                hierarchical_shards.extend(
+                    hierarchical_placement_from_distribution(net_id, &net_status.distribution)
+                        .into_iter()
+                        .filter(|shard| shard.role == "backup"),
+                );
+            }
+            net_status.hierarchical_shards = hierarchical_shards;
             net_status.shard_movements = build_shard_placement_movements(
                 net_id,
                 &previous_distribution,
@@ -7694,7 +8476,7 @@ impl DistributedNode {
                             external_sensory_spikes: recovered_channel.external_sensory_spikes,
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
-                            playing: true,
+                            playing: distributed_autostart_enabled(),
                             initial_config: net_cfg,
                             initial_model: model,
                             initial_learning: learning,
@@ -7727,6 +8509,13 @@ impl DistributedNode {
                     let mut net = net_arc.write().await;
                     if let Some(action) = control_action_from_command(cmd_type) {
                         apply_control_to_managed_network(&mut net, action);
+                        if cmd_type == CommandType::Start {
+                            nm_log!(
+                                "[distributed] simulator network {} armed (playing={})",
+                                net.id,
+                                net.playing
+                            );
+                        }
                     }
                 }
             }
@@ -8561,6 +9350,22 @@ impl DistributedNeuromorphic for DistributedNode {
                         let reported_total =
                             total_neurons_from_distribution(&net_status.distribution);
                         net_status.total_neurons = net_status.total_neurons.max(reported_total);
+                        // A worker heartbeat reports legacy executable layer
+                        // ranges. Preserve the last successful hierarchical
+                        // planner result until the next rebalance refreshes
+                        // it; otherwise ordinary heartbeats erase area and
+                        // sub-shard telemetry from both placement UIs.
+                        if !net_status
+                            .hierarchical_shards
+                            .iter()
+                            .any(|shard| shard.source == "planner")
+                        {
+                            net_status.hierarchical_shards =
+                                hierarchical_placement_from_distribution(
+                                    &net_id,
+                                    &net_status.distribution,
+                                );
+                        }
                     }
                 }
             }
@@ -9245,9 +10050,15 @@ impl DistributedNeuromorphic for DistributedNode {
                     "network is not registered on the orchestrator",
                 ));
             };
+            // Compatibility placements can keep a warm copy on a selected
+            // worker whose active layer list is empty. Those copies are
+            // useful for reassignment and placement visibility, but they are
+            // not authoritative shards and must not participate in a global
+            // snapshot, which requires one unique owner per layer.
             let expected_assignment = status
                 .distribution
                 .iter()
+                .filter(|(_, range)| !range.layers.is_empty())
                 .map(|(node_id, range)| (node_id.clone(), range.layers.clone()))
                 .collect::<std::collections::BTreeMap<_, _>>();
             let addresses = expected_assignment
@@ -10520,14 +11331,24 @@ mod tests {
             "alpha".to_string(),
             NetworkStatus {
                 network_id: "alpha".to_string(),
-                distribution: HashMap::from([(
-                    "orch".to_string(),
-                    LayerRange {
-                        layers: vec![0],
-                        layer_neuron_counts: HashMap::new(),
-                        backup_layers: Vec::new(),
-                    },
-                )]),
+                distribution: HashMap::from([
+                    (
+                        "orch".to_string(),
+                        LayerRange {
+                            layers: vec![0],
+                            layer_neuron_counts: HashMap::new(),
+                            backup_layers: Vec::new(),
+                        },
+                    ),
+                    (
+                        "warm-worker".to_string(),
+                        LayerRange {
+                            layers: Vec::new(),
+                            layer_neuron_counts: HashMap::new(),
+                            backup_layers: vec![0],
+                        },
+                    ),
+                ]),
                 config_json: snapshot_json,
                 num_layers: 1,
                 desired_aarnn_depth: 1,
@@ -11361,6 +12182,27 @@ mod tests {
             vec![
                 ("node-a".to_string(), vec![0], vec![1]),
                 ("node-b".to_string(), vec![1], vec![0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_workers_get_warm_copies_when_layers_are_fewer_than_targets() {
+        let mut assignments = vec![("node-a".to_string(), vec![0], Vec::new())];
+        let targets = vec![
+            ("node-a".to_string(), 3.0),
+            ("node-b".to_string(), 2.0),
+            ("node-c".to_string(), 1.0),
+        ];
+
+        ensure_selected_targets_represented(&mut assignments, &targets, 1);
+
+        assert_eq!(
+            assignments,
+            vec![
+                ("node-a".to_string(), vec![0], Vec::new()),
+                ("node-b".to_string(), Vec::new(), vec![0]),
+                ("node-c".to_string(), Vec::new(), vec![0]),
             ]
         );
     }

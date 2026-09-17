@@ -2145,7 +2145,7 @@ impl RuntimeManager {
                         continue;
                     }
                 };
-                let manifest: WorkspaceManifest = match serde_json::from_str(&manifest_raw) {
+                let mut manifest: WorkspaceManifest = match serde_json::from_str(&manifest_raw) {
                     Ok(manifest) => manifest,
                     Err(err) => {
                         nm_err!(
@@ -2186,6 +2186,7 @@ impl RuntimeManager {
                 };
 
                 let latest_snapshot_path = workspace_dir.join(LATEST_SNAPSHOT_FILE);
+                let mut migrated_snapshot_json = None;
                 if let Ok(Some(snapshot_json)) = read_if_exists(&latest_snapshot_path) {
                     if let Err(err) = engine.import_snapshot_json(&snapshot_json) {
                         nm_err!(
@@ -2193,6 +2194,14 @@ impl RuntimeManager {
                             latest_snapshot_path.display(),
                             err
                         );
+                    } else if engine.spec().net.deployment != manifest.engine.net.deployment {
+                        // Loading a legacy workspace is itself an import. Save
+                        // the canonical distributed policy immediately so the
+                        // next load does not repeat the migration.
+                        manifest.engine = engine.spec().clone();
+                        manifest.updated_at_ms = now_ms();
+                        manifest.last_saved_at_ms = Some(manifest.updated_at_ms);
+                        migrated_snapshot_json = Some(engine.export_snapshot_json()?);
                     }
                 }
 
@@ -2200,21 +2209,32 @@ impl RuntimeManager {
                 let activity = engine.activity();
                 let resume_suppressed =
                     !self.config.resume_existing_workspaces && manifest.desired_running;
-                loaded.insert(
-                    key.clone(),
-                    Arc::new(WorkspaceHandle {
-                        key,
-                        dir: workspace_dir.clone(),
-                        manifest: RwLock::new(manifest.clone()),
-                        engine: Mutex::new(engine),
-                        running: AtomicBool::new(manifest.desired_running && !resume_suppressed),
-                        resume_suppressed: AtomicBool::new(resume_suppressed),
-                        stepping: AtomicBool::new(false),
-                        avg_step_time_micros: AtomicU64::new(0),
-                        status_cache: RwLock::new(status),
-                        activity_cache: RwLock::new(activity),
-                    }),
-                );
+                let loaded_key = key.clone();
+                let handle = Arc::new(WorkspaceHandle {
+                    key,
+                    dir: workspace_dir.clone(),
+                    manifest: RwLock::new(manifest.clone()),
+                    engine: Mutex::new(engine),
+                    running: AtomicBool::new(manifest.desired_running && !resume_suppressed),
+                    resume_suppressed: AtomicBool::new(resume_suppressed),
+                    stepping: AtomicBool::new(false),
+                    avg_step_time_micros: AtomicU64::new(0),
+                    status_cache: RwLock::new(status),
+                    activity_cache: RwLock::new(activity),
+                });
+                if let Some(snapshot_json) = migrated_snapshot_json {
+                    let handle_for_persist = handle.clone();
+                    let workspace_id = manifest.workspace_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        persist_handle_files(&handle_for_persist, &snapshot_json, false)
+                    })
+                    .await
+                    .context("converted workspace persistence task failed")?
+                    .with_context(|| {
+                        format!("failed publishing converted workspace '{workspace_id}'")
+                    })?;
+                }
+                loaded.insert(loaded_key, handle);
             }
         }
 

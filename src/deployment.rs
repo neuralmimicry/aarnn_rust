@@ -251,6 +251,29 @@ impl DeploymentConfig {
         self.transition_policy.normalize();
     }
 
+    /// Upgrade an imported pre-sharding policy in place.  Legacy payloads had
+    /// an empty policy (or an individual-only policy), so they otherwise
+    /// silently return to single-host execution after being imported.  The
+    /// migration is deliberately idempotent: the serialized deployment modes
+    /// are the compatibility marker for subsequent loads.
+    pub fn migrate_legacy_import(&mut self) -> bool {
+        let already_distributed =
+            self.has_mode(ExecutionMode::Distributed) && self.has_mode(ExecutionMode::Sharded);
+        if already_distributed {
+            self.normalize();
+            return false;
+        }
+
+        self.set_mode(ExecutionMode::Individual, false);
+        self.add_mode(ExecutionMode::Distributed);
+        self.add_mode(ExecutionMode::Sharded);
+        if self.desired_shards == 0 {
+            self.desired_shards = 1;
+        }
+        self.normalize();
+        true
+    }
+
     pub fn prefers_sharding(&self) -> bool {
         self.has_mode(ExecutionMode::Sharded)
     }
@@ -678,6 +701,20 @@ mod tests {
         assert!(cfg.has_mode(ExecutionMode::Grouped));
         assert!(cfg.has_mode(ExecutionMode::Federated));
         assert_eq!(cfg.related_network_ids, vec!["alpha".to_string()]);
+    }
+
+    #[test]
+    fn legacy_import_is_upgraded_once_and_serializes_as_distributed() {
+        let mut cfg = DeploymentConfig::default();
+        assert!(cfg.migrate_legacy_import());
+        assert!(cfg.has_mode(ExecutionMode::Distributed));
+        assert!(cfg.has_mode(ExecutionMode::Sharded));
+        assert!(!cfg.has_mode(ExecutionMode::Individual));
+        assert_eq!(cfg.desired_shards, 1);
+        assert!(!cfg.migrate_legacy_import());
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        assert!(serialized.contains("distributed"));
+        assert!(serialized.contains("sharded"));
     }
 
     #[test]

@@ -188,58 +188,7 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
         AbsDriveMax = FMath::Max(AbsDriveMax, AbsDrive);
     }
 
-    // Webots-style anti-flatline fallback: if the decoded body drive stays near
-    // neutral for long enough, inject a mild traveling wave so the body twitches
-    // and re-enters a sensory-active regime.
-    constexpr float FlatDriveEps = 0.050f;
-    constexpr int32 FlatStepsTrigger = 8;
-    constexpr int32 TwitchHoldSteps = 56;
-    constexpr float TwitchAmp = 0.55f;
-    constexpr float TwitchPhaseStep = 0.35f;
-    constexpr float TwoPi = 6.28318530718f;
-
     const float AbsDriveMean = AbsDriveSum / static_cast<float>(NumSegments);
-    const bool bLowMotionDrive =
-        (AbsDriveMax <= FlatDriveEps) || (AbsDriveMean <= 0.35f * FlatDriveEps);
-
-    if (bLowMotionDrive)
-    {
-        FlatSteps = FMath::Min(FlatSteps + 1, 1000000);
-    }
-    else
-    {
-        FlatSteps = FMath::Max(0, FlatSteps - 2);
-    }
-
-    if (FlatSteps >= FlatStepsTrigger)
-    {
-        TwitchHoldRemaining = FMath::Max(TwitchHoldRemaining, TwitchHoldSteps);
-    }
-    else if (!bLowMotionDrive && AbsDriveMax >= 1.8f * FlatDriveEps)
-    {
-        TwitchHoldRemaining = 0;
-    }
-
-    if (TwitchHoldRemaining > 0)
-    {
-        TwitchHoldRemaining = FMath::Max(0, TwitchHoldRemaining - 1);
-        TwitchPhase += TwitchPhaseStep;
-        if (TwitchPhase > TwoPi)
-        {
-            TwitchPhase = FMath::Fmod(TwitchPhase, TwoPi);
-        }
-
-        for (int32 Seg = 0; Seg < NumSegments; ++Seg)
-        {
-            const float EdgeTaper = (Seg < 5 || Seg > 20) ? 0.85f : 1.0f;
-            const float Wave = FMath::Sin(TwitchPhase - static_cast<float>(Seg) * 0.52f);
-            SegmentDvDrive[Seg] = FMath::Clamp(
-                SegmentDvDrive[Seg] + EdgeTaper * TwitchAmp * Wave,
-                -1.0f,
-                1.0f);
-        }
-    }
-
     // Smooth per-segment drives before applying to constraints.
     for (int32 Seg = 0; Seg < NumSegments; ++Seg)
     {
@@ -279,7 +228,7 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
         Joint->SetAngularOrientationTarget(FRotator(Swing1, 0.f, Swing2));
     }
 
-    const bool bNeedWake = (MaxJointTargetAbsDeg > 1.0f) || (TwitchHoldRemaining > 0);
+    const bool bNeedWake = MaxJointTargetAbsDeg > 1.0f;
     if (bNeedWake)
     {
         for (UStaticMeshComponent* Seg : SegmentMeshes)
@@ -295,9 +244,8 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
     {
         DriveDiagDecimator = 0;
         UE_LOG(LogTemp, Log,
-               TEXT("NmCelegansDrive: abs_mean=%.4f abs_max=%.4f flat_steps=%d twitch_hold=%d max_target_deg=%.2f"),
-               AbsDriveMean, AbsDriveMax, FlatSteps, TwitchHoldRemaining,
-               MaxJointTargetAbsDeg);
+               TEXT("NmCelegansDrive: abs_mean=%.4f abs_max=%.4f max_target_deg=%.2f"),
+               AbsDriveMean, AbsDriveMax, MaxJointTargetAbsDeg);
     }
 }
 

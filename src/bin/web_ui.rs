@@ -2512,6 +2512,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "last_transition_ts_ms": { "type": "integer", "format": "uint64" },
               "last_transition_source": { "type": "string" },
               "shard_movements": { "type": "array", "items": { "$ref": "#/components/schemas/ShardPlacementMovement" } },
+              "hierarchical_shards": { "type": "array", "items": { "$ref": "#/components/schemas/HierarchicalPlacementShard" } },
               "distribution": { "type": "array", "items": { "$ref": "#/components/schemas/NetworkDistributionEntry" } }
             },
             "required": ["network_id", "distribution"]
@@ -2529,6 +2530,49 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "updated_at_ms": { "type": "integer", "format": "uint64" }
             },
             "required": ["shard_id", "role", "phase", "progress_milli"]
+          },
+          "HierarchicalPlacementLayer": {
+            "type": "object",
+            "properties": {
+              "layer": { "type": "integer", "format": "uint32" },
+              "neuron_count": { "type": "integer", "format": "uint64" },
+              "sub_shard_ids": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["layer", "sub_shard_ids"]
+          },
+          "HierarchicalPlacementSubShard": {
+            "type": "object",
+            "properties": {
+              "sub_shard_id": { "type": "string" },
+              "parent_shard_id": { "type": "string" },
+              "layer": { "type": "integer", "format": "uint32" },
+              "active_node": { "type": "string" },
+              "neuron_count": { "type": "integer", "format": "uint64" },
+              "work_units": { "type": "integer", "format": "uint64" },
+              "state_bytes": { "type": "integer", "format": "uint64" },
+              "latency_to_group_anchor_us": { "type": "integer", "format": "uint64" },
+              "role": { "type": "string", "enum": ["active", "backup"] }
+            },
+            "required": ["sub_shard_id", "parent_shard_id", "layer", "active_node", "role"]
+          },
+          "HierarchicalPlacementShard": {
+            "type": "object",
+            "properties": {
+              "shard_id": { "type": "string" },
+              "network_id": { "type": "string" },
+              "group_id": { "type": "string" },
+              "area_id": { "type": "integer", "format": "uint64" },
+              "area_label": { "type": "string" },
+              "active_node": { "type": "string" },
+              "role": { "type": "string", "enum": ["active", "backup"] },
+              "total_work_units": { "type": "integer", "format": "uint64" },
+              "total_state_bytes": { "type": "integer", "format": "uint64" },
+              "latency_to_group_anchor_us": { "type": "integer", "format": "uint64" },
+              "source": { "type": "string" },
+              "layers": { "type": "array", "items": { "$ref": "#/components/schemas/HierarchicalPlacementLayer" } },
+              "sub_shards": { "type": "array", "items": { "$ref": "#/components/schemas/HierarchicalPlacementSubShard" } }
+            },
+            "required": ["shard_id", "network_id", "group_id", "area_id", "area_label", "role", "layers", "sub_shards"]
           },
           "StatusResponse": {
             "type": "object",
@@ -5295,6 +5339,41 @@ async fn status(
                     })
                 })
                 .collect::<Vec<_>>();
+            let hierarchical_shards = n
+                .hierarchical_shards
+                .iter()
+                .map(|shard| {
+                    json!({
+                        "shard_id": shard.shard_id,
+                        "network_id": shard.network_id,
+                        "group_id": shard.group_id,
+                        "area_id": shard.area_id,
+                        "area_label": shard.area_label,
+                        "active_node": shard.active_node,
+                        "role": shard.role,
+                        "total_work_units": shard.total_work_units,
+                        "total_state_bytes": shard.total_state_bytes,
+                        "latency_to_group_anchor_us": shard.latency_to_group_anchor_us,
+                        "source": shard.source,
+                        "layers": shard.layers.iter().map(|layer| json!({
+                            "layer": layer.layer,
+                            "neuron_count": layer.neuron_count,
+                            "sub_shard_ids": layer.sub_shard_ids,
+                        })).collect::<Vec<_>>(),
+                        "sub_shards": shard.sub_shards.iter().map(|sub_shard| json!({
+                            "sub_shard_id": sub_shard.sub_shard_id,
+                            "parent_shard_id": sub_shard.parent_shard_id,
+                            "layer": sub_shard.layer,
+                            "active_node": sub_shard.active_node,
+                            "neuron_count": sub_shard.neuron_count,
+                            "work_units": sub_shard.work_units,
+                            "state_bytes": sub_shard.state_bytes,
+                            "latency_to_group_anchor_us": sub_shard.latency_to_group_anchor_us,
+                            "role": sub_shard.role,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>();
             json!({
                 "network_id": n.network_id,
                 "current_dt": n.current_dt,
@@ -5312,6 +5391,7 @@ async fn status(
                 "last_transition_ts_ms": n.last_transition_ts_ms,
                 "last_transition_source": n.last_transition_source,
                 "shard_movements": shard_movements,
+                "hierarchical_shards": hierarchical_shards,
                 "distribution": distribution,
             })
         })

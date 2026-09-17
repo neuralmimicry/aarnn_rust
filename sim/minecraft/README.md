@@ -104,9 +104,12 @@ endpoint. It exchanges the existing **AER1** protocol with the same
 the cluster-wide `web_ui /api/aer/infer` route: that route currently rejects
 authenticated sessions. No server authorisation gate is changed by this mod.
 
-Create a random secret in the terminal environment, then start Minecraft's
-launcher (or the dedicated Minecraft server) and the AARNN launcher from that
-same environment. Do not put the secret in a command, world save or Git file.
+When the unified launcher starts the Java launcher, it creates a private random
+session token automatically if `AARNN_MINECRAFT_TOKEN` is unset, and passes the
+same process-environment token to the companion and launched client. Do not put
+the secret in a command, world save or Git file. For an already-running client,
+or when starting the companion and client separately, create the token in the
+shared private environment first:
 
 ```sh
 export AARNN_MINECRAFT_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"

@@ -1334,6 +1334,20 @@ function mergeDistributions(base, incoming) {
   });
   return Array.from(merged.values());
 }
+function mergeHierarchicalPlacements(base, incoming) {
+  const merged = new Map();
+  (Array.isArray(base) ? base : []).forEach(record => {
+    if (!record || !record.shard_id) return;
+    merged.set(`${record.shard_id}:${record.role || "active"}`, record);
+  });
+  (Array.isArray(incoming) ? incoming : []).forEach(record => {
+    if (!record || !record.shard_id) return;
+    // The latest status snapshot wins for a stable parent/role identity. The
+    // child list is already the bounded placement projection for that parent.
+    merged.set(`${record.shard_id}:${record.role || "active"}`, record);
+  });
+  return Array.from(merged.values());
+}
 function aggregateClusterStatus() {
   const nodesById = new Map();
   const networksById = new Map();
@@ -1370,6 +1384,7 @@ function aggregateClusterStatus() {
       merged.num_layers = Math.max(Number(current.num_layers || 0), Number(net.num_layers || 0));
       merged.desired_aarnn_depth = Math.max(Number(current.desired_aarnn_depth || 0), Number(net.desired_aarnn_depth || 0));
       merged.distribution = mergeDistributions(current.distribution, net.distribution);
+      merged.hierarchical_shards = mergeHierarchicalPlacements(current.hierarchical_shards, net.hierarchical_shards);
       networksById.set(net.network_id, merged);
     });
   });
@@ -1507,6 +1522,116 @@ function evenLayerShards(nodeIds, layerCount, totalNeurons) {
   });
 }
 
+// Hierarchical telemetry is intentionally consumed as a read-only projection.
+// A parent area shard may have sub-shards on several hosts, so the placement
+// view groups each parent/role by its physical host while retaining the
+// parent identity, area, layer list and child IDs on every visible card.
+function buildHierarchicalPlacementModel(network, status, activity, movements, sourceNetworkId) {
+  const records = Array.isArray(network && network.hierarchical_shards)
+    ? network.hierarchical_shards.filter(record => record && Array.isArray(record.sub_shards) && record.sub_shards.length)
+    : [];
+  if (!records.length) return null;
+  const nodeById = new Map((status && status.nodes || []).map(node => [node.node_id || node.address, node]));
+  const fragments = new Map();
+  records.forEach(record => {
+    const subs = record.sub_shards || [];
+    const hosts = Array.from(new Set(subs.map(sub => String(sub.active_node || "").trim()).filter(Boolean)));
+    if (!hosts.length && record.active_node) hosts.push(String(record.active_node));
+    hosts.forEach(nodeId => {
+      const hostSubs = subs.filter(sub => String(sub.active_node || "") === nodeId);
+      const layers = Array.from(new Set((hostSubs.length
+        ? hostSubs.map(sub => Number(sub.layer))
+        : (record.layers || []).map(layer => Number(layer)))
+        .filter(Number.isFinite))).sort((a, b) => a - b);
+      const key = `${record.shard_id}:${record.role || "active"}:${nodeId}`;
+      const existing = fragments.get(key) || {
+        id: key,
+        parentShardId: String(record.shard_id || ""),
+        groupId: String(record.group_id || sourceNetworkId || ""),
+        areaId: Number(record.area_id || 0),
+        areaLabel: String(record.area_label || `area-${Number(record.area_id || 0)}`),
+        role: String(record.role || "active").toLowerCase() === "backup" ? "backup" : "active",
+        nodeId,
+        layers: [],
+        subShardIds: [],
+        neuronCount: 0,
+        latencyUs: Number(record.latency_to_group_anchor_us || 0),
+        source: String(record.source || "hierarchical planner")
+      };
+      existing.layers = Array.from(new Set(existing.layers.concat(layers))).sort((a, b) => a - b);
+      existing.subShardIds.push(...hostSubs.map(sub => String(sub.sub_shard_id || "")).filter(Boolean));
+      existing.neuronCount += hostSubs.length
+        ? hostSubs.reduce((sum, sub) => sum + Number(sub.neuron_count || 0), 0)
+        : (record.layers || []).reduce((sum, layer) => sum + Number(layer.neuron_count || 0), 0);
+      existing.latencyUs = Math.max(existing.latencyUs, ...hostSubs.map(sub => Number(sub.latency_to_group_anchor_us || 0)));
+      fragments.set(key, existing);
+    });
+  });
+  const nodesById = new Map();
+  let activeNeuronTotal = 0;
+  let backupNeuronTotal = 0;
+  Array.from(fragments.values()).sort((a, b) => a.nodeId.localeCompare(b.nodeId) || a.id.localeCompare(b.id)).forEach(fragment => {
+    const node = nodeById.get(fragment.nodeId) || {};
+    if (!nodesById.has(fragment.nodeId)) {
+      nodesById.set(fragment.nodeId, {
+        id: fragment.nodeId,
+        host: node.address || fragment.nodeId,
+        address: node.address || "unreported",
+        cpu: Number.isFinite(Number(node.cpu_usage)) ? Number(node.cpu_usage) : null,
+        shards: []
+      });
+    }
+    const metric = placementActivityForLayers(fragment.layers, activity, fragment.neuronCount);
+    const shard = {
+      id: fragment.id,
+      parentShardId: fragment.parentShardId,
+      groupId: fragment.groupId,
+      areaId: fragment.areaId,
+      layers: fragment.layers,
+      subShardIds: fragment.subShardIds,
+      subShardCount: fragment.subShardIds.length,
+      neuronCount: fragment.neuronCount,
+      neuronCountKnown: true,
+      role: fragment.role,
+      latencyUs: fragment.latencyUs,
+      hierarchical: true,
+      source: fragment.source,
+      ...metric,
+      movements: movementsForPlacementShard(movements, fragment.nodeId, fragment.role, fragment.layers)
+    };
+    nodesById.get(fragment.nodeId).shards.push(shard);
+    if (fragment.role === "backup") backupNeuronTotal += fragment.neuronCount;
+    else activeNeuronTotal += fragment.neuronCount;
+  });
+  (status && status.nodes || []).filter(node => (node.active_networks || []).includes(sourceNetworkId)).forEach(node => {
+    const nodeId = node.node_id || node.address;
+    if (!nodesById.has(nodeId)) nodesById.set(nodeId, {
+      id: nodeId,
+      host: node.address || nodeId,
+      address: node.address || "unreported",
+      cpu: Number.isFinite(Number(node.cpu_usage)) ? Number(node.cpu_usage) : null,
+      shards: []
+    });
+  });
+  return {
+    networkId: network.network_id,
+    nodes: Array.from(nodesById.values()).sort((a, b) => a.id.localeCompare(b.id)),
+    movements,
+    activeNeuronTotal,
+    backupNeuronTotal,
+    activeNeuronTotalKnown: true,
+    backupNeuronTotalKnown: true,
+    configuredNeuronTotal: Number(network.total_neurons || 0),
+    step: activity.sim_step,
+    sourceLabel: "hierarchical placement telemetry",
+    hierarchical: true,
+    areaShardCount: records.length,
+    layerCount: Array.from(new Set(records.flatMap(record => (record.layers || []).map(layer => Number(layer.layer))))).length,
+    subShardCount: records.reduce((sum, record) => sum + (record.sub_shards || []).length, 0),
+    reported: true
+  };
+}
+
 function buildPlacementModel() {
   const source = activeSource();
   if (!source) return null;
@@ -1616,6 +1741,8 @@ function buildPlacementModel() {
   const network = (status && Array.isArray(status.networks) ? status.networks : []).find(item => item.network_id === source.networkId);
   if (!network) return null;
   const movements = (network.shard_movements || []).map(normalizePlacementMovement).filter(Boolean);
+  const hierarchicalModel = buildHierarchicalPlacementModel(network, status, activity, movements, source.networkId);
+  if (hierarchicalModel) return hierarchicalModel;
   const totals = placementNeuronTotals(network.distribution);
   const nodeById = new Map((status.nodes || []).map(node => [node.node_id || node.address, node]));
   const nodesById = new Map();
@@ -1818,7 +1945,7 @@ function renderPlacement() {
   model.nodes.forEach((node, index) => {
     const x = 20 + index * (nodeWidth + gap);
     const y = 28;
-    const cardHeight = Math.min(485, 105 + node.shards.length * 108);
+    const cardHeight = Math.min(485, 105 + node.shards.length * 126);
     nodeCenters.set(node.id, { x: x + nodeWidth / 2, y: y + cardHeight / 2 });
     ctx.fillStyle = "rgba(38, 56, 70, 0.94)";
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
@@ -1831,36 +1958,47 @@ function renderPlacement() {
     ctx.fillStyle = "#78d7aa";
     ctx.fillText(node.cpu == null ? "CPU: n/a" : `CPU: ${node.cpu.toFixed(1)}%`, x + 12, y + 61);
     node.shards.forEach((shard, shardIndex) => {
-      const sy = y + 78 + shardIndex * 108;
+      const sy = y + 78 + shardIndex * 126;
       const score = Number(shard.score) || 0;
       const selected = state.placement.selectedShardIds.has(shard.id);
       const moving = (shard.movements || []).some(movement => movement.phase === "moving");
       const considering = !moving && (shard.movements || []).some(movement => movement.phase === "considering");
       ctx.fillStyle = placementActivityColor(score);
-      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, 88, 8); ctx.fill();
+      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, shard.hierarchical ? 106 : 88, 8); ctx.fill();
       ctx.strokeStyle = selected ? "#fff0a8" : moving ? "#b889ff" : considering ? "#ffd37a" : shard.role === "backup" ? "#69b7c9" : "rgba(16,32,42,0.35)";
       ctx.lineWidth = selected ? 3 : 2;
       if (considering) ctx.setLineDash([6, 4]);
-      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, 88, 8); ctx.stroke();
+      fillPlacementRoundedRect(ctx, x + 10, sy, nodeWidth - 20, shard.hierarchical ? 106 : 88, 8); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#10202a";
-      ctx.fillText(`${shard.role === "backup" ? "Backup" : "Shard"} ${shard.id.split(":")[0]}`, x + 18, sy + 18);
+      ctx.fillText(shard.hierarchical
+        ? `${shard.role === "backup" ? "Backup" : "Area shard"} ${shard.parentShardId || shard.id}`
+        : `${shard.role === "backup" ? "Backup" : "Shard"} ${shard.id.split(":")[0]}`, x + 18, sy + 18);
       const layers = shard.layers.length ? shard.layers.join(", ") : "unreported";
-      ctx.fillText(`layers: ${layers}`, x + 18, sy + 36);
+      ctx.fillText(shard.hierarchical
+        ? `group ${shard.groupId || "unreported"} · area ${shard.areaLabel || shard.areaId} · layers ${layers}`
+        : `layers: ${layers}`, x + 18, sy + 36);
+      if (shard.hierarchical) {
+        ctx.fillText(`sub-shards: ${shard.subShardCount} · latency: ${shard.latencyUs ? `${shard.latencyUs}µs` : "unreported"}`, x + 18, sy + 52);
+      }
       const neuronLabel = shard.neuronCountKnown === false
         ? (shard.neuronCountEstimated ? `~${shard.neuronCount || 0} estimated` : "unreported")
         : `${shard.neuronCount || 0}`;
-      ctx.fillText(`${shard.active || 0}/${shard.total || shard.neuronCount || 0} active · ${neuronLabel} neurons`, x + 18, sy + 54);
+      ctx.fillText(`${shard.active || 0}/${shard.total || shard.neuronCount || 0} active · ${neuronLabel} neurons`, x + 18, sy + (shard.hierarchical ? 68 : 54));
       ctx.fillStyle = "rgba(16,32,42,0.35)";
-      ctx.fillRect(x + 18, sy + 66, nodeWidth - 36, 6);
+      const barY = sy + (shard.hierarchical ? 80 : 66);
+      ctx.fillRect(x + 18, barY, nodeWidth - 36, 6);
       ctx.fillStyle = "#10202a";
-      ctx.fillRect(x + 18, sy + 66, (nodeWidth - 36) * score, 6);
+      ctx.fillRect(x + 18, barY, (nodeWidth - 36) * score, 6);
       const movement = (shard.movements || [])[0];
       if (movement) {
         ctx.fillStyle = movement.phase === "moving" ? "#eadcff" : "#fff0b3";
-        ctx.fillText(`${movement.phase === "moving" ? "Moving" : "Considering"} ${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"}`, x + 18, sy + 82);
+        ctx.fillText(`${movement.phase === "moving" ? "Moving" : "Considering"} ${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"}`, x + 18, sy + (shard.hierarchical ? 99 : 82));
+      } else if (shard.hierarchical) {
+        ctx.fillStyle = "#10202a";
+        ctx.fillText(String(shard.source || "hierarchical telemetry").slice(0, 36), x + 18, sy + 99);
       }
-      state.placement.hitTargets.push({ id: shard.id, rect: { x: x + 10, y: sy, width: nodeWidth - 20, height: 88 } });
+      state.placement.hitTargets.push({ id: shard.id, rect: { x: x + 10, y: sy, width: nodeWidth - 20, height: shard.hierarchical ? 106 : 88 } });
     });
   });
   (model.movements || []).forEach(movement => {
@@ -1880,7 +2018,10 @@ function renderPlacement() {
   const activeTotalLabel = model.activeNeuronTotalKnown ? `${Number(model.activeNeuronTotal || 0)} active` : "active unreported";
   const backupTotalLabel = model.backupNeuronTotalKnown ? `${Number(model.backupNeuronTotal || 0)} redundant` : "redundant unreported";
   const configuredTotalLabel = Number(model.configuredNeuronTotal || 0) > 0 ? ` / configured ${Number(model.configuredNeuronTotal)}` : "";
-  if (placementSummaryEl) placementSummaryEl.textContent = `${model.networkId} · ${model.nodes.length} nodes · ${model.nodes.reduce((sum, node) => sum + node.shards.length, 0)} shards · ${activeTotalLabel}${configuredTotalLabel} · ${backupTotalLabel} · ${model.sourceLabel}${Number.isFinite(Number(model.step)) ? ` · step ${model.step}` : ""}`;
+  const hierarchyLabel = model.hierarchical
+    ? ` · ${model.areaShardCount} area shards · ${model.layerCount} layers · ${model.subShardCount} sub-shards`
+    : "";
+  if (placementSummaryEl) placementSummaryEl.textContent = `${model.networkId} · ${model.nodes.length} hosts · ${model.nodes.reduce((sum, node) => sum + node.shards.length, 0)} placement groups${hierarchyLabel} · ${activeTotalLabel}${configuredTotalLabel} · ${backupTotalLabel} · ${model.sourceLabel}${Number.isFinite(Number(model.step)) ? ` · step ${model.step}` : ""}`;
   if (placementTableEl) {
     placementTableEl.innerHTML = model.nodes.flatMap(node => node.shards.map(shard => {
       const selected = state.placement.selectedShardIds.has(shard.id) ? " selected" : "";
@@ -1889,7 +2030,10 @@ function renderPlacement() {
       const neuronLabel = shard.neuronCountKnown === false
         ? (shard.neuronCountEstimated ? `~${Number(shard.neuronCount || 0)} estimated` : "unreported")
         : `${Number(shard.neuronCount || 0)}`;
-      return `<div class="placement-row${selected}${moving}"><strong>${escapeHtml(node.id)} / ${escapeHtml(shard.role || "active")}</strong><br/><small>${escapeHtml(node.host || "unknown host")} · layers ${escapeHtml(shard.layers.join(", ") || "unreported")} · ${neuronLabel} neurons · ${Number(shard.score || 0) * 100 | 0}% activity${phase ? ` · ${escapeHtml(phase.phase)}` : ""}</small></div>`;
+      const hierarchy = shard.hierarchical
+        ? ` · area ${escapeHtml(shard.areaLabel || String(Number(shard.areaId || 0)))} · ${Number(shard.subShardCount || 0)} sub-shards · group ${escapeHtml(shard.groupId || "unreported")}`
+        : "";
+      return `<div class="placement-row${selected}${moving}"><strong>${escapeHtml(node.id)} / ${escapeHtml(shard.role || "active")}</strong><br/><small>${escapeHtml(node.host || "unknown host")} · layers ${escapeHtml(shard.layers.join(", ") || "unreported")}${hierarchy} · ${neuronLabel} neurons · ${Number(shard.score || 0) * 100 | 0}% activity${phase ? ` · ${escapeHtml(phase.phase)}` : ""}</small></div>`;
     })).join("");
   }
   const detail = model.nodes.flatMap(node => node.shards.map(shard => ({ node, shard }))).find(item => item.shard.id === state.placement.detailShardId);
@@ -1900,7 +2044,10 @@ function renderPlacement() {
       const neuronLabel = detail.shard.neuronCountKnown === false
         ? (detail.shard.neuronCountEstimated ? `~${Number(detail.shard.neuronCount || 0)} estimated` : "unreported")
         : `${Number(detail.shard.neuronCount || 0)}`;
-      placementDetailEl.innerHTML = `<strong>${escapeHtml(detail.shard.id)}</strong> · ${escapeHtml(detail.shard.role || "active")}<br/>Host: ${escapeHtml(detail.node.host || "unknown")}<br/>Layers: ${escapeHtml(detail.shard.layers.join(", ") || "unreported")}<br/>Neurons: ${neuronLabel} · activity: ${Number(detail.shard.score || 0) * 100 | 0}%${movements.length ? `<br/>Automation: ${escapeHtml(movements.map(movement => `${movement.phase} (${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"})`).join("; "))}` : ""}`;
+      const hierarchyDetail = detail.shard.hierarchical
+        ? `<br/>Area: ${escapeHtml(detail.shard.areaLabel || String(Number(detail.shard.areaId || 0)))} (${Number(detail.shard.areaId || 0)}) · group: ${escapeHtml(detail.shard.groupId || "unreported")} · sub-shards: ${Number(detail.shard.subShardCount || 0)}<br/>Sub-shard IDs: ${escapeHtml((detail.shard.subShardIds || []).join(", ") || "unreported")}<br/>Latency to group anchor: ${detail.shard.latencyUs ? `${detail.shard.latencyUs}µs` : "unreported"}`
+        : "";
+      placementDetailEl.innerHTML = `<strong>${escapeHtml(detail.shard.id)}</strong> · ${escapeHtml(detail.shard.role || "active")}<br/>Host: ${escapeHtml(detail.node.host || "unknown")}<br/>Layers: ${escapeHtml(detail.shard.layers.join(", ") || "unreported")}${hierarchyDetail}<br/>Neurons: ${neuronLabel} · activity: ${Number(detail.shard.score || 0) * 100 | 0}%${movements.length ? `<br/>Automation: ${escapeHtml(movements.map(movement => `${movement.phase} (${movement.sourceNode || "?"} → ${movement.destinationNode || "candidate"})`).join("; "))}` : ""}`;
     }
   }
 }

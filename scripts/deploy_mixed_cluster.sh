@@ -977,7 +977,7 @@ ${gpu_container_security_yaml}
               export RAYON_NUM_THREADS="\${CORES}"
               export TOKIO_WORKER_THREADS="\${CORES}"
               export NM_GA_RESERVE_CORES=0
-              exec ./aarnn_rust --orchestrator --grpc-addr 0.0.0.0:50051
+              exec ./aarnn_rust --orchestrator --grpc-addr 0.0.0.0:50051 --execution-mode distributed,sharded --execution-scope cluster
 ${gpu_container_mounts_yaml}
           ports:
             - containerPort: 50051
@@ -1084,7 +1084,7 @@ ${gpu_container_security_yaml}
               export RAYON_NUM_THREADS="\${CORES}"
               export TOKIO_WORKER_THREADS="\${CORES}"
               export NM_GA_RESERVE_CORES=0
-              exec ./aarnn_rust --node --orchestrator-addr http://orchestrator:50051 --brain-id cluster
+              exec ./aarnn_rust --node --orchestrator-addr http://orchestrator:50051 --brain-id cluster --execution-mode distributed,sharded --execution-scope cluster
 ${gpu_container_mounts_yaml}
 ${gpu_pod_volumes_yaml}
 EOF

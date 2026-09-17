@@ -5323,7 +5323,8 @@ impl Runner {
     /// Import a `NetworkConfig` from JSON and reset internal caches safely.
     #[allow(dead_code)]
     pub fn import_config_json(&mut self, s: &str) -> anyhow::Result<()> {
-        let cfg: crate::config::NetworkConfig = serde_json::from_str(s)?;
+        let mut cfg: crate::config::NetworkConfig = serde_json::from_str(s)?;
+        cfg.deployment.migrate_legacy_import();
         // Apply config and reset runner keeping current weights/topology
         self.net = cfg;
         // Rebuild morphology and histories as parameters may affect AARNN
@@ -6057,6 +6058,7 @@ impl Runner {
     #[allow(dead_code)]
     pub fn import_network_json(&mut self, s: &str) -> anyhow::Result<()> {
         let mut snap = decode_snapshot_with_profile_backfill(s)?;
+        snap.net.deployment.migrate_legacy_import();
         let snapshot_step = snap.t;
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;

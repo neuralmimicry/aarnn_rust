@@ -73,7 +73,7 @@ use crate::spike_io::profiles::{
 use crate::spike_io::transport::{apply_hex_aer_payload, apply_usize_indices};
 use crate::stimuli::{AerIoConfig, AerLink};
 use rand::{RngExt, SeedableRng};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -1534,6 +1534,23 @@ enum RemoteStatusMsg {
 struct RemoteConnection {
     addr: String,
     stop: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, Default)]
+struct HierarchicalPlacementCard {
+    id: String,
+    node_id: String,
+    parent_shard_id: String,
+    group_id: String,
+    area_id: u64,
+    area_label: String,
+    role: String,
+    layers: Vec<u32>,
+    sub_shard_ids: Vec<String>,
+    neuron_count: usize,
+    latency_us: u64,
+    source: String,
 }
 
 #[cfg(feature = "ui")]
@@ -6319,7 +6336,13 @@ impl App {
         let imported_layers = (net_guard.runner.net.num_hidden_layers + 1) as u32;
         let imported_model = net_guard.runner.neuron_model.to_str().to_string();
         let imported_learning = net_guard.runner.learning.to_str().to_string();
-        let imported_snapshot_json = json.to_string();
+        // Runner import performs the legacy-to-distributed migration. Persist
+        // the canonical re-export so the next load does not repeat it and the
+        // orchestrator receives the same schema the UI is displaying.
+        let imported_snapshot_json = net_guard
+            .runner
+            .export_network_json()
+            .map_err(|e| e.to_string())?;
         if let Some(node) = self.distributed_node.clone() {
             let network_id = network_id.to_string();
             self.runtime_handle.spawn(async move {
@@ -8253,6 +8276,366 @@ impl App {
     /// surface. Layer ownership comes from the orchestrator's network registry;
     /// the activity colour is derived from the existing lock-free activity
     /// buffers and is never used to mutate placement.
+    fn render_hierarchical_placement_explorer(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        network_id: &str,
+        network: &NetworkStatus,
+    ) -> bool {
+        if network.hierarchical_shards.is_empty() {
+            return false;
+        }
+        let mut cards = BTreeMap::<(String, String, String), HierarchicalPlacementCard>::new();
+        for placement in &network.hierarchical_shards {
+            for sub_shard in &placement.sub_shards {
+                let node_id = if sub_shard.active_node.is_empty() {
+                    placement.active_node.clone()
+                } else {
+                    sub_shard.active_node.clone()
+                };
+                if node_id.is_empty() {
+                    continue;
+                }
+                let role = if sub_shard.role.is_empty() {
+                    placement.role.clone()
+                } else {
+                    sub_shard.role.clone()
+                };
+                let key = (node_id.clone(), placement.shard_id.clone(), role.clone());
+                let card = cards
+                    .entry(key)
+                    .or_insert_with(|| HierarchicalPlacementCard {
+                        id: format!("{}:{}:{}", placement.shard_id, role, node_id),
+                        node_id: node_id.clone(),
+                        parent_shard_id: placement.shard_id.clone(),
+                        group_id: placement.group_id.clone(),
+                        area_id: placement.area_id,
+                        area_label: placement.area_label.clone(),
+                        role,
+                        latency_us: placement.latency_to_group_anchor_us,
+                        source: placement.source.clone(),
+                        ..Default::default()
+                    });
+                card.layers.push(sub_shard.layer);
+                card.sub_shard_ids.push(sub_shard.sub_shard_id.clone());
+                card.neuron_count = card
+                    .neuron_count
+                    .saturating_add(sub_shard.neuron_count as usize);
+                card.latency_us = card.latency_us.max(sub_shard.latency_to_group_anchor_us);
+            }
+        }
+        if cards.is_empty() {
+            return false;
+        }
+        for card in cards.values_mut() {
+            card.layers.sort_unstable();
+            card.layers.dedup();
+            card.sub_shard_ids.sort();
+            card.sub_shard_ids.dedup();
+        }
+        let mut cards_by_node = BTreeMap::<String, Vec<HierarchicalPlacementCard>>::new();
+        for card in cards.into_values() {
+            cards_by_node
+                .entry(card.node_id.clone())
+                .or_default()
+                .push(card);
+        }
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(14, 24, 31));
+        let response = ui.interact(
+            rect,
+            egui::Id::new("hierarchical_placement_canvas"),
+            egui::Sense::click_and_drag(),
+        );
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 12.0),
+            egui::Align2::LEFT_TOP,
+            format!("Hierarchical placement · {}", network_id),
+            egui::FontId::proportional(18.0),
+            egui::Color32::WHITE,
+        );
+        let layer_count = network
+            .hierarchical_shards
+            .iter()
+            .flat_map(|shard| shard.layers.iter().map(|layer| layer.layer))
+            .collect::<HashSet<_>>()
+            .len();
+        let sub_shard_count = network
+            .hierarchical_shards
+            .iter()
+            .map(|shard| shard.sub_shards.len())
+            .sum::<usize>();
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 36.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{} hosts · {} area shards · {} layers · {} sub-shards · active/backup telemetry",
+                cards_by_node.len(),
+                network.hierarchical_shards.len(),
+                layer_count,
+                sub_shard_count
+            ),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(180, 198, 208),
+        );
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 53.0),
+            egui::Align2::LEFT_TOP,
+            "Placement is read-only; active ownership remains governed by the executor/control plane",
+            egui::FontId::proportional(10.0),
+            egui::Color32::from_rgb(255, 220, 150),
+        );
+
+        let gap = 14.0;
+        let node_count = cards_by_node.len().max(1);
+        let card_width = ((rect.width() - 24.0 - gap * (node_count.saturating_sub(1) as f32))
+            / node_count as f32)
+            .clamp(190.0, 320.0);
+        let total_width =
+            card_width * node_count as f32 + gap * node_count.saturating_sub(1) as f32;
+        let left = rect.center().x - total_width * 0.5;
+        let top = rect.top() + 72.0;
+        let mut hit_targets = Vec::<(String, egui::Rect, Vec<u32>)>::new();
+        for (index, (node_id, node_cards)) in cards_by_node.iter().enumerate() {
+            let x = left + index as f32 * (card_width + gap);
+            let node_rect = egui::Rect::from_min_size(
+                egui::pos2(x, top),
+                egui::vec2(card_width, (rect.height() - 86.0).max(190.0)),
+            );
+            painter.rect_filled(node_rect, 10.0, egui::Color32::from_rgb(38, 56, 70));
+            painter.rect_stroke(
+                node_rect,
+                10.0,
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(45)),
+                egui::StrokeKind::Outside,
+            );
+            let host = self
+                .dist_nodes
+                .get(node_id)
+                .map(|node| node.address.as_str())
+                .filter(|address| !address.is_empty())
+                .unwrap_or("host address unavailable");
+            painter.text(
+                node_rect.left_top() + egui::vec2(12.0, 12.0),
+                egui::Align2::LEFT_TOP,
+                format!("Host {}", node_id),
+                egui::FontId::proportional(14.0),
+                egui::Color32::WHITE,
+            );
+            painter.text(
+                node_rect.left_top() + egui::vec2(12.0, 33.0),
+                egui::Align2::LEFT_TOP,
+                host,
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_rgb(180, 198, 208),
+            );
+            for (card_index, card) in node_cards.iter().enumerate() {
+                let card_rect = egui::Rect::from_min_size(
+                    node_rect.left_top() + egui::vec2(10.0, 58.0 + card_index as f32 * 116.0),
+                    egui::vec2(node_rect.width() - 20.0, 104.0),
+                );
+                let selected = self.placement_selected_shards.contains(&card.id);
+                let fill = if card.role.eq_ignore_ascii_case("backup") {
+                    egui::Color32::from_rgb(69, 125, 143)
+                } else {
+                    egui::Color32::from_rgb(102, 134, 155)
+                };
+                painter.rect_filled(card_rect, 8.0, fill);
+                painter.rect_stroke(
+                    card_rect,
+                    8.0,
+                    egui::Stroke::new(
+                        if selected { 3.0 } else { 1.5 },
+                        if selected {
+                            egui::Color32::from_rgb(255, 240, 168)
+                        } else if card.role.eq_ignore_ascii_case("backup") {
+                            egui::Color32::from_rgb(145, 220, 230)
+                        } else {
+                            fill
+                        },
+                    ),
+                    egui::StrokeKind::Outside,
+                );
+                let layers = card
+                    .layers
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                painter.text(
+                    card_rect.left_top() + egui::vec2(9.0, 10.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "{} {} ({}) · {}",
+                        if card.role.eq_ignore_ascii_case("backup") {
+                            "Backup"
+                        } else {
+                            "Area shard"
+                        },
+                        card.area_id,
+                        if card.area_label.is_empty() {
+                            "unlabelled"
+                        } else {
+                            card.area_label.as_str()
+                        },
+                        card.parent_shard_id
+                    ),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::from_rgb(225, 247, 250),
+                );
+                painter.text(
+                    card_rect.left_top() + egui::vec2(9.0, 29.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("group {} · layers {}", card.group_id, layers),
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(225, 247, 250),
+                );
+                painter.text(
+                    card_rect.left_top() + egui::vec2(9.0, 47.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "{} sub-shards · {} neurons · latency {}µs",
+                        card.sub_shard_ids.len(),
+                        card.neuron_count,
+                        if card.latency_us == 0 {
+                            "unreported".to_string()
+                        } else {
+                            card.latency_us.to_string()
+                        }
+                    ),
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(225, 247, 250),
+                );
+                painter.text(
+                    card_rect.left_top() + egui::vec2(9.0, 65.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "children: {}",
+                        card.sub_shard_ids
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    egui::FontId::proportional(9.0),
+                    egui::Color32::from_rgb(205, 232, 236),
+                );
+                painter.text(
+                    card_rect.left_top() + egui::vec2(9.0, 84.0),
+                    egui::Align2::LEFT_TOP,
+                    format!("source: {}", card.source),
+                    egui::FontId::proportional(9.0),
+                    egui::Color32::from_rgb(205, 232, 236),
+                );
+                hit_targets.push((card.id.clone(), card_rect, card.layers.clone()));
+            }
+        }
+        if (response.clicked() || response.double_clicked())
+            && let Some(pointer) = response.interact_pointer_pos()
+            && let Some((card_id, card_rect, layers)) = hit_targets
+                .iter()
+                .rev()
+                .find(|(_, card_rect, _)| card_rect.contains(pointer))
+        {
+            let modifiers = ui.input(|input| input.modifiers);
+            if response.double_clicked() {
+                self.placement_detail_shard = Some(card_id.clone());
+                self.placement_camera_zoom = 1.8;
+                self.placement_cam_pan += rect.center() - card_rect.center();
+            }
+            if !(modifiers.ctrl || modifiers.command) {
+                self.placement_selected_shards.clear();
+            }
+            if modifiers.ctrl || modifiers.command {
+                if !self.placement_selected_shards.insert(card_id.clone()) {
+                    self.placement_selected_shards.remove(card_id);
+                }
+            } else {
+                self.placement_selected_shards.insert(card_id.clone());
+            }
+            self.placement_selected_layers.clear();
+            for (candidate_id, _, candidate_layers) in &hit_targets {
+                if self.placement_selected_shards.contains(candidate_id) {
+                    self.placement_selected_layers
+                        .extend(candidate_layers.iter().copied());
+                }
+            }
+            self.status = format!(
+                "Selected hierarchical placement {} · layers {}",
+                card_id,
+                layers
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if let Some(detail_id) = self.placement_detail_shard.as_ref()
+            && let Some(card) = cards_by_node
+                .values()
+                .flat_map(|node_cards| node_cards.iter())
+                .find(|card| &card.id == detail_id)
+        {
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - 320.0, rect.top() + 10.0),
+                    egui::vec2(306.0, 120.0),
+                ),
+                8.0,
+                egui::Color32::from_rgba_unmultiplied(12, 24, 32, 235),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 308.0, rect.top() + 21.0),
+                egui::Align2::LEFT_TOP,
+                "Hierarchical shard detail",
+                egui::FontId::proportional(13.0),
+                egui::Color32::WHITE,
+            );
+            painter.text(
+                egui::pos2(rect.right() - 308.0, rect.top() + 43.0),
+                egui::Align2::LEFT_TOP,
+                format!(
+                    "{} · host {} · area {}",
+                    card.parent_shard_id, card.node_id, card.area_id
+                ),
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_rgb(205, 225, 232),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 308.0, rect.top() + 61.0),
+                egui::Align2::LEFT_TOP,
+                format!(
+                    "group {} · {} · {} sub-shards",
+                    card.group_id,
+                    card.layers
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    card.sub_shard_ids.len()
+                ),
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_rgb(205, 225, 232),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 308.0, rect.top() + 79.0),
+                egui::Align2::LEFT_TOP,
+                format!("latency {}µs · source {}", card.latency_us, card.source),
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_rgb(205, 225, 232),
+            );
+            painter.text(
+                egui::pos2(rect.right() - 308.0, rect.top() + 97.0),
+                egui::Align2::LEFT_TOP,
+                "Double-click focuses; Ctrl-click adds placements",
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_rgb(255, 220, 150),
+            );
+        }
+        true
+    }
+
     fn render_placement_explorer(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let network_id = match &self.view_source {
             ViewSource::Standalone => self.brain_id.clone(),
@@ -8346,6 +8729,10 @@ impl App {
             });
             return;
         };
+
+        if self.render_hierarchical_placement_explorer(ui, rect, &network_id, &network) {
+            return;
+        }
 
         let mut assignments: Vec<(String, crate::distributed::proto::LayerRange)> = network
             .distribution
@@ -9225,8 +9612,26 @@ impl eframe::App for App {
                     .map(|node| !node.address.trim().is_empty())
                     .unwrap_or(false)
             });
-            if let Some(node_id) = target_node {
-                let addr_opt = self.dist_nodes.get(&node_id).map(|n| n.address.clone());
+            let request_target = if self.dist_is_orchestrator {
+                self.distributed_node
+                    .as_ref()
+                    .and_then(|node| node.state.try_read().ok())
+                    .and_then(|state| state._orchestrator_addr.clone())
+                    .map(|address| (String::from("orchestrator"), address))
+            } else {
+                target_node.clone().and_then(|node_id| {
+                    self.dist_nodes
+                        .get(&node_id)
+                        .map(|node| (node_id, node.address.clone()))
+                })
+            };
+            let placement_ready = self
+                .dist_network_registry
+                .get(net_id)
+                .is_some_and(|status| !status.distribution.is_empty());
+            if placement_ready {
+                if let Some((node_id, addr_value)) = request_target {
+                    let addr_opt = Some(addr_value);
                 if let Some(mut addr) = addr_opt {
                     if !addr.is_empty() {
                         if !addr.starts_with("http://") && !addr.starts_with("https://") {
@@ -9258,11 +9663,11 @@ impl eframe::App for App {
                                             ))
                                             .await
                                         {
-                                            Ok(resp) => match decode_cluster_snapshot_projection(
-                                                resp.into_inner(),
-                                                &net_id_clone,
-                                                Some(&node_id_clone),
-                                            ) {
+                                                    Ok(resp) => match decode_cluster_snapshot_projection(
+                                                        resp.into_inner(),
+                                                        &net_id_clone,
+                                                        None,
+                                                    ) {
                                                 Ok((snap, shard_count, cluster_digest)) => {
                                                     let _ = tx.send(ClusterSnapshotMsg::Ok {
                                                         network_id: net_id_clone,
@@ -9921,6 +10326,7 @@ impl eframe::App for App {
                             self.remote_token_error = Some(error);
                         }
                     }
+                }
                 }
             }
         }

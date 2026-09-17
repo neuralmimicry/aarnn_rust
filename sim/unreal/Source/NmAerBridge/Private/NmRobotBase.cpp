@@ -378,19 +378,27 @@ void UNmRobotBase::TickComponent(float DeltaTime,
         return;
     }
 
-    // Pull the newest completed brain outputs, if any.
+    // Pull the newest completed brain outputs, if any. A response is a single
+    // neural output frame: replaying it on every render tick would turn a
+    // sparse spike into a persistent actuator command.
     TArray<float> Outputs;
     if (IoWorker->ConsumeLatestOutputs(Outputs))
     {
         LastActuatorOutputs = MoveTemp(Outputs);
         bHasLastActuatorOutputs = true;
-    }
-
-    // Re-apply the latest actuator vector every frame while connected. This keeps
-    // actuation continuous even if network responses arrive slower than Tick.
-    if (bHasLastActuatorOutputs)
-    {
         ApplyActuators(LastActuatorOutputs);
+    }
+    else if (bHasLastActuatorOutputs)
+    {
+        // No new neural frame arrived. Feed a neutral frame once per game tick
+        // so actuator-side muscle traces and targets decay instead of holding a
+        // stale spike indefinitely. Zero is the neutral value for the bridge
+        // actuator contracts; AER output frames are binary spike vectors.
+        TArray<FString> ActuatorNames;
+        GetActuatorNames(ActuatorNames);
+        TArray<float> NeutralOutputs;
+        NeutralOutputs.Init(0.0f, ActuatorNames.Num());
+        ApplyActuators(NeutralOutputs);
     }
 
     SimTimeMs += DeltaTime * 1000.0f;

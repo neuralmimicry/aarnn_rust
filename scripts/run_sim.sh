@@ -12,8 +12,8 @@
 #   --sim <webots|unreal|unity|webgl|minecraft|all>
 #                     Simulation backend (default: webots).
 #                       webots  — launch Webots + AARNN via run_multi_robot_webots.sh
-#                       unreal  — start AARNN brains AND launch the Unreal project
-#                                 (robots spawn and connect automatically)
+#                       unreal  — load distributed brains paused, launch Unreal,
+#                                 then arm processing after every robot handshake
 #                       unity   — start AARNN brains; press Play in the Unity editor
 #                       webgl   — start the distributed AARNN runtime and authenticated
 #                                 web gateway; open the printed URL in a browser
@@ -306,6 +306,7 @@ parse_robot_spec() {
 # Build nn_tcp_server binary
 # ---------------------------------------------------------------------------
 TCP_SERVER_BIN=""
+TCP_AER_BRIDGE_BIN=""
 
 locate_tcp_server_bin() {
   # Prefer examples sub-directory, fall back to root of target/release
@@ -350,6 +351,38 @@ build_tcp_server() {
   fi
 }
 
+locate_tcp_aer_bridge_bin() {
+  if [ -x "$ROOT_DIR/target/release/tcp_aer_ipc_bridge" ]; then
+    TCP_AER_BRIDGE_BIN="$ROOT_DIR/target/release/tcp_aer_ipc_bridge"
+  else
+    TCP_AER_BRIDGE_BIN=""
+  fi
+}
+
+build_tcp_aer_bridge() {
+  if [ "$NO_BUILD" -eq 1 ]; then
+    locate_tcp_aer_bridge_bin
+    if [ -z "$TCP_AER_BRIDGE_BIN" ]; then
+      echo "run_sim.sh: --no-build specified but Rust TCP/AER IPC bridge was not found." >&2
+      echo "  Expected at: $ROOT_DIR/target/release/tcp_aer_ipc_bridge" >&2
+      echo "  Build with: cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  echo "run_sim.sh: building Rust TCP/AER IPC bridge …"
+  (
+    cd "$ROOT_DIR"
+    cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge
+  )
+  locate_tcp_aer_bridge_bin
+  if [ -z "$TCP_AER_BRIDGE_BIN" ]; then
+    echo "run_sim.sh: bridge build succeeded but target/release/tcp_aer_ipc_bridge was not found." >&2
+    exit 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Process tracking for TCP brain servers
 # ---------------------------------------------------------------------------
@@ -360,6 +393,9 @@ BRIDGE_PIDS=()
 BRIDGE_PORTS=()
 CLUSTER_SOCKET_DIR=""
 CLUSTER_LOG_DIR=""
+CLUSTER_ORCHESTRATOR_PORT=""
+ENV_READY_DIR=""
+ARM_FILE=""
 DISTRIBUTED_MODE=0
 WEBGL_BACKEND_PID=""
 WEBGL_WEB_PID=""
@@ -417,6 +453,9 @@ cleanup_distributed_runtime() {
   done
   BRIDGE_PIDS=()
   BRIDGE_PORTS=()
+  CLUSTER_ORCHESTRATOR_PORT=""
+  ENV_READY_DIR=""
+  ARM_FILE=""
   CLUSTER_PIDS=()
   if [ -n "$CLUSTER_SOCKET_DIR" ] && [ -d "$CLUSTER_SOCKET_DIR" ]; then
     rm -rf "$CLUSTER_SOCKET_DIR"
@@ -654,6 +693,78 @@ wait_for_ipc_sockets() {
   exit 1
 }
 
+wait_for_distributed_workers_ready() {
+  local expected="$CLUSTER_NODE_COUNT"
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local ready_marker="worker processes: ${expected} ("
+  while [ "$SECONDS" -le "$deadline" ]; do
+    if grep -Fq "$ready_marker" "$CLUSTER_LOG_DIR/runtime.log" 2>/dev/null; then
+      echo "run_sim.sh: distributed runtime registered $expected worker process(es)."
+      local node_inventory
+      node_inventory="$(grep -F 'registered node IDs:' "$CLUSTER_LOG_DIR/runtime.log" | tail -n 1 || true)"
+      if [ -n "$node_inventory" ]; then
+        echo "  $node_inventory"
+      fi
+      echo "  cluster log: $CLUSTER_LOG_DIR/runtime.log"
+      return 0
+    fi
+    for pid in "${CLUSTER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: distributed runtime exited before all worker processes registered." >&2
+        echo "  See: $CLUSTER_LOG_DIR/runtime.log" >&2
+        tail -n 60 "$CLUSTER_LOG_DIR/runtime.log" >&2 || true
+        exit 1
+      fi
+    done
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for $expected distributed worker processes to register." >&2
+  echo "  See: $CLUSTER_LOG_DIR/runtime.log" >&2
+  tail -n 60 "$CLUSTER_LOG_DIR/runtime.log" >&2 || true
+  exit 1
+}
+
+wait_for_distributed_placement_ready() {
+  local expected="$CLUSTER_NODE_COUNT"
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local -a placement_lines=()
+  local brain line
+  local placement_log="$CLUSTER_LOG_DIR/webots_orchestrator.log"
+
+  echo "run_sim.sh: waiting for placement across all ${expected} worker(s) …"
+  while [ "$SECONDS" -le "$deadline" ]; do
+    placement_lines=()
+    local all_ready=1
+    for brain in "${BRAIN_IDS[@]}"; do
+      line="$(grep -F " - Network ${brain}:" "$placement_log" 2>/dev/null \
+        | grep -F "Distributed across ${expected} nodes" | tail -n 1 || true)"
+      if [ -z "$line" ]; then
+        all_ready=0
+        break
+      fi
+      placement_lines+=("$line")
+    done
+    if [ "$all_ready" -eq 1 ]; then
+      echo "run_sim.sh: distributed placement confirmed for all ${#BRAIN_IDS[@]} network(s):"
+      printf '  %s\n' "${placement_lines[@]}"
+      return 0
+    fi
+    for pid in "${CLUSTER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: distributed runtime exited before placement was confirmed." >&2
+        echo "  See: $placement_log" >&2
+        tail -n 80 "$placement_log" >&2 || true
+        exit 1
+      fi
+    done
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for placement across ${expected} worker(s)." >&2
+  echo "  See: $placement_log" >&2
+  tail -n 80 "$placement_log" >&2 || true
+  exit 1
+}
+
 wait_for_tcp_bridges_ready() {
   local total="${#BRIDGE_PIDS[@]}"
   local deadline=$((SECONDS + TCP_READY_TIMEOUT))
@@ -689,15 +800,17 @@ start_distributed_tcp_servers() {
     echo "run_sim.sh: --node/--nodes=$CLUSTER_NODE_COUNT requires at least one worker per brain ($total)." >&2
     exit 1
   fi
-  if [ ! -x "$ROOT_DIR/scripts/tcp_aer_ipc_bridge.py" ]; then
-    echo "run_sim.sh: distributed TCP bridge is missing or not executable." >&2
-    exit 1
-  fi
+  build_tcp_aer_bridge
 
   DISTRIBUTED_MODE=1
   CLUSTER_SOCKET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aarnn-sim-ipc.XXXXXX")"
   CLUSTER_LOG_DIR="$ROOT_DIR/logs/sim_cluster_${BASHPID}"
+  ENV_READY_DIR="$CLUSTER_LOG_DIR/environment_ready"
+  ARM_FILE="$ENV_READY_DIR/neural_runtime_armed"
+  CLUSTER_ORCHESTRATOR_PORT="$(free_tcp_port 0)"
   mkdir -p "$CLUSTER_LOG_DIR"
+  mkdir -p "$ENV_READY_DIR"
+  rm -f "$ARM_FILE"
   local cluster_config_map=""
   local cluster_network_map=""
   local i brain_id brain_type path
@@ -720,10 +833,19 @@ start_distributed_tcp_servers() {
     env
     "NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"
     "NM_CLUSTER_NODES=$CLUSTER_NODE_COUNT"
+    # A simulator request must not consume the network's initial autonomous
+    # activity while the environment is still loading.  The launcher arms the
+    # network through the existing cluster-control RPC after all bridge
+    # handshakes complete.
+    "NM_DISTRIBUTED_AUTOSTART=0"
     "LOG_DIR=$CLUSTER_LOG_DIR"
     "$ROOT_DIR/run_webot.sh"
-    --runtime cluster --no-webots --no-diag --no-orchestrator-ui
+    # Keep the orchestrator dashboard visible for simulator runs.  The
+    # per-brain IPC UIs remain hidden, while this single authoritative view
+    # reports every registered worker, including headless shard workers.
+    --runtime cluster --no-webots --no-diag
     --node-ui-hidden --nodes "$CLUSTER_NODE_COUNT"
+    --orchestrator-port "$CLUSTER_ORCHESTRATOR_PORT"
     --brains "$(IFS=,; echo "${BRAIN_IDS[*]}")"
   )
   if [ "$NO_BUILD" -eq 1 ]; then cluster_cmd+=(--no-build); fi
@@ -735,6 +857,8 @@ start_distributed_tcp_servers() {
   setsid "${cluster_cmd[@]}" >"$CLUSTER_LOG_DIR/runtime.log" 2>&1 &
   CLUSTER_PIDS+=("$!")
   wait_for_ipc_sockets
+  wait_for_distributed_workers_ready
+  wait_for_distributed_placement_ready
 
   echo ""
   echo "run_sim.sh: launching $total distributed TCP bridge(s) …"
@@ -749,10 +873,14 @@ start_distributed_tcp_servers() {
     local ipc_path="$CLUSTER_SOCKET_DIR/aarnn_rust.${brain_id}.nn"
     if [ "$brain_id" = "default" ]; then ipc_path="$CLUSTER_SOCKET_DIR/aarnn_rust.nn"; fi
     local log_file="$CLUSTER_LOG_DIR/bridge_${brain_id}.log"
-    python3 "$ROOT_DIR/scripts/tcp_aer_ipc_bridge.py" \
+    local ready_file="$ENV_READY_DIR/${brain_id}.ready"
+    rm -f "$ready_file"
+    "$TCP_AER_BRIDGE_BIN" \
       --listen "$TCP_HOST:$port" --ipc "$ipc_path" \
       --sensory "$(robot_sensory "$brain_type")" \
       --output "$(robot_output "$brain_type")" \
+      --ready-file "$ready_file" \
+      --arm-file "$ARM_FILE" \
       >"$log_file" 2>&1 &
     BRIDGE_PIDS+=("$!")
     BRIDGE_PORTS+=("$port")
@@ -762,6 +890,96 @@ start_distributed_tcp_servers() {
   done
   wait_for_tcp_bridges_ready
   echo "run_sim.sh: distributed brain bridges ready on $TCP_HOST:$TCP_BASE_PORT – $((TCP_BASE_PORT + total - 1))"
+}
+
+wait_for_environment_bridges_ready() {
+  local total="${#BRIDGE_PIDS[@]}"
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local ready_count=0
+
+  echo ""
+  echo "run_sim.sh: waiting for Unreal environment readiness (all bridge handshakes, timeout ${TCP_READY_TIMEOUT}s) …"
+  while [ "$SECONDS" -le "$deadline" ]; do
+    ready_count=0
+    local i
+    for (( i=0; i<total; i++ )); do
+      local pid="${BRIDGE_PIDS[$i]}"
+      local brain_id="${BRAIN_IDS[$i]}"
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: bridge for ${brain_id} exited before the Unreal environment became ready." >&2
+        echo "  See: $CLUSTER_LOG_DIR/bridge_${brain_id}.log" >&2
+        exit 1
+      fi
+      if [ -f "$ENV_READY_DIR/${brain_id}.ready" ]; then
+        ready_count=$((ready_count + 1))
+      fi
+    done
+    if [ "$ready_count" -eq "$total" ]; then
+      echo "run_sim.sh: Unreal environment ready; all ${total} brain handshake(s) accepted."
+      return 0
+    fi
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for Unreal environment handshakes (${ready_count}/${total})." >&2
+  exit 1
+}
+
+arm_distributed_networks() {
+  local control_bin="$ROOT_DIR/target/release/aarnn_rust"
+  if [ ! -x "$control_bin" ]; then
+    echo "run_sim.sh: missing cluster-control binary: $control_bin" >&2
+    exit 1
+  fi
+  local brain_id
+  for brain_id in "${BRAIN_IDS[@]}"; do
+    echo "run_sim.sh: arming distributed network '$brain_id' after environment readiness …"
+    "$control_bin" \
+      --orchestrator-addr "http://127.0.0.1:$CLUSTER_ORCHESTRATOR_PORT" \
+      --cluster-control-network "$brain_id" \
+      --cluster-control-action start
+  done
+
+  wait_for_distributed_networks_armed
+  local temporary="$ARM_FILE.tmp-$$"
+  printf 'armed\n' >"$temporary"
+  mv -f "$temporary" "$ARM_FILE"
+  echo "run_sim.sh: distributed neural processing armed after environment readiness."
+}
+
+wait_for_distributed_networks_armed() {
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local -a worker_logs=()
+  local brain_id
+  for brain_id in "${BRAIN_IDS[@]}"; do
+    worker_logs+=("$CLUSTER_LOG_DIR/webots_${brain_id}.log")
+  done
+  local extra_index=1
+  local extra_workers=$((CLUSTER_NODE_COUNT - ${#BRAIN_IDS[@]}))
+  while [ "$extra_index" -le "$extra_workers" ]; do
+    worker_logs+=("$CLUSTER_LOG_DIR/webots_${BRAIN_IDS[0]}_worker_$(printf '%02d' "$extra_index").log")
+    extra_index=$((extra_index + 1))
+  done
+
+  echo "run_sim.sh: waiting for Start to reach all distributed workers …"
+  while [ "$SECONDS" -le "$deadline" ]; do
+    local all_ready=1
+    local log_file
+    for log_file in "${worker_logs[@]}"; do
+      for brain_id in "${BRAIN_IDS[@]}"; do
+        if ! grep -Fq "simulator network ${brain_id} armed (playing=true)" "$log_file" 2>/dev/null; then
+          all_ready=0
+          break 2
+        fi
+      done
+    done
+    if [ "$all_ready" -eq 1 ]; then
+      echo "run_sim.sh: Start reached all ${#worker_logs[@]} distributed worker(s) for all ${#BRAIN_IDS[@]} network(s)."
+      return 0
+    fi
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for distributed workers to apply Start." >&2
+  exit 1
 }
 # Block until the brain servers exit (used when no engine is auto-launched).
 serve_and_wait() {
@@ -787,22 +1005,21 @@ launch_unreal_engine() {
   local ue_bin="$UE_ENGINE/Binaries/Linux/UnrealEditor"
 
   if [ "$LAUNCH_ENGINE" -ne 1 ]; then
+    echo "run_sim.sh: Unreal launch disabled by --no-engine; no Unreal simulator process will be started."
     serve_and_wait
     return
   fi
 
   if [ ! -x "$ue_bin" ]; then
     echo "run_sim.sh: Unreal Engine binary not found: $ue_bin" >&2
-    echo "  Set --engine <UE_root>/Engine or UE_ENGINE, or pass --no-engine to" >&2
-    echo "  run the brain servers only and launch Unreal yourself." >&2
-    serve_and_wait
-    return
+    echo "  Set --engine <UE_root>/Engine or UE_ENGINE, or pass --no-engine to run" >&2
+    echo "  the brain servers only." >&2
+    return 1
   fi
   if [ ! -f "$UPROJECT" ]; then
     echo "run_sim.sh: Unreal project not found: $UPROJECT" >&2
-    echo "  Pass --uproject <path> or set UPROJECT. Falling back to server-only." >&2
-    serve_and_wait
-    return
+    echo "  Pass --uproject <path> or set UPROJECT." >&2
+    return 1
   fi
 
   # The GameMode reads these to spawn and wire the robots (ports match above).
@@ -822,6 +1039,11 @@ launch_unreal_engine() {
     -windowed -resx=1280 -resy=720 -stdout &
   UE_PID=$!
   echo "run_sim.sh: Unreal Engine started (pid $UE_PID). Close its window to stop."
+
+  if [ "$DISTRIBUTED_MODE" -eq 1 ]; then
+    wait_for_environment_bridges_ready
+    arm_distributed_networks
+  fi
 
   # When the engine exits, tear the brain servers down (handled by cleanup_all).
   wait "$UE_PID"
@@ -966,6 +1188,21 @@ launch_webgl() {
   wait "$WEBGL_WEB_PID"
 }
 
+prepare_minecraft_token() {
+  local edition="$1"
+  if [ "$edition" != java ] || [ -n "${AARNN_MINECRAFT_TOKEN:-}" ]; then
+    return 0
+  fi
+
+  local token
+  if ! token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" || [ "${#token}" -lt 24 ]; then
+    echo "run_sim.sh: could not create a private Minecraft session token; set AARNN_MINECRAFT_TOKEN explicitly." >&2
+    return 1
+  fi
+  export AARNN_MINECRAFT_TOKEN="$token"
+  echo "run_sim.sh: generated a private Minecraft session token for this run; any launcher-started Java client will inherit it."
+}
+
 # ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
@@ -997,6 +1234,7 @@ case "$SIM_BACKEND" in
   minecraft)
     # Detect every required capability before starting any brain process.
     minecraft_edition="$(python3 "$ROOT_DIR/scripts/minecraft.py" edition --edition "$MINECRAFT_EDITION")"
+    prepare_minecraft_token "$minecraft_edition"
     python3 "$ROOT_DIR/scripts/minecraft.py" doctor --require bridge --edition "$minecraft_edition"
     if [ "$LAUNCH_ENGINE" -eq 1 ]; then
       python3 "$ROOT_DIR/scripts/minecraft.py" doctor --require engine --edition "$minecraft_edition"

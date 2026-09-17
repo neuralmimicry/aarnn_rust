@@ -542,6 +542,10 @@ message NetworkStatus {
   // scheduler's current consideration or queued movement; they do not grant
   // authority and must not be used as a cutover acknowledgement.
   repeated ShardPlacementMovement shard_movements = 18;
+  // Additive hierarchical placement telemetry. When present, clients should
+  // render the area -> layer -> sub-shard hierarchy and use distribution as
+  // the compatibility projection for older consumers.
+  repeated HierarchicalPlacementShard hierarchical_shards = 19;
 }
 
 message LayerRange {
@@ -568,4 +572,45 @@ message ShardPlacementMovement {
   uint32 progress_milli = 6;
   string reason = 7;
   uint64 updated_at_ms = 8;
+}
+
+message HierarchicalPlacementShard {
+  // Stable parent area-shard identity. This is placement telemetry only and
+  // does not grant writer authority.
+  string shard_id = 1;
+  string network_id = 2;
+  string group_id = 3;
+  uint64 area_id = 4;
+  string active_node = 5;
+  // "active" or "backup".
+  string role = 6;
+  uint64 total_work_units = 7;
+  uint64 total_state_bytes = 8;
+  uint64 latency_to_group_anchor_us = 9;
+  repeated HierarchicalPlacementLayer layers = 10;
+  repeated HierarchicalPlacementSubShard sub_shards = 11;
+  // "planner" for a measured hierarchical plan, or a compatibility source
+  // while the legacy layer executor remains authoritative.
+  string source = 12;
+  // Stable explainable label derived from persisted region/position topology.
+  string area_label = 13;
+}
+
+message HierarchicalPlacementLayer {
+  uint32 layer = 1;
+  uint64 neuron_count = 2;
+  repeated string sub_shard_ids = 3;
+}
+
+message HierarchicalPlacementSubShard {
+  string sub_shard_id = 1;
+  string parent_shard_id = 2;
+  uint32 layer = 3;
+  string active_node = 4;
+  uint64 neuron_count = 5;
+  uint64 work_units = 6;
+  uint64 state_bytes = 7;
+  uint64 latency_to_group_anchor_us = 8;
+  // "active" or "backup".
+  string role = 9;
 }

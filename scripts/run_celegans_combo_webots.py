@@ -502,6 +502,66 @@ def wait_for_cluster_distribution(
             dist_entries = []
         dist_node_ids = {str(entry.get("node_id", "")).strip() for entry in dist_entries}
         dist_node_ids.discard("")
+        hierarchical_entries = target.get("hierarchical_shards") or []
+        hierarchical_sub_shards = [
+            sub_shard
+            for area in hierarchical_entries
+            if isinstance(area, dict)
+            for sub_shard in (area.get("sub_shards") or [])
+            if isinstance(sub_shard, dict)
+        ]
+        hierarchical_node_ids = {
+            str(sub_shard.get("active_node", "")).strip()
+            for sub_shard in hierarchical_sub_shards
+        }
+        hierarchical_node_ids.discard("")
+        hierarchical_backup_areas = [
+            area
+            for area in hierarchical_entries
+            if isinstance(area, dict)
+            and str(area.get("role", "active")).lower() == "backup"
+            and area.get("sub_shards")
+        ]
+        hierarchical_backup_sub_shards = [
+            sub_shard
+            for area in hierarchical_backup_areas
+            for sub_shard in (area.get("sub_shards") or [])
+            if isinstance(sub_shard, dict)
+        ]
+        active_layers = {
+            int(sub_shard["layer"])
+            for sub_shard in hierarchical_sub_shards
+            if str(sub_shard.get("role", "active")).lower() != "backup"
+            and isinstance(sub_shard.get("layer"), int)
+        }
+        backup_layers = {
+            int(sub_shard["layer"])
+            for sub_shard in hierarchical_backup_sub_shards
+            if isinstance(sub_shard.get("layer"), int)
+        }
+        active_hosts_by_layer = {}
+        backup_hosts_by_layer = {}
+        for sub_shard in hierarchical_sub_shards:
+            if str(sub_shard.get("role", "active")).lower() == "backup":
+                continue
+            layer = sub_shard.get("layer")
+            host = str(sub_shard.get("active_node", "")).strip()
+            if isinstance(layer, int) and host:
+                active_hosts_by_layer.setdefault(layer, set()).add(host)
+        for sub_shard in hierarchical_backup_sub_shards:
+            layer = sub_shard.get("layer")
+            host = str(sub_shard.get("active_node", "")).strip()
+            if isinstance(layer, int) and host:
+                backup_hosts_by_layer.setdefault(layer, set()).add(host)
+        backup_ready = (
+            bool(hierarchical_backup_areas)
+            and bool(hierarchical_backup_sub_shards)
+            and active_layers.issubset(backup_layers)
+            and all(
+                backup_hosts_by_layer.get(layer, set()) - active_hosts_by_layer.get(layer, set())
+                for layer in active_layers
+            )
+        )
 
         nodes_with_network = {
             str(node.get("node_id", "")).strip()
@@ -528,6 +588,9 @@ def wait_for_cluster_distribution(
             and dist_node_ids.issubset(nodes_with_network)
             and full_cover
             and has_partial_view
+            and len(hierarchical_sub_shards) > 0
+            and len(hierarchical_node_ids) >= expected_nodes
+            and backup_ready
         ):
             return status
 
@@ -542,7 +605,12 @@ def wait_for_cluster_distribution(
             f"layers={distribution_layers}, "
             f"layer_cover={sorted(layer_cover) if layer_cover else []}, "
             f"num_layers={num_layers}, "
-            f"has_partial_view={has_partial_view}"
+            f"has_partial_view={has_partial_view}, "
+            f"hierarchical_sub_shards={len(hierarchical_sub_shards)}, "
+            f"hierarchical_nodes={len(hierarchical_node_ids)}/{expected_nodes}, "
+            f"backup_areas={len(hierarchical_backup_areas)}, "
+            f"backup_sub_shards={len(hierarchical_backup_sub_shards)}, "
+            f"backup_ready={backup_ready}"
         )
         time.sleep(0.5)
 

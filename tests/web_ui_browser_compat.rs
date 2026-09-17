@@ -72,6 +72,9 @@ fn placement_surface_is_shipped_for_web_and_native_clients() {
     assert!(html.contains("data-surface-tab=\"placement\""));
     assert!(html.contains("placement-canvas"));
     assert!(app.contains("buildPlacementModel") && app.contains("renderPlacement"));
+    assert!(app.contains("hierarchical_shards") && app.contains("subShardCount"));
+    assert!(app.contains("area_label") && app.contains("areaLabel"));
+    assert!(app.contains("area shards") && app.contains("sub-shards"));
     assert!(app.contains("orchestrator report") && app.contains("workspace projection"));
     assert!(app.contains("shard_movements") && app.contains("normalizePlacementMovement"));
     assert!(app.contains("selectedShardIds") && app.contains("selectedLayers"));
@@ -89,6 +92,10 @@ fn placement_surface_is_shipped_for_web_and_native_clients() {
     let native = read_asset("src/ui.rs");
     assert!(native.contains("placement_explorer"));
     assert!(native.contains("render_placement_explorer"));
+    assert!(native.contains("render_hierarchical_placement_explorer"));
+    assert!(native.contains("hierarchical_shards") && native.contains("sub_shard_ids"));
+    assert!(native.contains("area_label") && native.contains("area_label.as_str()"));
+    assert!(native.contains("Area shard") && native.contains("latency_to_group_anchor_us"));
     assert!(
         native.contains("placement_selected_shards")
             && native.contains("placement_selected_layers")

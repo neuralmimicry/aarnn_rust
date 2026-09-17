@@ -176,6 +176,10 @@ pub mod shared_fs;
 /// Topological and spatial layout definitions for 3D neural growth.
 pub mod topology;
 
+/// Deterministic hierarchy for communication-aware network, area, layer and
+/// sub-shard planning. Physical host placement is selected from measured
+/// latency and explicit resource limits.
+pub mod hierarchical_sharding;
 /// Versioned biological topology and conservative component planning.
 pub mod topology_model;
 

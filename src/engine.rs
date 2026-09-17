@@ -389,7 +389,8 @@ impl RunnerEngine {
     }
 
     pub fn import_config_json(&mut self, config_json: &str) -> anyhow::Result<()> {
-        let cfg: crate::config::NetworkConfig = serde_json::from_str(config_json)?;
+        let mut cfg: crate::config::NetworkConfig = serde_json::from_str(config_json)?;
+        cfg.deployment.migrate_legacy_import();
         // A config import may change the physical network shape. The old
         // path only replaced Runner::net, leaving hidden-layer matrices and
         // state vectors at their previous dimensions. That made a persisted
@@ -431,9 +432,7 @@ impl RunnerEngine {
         // silently turn a cluster deployment back into the default policy.
         let manifest_deployment = self.spec.net.deployment.clone();
         self.runner.import_network_json(snapshot_json)?;
-        if self.runner.net.deployment == crate::deployment::DeploymentConfig::default()
-            && manifest_deployment != crate::deployment::DeploymentConfig::default()
-        {
+        if manifest_deployment != crate::deployment::DeploymentConfig::default() {
             self.runner.net.deployment = manifest_deployment;
         }
         self.spec.net = self.runner.net.clone();

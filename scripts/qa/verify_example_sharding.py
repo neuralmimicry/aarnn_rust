@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Bounded local verification for the compatibility example sharder.
 
-The launcher still exercises the legacy layer-assignment path. This helper
-keeps its live assertion honest by checking both the orchestrator projection
-and the destination worker's returned snapshot after a worker failure.
+The helper accepts the legacy layer projection for compatibility, but prefers
+the active hierarchical area/layer/sub-shard telemetry when it is present.
+It checks both the orchestrator projection and the destination worker's
+returned snapshot after a worker failure.
 """
 
 from __future__ import annotations
@@ -66,8 +67,22 @@ def cluster_summary(payload: dict[str, Any], network_id: str) -> dict[str, Any]:
         raise RuntimeError(f"network {network_id!r} is not present in /api/status")
 
     distribution = network.get("distribution", [])
+    hierarchical = network.get("hierarchical_shards", [])
     active = [entry for entry in distribution if entry.get("layers")]
     owners_by_layer: dict[int, str] = {}
+    hierarchical_active_nodes: set[str] = set()
+    for area in hierarchical if isinstance(hierarchical, list) else []:
+        for sub_shard in area.get("sub_shards", []):
+            node_id = str(sub_shard.get("active_node", "")).strip()
+            if not node_id:
+                continue
+            hierarchical_active_nodes.add(node_id)
+            layer = int(sub_shard.get("layer", -1))
+            if layer < 0:
+                continue
+            if layer in owners_by_layer and owners_by_layer[layer] != node_id:
+                raise RuntimeError(f"layer {layer} has multiple active hierarchical owners")
+            owners_by_layer[layer] = node_id
     for entry in active:
         for layer in entry.get("layers", []):
             layer = int(layer)
@@ -80,7 +95,7 @@ def cluster_summary(payload: dict[str, Any], network_id: str) -> dict[str, Any]:
         "total": int(network.get("total_neurons", 0)),
         "expected_layers": expected_layers,
         "owners_by_layer": owners_by_layer,
-        "active_nodes": sorted({entry["node_id"] for entry in active}),
+        "active_nodes": sorted(hierarchical_active_nodes or {entry["node_id"] for entry in active}),
         "distribution": distribution,
     }
 

@@ -88,6 +88,13 @@ AER1 and raw-float clients continue to use the same host/port assignments. The
 bridge uses the AER timestamp plus the negotiated frame duration when it creates
 an AER output timestamp; it never uses packet arrival time.
 
+The worker count is visible in the simulator's orchestrator dashboard and startup
+output as registered node IDs. A brain window represents a configured brain and
+is not a worker count. The current compatibility placement protocol sends
+complete neural layers to a worker, so a profile with one executable layer has
+one active owner and may use additional selected workers for warm copies; those
+copies are visible as placement hosts but never become active output writers.
+
 With `--sim all --node <n>`, Webots and Unreal use separate cluster IPC namespaces
 because each IPC endpoint has one active peer. This keeps both simulations
 independent while allowing both runtimes to use the requested worker count.

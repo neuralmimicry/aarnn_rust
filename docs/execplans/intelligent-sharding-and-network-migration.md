@@ -798,6 +798,27 @@ verified checkpoint digest, catch-up confirmation and committed cut tag for
 each retired or moved shard. This closes the previous gap where a valid plan
 could be mistaken for proof that state had already arrived at its destination.
 
+## Progress update — 2026-09-17: active hierarchical placement and UI telemetry
+
+- [x] Promoted the communication-aware hierarchical planner into the active
+  distributed compatibility placement path. It now selects executable layer
+  sub-shard hosts using measured transport EWMA when available and measured
+  worker step latency as the bounded fallback; capacity and memory remain hard
+  admission constraints. The legacy layer range is emitted as a wire-compatible
+  projection of that active decision.
+- [x] Added hierarchical placement telemetry to `NetworkStatus` and the web
+  gateway. Each record carries area, group, layer and host-specific sub-shard
+  identity, role and latency, while the older `distribution` field remains for
+  clients that have not migrated.
+- [x] Updated the Rust and web placement tabs to prefer active hierarchical
+  telemetry and show host, area shard, layer, sub-shard, role and latency
+  details with read-only selection/detail views.
+- [x] The current compatibility worker executes whole layers as its smallest
+  safe biological ownership boundary. The active planner therefore creates one
+  executable sub-shard per layer; neuron-level splitting is routed to the
+  stable shard executor boundary once its state transfer and causal cutover
+  gate is enabled.
+
 ## Decision Log
 
 - **D-ISM-001 — 2026-09-05:** Physical consolidation and virtual repartition are
@@ -2885,3 +2906,135 @@ executor-selection path.
   network. Comparing those numbers directly will continue to show a numeric
   difference; the UI now labels both scopes explicitly and uses the
   network-scoped projection for the selected-network value.
+
+## Progress update — 2026-09-17: communication-aware area/layer sub-shards
+
+- [x] Added the active `src/hierarchical_sharding.rs` planner. It first
+  groups interacting networks using communication frequency, chooses each
+  group anchor from a measured integer latency matrix, then builds stable
+  physical-area parent shards containing layer placements and bounded
+  latency-selected sub-shards. Host capacity and memory remain hard admission
+  constraints; no biological delay or executor semantics change.
+- [x] Added deterministic integration coverage in
+  `tests/hierarchical_sharding.rs` for communication grouping, area-before-layer
+  hierarchy, capacity-driven sub-shard spreading, latency-first host choice,
+  stable IDs and input-order-independent digests.
+- [x] Extended `run_examples.sh` with the opt-in
+  `AARNN_VERIFY_HIERARCHICAL_SHARDING=1` local gate. The existing live launcher
+  continues to exercise its compatibility layer path; this gate makes the new
+  hierarchy explicit and reviewable before that path is replaced.
+
+## Decision Log
+
+- **D-ISM-009 — 2026-09-17:** Hierarchical planning order is network
+  communication group → physical neural area → neural layer → bounded
+  sub-shard. Measured latency is the primary placement key, while capacity and
+  memory are hard eligibility constraints and deterministic resource usage only
+  breaks equal-latency ties. The distributed compatibility executor now uses
+  its layer-sized executable sub-shards; the stable shard executor remains the
+  boundary for neuron-level state splitting.
+  Authority: Sections 5.1–5.4, 6.4, 11.1–11.2 and `INV-001`, `INV-008`,
+  `INV-009`, `INV-010`. The active compatibility path is bounded by the
+  existing layer ownership contract; finer neuron-level execution remains
+  subject to the stable shard cutover gate.
+
+- **D-ISM-010 — 2026-09-17:** Promote the hierarchical planner from a
+  proposal fixture to the active placement decision for the current distributed
+  worker. Because that worker accepts complete layer ranges, its executable
+  sub-shard boundary is one layer; the stable executor remains the required
+  boundary for neuron-level state splitting. The decision is visible through
+  additive status telemetry and is not inferred from UI state.
+  Authority: user direction, Sections 5.1–5.4 and 11.1–11.2, with `INV-001`,
+  `INV-008` and `INV-009` preserved.
+
+## Verification update — 2026-09-17: active live placement and exchange-schema crosscheck
+
+- [x] Promoted the hierarchy to the active compatibility rebalance path. The
+  planner now accounts for indivisible area blocks with bounded fragment
+  headroom, so latency-first placement does not reject the final sub-shard
+  when proportional host capacities divide the total exactly. Heartbeats retain
+  the last successful planner telemetry until the next rebalance, rather than
+  replacing it with a legacy layer projection.
+- [x] Added additive `area_label` status propagation through protobuf, Rust
+  status conversion, the web gateway JSON/OpenAPI surface, the web Placement
+  tab and the native Rust Placement tab. Existing `distribution` and snapshot
+  fields remain compatible for older clients and import/export consumers.
+- [x] Validated snapshot import/export semantics with a decode/serialize/decode
+  round trip. The network configuration, matrix dimensions and layer ranges
+  remain equal after the additive placement schema is absent from the persisted
+  snapshot. CLI and UI exchange paths continue to validate snapshots through
+  the existing profile-backfill decoder.
+- [x] Ran the exact local launcher using the rebuilt release binaries:
+  `AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0
+  AARNN_VERIFY_HIERARCHICAL_SHARDING=1 AARNN_VERIFY_TIMEOUT_S=30
+  ./run_examples.sh`. The live `/api/status` gate passed with `cluster_master`
+  reporting 10 stable physical areas, 10 sub-shards and active hosts on both
+  local workers. Direct status inspection confirmed non-zero `area_id`,
+  non-empty deterministic labels, sub-shards and two distinct `active_node`
+  values; Ctrl-C cleanup completed with no example processes left running.
+- [x] Passed the focused suites: hierarchical sharding (4), web UI/browser
+  compatibility (8) and launcher contracts (9). Also passed the locked
+  feature-profile all-target `cargo check`, formatting, JavaScript syntax,
+  Python QA syntax, shell syntax and `git diff --check` validations. The
+  additional all-target check with `growth3d,morpho` passed, covering persisted
+  coordinates and region labels. Existing compiler warnings remain.
+
+The current compatibility worker still sends complete neural layers through its
+legacy `LoadNetwork` protocol. The active telemetry and planner therefore expose
+area/layer/sub-shard decisions, while neuron-level execution cutover remains
+owned by the stable shard executor boundary and its one-writer state transfer
+gate.
+
+## Verification update — 2026-09-17: backup projection and final local gate
+
+- [x] Corrected backup selection to use the actual latency-selected executable
+  layer map. A backup is selected per active layer, prefers the lowest measured
+  latency among eligible hosts, and excludes the active host whenever another
+  host is available. Hosts that hold only a backup remain in the executable
+  distribution so their warm copy is loaded and visible.
+- [x] Corrected status telemetry at the compatibility boundary. Fine planner
+  area sub-shards are projected onto the one-host-per-layer boundary accepted by
+  `LoadNetwork`, then distinct backup area/sub-shards are emitted at the
+  selected backup host. This prevents telemetry from claiming a layer is
+  simultaneously active on every host while its executable owner is singular.
+  When the fine planner has usable capacity on multiple hosts, the projection
+  retains a second latency-selected executable layer owner so multi-host active
+  placement is visible in both Placement clients.
+- [x] The rebuilt release profile passed the exact bounded local command:
+  `AARNN_SKIP_BUILD=1 AARNN_NATIVE_UI=0
+  AARNN_VERIFY_HIERARCHICAL_SHARDING=1 AARNN_VERIFY_TIMEOUT_S=30
+  timeout --signal=TERM --kill-after=10s 120s ./run_examples.sh`.
+  The verifier reported 10 physical areas, 10 active sub-shards on two worker
+  hosts, 10 backup areas and 10 backup sub-shards on the two backup hosts. The
+  launcher then shut down cleanly; exit 124 was the expected outer timeout after
+  the success message because the example intentionally remains running.
+- [x] Revalidated the focused suites: hierarchical sharding (4), launcher
+  contracts (10), web UI/browser compatibility (8), and the legacy migration
+  unit (`legacy_import_is_upgraded_once_and_serializes_as_distributed`). The
+  snapshot decode/serialize/decode round trip continues to preserve the legacy
+  exchange fields while additive placement telemetry stays out of persisted
+  snapshots. CLI, runtime and UI imports persist the canonical converted
+  distributed configuration, so a repeated load reads the converted form.
+- [x] `cargo fmt --all -- --check`, `git diff --check`, Python compilation for
+  the hierarchical verifier and Celegans/Drosophila/NAO launchers, and shell
+  syntax checks for the example/container/cluster launchers all pass. The
+  model and robot launchers carry the distributed/sharded settings and backup
+  readiness probes where their execution mode supports a cluster.
+- [x] The all-target run initially exposed that converted runtime workspaces
+  were persisting through `RwLock::blocking_read` on the Tokio executor. The
+  conversion publication was moved into `spawn_blocking`; the runtime manager
+  regression, all 302/293 library and binary tests, and the complete
+  `cargo test --locked --all-targets --quiet` run now pass. The final
+  `cargo check --locked --all-features --all-targets --quiet` check also passes.
+- [x] Rebuilt the release binaries after that persistence fix and repeated the
+  bounded launcher gate. The final run reported `node_1` with 10 areas and 10
+  active sub-shards across both worker hosts, with 10 backup areas and 10
+  backup sub-shards, then completed cleanup under the expected outer timeout.
+
+The compatibility worker remains layer-granular for biological execution. The
+area/layer/sub-shard telemetry and backup projection are active placement
+decisions, while neuron-level state splitting still requires the stable shard
+executor cutover and its writer-fencing evidence. A single-host deployment may
+retain a same-host warm copy, which provides recovery from process loss but
+cannot protect against host failure; multi-host protection is validated only
+when a distinct eligible host is available.

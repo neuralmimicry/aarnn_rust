@@ -240,6 +240,18 @@ else
         --bin aarnn_rust --bin web_ui --features "engine_runtime,ui,cuda"
 fi
 
+# The live launcher below remains a compatibility smoke for the current
+# orchestrator. Run the new deterministic hierarchy gate explicitly so this
+# laptop example also cross-checks communication grouping, physical-area
+# parents, layer children and capacity-driven sub-shards. It is opt-in to keep
+# ordinary example startup independent of Cargo's test profile.
+VERIFY_HIERARCHICAL_SHARDING="${AARNN_VERIFY_HIERARCHICAL_SHARDING:-0}"
+if [ "$VERIFY_HIERARCHICAL_SHARDING" = "1" ]; then
+    cargo test --locked --no-default-features --features parallel \
+        --test hierarchical_sharding -- --nocapture
+    echo "Hierarchical network/area/layer/sub-shard latency verification passed."
+fi
+
 #echo "Starting Standalone Network (Brain ID: standalone)..."
 # Using --continuous to keep it running in background
 #./target/release/aarnn_rust --brain-id standalone --continuous > standalone.log 2>&1 &
@@ -247,10 +259,18 @@ fi
 
 export NMD_TFLITE_ALLOW_LARGE=1
 
+EXECUTION_ARGS=(
+    --execution-mode distributed,sharded
+    --execution-scope cluster
+    --execution-desired-shards 2
+)
+
 echo "Starting Distributed Orchestrator (Brain ID: cluster_master)..."
+NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 NM_DISTRIBUTED_AUTOSTART=1 \
 "$BIN_DIR/aarnn_rust" --orchestrator --brain-id cluster_master \
     --grpc-addr "0.0.0.0:$ORCH_PORT" --advertise-addr "127.0.0.1:$ORCH_PORT" \
-    "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" "${NATIVE_UI_ARGS[@]}" > orchestrator.log 2>&1 &
+    "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" "${EXECUTION_ARGS[@]}" \
+    "${NATIVE_UI_ARGS[@]}" > orchestrator.log 2>&1 &
 PIDS=("$!")
 
 # Wait a bit for orchestrator to start broadcasting
@@ -260,14 +280,14 @@ require_process "${PIDS[0]}" "Orchestrator"
 echo "Starting Distributed Nodes (Brain IDs: node_1, node_2) connecting to orchestrator at http://127.0.0.1:$ORCH_PORT ..."
 "$BIN_DIR/aarnn_rust" --node --brain-id node_1 \
     --grpc-addr "0.0.0.0:$NODE1_PORT" --advertise-addr "127.0.0.1:$NODE1_PORT" \
-    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_1.log 2>&1 &
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_1.log 2>&1 &
 NODE1_PID="$!"
 PIDS+=("$!")
 sleep 1
 require_process "${PIDS[1]}" "Node node_1"
 "$BIN_DIR/aarnn_rust" --node --brain-id node_2 \
     --grpc-addr "0.0.0.0:$NODE2_PORT" --advertise-addr "127.0.0.1:$NODE2_PORT" \
-    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_2.log 2>&1 &
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_2.log 2>&1 &
 NODE2_PID="$!"
 PIDS+=("$!")
 sleep 1
@@ -301,6 +321,14 @@ done
 if ! curl --fail --silent --show-error --max-time 1 "$WEB_UI_URL/api/config" >/dev/null 2>&1; then
     echo "Web UI did not become ready at $WEB_UI_URL; see webui.log" >&2
     exit 1
+fi
+
+if [ "$VERIFY_HIERARCHICAL_SHARDING" = "1" ]; then
+    python3 "$SCRIPT_DIR/scripts/qa/verify_hierarchical_sharding.py" \
+        --base-url "$WEB_UI_URL" \
+        --orchestrator "127.0.0.1:$ORCH_PORT" \
+        --timeout "${AARNN_VERIFY_TIMEOUT_S:-50}"
+    echo "Live area/layer/sub-shard placement telemetry verified in the web status path."
 fi
 
 if [ "$VERIFY_SHARD_GROWTH" = "1" ]; then

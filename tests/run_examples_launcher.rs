@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 
 fn launcher() -> String {
     fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run_examples.sh"))
@@ -29,6 +30,10 @@ fn example_launcher_uses_the_local_non_management_profile() {
         !source.contains("cargo build --release --all-features"),
         "examples must not inherit the authenticated production management service"
     );
+    assert!(source.contains("--execution-mode distributed,sharded"));
+    assert!(source.contains("--execution-scope cluster"));
+    assert!(source.contains("--execution-desired-shards 2"));
+    assert!(source.contains("NM_DISTRIBUTED_AUTOSTART=1"));
 }
 
 #[test]
@@ -49,6 +54,9 @@ fn example_launcher_reports_a_ready_dashboard_url() {
 fn example_launcher_has_an_opt_in_growth_and_relocation_probe() {
     let source = launcher();
     assert!(source.contains("AARNN_VERIFY_SHARD_GROWTH"));
+    assert!(source.contains("AARNN_VERIFY_HIERARCHICAL_SHARDING"));
+    assert!(source.contains("verify_hierarchical_sharding.py"));
+    assert!(source.contains("Live area/layer/sub-shard placement telemetry verified"));
     assert!(source.contains("verify_example_sharding.py"));
     assert!(source.contains("--make-fixture"));
     assert!(source.contains("--node1-pid \"$NODE1_PID\""));
@@ -117,6 +125,10 @@ fn parameterized_cluster_launcher_supports_standalone_single_and_multi_worker_mo
     assert!(source.contains("if ! kill -0 \"$pid\""));
     assert!(source.contains("reserve_explicit_port"));
     assert!(source.contains("--orchestrator-addr \"http://127.0.0.1:$ORCH_PORT\""));
+    assert!(source.contains("--execution-mode distributed,sharded"));
+    assert!(source.contains("--execution-scope cluster"));
+    assert!(source.contains("--execution-desired-shards"));
+    assert!(source.contains("NM_DISTRIBUTE_STARTUP_SNAPSHOT=1"));
 }
 
 #[test]
@@ -132,6 +144,12 @@ fn webots_launcher_forwards_and_materializes_requested_cluster_workers() {
     assert!(source.contains("Successfully joined orchestrator"));
     assert!(source.contains("worker processes: $NODE_COUNT"));
     assert!(source.contains("engine_runtime,ui,robot_io,cuda"));
+    assert!(source.contains("spec[\"execution_modes\"] = [\"distributed\", \"sharded\"]"));
+    assert!(source.contains("spec[\"desired_shards\"] = desired_shards"));
+    assert!(source.contains("--execution-mode distributed,sharded"));
+    assert!(source.contains("--execution-scope cluster"));
+    assert!(source.contains("--execution-desired-shards \"$NODE_COUNT\""));
+    assert!(source.contains("registered node IDs:"));
 
     let multi_robot_source = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -151,9 +169,35 @@ fn simulator_launcher_forwards_node_count_to_the_distributed_webots_backend() {
     assert!(source.contains("--node|--nodes"));
     assert!(source.contains("WEBOTS_PASSTHROUGH_ARGS+=(--nodes \"$CLUSTER_NODE_COUNT\")"));
     assert!(source.contains("start_distributed_tcp_servers"));
-    assert!(source.contains("tcp_aer_ipc_bridge.py"));
+    assert!(source.contains("grep -F 'registered node IDs:'"));
+    assert!(source.contains("# Keep the orchestrator dashboard visible for simulator runs."));
+    assert!(source.contains("--runtime cluster --no-webots --no-diag"));
+    assert!(source.contains("target/release/tcp_aer_ipc_bridge"));
+    assert!(
+        source.contains(
+            "cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge"
+        )
+    );
+    assert!(!source.contains("tcp_aer_ipc_bridge.py"));
     assert!(source.contains("NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"));
     assert!(source.contains("--no-webots --no-diag --no-orchestrator-ui"));
+    assert!(source.contains("wait_for_distributed_workers_ready"));
+    assert!(source.contains("worker processes: ${expected} ("));
+    assert!(source.contains("NM_DISTRIBUTED_AUTOSTART=0"));
+    assert!(source.contains("--ready-file \"$ready_file\""));
+    assert!(source.contains("--arm-file \"$ARM_FILE\""));
+    assert!(source.contains("wait_for_environment_bridges_ready"));
+    assert!(source.contains("arm_distributed_networks"));
+    assert!(source.contains("--cluster-control-action start"));
+    assert!(source.contains("wait_for_distributed_networks_armed"));
+    assert!(source.contains("prepare_minecraft_token"));
+    assert!(source.contains("any launcher-started Java client will inherit it"));
+    assert!(source.contains("Unreal launch disabled by --no-engine"));
+
+    let distributed_launcher =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run_webot.sh"))
+            .expect("distributed launcher must be present");
+    assert!(distributed_launcher.contains("NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"));
 
     let unreal_source = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -176,12 +220,45 @@ fn simulator_launcher_forwards_node_count_to_the_distributed_webots_backend() {
 fn distributed_tcp_bridge_preserves_bounded_protocol_layers() {
     let source = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/scripts/tcp_aer_ipc_bridge.py"
+        "/src/tcp_aer_ipc_bridge.rs"
     ))
-    .expect("distributed TCP bridge must be present");
+    .expect("Rust distributed TCP bridge must be present");
     assert!(source.contains("MAX_FRAME_BYTES"));
     assert!(source.contains("MAX_DATAGRAM_BYTES"));
     assert!(source.contains("AER_MAGIC"));
-    assert!(source.contains("aer_timestamp(payload)"));
-    assert!(source.contains("never use wall-clock arrival time"));
+    assert!(source.contains("aer_timestamp(&payload)"));
+    assert!(source.contains("biological time"));
+    assert!(source.contains("mark_ready"));
+    assert!(source.contains("ready_file"));
+}
+
+#[test]
+fn robot_combo_launchers_and_container_workers_select_cluster_sharding() {
+    for path in [
+        "scripts/run_celegans_combo_webots.py",
+        "scripts/run_drosophila_combo_webots.py",
+        "scripts/run_nao_combo_webots.py",
+    ] {
+        let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))
+            .expect("combo launcher must be present");
+        assert!(source.contains("\"distributed,sharded\""));
+        assert!(source.contains("\"cluster\""));
+        assert!(source.contains("\"NM_DISTRIBUTE_STARTUP_SNAPSHOT\": \"1\""));
+        assert!(source.contains("\"NM_DISTRIBUTED_AUTOSTART\": \"1\""));
+        assert!(source.contains("hierarchical_sub_shards"));
+        assert!(source.contains("hierarchical_nodes"));
+        assert!(source.contains("hierarchical_backup_areas"));
+        assert!(source.contains("hierarchical_backup_sub_shards"));
+        assert!(source.contains("backup_hosts_by_layer"));
+        assert!(source.contains("backup_ready"));
+    }
+
+    let entrypoint = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/container_entrypoint.sh"
+    ))
+    .expect("container entrypoint must be present");
+    assert!(entrypoint.contains("--execution-mode distributed,sharded"));
+    assert!(entrypoint.contains("--execution-scope cluster"));
+    assert!(entrypoint.contains("AARNN_EXECUTION_DESIRED_SHARDS"));
 }

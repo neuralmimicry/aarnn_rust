@@ -58,8 +58,10 @@ Canonical sources:
   not regenerate user network snapshots or configs.
 - `web_ui/webgl-world.js`: bounded sensor/motion reference, generated verbatim
   into Bedrock. `src/bin/web_ui.rs` retains its authorisation gate.
-- `examples/nn_tcp_server.rs`, `scripts/tcp_aer_ipc_bridge.py`: existing Rust
-  sandbox endpoints. No additional Rust workspace or neural implementation.
+- `examples/nn_tcp_server.rs`, `src/tcp_aer_ipc_bridge.rs` and the
+  `tcp_aer_ipc_bridge` binary: existing Rust sandbox endpoints. No additional
+  Rust workspace or neural implementation. The Python NAO reference proxy uses
+  only the isolated `scripts/aer_legacy_codec.py` compatibility helpers.
 - `sim/minecraft/src/`, Gradle build and `scripts/minecraft.py`: Java adapter,
   companion, detection and certified saved-world export.
 - `scripts/build_minecraft_bedrock.py`, `sim/minecraft/bedrock/scripts/`,

@@ -120,6 +120,7 @@ stable_id!(RouteId);
 stable_id!(StreamId);
 stable_id!(EventId);
 stable_id!(ComponentId);
+stable_id!(SubShardId);
 
 /// A monotonically increasing topology generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

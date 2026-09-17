@@ -13,7 +13,7 @@ import threading
 from urllib.parse import urlsplit
 
 from nao_social import CONTRACT, Hub, ROOT, SocialError
-from tcp_aer_ipc_bridge import aer_frame, read_exact, write_frame
+from aer_legacy_codec import aer_frame, read_exact, write_frame
 
 MAX_FRAME = 65536
 

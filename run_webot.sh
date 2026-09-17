@@ -605,6 +605,15 @@ if [ "$RUNTIME" = "uds" ] && [ "$NODE_COUNT" -ne 1 ]; then
     exit 1
 fi
 
+# Cluster launchers must declare the placement contract explicitly. The
+# orchestrator applies these settings to every startup network and workers
+# carry the same contract when they preload a network for IPC dimensions.
+EXECUTION_ARGS=(
+    --execution-mode distributed,sharded
+    --execution-scope cluster
+    --execution-desired-shards "$NODE_COUNT"
+)
+
 START_WEBOTS="$(normalize_bool START_WEBOTS "$START_WEBOTS")" || exit 1
 WEBOTS_HEADLESS="$(normalize_bool WEBOTS_HEADLESS "$WEBOTS_HEADLESS")" || exit 1
 WEBOTS_RECORD="$(normalize_bool NM_WEBOTS_RECORD "$WEBOTS_RECORD")" || exit 1
@@ -1067,11 +1076,12 @@ build_orchestrator_network_specs_json() {
         triples+=("$brain" "$cfg" "$net")
     done
 
-    python3 - "${triples[@]}" <<'PY'
+    python3 - "$NODE_COUNT" "${triples[@]}" <<'PY'
 import json
 import sys
 
-args = sys.argv[1:]
+desired_shards = int(sys.argv[1])
+args = sys.argv[2:]
 if len(args) % 3 != 0:
     raise SystemExit(2)
 
@@ -1086,6 +1096,10 @@ for i in range(0, len(args), 3):
         spec["config_path"] = config_path
     if network_path:
         spec["network_path"] = network_path
+    spec["execution_modes"] = ["distributed", "sharded"]
+    spec["execution_scope"] = "cluster"
+    spec["desired_shards"] = desired_shards
+    spec["autodetect_infrastructure"] = False
     specs.append(spec)
 
 print(json.dumps(specs, separators=(",", ":")))
@@ -2333,6 +2347,7 @@ start_cluster_runtime() {
             --orchestrator
             --brain-id "$brain"
             --grpc-addr "0.0.0.0:$orch_port"
+            "${EXECUTION_ARGS[@]}"
             --ipc
             --ui
         )
@@ -2372,8 +2387,10 @@ start_cluster_runtime() {
         exit 1
     }
     local ipc_node_ids=""
+    local -a cluster_node_ids=()
     for brain in "${BRAINS[@]}"; do
         ipc_node_ids="${ipc_node_ids:+$ipc_node_ids,}${brain}_ipc"
+        cluster_node_ids+=("${brain}_ipc")
     done
     local orch_cmd=(
         env
@@ -2391,6 +2408,8 @@ start_cluster_runtime() {
         --orchestrator
         --brain-id orchestrator
         --grpc-addr "0.0.0.0:$orch_port"
+        --orchestrator-addr "http://127.0.0.1:$orch_port"
+        "${EXECUTION_ARGS[@]}"
     )
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
         orch_cmd+=(--ui)
@@ -2420,6 +2439,7 @@ start_cluster_runtime() {
         local node_cmd=(
             env
             "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK"
+            "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
             "NM_REALTIME_IPC=$REALTIME_IPC"
             "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
             "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
@@ -2432,6 +2452,7 @@ start_cluster_runtime() {
             --brain-id "$brain"
             --grpc-addr "0.0.0.0:$node_port"
             --orchestrator-addr "http://127.0.0.1:$orch_port"
+            "${EXECUTION_ARGS[@]}"
             --ipc
         )
         local brain_config
@@ -2500,6 +2521,7 @@ start_cluster_runtime() {
         local node_cmd=(
             env
             "NM_PRELOAD_NODE_NETWORK=$PRELOAD_NODE_NETWORK"
+            "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
             "NM_REALTIME_IPC=$REALTIME_IPC"
             "NM_REALTIME_DISABLE_GROWTH=$REALTIME_DISABLE_GROWTH"
             "NM_REALTIME_DISABLE_MORPHO=$REALTIME_DISABLE_MORPHO"
@@ -2512,6 +2534,7 @@ start_cluster_runtime() {
             --brain-id "$worker_brain"
             --grpc-addr "0.0.0.0:$node_port"
             --orchestrator-addr "http://127.0.0.1:$orch_port"
+            "${EXECUTION_ARGS[@]}"
         )
         local brain_config
         brain_config="$(config_for_brain "$worker_brain")"
@@ -2537,12 +2560,14 @@ start_cluster_runtime() {
         echo "Worker '$worker_id' ready:"
         echo "  node gRPC: $node_port"
         echo "  log: $log_file"
+        cluster_node_ids+=("$worker_id")
         extra_index=$((extra_index + 1))
     done
 
     echo "Orchestrator ready:"
     echo "  gRPC: $orch_port"
     echo "  worker processes: $NODE_COUNT (${#BRAINS[@]} IPC owner(s), $extra_workers additional worker(s))"
+    echo "  registered node IDs: $(IFS=,; echo "${cluster_node_ids[*]}")"
     echo "  IPC owner IDs: $ipc_node_ids"
     echo "  log: $orch_log"
     if [ "$ORCHESTRATOR_UI" -eq 1 ]; then
@@ -2892,6 +2917,8 @@ start_remote_cluster_runtime() {
         --orchestrator
         --brain-id orchestrator
         --grpc-addr "0.0.0.0:$orch_port"
+        --orchestrator-addr "$orchestrator_addr_public"
+        "${EXECUTION_ARGS[@]}"
     )
     if [ "$REMOTE_QUIET" -eq 1 ]; then
         orch_cmd+=(--quiet)
@@ -2948,6 +2975,7 @@ start_remote_cluster_runtime() {
             --brain-id "$brain"
             --grpc-addr "0.0.0.0:$node_port"
             --orchestrator-addr "$orchestrator_addr_public"
+            "${EXECUTION_ARGS[@]}"
         )
         if [ -n "$worker_id" ]; then
             node_cmd+=(--node-id "$worker_id")
@@ -2968,7 +2996,8 @@ start_remote_cluster_runtime() {
                 --node
                 --brain-id "$brain"
                 --grpc-addr "0.0.0.0:$node_port"
-                --orchestrator-addr "$orchestrator_addr_public")
+                --orchestrator-addr "$orchestrator_addr_public"
+                "${EXECUTION_ARGS[@]}")
             if [ -n "$worker_id" ]; then
                 node_cmd+=(--node-id "$worker_id")
             fi

@@ -43,6 +43,7 @@ mod ga;
 mod generated_management;
 #[cfg(feature = "opencl")]
 mod gpu_api;
+mod hierarchical_sharding;
 mod managed_durability;
 mod managed_partial_shard_runtime;
 mod managed_shard_runtime;
@@ -117,6 +118,7 @@ use crate::deployment::{
     DeploymentConfig, ExecutionMode, ExecutionScope, default_infrastructure_roots,
     detect_infrastructure,
 };
+use crate::distributed::distributed_autostart_enabled;
 use crate::monitor::MonitorHeuristics;
 use crate::runner::Runner;
 use crate::runtime_api::{
@@ -1087,17 +1089,63 @@ fn resolve_deployment(net_cfg: &mut NetworkConfig, args: &Cli) {
     apply_deployment_autodetect(net_cfg, args);
 }
 
+fn persist_imported_network_payload(path: &str, payload: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::path::Path;
+
+    let target = Path::new(path);
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temporary = target.with_extension(format!("aarnn-import-{}.tmp", std::process::id()));
+    let mut file = std::fs::File::create(&temporary).with_context(|| {
+        format!(
+            "failed to create converted import '{}''",
+            temporary.display()
+        )
+    })?;
+    file.write_all(payload.as_bytes())
+        .with_context(|| format!("failed to write converted import '{}'", temporary.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush converted import '{}'", temporary.display()))?;
+    std::fs::rename(&temporary, target)
+        .with_context(|| format!("failed to publish converted import '{}'", target.display()))?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .with_context(|| {
+            format!(
+                "failed to sync converted import directory '{}'",
+                parent.display()
+            )
+        })?;
+    Ok(())
+}
+
 fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig, Option<String>)> {
     let payload = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read startup network payload: {}", path))?;
-    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
-        Ok((snapshot.net, Some(payload)))
+    if let Ok(mut snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
+        let converted = snapshot.net.deployment.migrate_legacy_import();
+        let canonical = if converted {
+            let canonical = serde_json::to_string_pretty(&snapshot)?;
+            persist_imported_network_payload(path, &canonical)?;
+            canonical
+        } else {
+            payload
+        };
+        Ok((snapshot.net, Some(canonical)))
     } else {
         let mut cfg: NetworkConfig = serde_json::from_str(&payload)
             .with_context(|| format!("Failed to parse network config JSON: {}", path))?;
         if cfg.clumping_design != crate::config::ClumpingDesign::None && cfg.num_hidden_layers <= 1
         {
             apply_clumping_layer_defaults(&mut cfg);
+        }
+        if cfg.deployment.migrate_legacy_import() {
+            let canonical = serde_json::to_string_pretty(&cfg)?;
+            persist_imported_network_payload(path, &canonical)?;
+            cfg = serde_json::from_str(&canonical)?;
         }
         Ok((cfg, None))
     }
@@ -2353,13 +2401,6 @@ fn log_fpaa_status(status: &crate::fpaa::FpaaRuntimeStatus) {
     }
 }
 
-fn distributed_autostart_enabled() -> bool {
-    std::env::var("NM_DISTRIBUTED_AUTOSTART")
-        .ok()
-        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-        .unwrap_or(true)
-}
-
 #[cfg(feature = "openmpi")]
 fn maybe_apply_openmpi_bootstrap(args: &mut Cli) -> anyhow::Result<()> {
     let force_bootstrap = std::env::var("NM_MPI_FORCE_BOOTSTRAP")
@@ -2572,8 +2613,16 @@ fn main() -> anyhow::Result<()> {
         if Path::new(&args.config).exists() {
             let s = fs::read_to_string(&args.config)?;
             if args.network.is_none() {
-                if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
-                    startup_snapshot_json = Some(s);
+                if let Ok(mut snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
+                    if (args.orchestrator || args.node)
+                        && snap.net.deployment.migrate_legacy_import()
+                    {
+                        let canonical = serde_json::to_string_pretty(&snap)?;
+                        persist_imported_network_payload(&args.config, &canonical)?;
+                        startup_snapshot_json = Some(canonical);
+                    } else {
+                        startup_snapshot_json = Some(s);
+                    }
                     snap.net
                 } else {
                     serde_json::from_str(&s)?
@@ -2597,8 +2646,14 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(network_path) = args.network.as_deref() {
         let s = std::fs::read_to_string(network_path)?;
-        let snap = crate::runner::decode_snapshot_with_profile_backfill(&s)?;
-        startup_snapshot_json = Some(s);
+        let mut snap = crate::runner::decode_snapshot_with_profile_backfill(&s)?;
+        if snap.net.deployment.migrate_legacy_import() {
+            let canonical = serde_json::to_string_pretty(&snap)?;
+            persist_imported_network_payload(network_path, &canonical)?;
+            startup_snapshot_json = Some(canonical);
+        } else {
+            startup_snapshot_json = Some(s);
+        }
         net_cfg = snap.net;
         if let Some(contract) = io_contract.as_ref() {
             if apply_io_contract(&mut net_cfg, contract) {
@@ -3731,6 +3786,11 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     crate::distributed::validate_production_cutover_config(&node_id, args.orchestrator)
         .map_err(|error| anyhow::anyhow!(error))?;
     let node = DistributedNode::new(node_id.clone(), args.orchestrator);
+    if args.orchestrator {
+        if let Some(address) = args.orchestrator_addr.as_deref() {
+            node.state.write().await._orchestrator_addr = Some(address.to_string());
+        }
+    }
     #[cfg(feature = "stable_executor_live")]
     if let Some(path) = args.stable_worker_manifest.as_ref() {
         let bootstrap = open_stable_worker_manifest(path.clone(), node_id.clone()).await?;
@@ -4005,7 +4065,7 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                 }
                 #[cfg(not(feature = "stable_executor_live"))]
                 {
-                    managed_network.playing = true;
+                    managed_network.playing = crate::distributed::distributed_autostart_enabled();
                 }
                 state.networks.insert(
                     args.brain_id.clone(),

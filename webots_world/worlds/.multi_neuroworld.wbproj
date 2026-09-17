@@ -7,5 +7,3 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: DROS_BANC_01:dros_s_34_eye_left;1;1.33333;0;0
-renderingDevicePerspectives: DROS_BANC_01:dros_s_35_eye_right;1;1.33333;0;0
