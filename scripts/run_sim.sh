@@ -4,6 +4,8 @@
 # Selects the simulation backend (Webots, Unreal, Unity, WebGL, or all three)
 # and
 # starts the appropriate AARNN brain processes for the requested robot spec.
+
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #
 # Usage:
 #   ./run_sim.sh [options]
@@ -81,6 +83,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 ROBOT_PROFILES_PY="$ROOT_DIR/scripts/robot_profiles.py"
 
+LOCAL_MANAGEMENT_ROOT="${NM_LOCAL_MANAGEMENT_ROOT:-$ROOT_DIR/data/simulator-runtime}"
+
 if [ ! -f "$ROBOT_PROFILES_PY" ]; then
   echo "run_sim.sh: missing shared robot profile helper: $ROBOT_PROFILES_PY" >&2
   exit 1
@@ -99,7 +103,7 @@ CLUSTER_NODE_COUNT="${NM_CLUSTER_NODES:-1}"
 CLUSTER_NODE_COUNT_SET=0
 NO_BUILD=0
 NAO_SOCIAL=0
-BUILD_ALL_FEATURES=0
+BUILD_ALL_FEATURES=1
 WEBOTS_PASSTHROUGH_ARGS=()
 CONFIG_MAP_CSV=""
 NETWORK_MAP_CSV=""
@@ -294,6 +298,13 @@ if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
   WEBOTS_PASSTHROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "run_sim.sh: python3 is required to prepare the local management environment" >&2
+  exit 1
+fi
+eval "$(python3 "$ROOT_DIR/scripts/local_management_env.py" \
+  --runtime-root "$LOCAL_MANAGEMENT_ROOT" --shell)"
+
 # ---------------------------------------------------------------------------
 # Robot spec parser — produces parallel arrays: BRAIN_IDS[], BRAIN_TYPES[]
 # ---------------------------------------------------------------------------
@@ -327,8 +338,6 @@ build_tcp_server() {
       echo "  Expected at: $ROOT_DIR/target/release/examples/nn_tcp_server" >&2
       if [ "$BUILD_ALL_FEATURES" -eq 1 ]; then
         echo "  Build with: cargo build --release --all-features --example nn_tcp_server" >&2
-      else
-        echo "  Build with: cargo build --release --features ui,robot_io --example nn_tcp_server" >&2
       fi
       exit 1
     fi
@@ -338,11 +347,7 @@ build_tcp_server() {
   echo "run_sim.sh: building nn_tcp_server …"
   (
     cd "$ROOT_DIR"
-    if [ "$BUILD_ALL_FEATURES" -eq 1 ]; then
-      cargo build --release --all-features --example nn_tcp_server
-    else
-      cargo build --release --features ui,robot_io --example nn_tcp_server
-    fi
+    cargo build --release --all-features --example nn_tcp_server
   )
   locate_tcp_server_bin
   if [ -z "$TCP_SERVER_BIN" ]; then
@@ -365,7 +370,7 @@ build_tcp_aer_bridge() {
     if [ -z "$TCP_AER_BRIDGE_BIN" ]; then
       echo "run_sim.sh: --no-build specified but Rust TCP/AER IPC bridge was not found." >&2
       echo "  Expected at: $ROOT_DIR/target/release/tcp_aer_ipc_bridge" >&2
-      echo "  Build with: cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge" >&2
+      echo "  Build with: cargo build --release --locked --all-features --bin tcp_aer_ipc_bridge" >&2
       exit 1
     fi
     return
@@ -374,7 +379,7 @@ build_tcp_aer_bridge() {
   echo "run_sim.sh: building Rust TCP/AER IPC bridge …"
   (
     cd "$ROOT_DIR"
-    cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge
+    cargo build --release --locked --all-features --bin tcp_aer_ipc_bridge
   )
   locate_tcp_aer_bridge_bin
   if [ -z "$TCP_AER_BRIDGE_BIN" ]; then
@@ -1113,10 +1118,8 @@ launch_webgl() {
 
   if [ "$NO_BUILD" -eq 0 ]; then
     echo "run_sim.sh: building the AARNN cluster and browser gateway …"
-    cargo build --release --locked --no-default-features \
-      --bin aarnn_rust --features "$WEBGL_RUNTIME_FEATURES"
-    cargo build --release --locked --no-default-features \
-      --bin web_ui --features engine_runtime,ui
+    cargo build --release --locked --all-features --bin aarnn_rust
+    cargo build --release --locked --all-features --bin web_ui
   fi
   if [ ! -x "$ROOT_DIR/target/release/aarnn_rust" ] || [ ! -x "$ROOT_DIR/target/release/web_ui" ]; then
     echo "run_sim.sh: WebGL requires target/release/aarnn_rust and target/release/web_ui." >&2
@@ -1124,7 +1127,7 @@ launch_webgl() {
   fi
   if ! command -v strings >/dev/null 2>&1 || ! strings "$ROOT_DIR/target/release/aarnn_rust" | grep -F "[IpcUdsServer] Bound to" >/dev/null; then
     echo "run_sim.sh: target/release/aarnn_rust was built without the robot_io IPC runtime." >&2
-    echo "  Re-run without --no-build, or build with --features $WEBGL_RUNTIME_FEATURES." >&2
+    echo "  Re-run without --no-build, or build with --all-features." >&2
     exit 1
   fi
 

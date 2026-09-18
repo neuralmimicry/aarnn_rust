@@ -710,6 +710,50 @@ fn persist_workspace_snapshot(
     Ok(())
 }
 
+async fn run_workspace_autosave_writer(
+    network_id: String,
+    mut receiver: mpsc::Receiver<WorkspaceAutosaveJob>,
+) {
+    let mut last_published_step = 0_u64;
+    while let Some(job) = receiver.recv().await {
+        // A worker emits jobs in commit order. Keep this guard as a second
+        // line of defence if a future recovery path replays an older job.
+        if job.committed_step < last_published_step {
+            nm_err!(
+                "[warn] Ignoring stale autosave for network {} at step {} (last published {})",
+                network_id,
+                job.committed_step,
+                last_published_step
+            );
+            continue;
+        }
+        let committed_step = job.committed_step;
+        let workspace_id = job.binding.workspace_id.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            persist_workspace_snapshot(&job.binding, &job.snapshot_json)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                last_published_step = committed_step;
+            }
+            Ok(Err(error)) => nm_err!(
+                "[warn] Failed to persist workspace '{}' for network {} at committed step {}: {}",
+                workspace_id,
+                network_id,
+                committed_step,
+                error
+            ),
+            Err(error) => nm_err!(
+                "[warn] Workspace autosave writer failed for network {} at committed step {}: {}",
+                network_id,
+                committed_step,
+                error
+            ),
+        }
+    }
+}
+
 fn apply_control_to_managed_network(
     net: &mut ManagedNetwork,
     action: proto::control_update::Action,
@@ -4595,6 +4639,31 @@ pub struct DistributedNode {
     /// this callback is scheduled outside the heartbeat lock.
     stable_worker_registration_handler:
         Arc<std::sync::RwLock<Option<StableWorkerRegistrationHandler>>>,
+}
+
+/// A snapshot captured after an authoritative step commit.  The JSON is
+/// owned before it enters the queue, so filesystem publication never reads a
+/// live Runner or holds a network lock.
+struct WorkspaceAutosaveJob {
+    binding: NetworkWorkspaceBinding,
+    snapshot_json: String,
+    committed_step: u64,
+}
+
+struct NetworkWorkerHandles {
+    network: Arc<RwLock<ManagedNetwork>>,
+    worker: tokio::task::JoinHandle<()>,
+    output: tokio::task::JoinHandle<()>,
+    autosave: tokio::task::JoinHandle<()>,
+}
+
+fn bounded_worker_queue_capacity(name: &str, default: usize, maximum: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+        .min(maximum)
 }
 
 pub type StableActivationResultHandler = Arc<dyn Fn(NetworkCommandResult) + Send + Sync>;
@@ -8578,321 +8647,477 @@ impl DistributedNode {
 
     pub async fn run_simulation(&self, mut shutdown: watch::Receiver<bool>) {
         let node_id = self.state.read().await.node_id.clone();
-        nm_log!("[info] Node {} simulation loop started", node_id);
+        let output_capacity =
+            bounded_worker_queue_capacity("NM_NETWORK_OUTPUT_QUEUE_CAPACITY", 8, 1024);
+        let autosave_capacity =
+            bounded_worker_queue_capacity("NM_WORKSPACE_AUTOSAVE_QUEUE_CAPACITY", 2, 64);
+        let mut workers: HashMap<String, NetworkWorkerHandles> = HashMap::new();
+        nm_log!(
+            "[info] Node {} simulation supervisor started (output_queue={}, autosave_queue={})",
+            node_id,
+            output_capacity,
+            autosave_capacity
+        );
 
         loop {
             if *shutdown.borrow() {
                 break;
             }
+
             let networks = {
                 let state = self.state.read().await;
-                state.networks.values().cloned().collect::<Vec<_>>()
+                state
+                    .networks
+                    .iter()
+                    .map(|(network_id, network)| (network_id.clone(), network.clone()))
+                    .collect::<HashMap<_, _>>()
             };
 
-            if networks.is_empty() {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+            for (network_id, net_arc) in &networks {
+                if let Some(existing) = workers.get(network_id) {
+                    if Arc::ptr_eq(&existing.network, net_arc) {
+                        continue;
+                    }
+                    // The map entry was replaced at a topology/workspace
+                    // boundary. Drain the old worker's committed queues
+                    // before starting the replacement for the same ID.
+                    if let Some(handles) = workers.remove(network_id) {
+                        let _ = handles.worker.await;
+                        let _ = handles.output.await;
+                        let _ = handles.autosave.await;
+                    }
+                }
+                let (output_tx, mut output_rx) = mpsc::channel::<Vec<SpikeBatch>>(output_capacity);
+                let (autosave_tx, autosave_rx) =
+                    mpsc::channel::<WorkspaceAutosaveJob>(autosave_capacity);
+                let output_node = self.clone();
+                let output_network_id = network_id.clone();
+                let output_task = tokio::spawn(async move {
+                    while let Some(batches) = output_rx.recv().await {
+                        if batches.is_empty() {
+                            continue;
+                        }
+                        output_node
+                            .send_spike_batches(&output_network_id, &batches, None)
+                            .await;
+                    }
+                });
+                let autosave_task = tokio::spawn(run_workspace_autosave_writer(
+                    network_id.clone(),
+                    autosave_rx,
+                ));
+                let worker_node = self.clone();
+                let worker_network_id = network_id.clone();
+                let worker_network = net_arc.clone();
+                let worker_shutdown = shutdown.clone();
+                let worker_task = tokio::spawn(async move {
+                    worker_node
+                        .run_network_worker(
+                            worker_network_id,
+                            worker_network,
+                            autosave_tx,
+                            output_tx,
+                            worker_shutdown,
+                        )
+                        .await;
+                });
+                workers.insert(
+                    network_id.clone(),
+                    NetworkWorkerHandles {
+                        network: net_arc.clone(),
+                        worker: worker_task,
+                        output: output_task,
+                        autosave: autosave_task,
+                    },
+                );
+                nm_log!(
+                    "[info] Started independent simulation worker for network {}",
+                    network_id
+                );
+            }
+
+            // A network replacement or unload is a worker lifecycle event. Let
+            // its bounded output and autosave queues drain before retiring the
+            // tasks, so committed output is never discarded for responsiveness.
+            let retired = workers
+                .keys()
+                .filter(|network_id| !networks.contains_key(*network_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            for network_id in retired {
+                if let Some(handles) = workers.remove(&network_id) {
+                    let _ = handles.worker.await;
+                    let _ = handles.output.await;
+                    let _ = handles.autosave.await;
+                    nm_log!(
+                        "[info] Retired simulation worker for network {}",
+                        network_id
+                    );
+                }
+            }
+
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() { break; }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(if workers.is_empty() { 100 } else { 20 })) => {}
+            }
+        }
+
+        for (network_id, handles) in workers {
+            let _ = handles.worker.await;
+            let _ = handles.output.await;
+            let _ = handles.autosave.await;
+            nm_log!(
+                "[info] Stopped simulation worker for network {}",
+                network_id
+            );
+        }
+        nm_log!("[info] Node {} simulation supervisor stopped", node_id);
+    }
+
+    async fn run_network_worker(
+        &self,
+        network_id: String,
+        net_arc: Arc<RwLock<ManagedNetwork>>,
+        autosave_tx: mpsc::Sender<WorkspaceAutosaveJob>,
+        output_tx: mpsc::Sender<Vec<SpikeBatch>>,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
+        let node_id = self.state.read().await.node_id.clone();
+        nm_log!(
+            "[info] Network {} worker started on node {}",
+            network_id,
+            node_id
+        );
+        loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            let current = {
+                let state = self.state.read().await;
+                state.networks.get(&network_id).cloned()
+            };
+            if current
+                .as_ref()
+                .map(|network| Arc::ptr_eq(network, &net_arc))
+                != Some(true)
+            {
+                break;
+            }
+
+            observe_time!("distributed/node_step");
+            let step_start = std::time::Instant::now();
+            #[cfg(feature = "replicated_durability")]
+            let live_outbox_peers = if live_causal_transport_enabled() {
+                let network_id = net_arc.read().await.id.clone();
+                self.spike_targets_for_network(&network_id, None)
+                    .await
+                    .into_iter()
+                    .map(|(node_id, _)| node_id)
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let mut net = net_arc.write().await;
+            if !net.playing {
+                drop(net);
+                tokio::select! {
+                    _ = shutdown.changed() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+                }
+                continue;
+            }
+            if let Err(error) = net.admit_shard_step() {
+                nm_err!(
+                    "[warn] Refusing network {} step because shard ownership evidence is stale: {}",
+                    net.id,
+                    error
+                );
                 continue;
             }
 
-            let mut any_playing = false;
-            for net_arc in networks {
-                if *shutdown.borrow() {
-                    break;
-                }
-                observe_time!("distributed/node_step");
-                let step_start = std::time::Instant::now();
-                #[cfg(feature = "replicated_durability")]
-                let live_outbox_peers = if live_causal_transport_enabled() {
-                    let network_id = net_arc.read().await.id.clone();
-                    self.spike_targets_for_network(&network_id, None)
-                        .await
-                        .into_iter()
-                        .map(|(node_id, _)| node_id)
-                        .collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
-                let mut net = net_arc.write().await;
-                if !net.playing {
-                    continue;
-                }
-                if let Err(error) = net.admit_shard_step() {
+            #[cfg(feature = "stable_executor_live")]
+            if net.stable_executor_registered() {
+                // The stable manifest profile currently owns every virtual
+                // shard in this process. Receiving a legacy layer batch
+                // would otherwise be silently ignored, so stop at the
+                // safety boundary until physical stable-shard routing is
+                // available.
+                if !net.remote_spikes_fwd.is_empty() || !net.remote_spikes_bwd.is_empty() {
+                    net.playing = false;
                     nm_err!(
-                        "[warn] Refusing network {} step because shard ownership evidence is stale: {}",
-                        net.id,
-                        error
+                        "[error] Pausing stable network {} because it received work outside its local stable-shard profile",
+                        net.id
                     );
                     continue;
                 }
-                any_playing = true;
-
-                #[cfg(feature = "stable_executor_live")]
-                if net.stable_executor_registered() {
-                    // The stable manifest profile currently owns every virtual
-                    // shard in this process. Receiving a legacy layer batch
-                    // would otherwise be silently ignored, so stop at the
-                    // safety boundary until physical stable-shard routing is
-                    // available.
-                    if !net.remote_spikes_fwd.is_empty() || !net.remote_spikes_bwd.is_empty() {
+                let external_sensory = net.external_sensory_spikes.take();
+                let stable_start = std::time::Instant::now();
+                let poll = match net.poll_stable_executor_sensory(external_sensory.as_deref()) {
+                    Ok(poll) => poll,
+                    Err(error) => {
                         net.playing = false;
                         nm_err!(
-                            "[error] Pausing stable network {} because it received work outside its local stable-shard profile",
-                            net.id
-                        );
-                        continue;
-                    }
-                    let external_sensory = net.external_sensory_spikes.take();
-                    let stable_start = std::time::Instant::now();
-                    let poll = match net.poll_stable_executor_sensory(external_sensory.as_deref()) {
-                        Ok(poll) => poll,
-                        Err(error) => {
-                            net.playing = false;
-                            nm_err!(
-                                "[error] Pausing stable network {} after authoritative poll failure: {}",
-                                net.id,
-                                error
-                            );
-                            continue;
-                        }
-                    };
-                    let elapsed = stable_start.elapsed().as_secs_f32() * 1000.0;
-                    if net.avg_step_time_ms == 0.0 {
-                        net.avg_step_time_ms = elapsed;
-                    } else {
-                        net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
-                    }
-                    if poll.budget_exhausted {
-                        nm_log!(
-                            "[info] Stable network {} retained {} bounded causal events for the next poll",
-                            net.id,
-                            poll.pending_after
-                        );
-                    }
-                    // All shards in this explicitly local profile share the
-                    // same durable executor. Emitted events are either
-                    // consumed by the bounded drain or retained in its
-                    // immutable pending checkpoint; no transport output is
-                    // fabricated or discarded here.
-                    drop(net);
-                    continue;
-                }
-
-                // The input queues are drained into the compatibility kernel
-                // before the step. Keep an owned pre-step image so a failed
-                // durable publication can retry the exact same admission
-                // without silently losing queued causal input.
-                #[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
-                let previous_channel_state = capture_channel_state(&net);
-
-                // Sync remote spikes into runner before stepping.
-                // Use copy_from_slice instead of Array1::from_vec to reuse the existing
-                // allocation and avoid per-step heap allocation on the hot path.
-                let fwd_spikes = std::mem::take(&mut net.remote_spikes_fwd);
-                for (l, spikes) in fwd_spikes {
-                    let li = l as usize;
-                    if li < net.runner.last_spk_h.len() {
-                        let sz = net.runner.layer_size(li);
-                        if spikes.len() == sz {
-                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                                dst.copy_from_slice(&spikes);
-                            }
-                        } else {
-                            // Topology mismatch: resize-and-copy (rare path).
-                            let n = sz.min(spikes.len());
-                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                                dst[..n].copy_from_slice(&spikes[..n]);
-                                for v in dst[n..].iter_mut() {
-                                    *v = 0;
-                                }
-                            }
-                        }
-                    }
-                }
-                let bwd_spikes = std::mem::take(&mut net.remote_spikes_bwd);
-                for (l, spikes) in bwd_spikes {
-                    let li = l as usize;
-                    if li < net.runner.last_spk_h.len() {
-                        let sz = net.runner.layer_size(li);
-                        if spikes.len() == sz {
-                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                                dst.copy_from_slice(&spikes);
-                            }
-                        } else {
-                            let n = sz.min(spikes.len());
-                            if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                                dst[..n].copy_from_slice(&spikes[..n]);
-                                for v in dst[n..].iter_mut() {
-                                    *v = 0;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let external_sensory = net.external_sensory_spikes.take();
-                #[cfg(feature = "replicated_durability")]
-                let (_out, durable_batches) = match net.step_and_commit_durable_with_outbox(
-                    external_sensory.as_deref(),
-                    previous_channel_state.clone(),
-                    &live_outbox_peers,
-                ) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        nm_err!(
-                            "[warn] Durable managed step for network {} deferred for retry: {}",
+                            "[error] Pausing stable network {} after authoritative poll failure: {}",
                             net.id,
                             error
                         );
                         continue;
                     }
                 };
-                #[cfg(not(feature = "replicated_durability"))]
-                #[cfg(feature = "superdense_executor")]
-                let out = match net.step_with_superdense(external_sensory.as_deref()) {
-                    Ok(out) => out,
-                    Err(error) => {
-                        restore_channel_state(&mut net, previous_channel_state.clone());
-                        nm_err!(
-                            "[warn] Superdense step for network {} deferred for retry: {}",
-                            net.id,
-                            error
-                        );
-                        continue;
-                    }
-                };
-                #[cfg(all(
-                    not(feature = "replicated_durability"),
-                    not(feature = "superdense_executor")
-                ))]
-                let out = if let Some(ref sensory) = external_sensory {
-                    net.runner.step(Some(sensory.as_slice()))
-                } else {
-                    net.runner.step(None)
-                };
-
-                #[cfg(not(feature = "replicated_durability"))]
-                let step_index = out.t as i64;
-                let net_id = net.id.clone();
-                #[cfg(feature = "replicated_durability")]
-                let batches = durable_batches;
-                #[cfg(not(feature = "replicated_durability"))]
-                let batches = managed_spike_batches(&net, step_index);
-
-                #[cfg(feature = "replicated_durability")]
-                if let Some(owner) = net.durable_owner.as_ref() {
-                    match owner.authoritative_state() {
-                        Ok(state) => {
-                            if let Err(error) =
-                                net.commit_shard_step(state.committed_tag, state.state_digest)
-                            {
-                                nm_err!(
-                                    "[error] Refusing network {} output after shard commit evidence failed: {}",
-                                    net.id,
-                                    error
-                                );
-                                continue;
-                            }
-                        }
-                        Err(error) => {
-                            nm_err!(
-                                "[error] Refusing network {} output because durable shard state cannot be read: {}",
-                                net.id,
-                                error
-                            );
-                            continue;
-                        }
-                    }
-                }
-
-                let elapsed = step_start.elapsed().as_secs_f32() * 1000.0;
+                let elapsed = stable_start.elapsed().as_secs_f32() * 1000.0;
                 if net.avg_step_time_ms == 0.0 {
                     net.avg_step_time_ms = elapsed;
                 } else {
                     net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
                 }
+                if poll.budget_exhausted {
+                    nm_log!(
+                        "[info] Stable network {} retained {} bounded causal events for the next poll",
+                        net.id,
+                        poll.pending_after
+                    );
+                }
+                // All shards in this explicitly local profile share the
+                // same durable executor. Emitted events are either
+                // consumed by the bounded drain or retained in its
+                // immutable pending checkpoint; no transport output is
+                // fabricated or discarded here.
+                drop(net);
+                continue;
+            }
 
-                if let Some(binding) = net.workspace_binding.as_ref() {
-                    let autosave_steps = binding.autosave_steps.max(1) as usize;
-                    if autosave_steps == 1 || net.runner.t % autosave_steps == 0 {
-                        match local_shard_snapshot(&net) {
-                            Ok((snapshot_json, _, _, _)) => {
-                                if let Err(err) =
-                                    persist_workspace_snapshot(binding, &snapshot_json)
-                                {
-                                    nm_err!(
-                                        "[warn] Failed to persist workspace '{}' for network {}: {}",
-                                        binding.workspace_id,
-                                        net.id,
-                                        err
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                nm_err!(
-                                    "[warn] Failed to export workspace snapshot for network {}: {}",
-                                    net.id,
-                                    err
-                                );
+            // The input queues are drained into the compatibility kernel
+            // before the step. Keep an owned pre-step image so a failed
+            // durable publication can retry the exact same admission
+            // without silently losing queued causal input.
+            #[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
+            let previous_channel_state = capture_channel_state(&net);
+
+            // Sync remote spikes into runner before stepping.
+            // Use copy_from_slice instead of Array1::from_vec to reuse the existing
+            // allocation and avoid per-step heap allocation on the hot path.
+            let fwd_spikes = std::mem::take(&mut net.remote_spikes_fwd);
+            for (l, spikes) in fwd_spikes {
+                let li = l as usize;
+                if li < net.runner.last_spk_h.len() {
+                    let sz = net.runner.layer_size(li);
+                    if spikes.len() == sz {
+                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                            dst.copy_from_slice(&spikes);
+                        }
+                    } else {
+                        // Topology mismatch: resize-and-copy (rare path).
+                        let n = sz.min(spikes.len());
+                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                            dst[..n].copy_from_slice(&spikes[..n]);
+                            for v in dst[n..].iter_mut() {
+                                *v = 0;
                             }
                         }
                     }
                 }
-
-                // Auto-adjust AARNN depth down if lagging.
-                // Can be disabled to preserve configured bio depth exactly.
-                let realtime_ipc = env_flag("NM_REALTIME_IPC").unwrap_or(false);
-                let auto_adjust_depth = env_flag("NM_AUTO_AARNN_DEPTH").unwrap_or(!realtime_ipc);
-                let target_ms = std::env::var("NM_AARNN_DEPTH_TARGET_STEP_MS")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<f32>().ok())
-                    .filter(|v| v.is_finite() && *v >= 0.5)
-                    .unwrap_or(10.0);
-                let warmup_steps = std::env::var("NM_AARNN_DEPTH_WARMUP_STEPS")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                    .unwrap_or(250);
-                // A depth-zero network can remain transport-ready while
-                // producing no meaningful network output. Keep a configurable
-                // floor for output-producing workloads; operators can still
-                // set it to zero for intentionally shallow simulations.
-                let minimum_depth = std::env::var("NM_AARNN_MIN_DEPTH")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                    .unwrap_or(0)
-                    .min(net.desired_aarnn_depth as usize);
-
-                if auto_adjust_depth && net.runner.t >= warmup_steps {
-                    if net.avg_step_time_ms > target_ms
-                        && net.runner.net.aarnn_layer_depth > minimum_depth
-                    {
-                        net.runner.net.aarnn_layer_depth -= 1;
-                        nm_log!(
-                            "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
-                            node_id,
-                            net.runner.net.aarnn_layer_depth,
-                            net.id
-                        );
-                    } else if net.avg_step_time_ms < target_ms * 0.5
-                        && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize
-                    {
-                        net.runner.net.aarnn_layer_depth += 1;
+            }
+            let bwd_spikes = std::mem::take(&mut net.remote_spikes_bwd);
+            for (l, spikes) in bwd_spikes {
+                let li = l as usize;
+                if li < net.runner.last_spk_h.len() {
+                    let sz = net.runner.layer_size(li);
+                    if spikes.len() == sz {
+                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                            dst.copy_from_slice(&spikes);
+                        }
+                    } else {
+                        let n = sz.min(spikes.len());
+                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                            dst[..n].copy_from_slice(&spikes[..n]);
+                            for v in dst[n..].iter_mut() {
+                                *v = 0;
+                            }
+                        }
                     }
                 }
+            }
 
-                drop(net);
-                if !batches.is_empty() {
-                    self.send_spike_batches(&net_id, &batches, None).await;
+            let external_sensory = net.external_sensory_spikes.take();
+            #[cfg(feature = "replicated_durability")]
+            let (_out, durable_batches) = match net.step_and_commit_durable_with_outbox(
+                external_sensory.as_deref(),
+                previous_channel_state.clone(),
+                &live_outbox_peers,
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    nm_err!(
+                        "[warn] Durable managed step for network {} deferred for retry: {}",
+                        net.id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            #[cfg(not(feature = "replicated_durability"))]
+            #[cfg(feature = "superdense_executor")]
+            let out = match net.step_with_superdense(external_sensory.as_deref()) {
+                Ok(out) => out,
+                Err(error) => {
+                    restore_channel_state(&mut net, previous_channel_state.clone());
+                    nm_err!(
+                        "[warn] Superdense step for network {} deferred for retry: {}",
+                        net.id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            #[cfg(all(
+                not(feature = "replicated_durability"),
+                not(feature = "superdense_executor")
+            ))]
+            let out = if let Some(ref sensory) = external_sensory {
+                net.runner.step(Some(sensory.as_slice()))
+            } else {
+                net.runner.step(None)
+            };
+
+            #[cfg(not(feature = "replicated_durability"))]
+            let step_index = out.t as i64;
+            let net_id = net.id.clone();
+            #[cfg(feature = "replicated_durability")]
+            let batches = durable_batches;
+            #[cfg(not(feature = "replicated_durability"))]
+            let batches = managed_spike_batches(&net, step_index);
+
+            #[cfg(feature = "replicated_durability")]
+            if let Some(owner) = net.durable_owner.as_ref() {
+                match owner.authoritative_state() {
+                    Ok(state) => {
+                        if let Err(error) =
+                            net.commit_shard_step(state.committed_tag, state.state_digest)
+                        {
+                            nm_err!(
+                                "[error] Refusing network {} output after shard commit evidence failed: {}",
+                                net.id,
+                                error
+                            );
+                            continue;
+                        }
+                    }
+                    Err(error) => {
+                        nm_err!(
+                            "[error] Refusing network {} output because durable shard state cannot be read: {}",
+                            net.id,
+                            error
+                        );
+                        continue;
+                    }
                 }
             }
-            let sleep_ms = if any_playing { 1 } else { 20 };
+
+            let elapsed = step_start.elapsed().as_secs_f32() * 1000.0;
+            if net.avg_step_time_ms == 0.0 {
+                net.avg_step_time_ms = elapsed;
+            } else {
+                net.avg_step_time_ms = 0.9 * net.avg_step_time_ms + 0.1 * elapsed;
+            }
+
+            let autosave_job = if let Some(binding) = net.workspace_binding.as_ref() {
+                let autosave_steps = binding.autosave_steps.max(1) as usize;
+                if autosave_steps == 1 || net.runner.t % autosave_steps == 0 {
+                    match local_shard_snapshot(&net) {
+                        Ok((snapshot_json, _, committed_step, _)) => Some(WorkspaceAutosaveJob {
+                            binding: binding.clone(),
+                            snapshot_json,
+                            committed_step,
+                        }),
+                        Err(err) => {
+                            nm_err!(
+                                "[warn] Failed to export workspace snapshot for network {}: {}",
+                                net.id,
+                                err
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Auto-adjust AARNN depth down if lagging.
+            // Can be disabled to preserve configured bio depth exactly.
+            let realtime_ipc = env_flag("NM_REALTIME_IPC").unwrap_or(false);
+            let auto_adjust_depth = env_flag("NM_AUTO_AARNN_DEPTH").unwrap_or(!realtime_ipc);
+            let target_ms = std::env::var("NM_AARNN_DEPTH_TARGET_STEP_MS")
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.5)
+                .unwrap_or(10.0);
+            let warmup_steps = std::env::var("NM_AARNN_DEPTH_WARMUP_STEPS")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(250);
+            // A depth-zero network can remain transport-ready while
+            // producing no meaningful network output. Keep a configurable
+            // floor for output-producing workloads; operators can still
+            // set it to zero for intentionally shallow simulations.
+            let minimum_depth = std::env::var("NM_AARNN_MIN_DEPTH")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(net.desired_aarnn_depth as usize);
+
+            if auto_adjust_depth && net.runner.t >= warmup_steps {
+                if net.avg_step_time_ms > target_ms
+                    && net.runner.net.aarnn_layer_depth > minimum_depth
+                {
+                    net.runner.net.aarnn_layer_depth -= 1;
+                    nm_log!(
+                        "[info] Node {} auto-adjusting AARNN depth down to {} for network {}",
+                        node_id,
+                        net.runner.net.aarnn_layer_depth,
+                        net.id
+                    );
+                } else if net.avg_step_time_ms < target_ms * 0.5
+                    && net.runner.net.aarnn_layer_depth < net.desired_aarnn_depth as usize
+                {
+                    net.runner.net.aarnn_layer_depth += 1;
+                }
+            }
+
+            drop(net);
+            if let Some(job) = autosave_job {
+                if autosave_tx.send(job).await.is_err() {
+                    nm_err!(
+                        "[warn] Workspace autosave writer closed for network {}; committed snapshot was not published",
+                        net_id
+                    );
+                }
+            }
+            if !batches.is_empty() {
+                if output_tx.send(batches).await.is_err() {
+                    nm_err!(
+                        "[warn] Output queue closed for network {}; committed output was not forwarded",
+                        net_id
+                    );
+                    break;
+                }
+            }
             tokio::select! {
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() { break; }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(sleep_ms)) => {}
+                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
             }
         }
-        nm_log!("[info] Node {} simulation loop stopped", node_id);
+        nm_log!(
+            "[info] Network {} worker stopped on node {}",
+            network_id,
+            node_id
+        );
     }
 }
 

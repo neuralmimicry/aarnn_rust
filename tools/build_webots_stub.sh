@@ -18,10 +18,10 @@ esac
 
 echo "==> Building Rust cdylib (profile=$profile, features=ffi_bridge)"
 if [[ "$profile" == "release" ]]; then
-  cargo build --release --features ffi_bridge
+  cargo build --release --all-features
   OUT_DIR="target/release"
 else
-  cargo build --features ffi_bridge
+  cargo build --all-features
   OUT_DIR="target/debug"
 fi
 

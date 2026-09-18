@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class RemoteConnectionState { Idle, Connecting, Connected, Error }
 
@@ -24,8 +25,10 @@ class RemoteConnectionController : AutoCloseable {
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+    @Volatile
     private var client: RemoteAarnnClient? = null
     private var refreshScheduled = false
+    private val refreshInFlight = AtomicBoolean(false)
 
     fun connect(endpoint: String, virtualHost: String, username: String, password: String) {
         if (endpoint.isBlank() || virtualHost.isBlank() || username.isBlank() || password.isBlank()) {
@@ -61,23 +64,28 @@ class RemoteConnectionController : AutoCloseable {
     }
 
     fun refresh() {
+        if (!refreshInFlight.compareAndSet(false, true)) return
         executor.execute {
-            val activeClient = client ?: return@execute
-            val workspaceId = uiState.snapshot?.summary?.workspaceId
-            runCatching { activeClient.loadWorkspace(workspaceId) }
-                .onSuccess { snapshot ->
-                    post {
-                        uiState = uiState.copy(
-                            state = RemoteConnectionState.Connected,
-                            snapshot = snapshot,
-                            error = null,
-                            lastUpdatedMs = System.currentTimeMillis(),
-                        )
+            try {
+                val activeClient = client ?: return@execute
+                val workspaceId = uiState.snapshot?.summary?.workspaceId
+                runCatching { activeClient.loadWorkspace(workspaceId) }
+                    .onSuccess { snapshot ->
+                        post {
+                            uiState = uiState.copy(
+                                state = RemoteConnectionState.Connected,
+                                snapshot = snapshot,
+                                error = null,
+                                lastUpdatedMs = System.currentTimeMillis(),
+                            )
+                        }
                     }
-                }
-                .onFailure { error ->
-                    post { uiState = uiState.copy(error = error.message ?: "Refresh failed") }
-                }
+                    .onFailure { error ->
+                        post { uiState = uiState.copy(error = error.message ?: "Refresh failed") }
+                    }
+            } finally {
+                refreshInFlight.set(false)
+            }
         }
     }
 

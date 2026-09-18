@@ -73,7 +73,9 @@ on:
         default: false
 
 # Push-triggered container jobs publish the immutable SHA manifests used by
-# the deployment roles; manual dispatch remains verification/release-only.
+# the deployment roles, promote the main branch's node image to the developer
+# blue track, and then create the next patch version tag. Manual dispatch keeps
+# the existing explicit promotion and version-bump controls.
 
 permissions:
   contents: read
@@ -1261,7 +1263,15 @@ jobs:
 
   container-promote:
     name: Container Promote
-    if: github.event_name == 'workflow_dispatch' && inputs.environment != ''
+    needs: container-manifest
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' &&
+         github.ref == 'refs/heads/main' &&
+         needs.container-manifest.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment != '')
+      )
     runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
@@ -1298,7 +1308,7 @@ jobs:
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${{ inputs.build_id || github.sha }}"
           workload="${{ inputs.container_workload || 'node' }}"
-          env_name="${{ inputs.environment }}"
+          env_name="${{ inputs.environment || 'developer' }}"
           track="${{ inputs.track || 'blue' }}"
           target="${image}:${env_name}-${track}"
           podman manifest rm "${target}" >/dev/null 2>&1 || true
@@ -1310,7 +1320,16 @@ jobs:
 
   version-bump:
     name: Version Bump and Tag
-    if: github.event_name == 'workflow_dispatch' && inputs.run_version_bump
+    needs: container-promote
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' &&
+         github.ref == 'refs/heads/main' &&
+         needs.container-promote.result == 'success' &&
+         !startsWith(github.event.head_commit.message, 'chore: bump version ')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.run_version_bump)
+      )
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write

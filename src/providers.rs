@@ -25,6 +25,78 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[cfg(feature = "ui")]
+const MAX_VIDEO_PREVIEW_PIXELS: usize = 640 * 480;
+
+/// Latest decoded frame retained for an input preview. This is deliberately
+/// separate from sensory admission: pixels are display state and carry no
+/// biological timestamp or causal authority.
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug)]
+pub struct VideoPreviewFrame {
+    pub width: usize,
+    pub height: usize,
+    pub rgb: Vec<u8>,
+    pub sequence: u64,
+}
+
+#[cfg(feature = "ui")]
+pub type VideoPreviewStore = Arc<Mutex<Option<VideoPreviewFrame>>>;
+
+#[cfg(feature = "ui")]
+pub fn new_video_preview_store() -> VideoPreviewStore {
+    Arc::new(Mutex::new(None))
+}
+
+#[cfg(feature = "ui")]
+fn publish_video_preview(store: &VideoPreviewStore, width: usize, height: usize, rgb: &[u8]) {
+    let Some(source_pixels) = width.checked_mul(height) else {
+        return;
+    };
+    let Some(source_bytes) = source_pixels.checked_mul(3) else {
+        return;
+    };
+    if width == 0 || height == 0 || rgb.len() < source_bytes {
+        return;
+    }
+    let scale = if source_pixels > MAX_VIDEO_PREVIEW_PIXELS {
+        (source_pixels as f64 / MAX_VIDEO_PREVIEW_PIXELS as f64).sqrt()
+    } else {
+        1.0
+    };
+    let mut out_width = ((width as f64) / scale).floor().max(1.0) as usize;
+    let mut out_height = ((height as f64) / scale).floor().max(1.0) as usize;
+    while out_width.saturating_mul(out_height) > MAX_VIDEO_PREVIEW_PIXELS {
+        if out_width >= out_height {
+            out_width = out_width.saturating_sub(1).max(1);
+        } else {
+            out_height = out_height.saturating_sub(1).max(1);
+        }
+    }
+    let mut out = vec![0u8; out_width.saturating_mul(out_height).saturating_mul(3)];
+    for y in 0..out_height {
+        let source_y = y.saturating_mul(height) / out_height;
+        for x in 0..out_width {
+            let source_x = x.saturating_mul(width) / out_width;
+            let source = (source_y * width + source_x) * 3;
+            let target = (y * out_width + x) * 3;
+            out[target..target + 3].copy_from_slice(&rgb[source..source + 3]);
+        }
+    }
+    if let Ok(mut current) = store.lock() {
+        let sequence = current
+            .as_ref()
+            .map(|frame| frame.sequence.saturating_add(1))
+            .unwrap_or(1);
+        *current = Some(VideoPreviewFrame {
+            width: out_width,
+            height: out_height,
+            rgb: out,
+            sequence,
+        });
+    }
+}
+
+#[cfg(feature = "ui")]
 use rustfft::{FftPlanner, num_complex::Complex32};
 
 #[cfg(feature = "ui")]
@@ -87,6 +159,49 @@ pub fn list_microphone_devices() -> anyhow::Result<Vec<MicrophoneDeviceInfo>> {
             name,
         });
     }
+    Ok(result)
+}
+
+/// Stable, operator-facing description of an available camera.
+///
+/// Nokhwa may expose a numeric or backend-specific string identity.  Keep the
+/// identity as a string so a refresh never collapses two cameras that happen
+/// to have the same display name and so macOS/Windows backends retain their
+/// native device key.
+#[cfg(feature = "webcam_input")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebcamDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub misc: String,
+}
+
+/// Enumerate all cameras currently visible to Nokhwa.
+#[cfg(feature = "webcam_input")]
+pub fn list_webcam_devices() -> anyhow::Result<Vec<WebcamDeviceInfo>> {
+    use nokhwa::utils::ApiBackend;
+
+    let cameras = nokhwa::query(ApiBackend::Auto)
+        .map_err(|error| anyhow::anyhow!("failed to enumerate webcam devices: {error}"))?;
+    let mut result = Vec::with_capacity(cameras.len());
+    for camera in cameras {
+        let id = camera.index().as_string();
+        if result.iter().any(|entry: &WebcamDeviceInfo| entry.id == id) {
+            continue;
+        }
+        result.push(WebcamDeviceInfo {
+            name: camera.human_name(),
+            description: camera.description().to_owned(),
+            misc: camera.misc(),
+            id,
+        });
+    }
+    result.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.name.cmp(&right.name))
+    });
     Ok(result)
 }
 
@@ -258,7 +373,7 @@ impl AudioFileProvider {
         use symphonia::core::io::MediaSourceStream;
         use symphonia::core::meta::MetadataOptions;
         use symphonia::core::probe::Hint;
-        use symphonia::default::get_probe;
+        use symphonia::default::{get_codecs, get_probe};
 
         anyhow::ensure!(
             num_sensory_neurons > 0,
@@ -279,14 +394,25 @@ impl AudioFileProvider {
             &MetadataOptions::default(),
         )?;
         let mut format = probed.format;
+        let codecs = get_codecs();
+        // A video container commonly has a video default track and an audio
+        // track. Prefer an audio-bearing track so the same provider can be
+        // paired with VideoFileProvider without requiring a second file. The
+        // codec registry check is essential: some containers expose audio-like
+        // metadata on their video track, which must never be sent to an audio
+        // decoder.
         let track = format
-            .default_track()
-            .ok_or_else(|| anyhow::anyhow!("No default track"))?;
+            .tracks()
+            .iter()
+            .find(|track| {
+                track.codec_params.sample_rate.is_some()
+                    && codecs.get_codec(track.codec_params.codec).is_some()
+            })
+            .ok_or_else(|| anyhow::anyhow!("No decodable audio track"))?;
         // Extract required fields to avoid holding an immutable borrow of `format` during the read loop.
         let track_id = track.id;
         let codec_params = track.codec_params.clone();
-        let mut decoder =
-            symphonia::default::get_codecs().make(&codec_params, &DecoderOptions::default())?;
+        let mut decoder = codecs.make(&codec_params, &DecoderOptions::default())?;
         let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| anyhow::anyhow!("Unknown sample rate"))?;
@@ -478,6 +604,60 @@ impl SensoryProvider for AudioFileProvider {
         }
         self.num_sensory_neurons = n_s;
         self.mapper.set_n_s(n_s);
+    }
+}
+
+/// Combines one visual provider and one audio provider at the same sensory
+/// boundary.  Visual and audio spikes are merged deterministically and the
+/// audio bands remain available to the Graphic EQ.  The preview frame stays
+/// owned by the visual provider and is never used as audio or timing input.
+#[cfg(feature = "ui")]
+pub struct CombinedVideoAudioProvider {
+    video: Box<dyn SensoryProvider + Send>,
+    audio: Box<dyn SensoryProvider + Send>,
+}
+
+#[cfg(feature = "ui")]
+impl CombinedVideoAudioProvider {
+    pub fn new(
+        video: Box<dyn SensoryProvider + Send>,
+        audio: Box<dyn SensoryProvider + Send>,
+    ) -> Self {
+        Self { video, audio }
+    }
+}
+
+#[cfg(feature = "ui")]
+impl SensoryProvider for CombinedVideoAudioProvider {
+    fn next_spikes(&mut self) -> Vec<i8> {
+        let mut visual = self.video.next_spikes();
+        let audio = self.audio.next_spikes();
+        if visual.len() < audio.len() {
+            visual.resize(audio.len(), 0);
+        }
+        for (visual_spike, audio_spike) in visual.iter_mut().zip(audio.iter()) {
+            *visual_spike = (*visual_spike).max(*audio_spike);
+        }
+        visual
+    }
+
+    fn last_bands(&self) -> Option<&[f32]> {
+        self.audio.last_bands()
+    }
+
+    fn stop(&mut self) {
+        self.video.stop();
+        self.audio.stop();
+    }
+
+    fn set_num_sensory_neurons(&mut self, n_s: usize) {
+        self.video.set_num_sensory_neurons(n_s);
+        self.audio.set_num_sensory_neurons(n_s);
+    }
+
+    fn set_dt(&mut self, dt_ms: f32) {
+        self.video.set_dt(dt_ms);
+        self.audio.set_dt(dt_ms);
     }
 }
 
@@ -987,6 +1167,7 @@ pub struct VideoFileProvider {
     threshold: f32,
     invert: bool,
     use_max: bool,
+    preview: Option<VideoPreviewStore>,
 }
 
 #[cfg(all(feature = "ui", feature = "video_input", not(target_arch = "aarch64")))]
@@ -995,6 +1176,15 @@ impl VideoFileProvider {
         path: &std::path::Path,
         num_sensory_neurons: usize,
         loop_on_eof: bool,
+    ) -> anyhow::Result<Self> {
+        Self::from_path_with_preview(path, num_sensory_neurons, loop_on_eof, None)
+    }
+
+    pub fn from_path_with_preview(
+        path: &std::path::Path,
+        num_sensory_neurons: usize,
+        loop_on_eof: bool,
+        preview: Option<VideoPreviewStore>,
     ) -> anyhow::Result<Self> {
         use opencv::prelude::*;
         let cap = opencv::videoio::VideoCapture::from_file(
@@ -1011,10 +1201,11 @@ impl VideoFileProvider {
             threshold: 0.5,
             invert: false,
             use_max: true,
+            preview,
         })
     }
 
-    fn read_gray(&mut self) -> anyhow::Result<(Vec<f32>, usize, usize)> {
+    fn read_gray(&mut self) -> anyhow::Result<(Vec<f32>, usize, usize, Vec<u8>)> {
         use opencv::prelude::VideoCaptureTrait;
         use opencv::prelude::*;
         let mut frame = opencv::core::Mat::default();
@@ -1025,7 +1216,7 @@ impl VideoFileProvider {
             }
         }
         if frame.empty() {
-            return Ok((Vec::new(), 0, 0));
+            return Ok((Vec::new(), 0, 0, Vec::new()));
         }
         let size = frame.size()?;
         let w = size.width as usize;
@@ -1033,9 +1224,11 @@ impl VideoFileProvider {
         let channels = frame.channels();
         let data_u8 = frame.data_bytes()?;
         let mut out = vec![0.0f32; w * h];
+        let mut rgb = vec![0u8; w.saturating_mul(h).saturating_mul(3)];
         if channels == 1 {
             for i in 0..(w * h) {
                 out[i] = data_u8[i] as f32 / 255.0;
+                rgb[i * 3..i * 3 + 3].fill(data_u8[i]);
             }
         } else {
             // Assume BGR
@@ -1047,10 +1240,12 @@ impl VideoFileProvider {
                     let g = data_u8[idx + 1] as f32;
                     let r = data_u8[idx + 2] as f32;
                     out[y * w + x] = (0.114 * b + 0.587 * g + 0.299 * r) / 255.0;
+                    let rgb_idx = (y * w + x) * 3;
+                    rgb[rgb_idx..rgb_idx + 3].copy_from_slice(&[r as u8, g as u8, b as u8]);
                 }
             }
         }
-        Ok((out, w, h))
+        Ok((out, w, h, rgb))
     }
 
     fn resample_cols(gray: &[f32], w: usize, h: usize, target: usize, use_max: bool) -> Vec<f32> {
@@ -1095,12 +1290,15 @@ impl VideoFileProvider {
 #[cfg(all(feature = "ui", feature = "video_input", not(target_arch = "aarch64")))]
 impl SensoryProvider for VideoFileProvider {
     fn next_spikes(&mut self) -> Vec<i8> {
-        let (gray, w, h) = match self.read_gray() {
+        let (gray, w, h, rgb) = match self.read_gray() {
             Ok(t) => t,
-            Err(_) => (Vec::new(), 0, 0),
+            Err(_) => (Vec::new(), 0, 0, Vec::new()),
         };
         if gray.is_empty() {
             return vec![0; self.num_sensory_neurons];
+        }
+        if let Some(preview) = &self.preview {
+            publish_video_preview(preview, w, h, &rgb);
         }
         let vals = Self::resample_cols(
             &gray,
@@ -1125,6 +1323,7 @@ impl SensoryProvider for VideoFileProvider {
 #[cfg(all(feature = "ui", feature = "video_input", target_arch = "aarch64"))]
 pub struct VideoFileProvider {
     num_sensory_neurons: usize,
+    preview: Option<VideoPreviewStore>,
 }
 
 #[cfg(all(feature = "ui", feature = "video_input", target_arch = "aarch64"))]
@@ -1137,6 +1336,15 @@ impl VideoFileProvider {
         Err(anyhow::anyhow!(
             "video_input via OpenCV is not supported on arm64 in this build; use image_input or webcam_input"
         ))
+    }
+
+    pub fn from_path_with_preview(
+        path: &std::path::Path,
+        num_sensory_neurons: usize,
+        loop_on_eof: bool,
+        _preview: Option<VideoPreviewStore>,
+    ) -> anyhow::Result<Self> {
+        Self::from_path(path, num_sensory_neurons, loop_on_eof)
     }
 }
 
@@ -1159,6 +1367,7 @@ pub struct WebcamCaptureProvider {
     threshold: f32,
     invert: bool,
     use_max: bool,
+    preview: Option<VideoPreviewStore>,
 }
 
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
@@ -1169,6 +1378,22 @@ unsafe impl Sync for WebcamCaptureProvider {}
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 impl WebcamCaptureProvider {
     pub fn new(index: u32, num_sensory_neurons: usize) -> anyhow::Result<Self> {
+        Self::new_with_device_id(&index.to_string(), num_sensory_neurons, None)
+    }
+
+    pub fn new_with_preview(
+        index: u32,
+        num_sensory_neurons: usize,
+        preview: Option<VideoPreviewStore>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_device_id(&index.to_string(), num_sensory_neurons, preview)
+    }
+
+    pub fn new_with_device_id(
+        device_id: &str,
+        num_sensory_neurons: usize,
+        preview: Option<VideoPreviewStore>,
+    ) -> anyhow::Result<Self> {
         use nokhwa::{
             Camera,
             pixel_format::RgbFormat,
@@ -1176,7 +1401,11 @@ impl WebcamCaptureProvider {
         };
         let requested =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-        let mut cam = Camera::new(CameraIndex::Index(index), requested)?;
+        let camera_index = device_id
+            .parse::<u32>()
+            .map(CameraIndex::Index)
+            .unwrap_or_else(|_| CameraIndex::String(device_id.to_owned()));
+        let mut cam = Camera::new(camera_index, requested)?;
         cam.open_stream()?;
         Ok(Self {
             num_sensory_neurons: num_sensory_neurons,
@@ -1184,6 +1413,7 @@ impl WebcamCaptureProvider {
             threshold: 0.5,
             invert: false,
             use_max: true,
+            preview,
         })
     }
 }
@@ -1235,6 +1465,23 @@ impl SensoryProvider for WebcamCaptureProvider {
             }
         } else {
             // Unknown format; fallback to zeros of correct length
+        }
+        if let Some(preview) = &self.preview {
+            let mut rgb = vec![0u8; pixels.saturating_mul(3)];
+            if len >= pixels.saturating_mul(3) && pixels > 0 {
+                let stride = len / pixels;
+                for index in 0..pixels {
+                    let source = index * stride;
+                    let target = index * 3;
+                    rgb[target..target + 3].copy_from_slice(&buf[source..source + 3]);
+                }
+            } else {
+                for (index, value) in gray.iter().copied().enumerate() {
+                    let value = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    rgb[index * 3..index * 3 + 3].fill(value);
+                }
+            }
+            publish_video_preview(preview, w, h, &rgb);
         }
         // Downsample
         let mut col_vals = vec![0.0f32; w];
@@ -1293,7 +1540,10 @@ impl SensoryProvider for WebcamCaptureProvider {
 
 #[cfg(all(test, feature = "ui"))]
 mod tests {
-    use super::{AudioFileProvider, SensoryProvider, list_microphone_devices};
+    use super::{
+        AudioFileProvider, CombinedVideoAudioProvider, SensoryProvider, list_microphone_devices,
+        new_video_preview_store, publish_video_preview,
+    };
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -1352,6 +1602,22 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "webcam_input")]
+    #[test]
+    fn webcam_enumeration_is_stable_or_reports_an_explicit_error() {
+        match super::list_webcam_devices() {
+            Ok(devices) => {
+                let mut ids = std::collections::HashSet::new();
+                for device in &devices {
+                    assert!(!device.id.is_empty());
+                    assert!(ids.insert(device.id.clone()), "duplicate webcam ID");
+                }
+                eprintln!("webcam devices: {}", devices.len());
+            }
+            Err(error) => assert!(!error.to_string().trim().is_empty()),
+        }
+    }
+
     #[test]
     fn audio_provider_decodes_eq_and_emits_repeatable_spikes() {
         let samples: Vec<i16> = (0..8_192)
@@ -1386,6 +1652,38 @@ mod tests {
             "the EQ must expose decoded spectral energy"
         );
         assert!(saw_spike, "non-silent audio must drive sensory spikes");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_provider_decodes_audio_track_from_mp4_video() {
+        let path = std::env::temp_dir().join(format!(
+            "aarnn-provider-video-audio-{}-{}.mp4",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(
+            &path,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/video-with-audio.mp4"
+            )),
+        )
+        .expect("write MP4 fixture");
+
+        let mut provider =
+            AudioFileProvider::from_path(&path, 64).expect("select and decode the MP4 audio track");
+        assert_eq!(provider.sample_rate(), 8_000);
+        assert!(provider.sample_count() > 0);
+        let spikes = provider.next_spikes();
+        assert_eq!(spikes.len(), 64);
+        assert!(
+            provider
+                .last_bands()
+                .unwrap()
+                .iter()
+                .any(|&band| band.is_finite() && band > 0.0)
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1428,5 +1726,53 @@ mod tests {
         };
         assert!(error.to_string().contains("supports at most"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn video_preview_store_keeps_one_bounded_latest_frame() {
+        let store = new_video_preview_store();
+        let rgb = vec![127u8; 1_000 * 1_000 * 3];
+        publish_video_preview(&store, 1_000, 1_000, &rgb);
+        let first = store.lock().unwrap().clone().expect("preview frame");
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.rgb.len(), first.width * first.height * 3);
+        assert!(first.width * first.height <= super::MAX_VIDEO_PREVIEW_PIXELS);
+
+        publish_video_preview(&store, 2, 1, &[1, 2, 3, 4, 5, 6]);
+        let second = store.lock().unwrap().clone().expect("latest preview frame");
+        assert_eq!(second.sequence, 2);
+        assert_eq!((second.width, second.height), (2, 1));
+        assert_eq!(second.rgb, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn combined_video_audio_provider_exposes_audio_bands_and_merges_spikes() {
+        struct FixtureProvider {
+            spikes: Vec<i8>,
+            bands: Option<Vec<f32>>,
+        }
+
+        impl SensoryProvider for FixtureProvider {
+            fn next_spikes(&mut self) -> Vec<i8> {
+                self.spikes.clone()
+            }
+
+            fn last_bands(&self) -> Option<&[f32]> {
+                self.bands.as_deref()
+            }
+        }
+
+        let mut provider = CombinedVideoAudioProvider::new(
+            Box::new(FixtureProvider {
+                spikes: vec![1, 0, 0],
+                bands: None,
+            }),
+            Box::new(FixtureProvider {
+                spikes: vec![0, 1, 0],
+                bands: Some(vec![0.25, 0.75]),
+            }),
+        );
+        assert_eq!(provider.next_spikes(), vec![1, 1, 0]);
+        assert_eq!(provider.last_bands(), Some(&[0.25, 0.75][..]));
     }
 }

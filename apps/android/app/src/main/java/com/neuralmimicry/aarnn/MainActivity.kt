@@ -1,6 +1,17 @@
 package com.neuralmimicry.aarnn
 
+import android.Manifest
+import android.content.Context
+import android.hardware.Camera
+import android.net.Uri
 import android.os.Bundle
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.ViewGroup
+import android.widget.MediaController
+import android.widget.VideoView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
@@ -31,6 +42,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -42,6 +56,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -51,6 +68,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,6 +77,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
@@ -76,15 +95,130 @@ class MainActivity : ComponentActivity() {
 
 private enum class AarnnTab { Dashboard, Graph, Account }
 
+@Suppress("DEPRECATION")
+private class CameraPreviewSurface(context: Context, private val cameraIndex: Int) : SurfaceView(context), SurfaceHolder.Callback {
+    private var camera: Camera? = null
+
+    init {
+        holder.addCallback(this)
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        runCatching {
+            camera = Camera.open(cameraIndex).also { opened ->
+                opened.setPreviewDisplay(holder)
+                opened.startPreview()
+            }
+        }
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        camera?.let { opened ->
+            runCatching {
+                opened.stopPreview()
+                opened.setPreviewDisplay(holder)
+                opened.startPreview()
+            }
+        }
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        camera?.let { opened ->
+            runCatching {
+                opened.stopPreview()
+                opened.release()
+            }
+        }
+        camera = null
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun availableCameraCount(): Int = runCatching { Camera.getNumberOfCameras() }.getOrDefault(0)
+
+@Composable
+private fun VideoPreviewDialog(mode: String, videoUri: String?, cameraIndex: Int, audioEnabled: Boolean, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(18.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFF071018),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("AARNN video input", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
+                if (mode == "camera") {
+                    AndroidView(
+                        factory = { context -> CameraPreviewSurface(context, cameraIndex) },
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                } else if (videoUri != null) {
+                    AndroidView(
+                        factory = { context ->
+                            VideoView(context).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                )
+                                setVideoURI(Uri.parse(videoUri))
+                                setMediaController(MediaController(context))
+                                setOnPreparedListener { player -> player.isLooping = true; start() }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                } else {
+                    Text("Choose a video file or grant camera access to open a preview.", color = Color(0xFFB7C7E5))
+                }
+                Text(
+                    if (audioEnabled) {
+                        "Audio companion selected • Graphic EQ unavailable until governed spectral bands are exposed. Preview pixels remain display state."
+                    } else {
+                        "Preview pixels are display state; governed sensory admission remains separately authorised."
+                    },
+                    color = Color(0xFF8294B7),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AarnnRemoteScreen() {
     val controller = remember { RemoteConnectionController() }
+    val context = LocalContext.current
     var endpoint by rememberSaveable { mutableStateOf("http://192.168.1.2") }
     var virtualHost by rememberSaveable { mutableStateOf("aarnn.neuralmimicry.ai") }
     var username by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var selectedTab by rememberSaveable { mutableIntStateOf(AarnnTab.Dashboard.ordinal) }
+    var videoUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var videoSource by rememberSaveable { mutableStateOf<String?>(null) }
+    var videoPreviewOpen by rememberSaveable { mutableStateOf(false) }
+    var selectedCameraIndex by rememberSaveable { mutableIntStateOf(0) }
+    var cameraCount by rememberSaveable { mutableIntStateOf(availableCameraCount()) }
+    var videoAudioEnabled by rememberSaveable { mutableStateOf(false) }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            videoUri = uri.toString()
+            videoSource = "video-file"
+            videoPreviewOpen = true
+        }
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            videoSource = "camera"
+            videoPreviewOpen = true
+        }
+    }
+    val audioPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        videoAudioEnabled = granted
+    }
     val state = controller.uiState
 
     DisposableEffect(controller) { onDispose { controller.close() } }
@@ -143,6 +277,30 @@ private fun AarnnRemoteScreen() {
                     onOpenAccount = { selectedTab = AarnnTab.Account.ordinal },
                     onOpenGraph = { selectedTab = AarnnTab.Graph.ordinal },
                     onRefresh = controller::refresh,
+                    videoSource = videoSource,
+                    onChooseVideo = { videoPicker.launch("video/*") },
+                    onOpenCamera = {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            videoSource = "camera"
+                            videoPreviewOpen = true
+                        } else {
+                            cameraPermission.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                    cameraCount = cameraCount,
+                    selectedCameraIndex = selectedCameraIndex,
+                    onSelectCamera = { selectedCameraIndex = it },
+                    onRefreshCameras = { cameraCount = availableCameraCount() },
+                    videoAudioEnabled = videoAudioEnabled,
+                    onVideoAudioEnabledChange = { enabled ->
+                        if (enabled && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            videoAudioEnabled = enabled
+                        }
+                    },
+                    canPopOutVideo = videoSource != null,
+                    onPopOutVideo = { videoPreviewOpen = videoSource != null },
                 )
             } else if (selectedTab == AarnnTab.Graph.ordinal) {
                 GraphExplorerScreen(
@@ -173,6 +331,15 @@ private fun AarnnRemoteScreen() {
                 )
             }
         }
+        if (videoPreviewOpen) {
+            VideoPreviewDialog(
+                videoSource ?: "none",
+                videoUri,
+                selectedCameraIndex,
+                videoAudioEnabled,
+                onDismiss = { videoPreviewOpen = false },
+            )
+        }
     }
 }
 
@@ -183,6 +350,17 @@ private fun DashboardScreen(
     onOpenAccount: () -> Unit,
     onOpenGraph: () -> Unit,
     onRefresh: () -> Unit,
+    videoSource: String?,
+    onChooseVideo: () -> Unit,
+    onOpenCamera: () -> Unit,
+    cameraCount: Int,
+    selectedCameraIndex: Int,
+    onSelectCamera: (Int) -> Unit,
+    onRefreshCameras: () -> Unit,
+    videoAudioEnabled: Boolean,
+    onVideoAudioEnabledChange: (Boolean) -> Unit,
+    canPopOutVideo: Boolean,
+    onPopOutVideo: () -> Unit,
 ) {
     val snapshot = state.snapshot
     LazyColumn(
@@ -196,6 +374,21 @@ private fun DashboardScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { DashboardIntro(snapshot, state.state, onOpenAccount) }
+        item {
+            VideoInputCard(
+                videoSource = videoSource,
+                onChooseVideo = onChooseVideo,
+                onOpenCamera = onOpenCamera,
+                cameraCount = cameraCount,
+                selectedCameraIndex = selectedCameraIndex,
+                onSelectCamera = onSelectCamera,
+                onRefreshCameras = onRefreshCameras,
+                videoAudioEnabled = videoAudioEnabled,
+                onVideoAudioEnabledChange = onVideoAudioEnabledChange,
+                canPopOutVideo = canPopOutVideo,
+                onPopOutVideo = onPopOutVideo,
+            )
+        }
         if (snapshot == null) {
             item { EmptyDashboard(state, onOpenAccount) }
         } else {
@@ -204,6 +397,75 @@ private fun DashboardScreen(
             item { NeuralActivityCard(snapshot, onOpenGraph) }
             item { LayerActivityCard(snapshot) }
             item { DistributedNodesCard(snapshot) }
+        }
+    }
+}
+
+@Composable
+private fun VideoInputCard(
+    videoSource: String?,
+    onChooseVideo: () -> Unit,
+    onOpenCamera: () -> Unit,
+    cameraCount: Int,
+    selectedCameraIndex: Int,
+    onSelectCamera: (Int) -> Unit,
+    onRefreshCameras: () -> Unit,
+    videoAudioEnabled: Boolean,
+    onVideoAudioEnabledChange: (Boolean) -> Unit,
+    canPopOutVideo: Boolean,
+    onPopOutVideo: () -> Unit,
+) {
+    var cameraMenuExpanded by remember { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Video input", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                when (videoSource) {
+                    "video-file" -> "Selected video-file source is ready for preview."
+                    "camera" -> "Selected camera source is ready for preview."
+                    else -> "Choose a video file or camera preview. Source names match Rust UI, web and CLI: video-file and camera."
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onChooseVideo, modifier = Modifier.weight(1f)) { Text("Video file") }
+                OutlinedButton(onClick = onOpenCamera, modifier = Modifier.weight(1f)) { Text("Camera") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Box {
+                    OutlinedButton(onClick = { cameraMenuExpanded = true }, enabled = cameraCount > 0) {
+                        Text(if (cameraCount > 0) "Camera ${selectedCameraIndex + 1}" else "No cameras")
+                    }
+                    DropdownMenu(expanded = cameraMenuExpanded, onDismissRequest = { cameraMenuExpanded = false }) {
+                        repeat(cameraCount) { index ->
+                            DropdownMenuItem(
+                                text = { Text("Camera ${index + 1}") },
+                                onClick = {
+                                    onSelectCamera(index)
+                                    cameraMenuExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+                TextButton(onClick = onRefreshCameras) { Text("Refresh") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = videoAudioEnabled, onCheckedChange = onVideoAudioEnabledChange)
+                Text("Include microphone audio")
+            }
+            Text(
+                if (videoAudioEnabled) "Audio companion selected • Graphic EQ unavailable until governed spectral bands are exposed."
+                else "Camera and microphone remain separate permissions.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Button(
+                onClick = onPopOutVideo,
+                enabled = canPopOutVideo,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Pop out video") }
         }
     }
 }

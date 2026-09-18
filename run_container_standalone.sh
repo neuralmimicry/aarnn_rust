@@ -23,6 +23,7 @@ RUN_ARGS=(
 PODMAN_ARGS=(
     --rm
     --name "aarnn-standalone-$(date +%s)"
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
     -v "${OUTPUT_DIR}:/app/outputs:Z"
     -v "${LOG_DIR}:/app/logs:Z"
 )

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
+
 # Kill any existing instances of the demo
 pkill -f aarnn_rust || true
 

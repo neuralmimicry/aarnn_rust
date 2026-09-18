@@ -39,6 +39,69 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [x] `2026-09-18` Implemented the Webots runtime/performance pass. Webots
+  launchers now use the explicit `engine_runtime,ui,robot_io,cuda` profile by
+  default and accept `--all-features` (or `NM_WEBOTS_RUNTIME_FEATURES=all`) as
+  an opt-in. The shared shell/Python profile helpers gate local management TLS
+  provisioning on `management_v1`, preventing plaintext explicit binaries from
+  receiving TLS client settings. Distributed simulation now has a supervisor
+  with one stepping task per hosted network, bounded per-network output queues,
+  and independent output sender tasks. Workspace autosave captures owned JSON
+  after the committed boundary and publishes it through a bounded background
+  writer outside the network lock. Explicit and all-feature Cargo checks,
+  launcher contract tests, shell/Python syntax and whitespace checks passed.
+  Queue capacities are configurable with
+  `NM_NETWORK_OUTPUT_QUEUE_CAPACITY` and
+  `NM_WORKSPACE_AUTOSAVE_QUEUE_CAPACITY`; committed queue sends await capacity
+  and do not use lossy `try_send`.
+- [x] `2026-09-18` Fixed a launcher argument transport defect found by the
+  explicit C. elegans CLI path. `webots_cargo_profile_args` emitted a
+  multi-line fragment, while its callers consumed only the first line with
+  `read -a`; Cargo therefore saw `--no-default-features` without
+  `engine_runtime`/Rayon and failed on `into_par_iter`. The helper now emits
+  the explicit Cargo arguments on one line. The release build of both Webots
+  binaries and the 12 launcher contract tests pass.
+- [x] `2026-09-18` Fixed the Webots lifetime asymmetry exposed by the CLI run.
+  `run_webot.sh` now supervises local orchestrator, node, worker, bridge and
+  UDS neural processes while Webots is running. A live C. elegans probe
+  terminated `nn_uds_server`; the launcher reported the supervised role and
+  status, stopped Webots through the existing cleanup path, returned status 1,
+  and left no Webots/controller/UDS processes behind.
+
+- [x] `2026-09-18` Investigated reports that neurons moved before the native UI
+  Start control was pressed. The simulation thread's `playing=false` gate was
+  correct: no `Runner::step` call occurs and the displayed biological clock
+  remains at `t=0`. The motion came from UI-only topology PID interpolation,
+  camera-pivot smoothing, centroid recentering and region-label smoothing during
+  paused layout refreshes. `src/ui.rs` now snaps those presentation states to
+  the authoritative topology while paused, retains camera-drag animation, and
+  includes a feature-gated regression test for stale PID state. Focused feature
+  compilation, the focused test, the all-feature check, the existing 387-test
+  library suite, formatting and whitespace checks all passed. Existing compiler
+  warnings remain non-fatal and unrelated to this fix.
+
+- [x] `2026-09-18` Investigated the flat Graphic EQ shown while `message.wav`
+  was loaded. The audio provider decoded the file and the simulation advanced,
+  but the UI retained a `spectral_bands` read guard across the complete frame
+  while the simulation publisher used a non-blocking write. The UI now clones
+  the short-lived band snapshot and releases the lock before rendering, so FFT
+  bands can be published on the next simulation frame. The focused audio
+  provider test, feature compilation, formatting and diff checks passed.
+
+- [x] `2026-09-18` Reproduced the remaining flat Graphic EQ case after the
+  lock-lifetime fix. Interactive `Choose File...` correctly replaced the
+  simulation provider and emitted sensory spikes, but `sim_audio_diagnostic`
+  was true only for audio loaded during application startup. The normal loop
+  therefore published `last_bands()` only inside that startup diagnostic gate:
+  a selected `message.wav` could drive the network while never reaching the
+  EQ renderer. EQ publication now occurs for every provider that exposes
+  spectral bands; the diagnostic flag controls periodic logging only. The
+  focused provider test, locked UI feature check, formatting and whitespace
+  checks passed. The rebuilt release launcher was then exercised with
+  `/home/pbisaacs/Downloads/message.wav`; the native UI path reached the
+  dashboard and logged `frame=120 eq_peak=0.7662 sensory_spikes=14/64` and
+  `frame=180 eq_peak=0.8470 sensory_spikes=14/64` before bounded cleanup.
+
 - [x] `2026-09-17` Cross-checked the former `scripts/tcp_aer_ipc_bridge.py`;
   its only
   launcher use is one per Unreal/Unity distributed brain from
@@ -2522,3 +2585,395 @@ no native engine content hash is presented as biological or physics equivalence.
   `engine_runtime,ui,robot_io,cuda`; focused distributed snapshot, Rust bridge,
   and spike transport tests; `run_examples_launcher` (10/10); shell syntax;
   and `git diff --check` on the touched launcher/distributed/UI files.
+
+## Verification update — 2026-09-18 07:21Z: default main promotion and tagging
+
+- [x] Updated `.github/workflows/build-and-release.yml` so a successful push to
+  `main` promotes the completed `container-manifest` node image to the
+  existing `developer-blue` target, then runs `Version Bump and Tag` for the
+  next patch release. Manual dispatch retains its explicit environment and
+  version-bump controls.
+- [x] Added a guard for the generated `chore: bump version ...` commit so its
+  push-triggered workflow does not recursively create another version bump.
+  YAML parsing, focused workflow dependency assertions and `git diff --check`
+  passed. `yamllint` reports only the workflow's existing line-length warnings.
+
+## Verification update — 2026-09-18: profile-aware CNS population growth
+
+- [x] The canonical growth path is `src/runner.rs`: hidden neurons mature in
+  `Topology3D`, while sensory/output formation currently advances toward fixed
+  `target_num_sensory` and `target_num_output` values. `src/config.rs` already
+  resolves organism profiles and sets the human cap to 86,000,000,000, so the
+  ratio controller belongs in the persisted network configuration and the
+  runner's topology admission boundary.
+- [x] The requested human CNS model treats the mature hidden population as its
+  interneuron budget: `S=floor(I/8,600)` and `M=floor(I/172,000)`. This yields
+  zero new peripheral neurons below 8,600 and 172,000 mature hidden neurons,
+  respectively. Existing explicit I/O remains append-only for compatibility;
+  ratio-managed additions are bounded by the biological neuron cap.
+- [x] Added persisted `GrowthIoRatioPolicy` configuration, human-profile
+  defaults, integer target calculation, final-volume composition calculation,
+  and profile isolation. At 86,000,000,000 total neurons the deterministic
+  composition is 85,989,501,282 interneurons, 9,998,779 sensory neurons, and
+  499,939 motor neurons.
+- [x] Updated AARNN growth admission to refresh sensory/motor targets from the
+  mature hidden population, exclude provisional early cells, preserve
+  append-only I/O formation, and respect `max_total_neurons`.
+- [x] Validation passed: focused configuration and runner tests, existing
+  hidden-topology and early-cell growth tests, `cargo test --locked --features
+  engine_runtime --lib` (382 passed), default `cargo check --locked --lib`,
+  the full feature check, `cargo fmt --all -- --check`, and `git diff --check`.
+  The standalone `growth3d` check still exposes unrelated pre-existing
+  unconditional Rayon/OpenCL references when those features are disabled.
+
+## Verification update — 2026-09-18: mapped species ratios and unknown-network average
+
+- [x] Reviewed the canonical profile generators and checked-in Webots mapping
+  contracts. The source populations are C. elegans `302/24/96` for biological
+  connectome/sensory/muscle-readout counts, Drosophila `20,000/418/48`, and
+  zebrafish `2,000/32/32`. C. elegans sensory and motor values remain external
+  adapter/readout channels, so its policy is recorded but the biological-I/O
+  admission gate remains closed for that profile.
+- [x] Added exact rational profile policies: C. elegans `24/302` and `96/302`,
+  Drosophila `418/20,000` and `48/20,000`, and zebrafish `32/2,000` for
+  sensory and motor per hidden/interneuron population. Hexapod inherits the
+  Drosophila policy; NAO resolves to the human profile and inherits the human
+  CNS policy.
+- [x] Added an unknown-network policy equal to the arithmetic average of the
+  four independent source types (human, C. elegans, Drosophila and zebrafish),
+  excluding derived Hexapod and NAO aliases. Its effective rounded thresholds
+  are approximately 35 hidden neurons per sensory neuron and 12 per motor
+  neuron, while target calculations retain the exact rational average.
+- [x] Profile snapshots retain their mapped I/O populations as an append-only
+  baseline. Unprofiled biological networks continue to begin with ratio-managed
+  I/O formation, preventing early peripheral populations from overwhelming the
+  developing hidden network.
+- [x] Validation passed: `cargo test --locked --features engine_runtime --lib`
+  (384 passed), `cargo check --locked --all-features`, default
+  `cargo check --locked --lib`, `cargo fmt --all -- --check`, and
+  `git diff --check`, including mapped-profile, unknown-average, human-ratio,
+  mapped-I/O preservation and growth-admission tests.
+
+## Verification update — 2026-09-18: morphology ratio observability
+
+- [x] Added the shared `GrowthIoRatioView` projection in `src/config.rs`.
+  Native UI, CLI summary logs, and growth target logs now use the same exact
+  policy fractions, mature-interneuron target calculation, current sensory /
+  motor populations, and profile label.
+- [x] Added the ratio report to the native `Morphological Evolution
+  (Physical)` panel in `src/ui.rs`, including the external adapter/readout
+  explanation required by the C. elegans mapped profile.
+- [x] Added the corresponding live report to the web UI's `Topology /
+  Morphology` panel. It reads serialized `growth_io_ratio_policy` fields and
+  live topology snapshot counts, preserving the same floor target semantics.
+- [x] Added `[summary] Morphological I/O ratio ...` CLI lines and a
+  change-triggered `[growth] I/O ratio ...` log for ongoing topology growth.
+- [x] Validation passed: the three focused `growth_ratio_view` tests, full
+  feature compilation with `cargo check --locked --all-features`,
+  `node --check web_ui/app.js`, and `git diff --check`. The repository's
+  existing compiler warnings remain non-fatal.
+
+## Verification update — 2026-09-18 16:43Z: UI parity and non-blocking review
+
+- [x] Cross-checked the native Rust, web, Android and checked-in iOS input
+  surfaces. Native standalone/provider views consume real provider FFT bands;
+  the web Graphic EQ is explicitly labelled as sensory-activity-derived;
+  Android and iOS currently expose preview-only media adapters and now state
+  that governed spectral bands are unavailable. Native cluster projection
+  views no longer imply that local/provider FFT data belongs to the remote
+  cluster; their EQ is labelled unavailable.
+- [x] Web activity polling now coalesces overlapping requests and rejects a
+  response whose source or request sequence is stale before updating the
+  graph, placement, probes or derived EQ.
+- [x] Native remote workspace Pull, Push, Start and Stop actions now queue
+  through `ToolTaskResult`. Snapshot serialisation, blocking HTTP and control
+  requests execute on worker threads; the egui thread only submits work and
+  applies the completed snapshot/result. A single in-flight guard prevents
+  duplicate remote operations.
+- [x] Android remote refresh remains on its executor and now uses an atomic
+  in-flight guard, preventing timer/manual refresh overlap. The client is
+  volatile for cross-thread visibility.
+- [x] Added compatibility tests for activity request coalescing/stale-source
+  handling, native background workspace actions and Android refresh
+  coalescing. `cargo test --locked --test web_ui_browser_compat` passed all 12
+  tests. `cargo check --locked --no-default-features --features
+  engine_runtime,ui`, `cargo fmt --all -- --check`, `node --check web_ui/app.js`
+  and `git diff --check` passed. Android
+  `:app:compileDebugKotlin` passed with the Android Studio JBR (Java 17); the
+  default JVM 8 environment was rejected by Gradle before the retry.
+- [!] Full Android/iOS UI parity remains an open delivery gate: Android has no
+  governed spectral-band endpoint or morphology-ratio panel, and the
+  repository still has no checked-in full iOS Xcode application. The review
+  records these capability gaps rather than fabricating data or a partial
+  production shell.
+- [!] The `save_on_exit` native workspace option still performs one synchronous
+  final push during `Drop`. It is deliberately retained as a shutdown durability
+  boundary: detaching that request would allow the process to exit and silently
+  lose the requested final snapshot. Interactive Pull/Push/Start/Stop paths
+  remain fully backgrounded.
+
+## Verification update — 2026-09-18 17:09Z: morphology stepping stall
+
+- [x] Investigated `logs/nm-1789750465.log`. The first severe pause was an
+  `App::update/render` frame of 8.42 s at `1789750493.867`; after that, the
+  simulation reported synchronous `morphology/evolve` maxima of 450 ms,
+  4.86 s, 5.39 s and later 7.39 s. The matching
+  `Runner::step/morpho` timings identify morphology evolution as the repeated
+  stepping blocker rather than audio or transport. The UI frame metric also
+  shows the first pause occurred in presentation work, while the ordinary
+  render frames resumed below a few milliseconds.
+- [x] Enabled the existing morphology worker by default for `ui` profiles in
+  `src/runner.rs`. `NM_MORPHO_ASYNC=0|1` remains the highest-priority explicit
+  override; `NM_REALTIME_IPC` remains the compatibility fallback, and
+  headless profiles retain their synchronous default unless configured.
+  Completed morphology results are still applied on the runner thread, so
+  topology and synapse ownership remain deterministic and single-writer.
+- [x] Closed the async worker lifecycle edge: topology changes, reset and
+  temporary morphology disablement invalidate a cloned result but retain its
+  receiver until the worker exits. A stale result is discarded by sequence,
+  preventing orphaned workers and unbounded overlapping morphology jobs.
+- [x] Bounded native morphology overlay presentation in `src/ui.rs` to a
+  topology-size-dependent draw cap and a 20,000-synapse scan budget. The UI
+  reports when the projection is capped, so large growth cannot make an
+  unbounded traversal monopolise an egui frame. The overlay now has its own
+  `App::update/render/morphology_overlay` metric for the next reproduction.
+- [x] Validation passed: `cargo check --locked --no-default-features
+  --features desktop_ui_workload`, the focused
+  `morphology_async_profile_has_explicit_override_precedence` test under the
+  same desktop profile, `cargo fmt --all -- --check`, and `git diff --check`.
+  The standalone `growth3d,morpho,ui` test command without the repository's
+  OpenCL/parallel desktop profile remains invalid because existing code has
+  unconditional Rayon/OpenCL references; that is recorded as a feature-profile
+  limitation, not a failure of this change.
+- [!] The exact internal sub-operation responsible for the single 8.42 s UI
+  frame is not independently timed by the current metrics. The new bounded
+  overlay path mitigates the identified unbounded presentation work; a future
+  profiling pass should split `App::update/render` into layout, topology and
+  painter scopes if the frame remains reproducible.
+
+## Verification update — 2026-09-18: adaptive rendering and morphology loop review
+
+- [x] Reviewed `logs/nm-1789752860.log`. The dominant outliers are still
+  synchronous `morphology/evolve` calls, including a 41.00 s maximum, while
+  the ordinary `Runner::step` and `App::update/render` samples are generally
+  in the millisecond range. The morphology overlay itself is negligible in
+  the same report, so it is not the source of the long stepping stall.
+- [x] Split morphology timing into grid/energy, pruning, growth/movement,
+  contact detection, and connectivity-repair metrics. These counters are
+  emitted by subsequent runs; the supplied log predates this instrumentation
+  and therefore cannot be used to claim a phase-level attribution for its
+  41-second samples.
+- [x] Replaced repeated full `self.synapses` scans during final growth
+  insertion deduplication with an endpoint-pair map already maintained by the
+  contact path. The stable endpoint semantics and single-writer morphology
+  ownership remain unchanged, while proposed insertions no longer perform an
+  O(new proposals × existing synapses) search.
+- [x] Replaced the static-overlay renderer's fixed 20,000-edge limit with an
+  adaptive budget derived from cached edge count, overlay density, topology
+  size, and the explicit force-show setting. Small requested views remain
+  complete; larger views receive proportionally more detail without allowing
+  topology growth to monopolise an egui frame.
+- [x] Validation passed: `cargo check --locked --no-default-features
+  --features desktop_ui_workload`, the seven morphology unit tests, the
+  focused morphology-growth and development-stage runner tests,
+  `cargo fmt --all -- --check`, and `git diff --check`. Existing compiler
+  warnings remain non-fatal.
+
+## Verification update — 2026-09-18: latest morphology log comparison
+
+- [x] Compared `logs/nm-1789755209.log` with the preceding runtime report.
+  The new phase metrics attribute the long pauses conclusively to
+  `morphology/evolve/contact_detection`: its maximum was 43.77 s and the
+  enclosing `morphology/evolve` maximum was 43.82 s. The next largest
+  morphology phases were `growth_movement` at 42.85 ms, `grid_energy` at
+  2.52 ms, `connectivity_repair` at 1.70 ms and `pruning` at 0.65 ms.
+  Native render frames remained in the ordinary 2–6 ms range and the
+  morphology overlay remained below 0.1 ms, so presentation work is not the
+  source of this stall.
+- [x] The contact path now stops spatial-index candidate materialisation at
+  the configured per-tip limit, filters repeated grid-cell references while
+  collecting, reuses the duplicate-filter buckets across tips, and keys
+  deduplication by the stable segment index. This preserves candidate order,
+  contact limits and deterministic single-writer topology ownership while
+  removing unbounded intermediate candidate growth and per-tip map setup.
+- [x] Added separate `morphology/evolve/contact_detection` timings for index
+  collection, the small-network pre-probe, indexed candidate evaluation and
+  fallback probing. The next runtime report can therefore distinguish
+  spatial-index traversal from compatibility, distance, migration and probe
+  work. The supplied log predates this final collector reuse and therefore
+  remains the baseline; a subsequent runtime log is required before claiming
+  the 43.77 s stall is resolved.
+- [x] Validation passed: `cargo check --locked --no-default-features
+  --features desktop_ui_workload`, focused morphology tests, formatting and
+  whitespace checks. Existing compiler warnings remain non-fatal.
+
+## Verification update — 2026-09-18: contact setup remains the outlier
+
+- [x] Reviewed `logs/nm-1789756544.log` after the bounded collector change.
+  Typical contact-detection maxima fell to roughly 0.34 s, and one later
+  report reached 8.59 s, but the run still contains a 40.01 s contact maximum.
+  The aggregate is therefore improved for ordinary growth but the worst-case
+  stall remains.
+- [x] The new submetrics show that the 40.01 s sample spent only 483.90 ms
+  in index collection, 1.02 ms in indexed candidate evaluation, 0.62 ms in
+  pre-probing and 0.12 ms in fallback probing. The missing time occurs before
+  those loops, during the contact phase's axon sprouting, segment-reference
+  preparation or spatial-index construction. Candidate evaluation is no
+  longer the dominant explanation for that outlier.
+- [x] Added independent timings for
+  `morphology/evolve/contact_detection/axon_sprouting` and
+  `morphology/evolve/contact_detection/index_build`. The next started run can
+  identify which setup operation consumes the remaining time before another
+  algorithmic change is made.
+
+- [x] The new timings identify spatial-index construction as the blocker:
+  `index_build` reached 41.25 s while axon sprouting was 11.02 ms and indexed
+  candidate evaluation was below 1 ms. `AxonSegIndex::build` now estimates
+  uniform-grid expansion before insertion and selects the octree when the
+  grid would exceed the configured density or reference budget. Sparse,
+  low-detail networks continue to use the uniform grid, and retained grid
+  builds reserve their estimated reference capacity to reduce rehashing.
+- [x] Validation passed after the index-selection change: desktop-profile
+  compilation, seven focused morphology tests, formatting and whitespace
+  checks. A new started runtime log is still required to measure the actual
+  index-build reduction.
+
+## Verification update — 2026-09-18: latest morphology log comparison
+
+- [x] Reviewed `logs/nm-1789757760.log` across 87 metrics reports. The
+  previous multi-second contact-detection/index-build failure is no longer
+  present: `morphology/evolve` peaked at 804.78 ms and contact detection at
+  795.44 ms. The largest remaining contact subphase was axon sprouting at
+  393.88 ms; this is proportional to the growing axon population and its
+  detail-controlled energy search, and remains off the UI thread when the
+  desktop morphology worker is enabled.
+- [x] Spatial-index construction shows isolated early peaks of 573.67 ms,
+  474.46 ms and 377.88 ms while the later reports settle near 1–2 ms, with
+  the final observed maximum at 2.32 ms. This confirms the grid-density /
+  octree selection removed the former 40–43 second pathological build.
+- [x] The normal runtime after startup remained responsive: `Runner::step`
+  peaked at 97.89 ms and ordinary `App::update/render` reports stayed below
+  16 ms after the isolated 6.98 s render sample. That sample contained no
+  corresponding morphology, topology-overlay or snapshot-copy cost, so it
+  is retained as an un-attributed presentation outlier rather than used to
+  justify a fixed reduction in adjustable biological detail.
+- [x] No further morphology algorithm change was made from this log. Axon
+  sprouting remains the next profiling target; any future reduction must use
+  the configured detail/budget policy and preserve deterministic proposal
+  ordering, rather than imposing a constant sample count.
+
+## Verification update — 2026-09-18: complete-feature launcher profiles
+
+- [x] Audited Cargo build/test commands in the repository-root launchers and
+  `scripts/`. `run_examples.sh`, `run_webcluster.sh`, `run_webot.sh`,
+  `scripts/run_cluster.sh`, `scripts/run_sim.sh` and
+  `scripts/run_multi_robot_webots.sh` now build with explicit
+  `--all-features`; the release packager and container workload metadata use
+  the same profile. The Webots stub helper and example Makefile were aligned
+  as well because they produce project binaries.
+- [x] Local/container launch paths now default `NM_MORPHO_ASYNC=1`, including
+  Podman workload wrappers. Existing environment overrides remain available
+  for diagnostics and compatibility, while the default morphology worker,
+  Rayon `parallel` feature and bounded asynchronous I/O paths are present in
+  the standard launcher profile.
+- [x] Validation passed: `bash -n` for all root and `scripts/*.sh` launchers,
+  the Webots stub helper, launcher help paths, the examples Makefile dry run,
+  `git diff --check`, and
+  `cargo check --locked --all-features --all-targets` (warnings only).
+- [x] The complete release binary graph also built successfully with
+  `cargo build --locked --all-features --release --bins`; the existing
+  compiler warning set remains non-fatal.
+
+## Verification update — 2026-09-18: all-feature example startup contract
+
+- [x] Reproduced the reported `run_examples.sh` failure. Compilation completed
+  successfully; the orchestrator then exited during startup because enabling
+  `management_v1` through `--all-features` activates fail-closed static
+  management authentication and requires `NM_MANAGEMENT_BEARER_TOKEN`.
+  Supplying that token exposed the next required local contract:
+  `NM_GRPC_TLS_CERT`, `NM_GRPC_TLS_KEY`, `NM_GRPC_TLS_CA` and a persisted
+  `NM_MANAGEMENT_STATE_PATH`.
+- [x] Kept the complete feature profile and made the loopback launcher provide
+  a per-run bearer credential, principal/policy, management state path, and an
+  ephemeral local CA-signed mTLS certificate. Existing deployment credentials
+  remain authoritative; incomplete externally supplied TLS configuration is
+  rejected rather than silently downgraded.
+- [x] Fixed the all-feature rustls startup ambiguity by selecting the ring
+  provider explicitly in the native and web binaries. The complete graph also
+  links reqwest's AWS-LC provider, so automatic provider selection otherwise
+  panicked at the first TLS handshake.
+- [x] Updated the web UI's distributed gRPC client to use the shared mTLS
+  endpoint builder. A live `run_examples.sh` smoke reached the dashboard,
+  joined both nodes to the orchestrator, and returned cluster data from
+  `/api/status`; no startup authentication, TLS-provider, or client-certificate
+  failure remained. The expected CUDA PTX compatibility fallback warnings are
+  unrelated and non-fatal.
+
+## Verification update — 2026-09-18: scripts all-feature launcher cross-check
+
+- [x] Cross-checked every executable under `scripts/` that builds or launches
+  an all-feature runtime. `scripts/run_cluster.sh`, `scripts/run_sim.sh`,
+  `scripts/run_multi_robot_webots.sh`, and the Celegans, Drosophila and NAO
+  Python combo launchers had the same missing `management_v1` startup
+  environment as the original example launcher.
+- [x] Added `scripts/local_management_env.py` as the shared local-launcher
+  setup. It preserves operator supplied credentials, rejects partial TLS
+  configuration, and otherwise creates a loopback-only static bearer identity,
+  management state path, and short-lived local CA-signed mTLS certificate.
+  The root `run_webcluster.sh` and `run_webot.sh` paths use the same helper so
+  script wrappers do not reintroduce the failure through delegation.
+- [x] Classified `scripts/package-release.sh`, container build/package scripts,
+  and `scripts/run_aarnn_with_compatible_libclang.sh` as build or standalone
+  UI paths rather than management-service launchers. `scripts/deploy_mixed_cluster.sh`
+  remains a production deployment path and must receive its management bearer,
+  TLS material, and durable state through Kubernetes deployment configuration;
+  it must not generate developer credentials on the operator host.
+- [ ] Production Kubernetes secret/PVC wiring for that deployment path remains
+  an external deployment gate and is not claimed closed by the local launcher
+  helper.
+
+## Verification update — 2026-09-18 20:59Z: Webots cluster parallelism and blocking paths
+
+- [x] Reproduced a fresh-state C. elegans Webots cluster run with
+  `WEBOTS_WORKSPACE_RESUME_EXISTING=0`, an isolated runtime root, headless
+  fast Webots mode, and two requested workers. The IPC owner executed the
+  biological `Runner::step` work; `webots_celegans_01_worker_01.log` recorded
+  only `distributed/node_step` samples and no `Runner::step` samples. The
+  configured C. elegans profile has one hidden layer, and the compatibility
+  placement deliberately does not split a biological layer between writers.
+  `--nodes 2` therefore adds a registered standby/placement target rather
+  than a second active biological compute stream for this workload.
+- [x] Confirmed that `--all-features` selects the runtime branch guarded by
+  `replicated_durability` and `superdense_executor`. Even without an
+  explicitly configured durable root, each compatibility step is routed
+  through `SuperdenseController::step`, which allocates/adopts causal events
+  and settles them before returning to the IPC loop. This is runtime behavior,
+  not merely a compile-size change. The all-feature release binary measured
+  about 70 MB in this checkout; the explicit
+  `engine_runtime,ui,robot_io,cuda` build measured about 56 MB.
+- [x] Identified the main non-blocking opportunity in
+  `DistributedNode::run_simulation`: the loop holds the network write lock
+  across the biological step, snapshot generation, and output preparation;
+  workspace autosave then performs full JSON publication, `sync_all`, rename,
+  and manifest publication before releasing that lock. This should be changed
+  only by capturing an immutable committed snapshot at the authoritative
+  boundary and handing it to a bounded writer queue. The queue must publish
+  monotonically and retain the latest-good checkpoint so `INV-012` and
+  recovery semantics are preserved.
+- [x] Identified two additional scheduling limits. Networks on one node are
+  stepped serially in the single `run_simulation` loop, so independent brains
+  wait behind one another; and spike forwarding is awaited before the loop
+  advances to the next network. Independent per-network workers plus bounded
+  output queues are candidates for `INV-010` compliance, but causal commit
+  and fencing work must remain ordered per network.
+- [x] The CLI Webots path now passes `--no-orchestrator-ui --node-ui-hidden`,
+  removing the unused orchestrator dashboard/render loop while retaining the
+  IPC-owning worker runtime. Shell syntax, launcher contract tests, and diff
+  checks passed after this change.
+- [!] An explicit-profile live comparison was attempted after preserving the
+  all-feature binaries. The explicit binary built successfully, but the
+  bounded launcher probe did not complete worker registration and repeatedly
+  reported gRPC transport errors, so no numeric speedup claim is made from
+  that probe. The next benchmark must first resolve that registration issue,
+  then compare identical fresh-state runs with the same autosave and IPC
+  settings.

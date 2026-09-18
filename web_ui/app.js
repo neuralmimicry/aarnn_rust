@@ -72,6 +72,7 @@ const evolution3d = document.getElementById("evolution-3d");
 const growth3dInput = document.getElementById("growth-3d");
 const showRegionLabelsInput = document.getElementById("show-region-labels");
 const clumpingDesign = document.getElementById("clumping-design");
+const growthIoRatioEl = document.getElementById("growth-io-ratio");
 const exportNeuromlBtn = document.getElementById("export-neuroml");
 const exportPynnBtn = document.getElementById("export-pynn");
 const exportNirBtn = document.getElementById("export-nir");
@@ -84,6 +85,19 @@ const ioInputUrl = document.getElementById("io-input-url");
 const ioAerBase = document.getElementById("io-aer-base");
 const ioSourceToggle = document.getElementById("io-source-toggle");
 const ioSourceStatus = document.getElementById("io-source-status");
+const ioVideoControls = document.getElementById("io-video-controls");
+const ioVideoFile = document.getElementById("io-video-file");
+const ioVideoFilePick = document.getElementById("io-video-file-pick");
+const ioCameraDevice = document.getElementById("io-camera-device");
+const ioCameraToggle = document.getElementById("io-camera-toggle");
+const ioVideoPopout = document.getElementById("io-video-popout");
+const ioVideoAudioControls = document.getElementById("io-video-audio-controls");
+const ioVideoAudio = document.getElementById("io-video-audio");
+const ioAudioDevice = document.getElementById("io-audio-device");
+const ioDeviceRefresh = document.getElementById("io-device-refresh");
+const ioVideoAudioStatus = document.getElementById("io-video-audio-status");
+const ioVideoPreviewRow = document.getElementById("io-video-preview-row");
+const ioVideoPreview = document.getElementById("io-video-preview");
 const authOverlay = document.getElementById("auth-overlay");
 const authMessage = document.getElementById("auth-message");
 const authDivider = document.getElementById("auth-divider");
@@ -274,6 +288,9 @@ let ioSourceRunner = null;
 let runtimeStatusRequestSeq = 0;
 let runtimeStatusFetchInFlight = false;
 let runtimeStatusFetchQueued = false;
+let activityRequestSeq = 0;
+let activityFetchInFlight = false;
+let activityFetchQueued = false;
 let configSaveTimer = null;
 let suppressUserConfigSave = false;
 function parseAuthGroups(value) {
@@ -489,9 +506,12 @@ function resetInstrumentationBuffers({
 }
 function buildUserConfig() {
   const ioConfig = {
-    sourceType: state.io.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+    sourceType: normalizeIoSourceType(state.io.sourceType),
     sourceUrl: typeof state.io.sourceUrl === "string" ? state.io.sourceUrl : "",
-    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0
+    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0,
+    videoAudioEnabled: Boolean(state.io.videoAudioEnabled),
+    cameraDeviceId: typeof state.io.cameraDeviceId === "string" ? state.io.cameraDeviceId : "",
+    audioDeviceId: typeof state.io.audioDeviceId === "string" ? state.io.audioDeviceId : ""
   };
   return {
     targets: state.targets,
@@ -505,6 +525,10 @@ function buildUserConfig() {
       probes: serializeProbes()
     }
   };
+}
+function normalizeIoSourceType(value) {
+  const source = String(value || "none");
+  return ["none", "aer-http-stream", "video-file", "camera"].indexOf(source) >= 0 ? source : "none";
 }
 function scheduleUserConfigSave() {
   if (!state.userConfigEnabled || suppressUserConfigSave) return;
@@ -989,35 +1013,58 @@ function loadIoSettings() {
     if (!raw) throw new Error("missing");
     const parsed = JSON.parse(raw);
     return {
-      sourceType: parsed.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+      sourceType: normalizeIoSourceType(parsed.sourceType),
       sourceUrl: typeof parsed.sourceUrl === "string" ? parsed.sourceUrl : "",
       aerBase: Number.isFinite(Number(parsed.aerBase)) ? Math.max(0, Number(parsed.aerBase)) : 0,
+      videoAudioEnabled: Boolean(parsed.videoAudioEnabled),
+      videoHasAudio: false,
+      cameraDeviceId: typeof parsed.cameraDeviceId === "string" ? parsed.cameraDeviceId : "",
+      audioDeviceId: typeof parsed.audioDeviceId === "string" ? parsed.audioDeviceId : "",
       streaming: false,
       status: "Disconnected",
       statusClass: "io-status-idle",
       connectedAt: 0,
       defaultAddr: "",
-      defaultNetworkId: ""
+      defaultNetworkId: "",
+      videoStream: null,
+      videoObjectUrl: "",
+      videoPopup: null,
+      videoName: "",
+      cameraDevices: [],
+      audioDevices: []
     };
   } catch (_) {
     return {
       sourceType: "none",
       sourceUrl: "",
       aerBase: 0,
+      videoAudioEnabled: false,
+      videoHasAudio: false,
+      cameraDeviceId: "",
+      audioDeviceId: "",
       streaming: false,
       status: "Disconnected",
       statusClass: "io-status-idle",
       connectedAt: 0,
       defaultAddr: "",
-      defaultNetworkId: ""
+      defaultNetworkId: "",
+      videoStream: null,
+      videoObjectUrl: "",
+      videoPopup: null,
+      videoName: "",
+      cameraDevices: [],
+      audioDevices: []
     };
   }
 }
 function saveIoSettings() {
   const payload = {
-    sourceType: state.io.sourceType === "aer-http-stream" ? "aer-http-stream" : "none",
+    sourceType: normalizeIoSourceType(state.io.sourceType),
     sourceUrl: typeof state.io.sourceUrl === "string" ? state.io.sourceUrl.trim() : "",
-    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0
+    aerBase: Number.isFinite(Number(state.io.aerBase)) ? Math.max(0, Math.trunc(Number(state.io.aerBase))) : 0,
+    videoAudioEnabled: Boolean(state.io.videoAudioEnabled),
+    cameraDeviceId: typeof state.io.cameraDeviceId === "string" ? state.io.cameraDeviceId : "",
+    audioDeviceId: typeof state.io.audioDeviceId === "string" ? state.io.audioDeviceId : ""
   };
   state.io.sourceType = payload.sourceType;
   state.io.sourceUrl = payload.sourceUrl;
@@ -1027,6 +1074,57 @@ function saveIoSettings() {
     return;
   }
   localStorage.setItem("nm_io", JSON.stringify(payload));
+}
+function updateMediaDeviceOptions() {
+  if (ioCameraDevice) {
+    const selected = state.io.cameraDeviceId || "";
+    ioCameraDevice.innerHTML = `<option value="">System camera</option>`;
+    const cameraLabels = new Map();
+    state.io.cameraDevices.forEach((device, index) => {
+      const baseLabel = device.label || `Camera ${index + 1}`;
+      const occurrence = (cameraLabels.get(baseLabel) || 0) + 1;
+      cameraLabels.set(baseLabel, occurrence);
+      const label = occurrence > 1 ? `${baseLabel} (${occurrence})` : baseLabel;
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = label;
+      ioCameraDevice.appendChild(option);
+    });
+    ioCameraDevice.value = state.io.cameraDevices.some(device => device.deviceId === selected) ? selected : "";
+  }
+  if (ioAudioDevice) {
+    const selected = state.io.audioDeviceId || "";
+    ioAudioDevice.innerHTML = `<option value="">System microphone</option>`;
+    const audioLabels = new Map();
+    state.io.audioDevices.forEach((device, index) => {
+      const baseLabel = device.label || `Microphone ${index + 1}`;
+      const occurrence = (audioLabels.get(baseLabel) || 0) + 1;
+      audioLabels.set(baseLabel, occurrence);
+      const label = occurrence > 1 ? `${baseLabel} (${occurrence})` : baseLabel;
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = label;
+      ioAudioDevice.appendChild(option);
+    });
+    ioAudioDevice.value = state.io.audioDevices.some(device => device.deviceId === selected) ? selected : "";
+  }
+}
+async function refreshMediaDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    if (ioVideoAudioStatus) ioVideoAudioStatus.textContent = "Device enumeration is unavailable in this browser.";
+    return;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    state.io.cameraDevices = devices.filter(device => device.kind === "videoinput");
+    state.io.audioDevices = devices.filter(device => device.kind === "audioinput");
+    updateMediaDeviceOptions();
+    if (ioVideoAudioStatus) {
+      ioVideoAudioStatus.textContent = `${state.io.cameraDevices.length} camera(s), ${state.io.audioDevices.length} microphone(s) available.`;
+    }
+  } catch (error) {
+    if (ioVideoAudioStatus) ioVideoAudioStatus.textContent = `Device enumeration failed: ${error.message || error}`;
+  }
 }
 function saveRenderSettings() {
   if (state.userConfigEnabled) {
@@ -3531,6 +3629,13 @@ async function pollActivity() {
   if (!pageIsVisible()) return;
   const source = activeSource();
   if (!source) return;
+  if (activityFetchInFlight) {
+    activityFetchQueued = true;
+    return;
+  }
+  activityFetchInFlight = true;
+  const requestSeq = ++activityRequestSeq;
+  const requestKey = sourceRequestKey(source);
   let url = "";
   let fetcher = fetch;
   if (source.kind === "workspace") {
@@ -3547,11 +3652,25 @@ async function pollActivity() {
     if (!res.ok) return;
     const data = await res.json();
     const activity = source.kind === "workspace" ? normalizeActivityPayload(data.activity) : normalizeActivityPayload(data);
-    state.activity = activity;
-    pushInstrumentationFrame(activity);
-    drawNetwork();
-    renderPlacement();
+    const currentSource = activeSource();
+    if (requestSeq === activityRequestSeq && requestKey === sourceRequestKey(currentSource)) {
+      state.activity = activity;
+      pushInstrumentationFrame(activity);
+      drawNetwork();
+      renderPlacement();
+    } else {
+      activityFetchQueued = true;
+    }
   } catch (_) {}
+  finally {
+    activityFetchInFlight = false;
+    if (activityFetchQueued) {
+      activityFetchQueued = false;
+      scheduleMicrotask(() => {
+        pollActivity();
+      });
+    }
+  }
 }
 function buildGraph(snapshot, layout) {
   const net = snapshot.net || {};
@@ -4864,6 +4983,7 @@ function setPlaceholder() {
   activeTargetEl.textContent = "-";
   nodesCountEl.textContent = "0";
   networksCountEl.textContent = "0";
+  updateGrowthIoRatio(null);
   setStableSublist(clusterNodesEl, "");
   setStableSublist(clusterNetworksEl, "");
   resetInstrumentationBuffers();
@@ -4877,6 +4997,66 @@ function rebuildGraph() {
   }
   state.graph = buildGraph(state.snapshot, state.render.layout);
   drawNetwork();
+}
+function formatRatioCount(value) {
+  const count = Math.max(0, Math.trunc(Number(value) || 0));
+  return count.toLocaleString("en-US");
+}
+function growthRatioParts(policy) {
+  const source = policy && typeof policy === "object" ? policy : {};
+  const sensoryNumerator = Math.max(1, Math.trunc(Number(source.sensory_ratio_numerator) || 1));
+  const sensoryDenominator = Math.max(1, Math.trunc(Number(source.sensory_ratio_denominator) || Number(source.sensory_per_interneuron) || 1));
+  const motorNumerator = Math.max(1, Math.trunc(Number(source.motor_ratio_numerator) || 1));
+  const motorDenominator = Math.max(1, Math.trunc(Number(source.motor_ratio_denominator) || Number(source.motor_per_interneuron) || 1));
+  return {
+    enabled: source.enabled !== false,
+    sensoryNumerator,
+    sensoryDenominator,
+    motorNumerator,
+    motorDenominator
+  };
+}
+function growthRatioProfileLabel(net, parts) {
+  const design = String((net && net.clumping_design) || "");
+  const same = (a, b, c, d) => parts.sensoryNumerator === a && parts.sensoryDenominator === b && parts.motorNumerator === c && parts.motorDenominator === d;
+  if (!parts.enabled) return "Disabled";
+  if (design === "NematodeWorm" || same(24, 302, 96, 302)) return "C. elegans";
+  if (design === "Hexapod" || same(418, 20000, 48, 20000)) return "Drosophila / Hexapod";
+  if (design === "ZebraFish" || same(32, 2000, 32, 2000)) return "Zebrafish";
+  if (same(1, 8600, 1, 172000)) return "Human CNS / NAO";
+  if (design === "None") return "Unknown network average";
+  return "Custom ratio policy";
+}
+function growthRatioText(kind, numerator, denominator) {
+  if (numerator === 1) return `1 ${kind} : ${formatRatioCount(denominator)} interneurons`;
+  return `${formatRatioCount(numerator)}/${formatRatioCount(denominator)} ${kind} / interneurons (1 ${kind} : ${(denominator / Math.max(1, numerator)).toFixed(2)} interneurons)`;
+}
+function snapshotMatureInterneuronCount(snapshot) {
+  const layers = snapshot && snapshot.topo && Array.isArray(snapshot.topo.layers) ? snapshot.topo.layers : [];
+  const topologyCount = layers.reduce((total, layer) => total + (Array.isArray(layer) ? layer.length : 0), 0);
+  if (topologyCount > 0) return topologyCount;
+  const net = snapshot && snapshot.net ? snapshot.net : {};
+  return Math.max(0, Math.trunc(Number(net.num_hidden_layers) || 0)) * Math.max(0, Math.trunc(Number(net.num_hidden_per_layer_initial) || 0));
+}
+function updateGrowthIoRatio(snapshot) {
+  if (!growthIoRatioEl) return;
+  if (!snapshot || !snapshot.net) {
+    growthIoRatioEl.textContent = "I/O ratio profile: waiting for network snapshot";
+    return;
+  }
+  const net = snapshot.net;
+  const parts = growthRatioParts(net.growth_io_ratio_policy);
+  const matureInterneurons = snapshotMatureInterneuronCount(snapshot);
+  const targetSensory = Math.floor(matureInterneurons * parts.sensoryNumerator / parts.sensoryDenominator);
+  const targetMotor = Math.floor(matureInterneurons * parts.motorNumerator / parts.motorDenominator);
+  const sensory = Math.max(0, Math.trunc(Number(net.num_sensory_neurons) || 0));
+  const motor = Math.max(0, Math.trunc(Number(net.num_output_neurons) || 0));
+  const profile = growthRatioProfileLabel(net, parts);
+  const population = `mature interneurons: ${formatRatioCount(matureInterneurons)} | sensory: ${formatRatioCount(sensory)} | motor: ${formatRatioCount(motor)} | ratio targets: sensory ${formatRatioCount(targetSensory)} / motor ${formatRatioCount(targetMotor)}`;
+  const admission = net.io_channels_are_biological === false
+    ? "I/O is mapped external adapter/readout state; biological I/O admission is disabled."
+    : "Targets are admitted from mature interneurons; provisional early cells do not form I/O.";
+  growthIoRatioEl.innerHTML = `<strong>I/O ratio profile: ${escapeHtml(profile)}</strong><br/>${escapeHtml(growthRatioText("sensory", parts.sensoryNumerator, parts.sensoryDenominator))} · ${escapeHtml(growthRatioText("motor", parts.motorNumerator, parts.motorDenominator))}<br/>${escapeHtml(population)}<br/><small>${escapeHtml(admission)}</small>`;
 }
 function syncControlsToSnapshot(snapshot) {
   var _net$aarnn_bio$stp_en, _net$aarnn_bio, _net$aarnn_bio$neurom, _net$aarnn_bio2;
@@ -4905,6 +5085,7 @@ function syncControlsToSnapshot(snapshot) {
   evolution3d.checked = net.growth_enabled;
   growth3dInput.checked = net.growth_enabled; // Assuming they are linked for now
   clumpingDesign.value = net.clumping_design || "HumanBrain";
+  updateGrowthIoRatio(snapshot);
 }
 function updateSegmentedSelector(selector, value) {
   if (!selector) return;
@@ -5188,14 +5369,30 @@ function setIoStatus(text, cssClass = "io-status-idle") {
 }
 function syncIoControls() {
   if (!ioInputSource || !ioInputUrl || !ioAerBase || !ioSourceToggle) return;
-  ioInputSource.value = state.io.sourceType || "none";
+  state.io.sourceType = normalizeIoSourceType(state.io.sourceType);
+  ioInputSource.value = state.io.sourceType;
   ioInputUrl.value = state.io.sourceUrl || "";
   ioAerBase.value = Number.isFinite(Number(state.io.aerBase)) ? Number(state.io.aerBase) : 0;
   const sourceEnabled = ioInputSource.value === "aer-http-stream";
+  const videoEnabled = ioInputSource.value === "video-file" || ioInputSource.value === "camera";
   ioInputUrl.disabled = !sourceEnabled || state.io.streaming;
   ioAerBase.disabled = !sourceEnabled || state.io.streaming;
   ioSourceToggle.disabled = !sourceEnabled;
   ioSourceToggle.textContent = state.io.streaming ? "Disconnect" : "Connect";
+  if (ioVideoControls) ioVideoControls.hidden = !videoEnabled;
+  if (ioVideoAudioControls) ioVideoAudioControls.hidden = !videoEnabled;
+  if (ioVideoAudio) ioVideoAudio.checked = Boolean(state.io.videoAudioEnabled);
+  updateMediaDeviceOptions();
+  const hasVideo = Boolean(ioVideoPreview && (ioVideoPreview.src || state.io.videoStream));
+  if (ioVideoPreviewRow) ioVideoPreviewRow.hidden = !videoEnabled || !hasVideo;
+  if (ioVideoFilePick) ioVideoFilePick.disabled = ioInputSource.value !== "video-file";
+  if (ioCameraToggle) {
+    ioCameraToggle.disabled = ioInputSource.value !== "camera";
+    ioCameraToggle.textContent = state.io.videoStream ? "Stop camera" : "Start camera";
+  }
+  if (ioVideoPopout) ioVideoPopout.disabled = !videoEnabled || !hasVideo;
+  if (ioCameraDevice) ioCameraDevice.disabled = ioInputSource.value !== "camera" || Boolean(state.io.videoStream);
+  if (ioAudioDevice) ioAudioDevice.disabled = !videoEnabled || Boolean(state.io.videoStream);
   if (!state.io.status) {
     setIoStatus("Disconnected", "io-status-idle");
   } else if (ioSourceStatus) {
@@ -5363,11 +5560,92 @@ function stopIoSourceStream() {
   setIoStatus("Disconnected", "io-status-idle");
   syncIoControls();
 }
+function closeVideoPopout() {
+  if (state.io.videoPopup && !state.io.videoPopup.closed) {
+    state.io.videoPopup.close();
+  }
+  state.io.videoPopup = null;
+}
+function stopVideoInput() {
+  if (state.io.videoStream && state.io.videoStream.getTracks) {
+    state.io.videoStream.getTracks().forEach(track => track.stop());
+  }
+  state.io.videoStream = null;
+  state.io.videoHasAudio = false;
+  if (ioVideoPreview) {
+    ioVideoPreview.pause();
+    ioVideoPreview.srcObject = null;
+    ioVideoPreview.removeAttribute("src");
+    ioVideoPreview.load();
+  }
+  if (state.io.videoObjectUrl) {
+    URL.revokeObjectURL(state.io.videoObjectUrl);
+    state.io.videoObjectUrl = "";
+  }
+  closeVideoPopout();
+  syncIoControls();
+}
+function videoHasAudioTrack(video) {
+  return Boolean(
+    (video.audioTracks && video.audioTracks.length > 0) ||
+    video.mozHasAudio ||
+    video.webkitAudioDecodedByteCount > 0
+  );
+}
+function openVideoPopout() {
+  if (!ioVideoPreview) return;
+  const popup = window.open("", "aarnn-video-preview", "popup=yes,width=760,height=560,resizable=yes");
+  if (!popup) {
+    setIoStatus("Allow pop-up windows to open the video preview", "io-status-error");
+    return;
+  }
+  popup.document.title = "AARNN video input preview";
+  popup.document.body.innerHTML = "<main style=\"margin:0;background:#071018;color:#d8e6ee;font:14px system-ui;padding:12px\"><h1 style=\"font-size:16px\">AARNN video input</h1><video id=\"preview\" controls autoplay muted playsinline style=\"display:block;width:100%;max-height:460px;background:#000\"></video><p>Preview pixels are display state; governed admission remains separately authorised.</p></main>";
+  const preview = popup.document.getElementById("preview");
+  if (state.io.videoStream) {
+    preview.srcObject = state.io.videoStream;
+  } else {
+    preview.src = ioVideoPreview.src;
+  }
+  preview.play().catch(() => {});
+  state.io.videoPopup = popup;
+  setIoStatus("Video preview popped out", "io-status-active");
+}
+async function startBrowserCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setIoStatus("Camera capture is unavailable in this browser", "io-status-error");
+    return;
+  }
+  if (!window.isSecureContext) {
+    setIoStatus("Camera capture requires HTTPS or localhost", "io-status-error");
+    return;
+  }
+  try {
+    stopVideoInput();
+    const video = state.io.cameraDeviceId ? { deviceId: { exact: state.io.cameraDeviceId } } : true;
+    const audio = state.io.videoAudioEnabled
+      ? (state.io.audioDeviceId ? { deviceId: { exact: state.io.audioDeviceId } } : true)
+      : false;
+    state.io.videoStream = await navigator.mediaDevices.getUserMedia({ video, audio });
+    await refreshMediaDevices();
+    ioVideoPreview.srcObject = state.io.videoStream;
+    await ioVideoPreview.play();
+    setIoStatus(state.io.videoAudioEnabled
+      ? "Camera and microphone preview active; Graphic EQ enabled when sensory bands arrive"
+      : "Camera preview active; stop is local and immediate", "io-status-active");
+    syncIoControls();
+  } catch (error) {
+    setIoStatus(`Camera permission unavailable: ${error && error.message ? error.message : String(error)}`, "io-status-error");
+  }
+}
 function attachIoControls() {
   if (!ioInputSource || !ioInputUrl || !ioAerBase || !ioSourceToggle) return;
   syncIoControls();
   ioInputSource.addEventListener("change", () => {
-    state.io.sourceType = ioInputSource.value === "aer-http-stream" ? "aer-http-stream" : "none";
+    if (state.io.sourceType === "video-file" || state.io.sourceType === "camera") {
+      stopVideoInput();
+    }
+    state.io.sourceType = normalizeIoSourceType(ioInputSource.value);
     if (state.io.sourceType === "none" && state.io.streaming) {
       stopIoSourceStream();
     } else {
@@ -5396,11 +5674,59 @@ function attachIoControls() {
       startIoSourceStream();
     }
   });
+  if (ioVideoFilePick && ioVideoFile) {
+    ioVideoFilePick.addEventListener("click", () => ioVideoFile.click());
+    ioVideoFile.addEventListener("change", () => {
+      const file = ioVideoFile.files && ioVideoFile.files[0];
+      if (!file) return;
+      stopVideoInput();
+      state.io.videoName = file.name;
+      state.io.videoObjectUrl = URL.createObjectURL(file);
+      ioVideoPreview.src = state.io.videoObjectUrl;
+      ioVideoPreview.onloadedmetadata = () => {
+        const hasAudio = videoHasAudioTrack(ioVideoPreview);
+        if (hasAudio) {
+          state.io.videoHasAudio = true;
+          if (ioVideoAudioStatus) ioVideoAudioStatus.textContent = "Video audio track detected • Graphic EQ enabled";
+          setIoStatus(`Video preview active with audio: ${file.name}`, "io-status-active");
+        }
+        syncIoControls();
+      };
+      ioVideoPreview.play().catch(() => {});
+      setIoStatus(`Video preview active: ${file.name}`, "io-status-active");
+      syncIoControls();
+    });
+  }
+  if (ioCameraToggle) ioCameraToggle.addEventListener("click", () => {
+    if (state.io.videoStream) stopVideoInput();
+    else startBrowserCamera();
+  });
+  if (ioCameraDevice) ioCameraDevice.addEventListener("change", () => {
+    state.io.cameraDeviceId = ioCameraDevice.value;
+    saveIoSettings();
+  });
+  if (ioAudioDevice) ioAudioDevice.addEventListener("change", () => {
+    state.io.audioDeviceId = ioAudioDevice.value;
+    saveIoSettings();
+  });
+  if (ioVideoAudio) ioVideoAudio.addEventListener("change", () => {
+    state.io.videoAudioEnabled = ioVideoAudio.checked;
+    if (state.io.videoStream) {
+      stopVideoInput();
+      setIoStatus("Restart camera to apply audio selection", "io-status-idle");
+    }
+    saveIoSettings();
+    syncIoControls();
+  });
+  if (ioDeviceRefresh) ioDeviceRefresh.addEventListener("click", refreshMediaDevices);
+  if (ioVideoPopout) ioVideoPopout.addEventListener("click", openVideoPopout);
+  refreshMediaDevices();
 }
 window.addEventListener("beforeunload", () => {
   if (state.io.streaming) {
     stopIoSourceStream();
   }
+  stopVideoInput();
 });
 function attachControls() {
   syncRenderControls();

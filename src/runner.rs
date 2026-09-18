@@ -1644,6 +1644,16 @@ fn parse_rt_env_bool(name: &str) -> Option<bool> {
 }
 
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
+#[inline]
+fn resolve_morpho_async_enabled(
+    explicit_override: Option<bool>,
+    realtime_ipc: Option<bool>,
+    ui_profile: bool,
+) -> bool {
+    explicit_override.or(realtime_ipc).unwrap_or(ui_profile)
+}
+
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
 fn parse_rt_env_usize(name: &str) -> Option<usize> {
     std::env::var(name).ok()?.trim().parse::<usize>().ok()
 }
@@ -4790,12 +4800,15 @@ impl Runner {
             crate::config::apply_clumping_design(&mut net_actual, design);
         }
         if matches!(neuron_model, NeuronModel::Aarnn) && net_actual.growth_enabled {
-            // AARNN growth forms the I/O populations dynamically, but an explicit
-            // hidden topology is still authoritative. Previously this unconditionally
-            // replaced the configured hidden topology with 1x1, which made every
-            // deployment start with one hidden neuron regardless of its config.
-            net_actual.num_sensory_neurons = 0;
-            net_actual.num_output_neurons = 0;
+            // AARNN growth forms I/O populations dynamically for unprofiled
+            // biological networks. Profile snapshots carry mapped I/O
+            // populations, so retain them as the append-only baseline.
+            if net_actual.clumping_design == crate::config::ClumpingDesign::None
+                && net_actual.io_channels_are_biological
+            {
+                net_actual.num_sensory_neurons = 0;
+                net_actual.num_output_neurons = 0;
+            }
             net_actual.num_hidden_layers = net_actual.num_hidden_layers.max(1);
             net_actual.num_hidden_per_layer_initial =
                 net_actual.num_hidden_per_layer_initial.max(1);
@@ -4893,6 +4906,25 @@ impl Runner {
 
         let spk_hist_s = VecDeque::from(vec![Array1::<i8>::zeros(s_count); hist_len]);
         let spk_hist_o = VecDeque::from(vec![Array1::<i8>::zeros(o_count); hist_len]);
+        #[cfg(feature = "growth3d")]
+        let initial_growth_io_targets = if matches!(neuron_model, NeuronModel::Aarnn)
+            && net_actual.growth_enabled
+            && net_actual.io_channels_are_biological
+            && net_actual.growth_io_ratio_policy.enabled
+        {
+            let ratio_targets = net_actual
+                .growth_io_ratio_policy
+                .targets_for_interneurons((l_count as u64).saturating_mul(h_size as u64));
+            (
+                ratio_targets.0.max(net_actual.num_sensory_neurons as u64),
+                ratio_targets.1.max(net_actual.num_output_neurons as u64),
+            )
+        } else {
+            (
+                net_actual.num_sensory_neurons as u64,
+                net_actual.num_output_neurons as u64,
+            )
+        };
         let spk_hist_h = (0..l_count)
             .map(|_| VecDeque::from(vec![Array1::<i8>::zeros(h_size); hist_len]))
             .collect();
@@ -5063,9 +5095,9 @@ impl Runner {
             #[cfg(feature = "growth3d")]
             early_cell_next_id: 1,
             #[cfg(feature = "growth3d")]
-            target_num_sensory: net.num_sensory_neurons,
+            target_num_sensory: initial_growth_io_targets.0.min(usize::MAX as u64) as usize,
             #[cfg(feature = "growth3d")]
-            target_num_output: net.num_output_neurons,
+            target_num_output: initial_growth_io_targets.1.min(usize::MAX as u64) as usize,
             #[cfg(feature = "growth3d")]
             spawn_energy_depletion_zones: Vec::new(),
             #[cfg(feature = "growth3d")]
@@ -5075,8 +5107,15 @@ impl Runner {
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             metabolic_accumulated_dt: 0.0,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
-            morpho_async_enabled: parse_rt_env_bool("NM_MORPHO_ASYNC")
-                .unwrap_or_else(|| parse_rt_env_bool("NM_REALTIME_IPC").unwrap_or(false)),
+            // Morphology evolution is an auxiliary, expensive computation.  UI
+            // profiles must keep it off the stepping/render path by default;
+            // the explicit environment setting remains available for
+            // deterministic profiling and compatibility rollback.
+            morpho_async_enabled: resolve_morpho_async_enabled(
+                parse_rt_env_bool("NM_MORPHO_ASYNC"),
+                parse_rt_env_bool("NM_REALTIME_IPC"),
+                cfg!(feature = "ui"),
+            ),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             morpho_async_rx: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -6508,7 +6547,11 @@ impl Runner {
             // Rebuild morphology after any structural changes
             self.morpho_accumulated_dt = 0.0;
             self.metabolic_accumulated_dt = 0.0;
-            self.morpho_async_rx = None;
+            if self.morpho_async_rx.is_some() {
+                // A reset invalidates a worker's cloned morphology. Keep its
+                // receiver until completion so reset cannot orphan a thread.
+                self.morpho_async_seq = self.morpho_async_seq.wrapping_add(1);
+            }
             let rt_policy = realtime_ipc_policy();
             let morpho_synapse_upper_bound = self.w_in.len()
                 + self.w_out.len()
@@ -15258,8 +15301,10 @@ impl Runner {
                 && (rt_policy.disable_pruning || rt_force_morpho_off))
                 && stage_policy.pruning_enabled;
             if did_spawn && self.morpho_async_rx.is_some() {
-                // Topology changed locally; drop any stale async evolution result.
-                self.morpho_async_rx = None;
+                // Topology changed locally. Invalidate the result, but retain
+                // the receiver until the worker exits so a stale worker cannot
+                // be orphaned while another morphology worker is started.
+                self.morpho_async_seq = self.morpho_async_seq.wrapping_add(1);
             } else if self.morpho_async_enabled {
                 self.apply_ready_morpho_async_result();
             }
@@ -15431,7 +15476,11 @@ impl Runner {
                 }
             } else {
                 self.morpho_accumulated_dt = 0.0;
-                self.morpho_async_rx = None;
+                if self.morpho_async_rx.is_some() {
+                    // Reap the worker on the next loop and discard its result;
+                    // do not orphan it merely because morphology is disabled.
+                    self.morpho_async_seq = self.morpho_async_seq.wrapping_add(1);
+                }
             }
 
             // Metabolic updates consume significant CPU; throttle based on depth
@@ -15555,6 +15604,7 @@ impl Runner {
 
         #[cfg(feature = "growth3d")]
         if is_aarnn && ran_growth_pass {
+            self.refresh_growth_io_targets();
             let (target_in_layer, target_out_layer) = self.get_io_layers();
             let io_interval = (self.net.development_io_formation_interval_ms
                 * stage_policy.io_formation_interval_scale.max(0.0))
@@ -15562,7 +15612,12 @@ impl Runner {
             // Sensory formation: target_in_layer exists
             if self.net.num_hidden_layers > target_in_layer && self.layer_size(target_in_layer) > 0
             {
-                if self.net.num_sensory_neurons < self.target_num_sensory {
+                let growth_capacity_available = self.net.max_total_neurons == 0
+                    || !self.net.io_channels_are_biological
+                    || (self.total_neurons() as u64) < self.net.max_total_neurons;
+                if growth_capacity_available
+                    && self.net.num_sensory_neurons < self.target_num_sensory
+                {
                     if self.t_ms - self.last_sensory_formation_ms >= io_interval {
                         self.last_sensory_formation_ms = self.t_ms;
                         let next_s = self.net.num_sensory_neurons + 1;
@@ -15579,7 +15634,11 @@ impl Runner {
             if self.net.num_hidden_layers > target_out_layer
                 && self.layer_size(target_out_layer) > 0
             {
-                if self.net.num_output_neurons < self.target_num_output {
+                let growth_capacity_available = self.net.max_total_neurons == 0
+                    || !self.net.io_channels_are_biological
+                    || (self.total_neurons() as u64) < self.net.max_total_neurons;
+                if growth_capacity_available && self.net.num_output_neurons < self.target_num_output
+                {
                     if self.t_ms - self.last_output_formation_ms >= io_interval {
                         self.last_output_formation_ms = self.t_ms;
                         let next_o = self.net.num_output_neurons + 1;
@@ -17007,6 +17066,11 @@ impl Runner {
 
         if let Some(done) = done {
             self.morpho_async_rx = None;
+            if done.seq != self.morpho_async_seq {
+                // A topology change occurred while this worker was running.
+                // Its cloned morphology is no longer an admissible base state.
+                return;
+            }
             self.morph = done.morph;
             self.apply_morpho_evolution_result(done.res);
             self.morpho_async_seq = done.seq;
@@ -19638,6 +19702,56 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    fn refresh_growth_io_targets(&mut self) {
+        let policy = self.net.growth_io_ratio_policy.clone();
+        if !policy.enabled || !self.net.io_channels_are_biological {
+            return;
+        }
+
+        // Count only mature hidden cells.  Early cells are still provisional;
+        // admitting peripheral neurons for them would reverse the intended
+        // developmental order and make a failed maturation consume I/O quota.
+        let interneurons = self.v_h.iter().map(|layer| layer.len() as u64).sum::<u64>();
+        let (ratio_sensory, ratio_motor) = policy.targets_for_interneurons(interneurons);
+        let ratio_sensory = ratio_sensory.min(usize::MAX as u64) as usize;
+        let ratio_motor = ratio_motor.min(usize::MAX as u64) as usize;
+
+        // Formation is append-only.  A previously explicit or already
+        // admitted population is never silently removed when a topology is
+        // pruned or restored from an older snapshot.
+        let previous_target_sensory = self.target_num_sensory;
+        let previous_target_motor = self.target_num_output;
+        self.target_num_sensory = self
+            .target_num_sensory
+            .max(self.net.num_sensory_neurons)
+            .max(ratio_sensory);
+        self.target_num_output = self
+            .target_num_output
+            .max(self.net.num_output_neurons)
+            .max(ratio_motor);
+        if self.target_num_sensory != previous_target_sensory
+            || self.target_num_output != previous_target_motor
+        {
+            let report = policy.view(
+                interneurons,
+                self.net.num_sensory_neurons as u64,
+                self.net.num_output_neurons as u64,
+                self.net.io_channels_are_biological,
+            );
+            nm_log!(
+                "[growth] I/O ratio profile={} | {} | {}",
+                report.profile,
+                report.sensory_ratio_text(),
+                report.motor_ratio_text()
+            );
+            nm_log!(
+                "[growth] I/O ratio populations: {}",
+                report.population_text()
+            );
+        }
+    }
+
+    #[cfg(feature = "growth3d")]
     fn collect_growth_candidates(&mut self) {
         self.growth_queue.clear();
         // Global cooldown gate
@@ -21735,6 +21849,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "morpho")]
+    fn morphology_async_profile_has_explicit_override_precedence() {
+        assert_eq!(
+            resolve_morpho_async_enabled(None, None, true),
+            true,
+            "UI profiles default to asynchronous morphology"
+        );
+        assert_eq!(
+            resolve_morpho_async_enabled(None, None, false),
+            false,
+            "headless profiles retain synchronous compatibility by default"
+        );
+        assert!(!resolve_morpho_async_enabled(Some(false), Some(true), true));
+        assert!(resolve_morpho_async_enabled(Some(true), Some(false), false));
+        assert!(resolve_morpho_async_enabled(None, Some(true), false));
+    }
+
+    #[test]
     #[cfg(feature = "opencl")]
     fn aarnn_gpu_membrane_step_matches_reference_runner() {
         if std::env::var("NM_ENABLE_OPENCL_IN_TESTS").ok().as_deref() != Some("1") {
@@ -22744,6 +22876,53 @@ mod tests {
         // AARNN growth still forms I/O populations dynamically.
         assert_eq!(runner.net.num_sensory_neurons, 0);
         assert_eq!(runner.net.num_output_neurons, 0);
+    }
+
+    #[test]
+    fn profiled_aarnn_growth_preserves_mapped_io_baseline() {
+        let mut net = NetworkConfig::default();
+        crate::config::apply_aarnn_drosophila_biomimicry_defaults(&mut net);
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 20;
+        net.num_sensory_neurons = 4;
+        net.num_output_neurons = 2;
+
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+
+        assert_eq!(runner.net.num_sensory_neurons, 4);
+        assert_eq!(runner.net.num_output_neurons, 2);
+        assert_eq!(runner.target_num_sensory, 4);
+        assert_eq!(runner.target_num_output, 2);
+    }
+
+    #[test]
+    fn human_ratio_manager_waits_for_mature_hidden_population() {
+        let mut runner = mk_aarnn_growth_runner();
+        runner.net.growth_io_ratio_policy.enabled = true;
+        runner.net.growth_io_ratio_policy.sensory_per_interneuron = 2;
+        runner.net.growth_io_ratio_policy.motor_per_interneuron = 4;
+        runner.net.growth_io_ratio_policy.sensory_ratio_numerator = 0;
+        runner.net.growth_io_ratio_policy.sensory_ratio_denominator = 0;
+        runner.net.growth_io_ratio_policy.motor_ratio_numerator = 0;
+        runner.net.growth_io_ratio_policy.motor_ratio_denominator = 0;
+
+        runner.refresh_growth_io_targets();
+        assert_eq!(runner.target_num_sensory, 0);
+        assert_eq!(runner.target_num_output, 0);
+
+        // The ratio controller counts only mature hidden state.  Provisional
+        // early cells are intentionally not represented in v_h and therefore
+        // cannot cause peripheral formation.
+        runner.v_h[0] = Array1::zeros(8);
+        runner.refresh_growth_io_targets();
+        assert_eq!(runner.target_num_sensory, 4);
+        assert_eq!(runner.target_num_output, 2);
     }
 
     #[test]

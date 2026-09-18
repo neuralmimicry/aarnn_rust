@@ -1215,6 +1215,31 @@ select {
   color: #ff8a8a;
 }
 
+.io-video-preview {
+  display: block;
+  width: min(100%, 640px);
+  max-height: 360px;
+  background: #05090c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+}
+
+#io-video-controls {
+  flex-wrap: wrap;
+}
+
+.io-device-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.io-device-field select {
+  min-width: 150px;
+  max-width: 260px;
+}
+
 a.btn {
   text-decoration: none;
 }

@@ -6,8 +6,11 @@ aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/webots_runtime_profile.sh"
 
 PIDS=()
+SUPERVISED_PIDS=()
+SUPERVISED_TAGS=()
 REMOTE_PROC_HOSTS=()
 REMOTE_PROC_PIDS=()
 REMOTE_PROC_TAGS=()
@@ -19,6 +22,47 @@ CLEANED_UP=0
 LOCAL_RUST_UI_LOG=""
 WEBOTS_RECORD_WORLD_FILE=""
 WEBOTS_RECORD_PROGRESS_PID=""
+
+register_supervised_pid() {
+    local pid="$1"
+    local tag="$2"
+    SUPERVISED_PIDS+=("$pid")
+    SUPERVISED_TAGS+=("$tag")
+}
+
+pid_is_running() {
+    local pid="$1"
+    kill -0 "$pid" 2>/dev/null || return 1
+    local state
+    state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$state" ] && [[ "$state" != Z* ]]
+}
+
+wait_for_runtime_or_webots() {
+    local webots_status=0
+    while true; do
+        if [ -n "${WEBOTS_PID:-}" ] && ! pid_is_running "$WEBOTS_PID"; then
+            wait "$WEBOTS_PID" || webots_status=$?
+            if [ "$webots_status" -ne 0 ]; then
+                echo "Webots exited with status $webots_status. See $WEBOTS_LOG"
+            fi
+            return "$webots_status"
+        fi
+
+        local i
+        for i in "${!SUPERVISED_PIDS[@]}"; do
+            local pid="${SUPERVISED_PIDS[$i]}"
+            if ! pid_is_running "$pid"; then
+                local runtime_status=0
+                wait "$pid" || runtime_status=$?
+                echo "AARNN runtime '${SUPERVISED_TAGS[$i]}' exited with status $runtime_status."
+                echo "Stopping Webots because its neural runtime is no longer available."
+                return 1
+            fi
+        done
+        sleep 0.25
+    done
+}
 
 cleanup() {
     if [ "$CLEANED_UP" -eq 1 ]; then
@@ -107,6 +151,8 @@ Options:
                            cluster: orchestrator + per-brain nodes (--ui --ipc).
                            uds:     per-brain nn_uds_server instances.
   --no-build               Skip cargo build.
+  --all-features           Opt into Cargo's complete feature graph (default is
+                           the explicit Webots runtime profile).
   --no-diag                Skip UDS diagnostics after launch.
   --world <path>           World file to parse controllerArgs.
   --brains <csv>           Comma-separated brain IDs (overrides NM_BRAINS/world args).
@@ -292,10 +338,11 @@ REALTIME_DISABLE_PRUNING="${NM_REALTIME_DISABLE_PRUNING:-auto}"
 REALTIME_MORPHO_INTERVAL_MS="${NM_REALTIME_MORPHO_INTERVAL_MS:-}"
 REALTIME_METABOLIC_INTERVAL_MS="${NM_REALTIME_METABOLIC_INTERVAL_MS:-}"
 REALTIME_MORPHO_MAX_SYNAPSES="${NM_REALTIME_MORPHO_MAX_SYNAPSES:-}"
-MORPHO_ASYNC="${NM_MORPHO_ASYNC:-auto}"
+MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 WEB_UI_RUNTIME_ROOT="${NM_WEB_UI_RUNTIME_ROOT:-$ROOT_DIR/data/runtime}"
 WEB_UI_DEFAULT_RUNTIME_USER="${NM_WEB_UI_DEFAULT_RUNTIME_USER:-}"
-LOCAL_RUNTIME_FEATURES="${NM_WEBOTS_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
+LOCAL_RUNTIME_FEATURES="$(webots_runtime_profile)"
+read -r -a CARGO_RUNTIME_ARGS <<< "$(webots_cargo_profile_args "$LOCAL_RUNTIME_FEATURES")"
 WEBOTS_PID=""
 WEBOTS_LOG=""
 
@@ -379,6 +426,10 @@ while [ "$#" -gt 0 ]; do
         --runtime)
             shift
             RUNTIME="${1:-$RUNTIME}"
+            ;;
+        --all-features)
+            LOCAL_RUNTIME_FEATURES=all-features
+            read -r -a CARGO_RUNTIME_ARGS <<< "$(webots_cargo_profile_args "$LOCAL_RUNTIME_FEATURES")"
             ;;
         --no-build)
             BUILD=0
@@ -604,6 +655,8 @@ if [ "$RUNTIME" = "uds" ] && [ "$NODE_COUNT" -ne 1 ]; then
     echo "--nodes is only supported with --runtime cluster."
     exit 1
 fi
+
+webots_prepare_management_env "$LOCAL_RUNTIME_FEATURES" "$WEB_UI_RUNTIME_ROOT"
 
 # Cluster launchers must declare the placement contract explicitly. The
 # orchestrator applies these settings to every startup network and workers
@@ -1826,7 +1879,7 @@ start_local_rust_ui_client() {
     local bin="$ROOT_DIR/target/release/aarnn_rust"
     if [ ! -x "$bin" ]; then
         echo "Local rust_ui requested, but executable is missing: $bin"
-        echo "Build with: cargo build --release --no-default-features --bin aarnn_rust --features $LOCAL_RUNTIME_FEATURES"
+        echo "Build with: cargo build --release ${CARGO_RUNTIME_ARGS[*]} --bin aarnn_rust"
         return 1
     fi
 
@@ -2304,7 +2357,7 @@ start_cluster_runtime() {
     local bin="$ROOT_DIR/target/release/aarnn_rust"
     if [ ! -x "$bin" ]; then
         echo "Missing executable: $bin"
-        echo "Build with: cargo build --release --no-default-features --bin aarnn_rust --features $LOCAL_RUNTIME_FEATURES"
+        echo "Build with: cargo build --release ${CARGO_RUNTIME_ARGS[*]} --bin aarnn_rust"
         exit 1
     fi
 
@@ -2364,6 +2417,7 @@ start_cluster_runtime() {
         "${orch_cmd[@]}" >"$orch_log" 2>&1 &
         local orch_pid="$!"
         PIDS+=("$orch_pid")
+        register_supervised_pid "$orch_pid" "orchestrator/$brain"
 
         if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$orch_pid"; then
             echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
@@ -2415,7 +2469,9 @@ start_cluster_runtime() {
         orch_cmd+=(--ui)
     fi
     "${orch_cmd[@]}" >"$orch_log" 2>&1 &
-    PIDS+=("$!")
+    local orch_pid="$!"
+    PIDS+=("$orch_pid")
+    register_supervised_pid "$orch_pid" "orchestrator"
 
     sleep 2
 
@@ -2476,6 +2532,7 @@ start_cluster_runtime() {
         fi
         local node_pid="$!"
         PIDS+=("$node_pid")
+        register_supervised_pid "$node_pid" "node/$brain"
 
         if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$node_pid"; then
             echo "Failed to bind IPC socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
@@ -2550,6 +2607,7 @@ start_cluster_runtime() {
         "${node_cmd[@]}" >"$log_file" 2>&1 &
         local node_pid="$!"
         PIDS+=("$node_pid")
+        register_supervised_pid "$node_pid" "worker/$worker_id"
         if ! wait_for_log_line "$log_file" "Successfully joined orchestrator" "$WEBOTS_CONNECT_TIMEOUT" "$node_pid"; then
             echo "Extra worker '$worker_id' did not register with the orchestrator within ${WEBOTS_CONNECT_TIMEOUT}s"
             echo "See log: $log_file"
@@ -2592,9 +2650,10 @@ build_remote_compute_binaries() {
             exit 1
         fi
         echo "Building remote binaries on $host ..."
-        if ! remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" <<'EOS'
+        if ! remote_exec_script "$host" bash -s -- "$REMOTE_ROOT_DIR" "$LOCAL_RUNTIME_FEATURES" <<'EOS'
 set -euo pipefail
 ROOT="$1"
+RUNTIME_FEATURES="$2"
 if [ -f "$HOME/.cargo/env" ]; then
     # Non-interactive ssh shells skip ~/.bashrc; source cargo explicitly.
     . "$HOME/.cargo/env"
@@ -2764,13 +2823,11 @@ if have_cmd mpicxx; then
 fi
 
 cd "$ROOT"
-REMOTE_FEATURES="${NM_REMOTE_RUNTIME_FEATURES:-growth3d,morpho}"
-if [ -n "$REMOTE_FEATURES" ]; then
-    cargo build --release --bin aarnn_rust --features "$REMOTE_FEATURES"
-    cargo build --release --bin web_ui --features "$REMOTE_FEATURES"
+if [ "$RUNTIME_FEATURES" = all-features ]; then
+    cargo build --release --all-features --bin aarnn_rust --bin web_ui
 else
-    cargo build --release --bin aarnn_rust
-    cargo build --release --bin web_ui
+    cargo build --release --no-default-features --features "$RUNTIME_FEATURES" \
+        --bin aarnn_rust --bin web_ui
 fi
 EOS
         then
@@ -3091,6 +3148,7 @@ start_remote_cluster_runtime() {
         "${bridge_cmd[@]}" >"$bridge_log" 2>&1 &
         local bridge_pid="$!"
         PIDS+=("$bridge_pid")
+        register_supervised_pid "$bridge_pid" "bridge/$brain"
         if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$bridge_pid"; then
             echo "Failed to bind local bridge socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
             echo "See log: $bridge_log"
@@ -3126,7 +3184,7 @@ start_uds_runtime() {
     local bin="$ROOT_DIR/target/release/examples/nn_uds_server"
     if [ ! -x "$bin" ]; then
         echo "Missing executable: $bin"
-        echo "Build with: cargo build --release --example nn_uds_server --features ui,robot_io"
+        echo "Build with: cargo build --release ${CARGO_RUNTIME_ARGS[*]} --example nn_uds_server"
         exit 1
     fi
 
@@ -3176,6 +3234,7 @@ start_uds_runtime() {
         "${uds_cmd[@]}" >"$log_file" 2>&1 &
         local uds_pid="$!"
         PIDS+=("$uds_pid")
+        register_supervised_pid "$uds_pid" "uds/$brain"
 
         if ! wait_for_socket "$socket_path" "$WEBOTS_CONNECT_TIMEOUT" "$uds_pid"; then
             echo "Failed to bind socket for brain '$brain' within ${WEBOTS_CONNECT_TIMEOUT}s: $socket_path"
@@ -3398,14 +3457,14 @@ if [ "$BUILD" -eq 1 ]; then
         echo "Remote compute mode selected: building on remote hosts during remote startup."
         if [ "$LOCAL_RUST_UI" -eq 1 ]; then
             echo "Building local rust_ui binary for native local display..."
-            cargo build --release --no-default-features --bin aarnn_rust --features "$LOCAL_RUNTIME_FEATURES"
+            cargo build --release "${CARGO_RUNTIME_ARGS[@]}" --bin aarnn_rust
         fi
     elif [ "$RUNTIME" = "cluster" ]; then
         echo "Building aarnn_rust binary..."
-        cargo build --release --no-default-features --bin aarnn_rust --features "$LOCAL_RUNTIME_FEATURES"
+        cargo build --release "${CARGO_RUNTIME_ARGS[@]}" --bin aarnn_rust
     else
         echo "Building nn_uds_server example..."
-        cargo build --release --example nn_uds_server --features ui,robot_io
+        cargo build --release "${CARGO_RUNTIME_ARGS[@]}" --example nn_uds_server
     fi
 fi
 
@@ -3470,7 +3529,7 @@ echo "Press Ctrl+C to stop."
 start_webots_recording_progress
 
 if [ "$START_WEBOTS" -eq 1 ] && [ -n "$WEBOTS_PID" ]; then
-    wait "$WEBOTS_PID" || true
+    wait_for_runtime_or_webots
 else
     wait
 fi

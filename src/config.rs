@@ -494,6 +494,414 @@ pub struct NeuronTypeConfig {
     pub bio_params: AarnnBioParams,
 }
 
+/// Population-ratio controller for developmental sensory and motor formation.
+///
+/// The hidden population is the model's interneuron budget.  A floor is used
+/// when deriving I/O targets so a small developing network cannot be flooded
+/// with peripheral cells.  Existing explicitly provisioned I/O is preserved;
+/// this policy governs additions during growth.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GrowthIoRatioPolicy {
+    /// Enable ratio-managed formation of biological sensory and motor neurons.
+    pub enabled: bool,
+    /// Number of hidden/interneuron neurons per sensory neuron.
+    pub sensory_per_interneuron: u64,
+    /// Number of hidden/interneuron neurons per motor neuron.
+    pub motor_per_interneuron: u64,
+    /// Exact sensory/interneuron ratio numerator.  A zero value uses the
+    /// legacy `sensory_per_interneuron` denominator as `1 / denominator`.
+    #[serde(default)]
+    pub sensory_ratio_numerator: u64,
+    /// Exact sensory/interneuron ratio denominator.
+    #[serde(default)]
+    pub sensory_ratio_denominator: u64,
+    /// Exact motor/interneuron ratio numerator.  A zero value uses the
+    /// legacy `motor_per_interneuron` denominator as `1 / denominator`.
+    #[serde(default)]
+    pub motor_ratio_numerator: u64,
+    /// Exact motor/interneuron ratio denominator.
+    #[serde(default)]
+    pub motor_ratio_denominator: u64,
+}
+
+impl GrowthIoRatioPolicy {
+    /// The CNS ratios requested for the human 86-billion-neuron profile.
+    pub const HUMAN_SENSORY_PER_INTERNEURON: u64 = 8_600;
+    pub const HUMAN_MOTOR_PER_INTERNEURON: u64 = 172_000;
+
+    // Canonical projected populations used by the checked-in species/network
+    // generators.  C. elegans I/O is external adapter/readout state, but its
+    // mapped ratio remains available for reports and for any future biological
+    // projection of that profile.
+    pub const CELEGANS_INTERNEURONS: u64 = 302;
+    pub const CELEGANS_SENSORY: u64 = 24;
+    pub const CELEGANS_MOTOR: u64 = 96;
+    pub const DROSOPHILA_INTERNEURONS: u64 = 20_000;
+    pub const DROSOPHILA_SENSORY: u64 = 418;
+    pub const DROSOPHILA_MOTOR: u64 = 48;
+    pub const ZEBRAFISH_INTERNEURONS: u64 = 2_000;
+    pub const ZEBRAFISH_SENSORY: u64 = 32;
+    pub const ZEBRAFISH_MOTOR: u64 = 32;
+
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            sensory_per_interneuron: Self::HUMAN_SENSORY_PER_INTERNEURON,
+            motor_per_interneuron: Self::HUMAN_MOTOR_PER_INTERNEURON,
+            sensory_ratio_numerator: 0,
+            sensory_ratio_denominator: 0,
+            motor_ratio_numerator: 0,
+            motor_ratio_denominator: 0,
+        }
+    }
+
+    pub const fn human_cns() -> Self {
+        Self::from_ratios(
+            1,
+            Self::HUMAN_SENSORY_PER_INTERNEURON,
+            1,
+            Self::HUMAN_MOTOR_PER_INTERNEURON,
+        )
+    }
+
+    pub const fn celegans() -> Self {
+        Self::from_reference_population(
+            Self::CELEGANS_INTERNEURONS,
+            Self::CELEGANS_SENSORY,
+            Self::CELEGANS_MOTOR,
+        )
+    }
+
+    pub const fn drosophila() -> Self {
+        Self::from_reference_population(
+            Self::DROSOPHILA_INTERNEURONS,
+            Self::DROSOPHILA_SENSORY,
+            Self::DROSOPHILA_MOTOR,
+        )
+    }
+
+    pub const fn zebrafish() -> Self {
+        Self::from_reference_population(
+            Self::ZEBRAFISH_INTERNEURONS,
+            Self::ZEBRAFISH_SENSORY,
+            Self::ZEBRAFISH_MOTOR,
+        )
+    }
+
+    /// Hexapod growth follows the Drosophila-derived neural architecture.
+    pub const fn hexapod() -> Self {
+        Self::drosophila()
+    }
+
+    /// NAO uses the human-derived profile and therefore the human CNS policy.
+    pub const fn nao() -> Self {
+        Self::human_cns()
+    }
+
+    /// Average the four independent source network types.  Hexapod and NAO
+    /// are derived profiles, so including them again would double-weight their
+    /// Drosophila and human parents in the unknown-network default.
+    pub const fn unknown_network_average() -> Self {
+        Self::from_ratios(7_563_467, 259_720_000, 43_670_179, 519_440_000)
+    }
+
+    const fn ceil_div(numerator: u64, denominator: u64) -> u64 {
+        if numerator == 0 {
+            1
+        } else {
+            let denominator = if denominator == 0 { 1 } else { denominator };
+            numerator.saturating_add(denominator.saturating_sub(1)) / denominator
+        }
+    }
+
+    const fn nonzero(value: u64) -> u64 {
+        if value == 0 { 1 } else { value }
+    }
+
+    const fn from_ratios(
+        sensory_numerator: u64,
+        sensory_denominator: u64,
+        motor_numerator: u64,
+        motor_denominator: u64,
+    ) -> Self {
+        Self {
+            enabled: true,
+            sensory_per_interneuron: Self::ceil_div(sensory_denominator, sensory_numerator),
+            motor_per_interneuron: Self::ceil_div(motor_denominator, motor_numerator),
+            sensory_ratio_numerator: sensory_numerator,
+            sensory_ratio_denominator: Self::nonzero(sensory_denominator),
+            motor_ratio_numerator: motor_numerator,
+            motor_ratio_denominator: Self::nonzero(motor_denominator),
+        }
+    }
+
+    const fn from_reference_population(interneurons: u64, sensory: u64, motor: u64) -> Self {
+        let interneurons = Self::nonzero(interneurons);
+        Self::from_ratios(sensory, interneurons, motor, interneurons)
+    }
+
+    fn ratio_parts(&self) -> (u128, u128, u128, u128) {
+        let sensory_numerator = if self.sensory_ratio_numerator == 0 {
+            1
+        } else {
+            self.sensory_ratio_numerator
+        };
+        let sensory_denominator = if self.sensory_ratio_denominator == 0 {
+            self.sensory_per_interneuron.max(1)
+        } else {
+            self.sensory_ratio_denominator
+        };
+        let motor_numerator = if self.motor_ratio_numerator == 0 {
+            1
+        } else {
+            self.motor_ratio_numerator
+        };
+        let motor_denominator = if self.motor_ratio_denominator == 0 {
+            self.motor_per_interneuron.max(1)
+        } else {
+            self.motor_ratio_denominator
+        };
+        (
+            u128::from(sensory_numerator),
+            u128::from(sensory_denominator),
+            u128::from(motor_numerator),
+            u128::from(motor_denominator),
+        )
+    }
+
+    /// Return the maximum ratio-managed sensory and motor counts supported by
+    /// a mature hidden/interneuron population.  Integer division deliberately
+    /// floors both values: the next peripheral neuron is admitted only after
+    /// its required hidden population exists.
+    pub fn targets_for_interneurons(&self, interneurons: u64) -> (u64, u64) {
+        if !self.enabled {
+            return (0, 0);
+        }
+        let (sensory_numerator, sensory_denominator, motor_numerator, motor_denominator) =
+            self.ratio_parts();
+        let hidden = u128::from(interneurons);
+        (
+            hidden
+                .saturating_mul(sensory_numerator)
+                .checked_div(sensory_denominator)
+                .unwrap_or(u128::MAX)
+                .min(u128::from(u64::MAX)) as u64,
+            hidden
+                .saturating_mul(motor_numerator)
+                .checked_div(motor_denominator)
+                .unwrap_or(u128::MAX)
+                .min(u128::from(u64::MAX)) as u64,
+        )
+    }
+
+    /// Calculate the integer composition of a final population volume while
+    /// preserving the requested total.  Largest-remainder allocation keeps
+    /// rounding error below one neuron per population.
+    pub fn population_for_total_volume(&self, total_volume: u64) -> GrowthPopulationCounts {
+        if !self.enabled {
+            return GrowthPopulationCounts {
+                interneurons: total_volume,
+                sensory: 0,
+                motor: 0,
+            };
+        }
+
+        let (sensory_numerator, sensory_denominator, motor_numerator, motor_denominator) =
+            self.ratio_parts();
+        let common_denominator = sensory_denominator.saturating_mul(motor_denominator);
+        let total_denominator = common_denominator
+            .saturating_add(sensory_numerator.saturating_mul(motor_denominator))
+            .saturating_add(motor_numerator.saturating_mul(sensory_denominator));
+        let total = u128::from(total_volume);
+        let hidden_numerator = total.saturating_mul(common_denominator);
+        let sensory_population_numerator = total
+            .saturating_mul(sensory_numerator)
+            .saturating_mul(motor_denominator);
+        let motor_population_numerator = total
+            .saturating_mul(motor_numerator)
+            .saturating_mul(sensory_denominator);
+        let hidden_floor = hidden_numerator / total_denominator.max(1);
+        let sensory_floor = sensory_population_numerator / total_denominator.max(1);
+        let motor_floor = motor_population_numerator / total_denominator.max(1);
+
+        let mut counts = GrowthPopulationCounts {
+            interneurons: hidden_floor as u64,
+            sensory: sensory_floor as u64,
+            motor: motor_floor as u64,
+        };
+        let remainder = total_volume.saturating_sub(counts.total());
+        // The exact fractional remainders determine which populations receive
+        // the one-neuron rounding corrections.  At most two corrections are
+        // needed because the three floors leave fewer than three neurons.
+        let mut order = [
+            (hidden_numerator % total_denominator.max(1), 0usize),
+            (
+                sensory_population_numerator % total_denominator.max(1),
+                1usize,
+            ),
+            (
+                motor_population_numerator % total_denominator.max(1),
+                2usize,
+            ),
+        ];
+        order.sort_by(|left, right| right.cmp(left));
+        for (_, population) in order.into_iter().take(remainder as usize) {
+            match population {
+                0 => counts.interneurons = counts.interneurons.saturating_add(1),
+                1 => counts.sensory = counts.sensory.saturating_add(1),
+                _ => counts.motor = counts.motor.saturating_add(1),
+            }
+        }
+        counts
+    }
+
+    /// Return the user-facing source profile represented by this policy.
+    ///
+    /// The comparison is deliberately made against the exact policy values so
+    /// imported configurations remain authoritative.  A policy that does not
+    /// match one of the known source networks is reported as custom rather
+    /// than being silently assigned a biological profile.
+    pub fn profile_label(&self) -> &'static str {
+        if !self.enabled {
+            "Disabled"
+        } else if self.ratio_parts() == Self::human_cns().ratio_parts() {
+            "Human CNS / NAO"
+        } else if self.ratio_parts() == Self::celegans().ratio_parts() {
+            "C. elegans"
+        } else if self.ratio_parts() == Self::drosophila().ratio_parts() {
+            "Drosophila / Hexapod"
+        } else if self.ratio_parts() == Self::zebrafish().ratio_parts() {
+            "Zebrafish"
+        } else if self.ratio_parts() == Self::unknown_network_average().ratio_parts() {
+            "Unknown network average"
+        } else {
+            "Custom ratio policy"
+        }
+    }
+
+    /// Build a consistent report for UI and command-line observability.
+    pub fn view(
+        &self,
+        mature_interneurons: u64,
+        sensory: u64,
+        motor: u64,
+        io_channels_are_biological: bool,
+    ) -> GrowthIoRatioView {
+        let (sensory_numerator, sensory_denominator, motor_numerator, motor_denominator) =
+            self.ratio_parts();
+        let (target_sensory, target_motor) = self.targets_for_interneurons(mature_interneurons);
+        GrowthIoRatioView {
+            profile: self.profile_label(),
+            enabled: self.enabled,
+            io_channels_are_biological,
+            mature_interneurons,
+            sensory,
+            motor,
+            target_sensory,
+            target_motor,
+            sensory_numerator: sensory_numerator.min(u128::from(u64::MAX)) as u64,
+            sensory_denominator: sensory_denominator.min(u128::from(u64::MAX)) as u64,
+            motor_numerator: motor_numerator.min(u128::from(u64::MAX)) as u64,
+            motor_denominator: motor_denominator.min(u128::from(u64::MAX)) as u64,
+        }
+    }
+}
+
+/// A point-in-time projection of the growth ratio used by presentation layers.
+///
+/// `mature_interneurons` is the hidden population that is eligible to form
+/// peripheral neurons.  Provisional early cells are intentionally excluded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrowthIoRatioView {
+    pub profile: &'static str,
+    pub enabled: bool,
+    pub io_channels_are_biological: bool,
+    pub mature_interneurons: u64,
+    pub sensory: u64,
+    pub motor: u64,
+    pub target_sensory: u64,
+    pub target_motor: u64,
+    pub sensory_numerator: u64,
+    pub sensory_denominator: u64,
+    pub motor_numerator: u64,
+    pub motor_denominator: u64,
+}
+
+impl GrowthIoRatioView {
+    fn ratio_text(kind: &str, numerator: u64, denominator: u64) -> String {
+        if numerator == 1 {
+            format!(
+                "1 {} : {} interneurons",
+                kind,
+                format_population_count(denominator)
+            )
+        } else {
+            format!(
+                "{}/{} {} / interneurons (1 {} : {:.2} interneurons)",
+                format_population_count(numerator),
+                format_population_count(denominator),
+                kind,
+                kind,
+                denominator as f64 / numerator.max(1) as f64
+            )
+        }
+    }
+
+    pub fn sensory_ratio_text(&self) -> String {
+        Self::ratio_text("sensory", self.sensory_numerator, self.sensory_denominator)
+    }
+
+    pub fn motor_ratio_text(&self) -> String {
+        Self::ratio_text("motor", self.motor_numerator, self.motor_denominator)
+    }
+
+    pub fn population_text(&self) -> String {
+        format!(
+            "mature interneurons: {} | sensory: {} | motor: {} | ratio targets: sensory {} / motor {}",
+            format_population_count(self.mature_interneurons),
+            format_population_count(self.sensory),
+            format_population_count(self.motor),
+            format_population_count(self.target_sensory),
+            format_population_count(self.target_motor),
+        )
+    }
+}
+
+fn format_population_count(value: u64) -> String {
+    let digits = value.to_string();
+    let first_group = digits.len() % 3;
+    let first_group = if first_group == 0 { 3 } else { first_group };
+    let mut result = String::with_capacity(digits.len() + digits.len() / 3);
+    result.push_str(&digits[..first_group]);
+    for chunk in digits[first_group..].as_bytes().chunks(3) {
+        result.push(',');
+        result.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+    }
+    result
+}
+
+impl Default for GrowthIoRatioPolicy {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GrowthPopulationCounts {
+    pub interneurons: u64,
+    pub sensory: u64,
+    pub motor: u64,
+}
+
+impl GrowthPopulationCounts {
+    pub const fn total(self) -> u64 {
+        self.interneurons
+            .saturating_add(self.sensory)
+            .saturating_add(self.motor)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "shape", rename_all = "snake_case")]
 pub enum RegionShape {
@@ -1283,6 +1691,26 @@ pub fn apply_clumping_design(cfg: &mut NetworkConfig, design: ClumpingDesign) {
         ClumpingDesign::Hexapod => apply_hexapod_design(cfg),
     }
     cfg.clumping_design = design;
+    match design {
+        ClumpingDesign::HumanBrain => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::human_cns();
+        }
+        ClumpingDesign::FruitFly | ClumpingDesign::FruitFlyLarva => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::drosophila();
+        }
+        ClumpingDesign::ZebraFish => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::zebrafish();
+        }
+        ClumpingDesign::NematodeWorm => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::celegans();
+        }
+        ClumpingDesign::Hexapod => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::hexapod();
+        }
+        ClumpingDesign::None => {
+            cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::unknown_network_average();
+        }
+    }
     apply_clumping_layer_defaults(cfg);
 }
 
@@ -1351,6 +1779,7 @@ pub fn brain_region_space_scale(regions: &[BrainRegionConfig]) -> f32 {
 /// human-brain clumping + core AARNN growth/morphology/delay settings.
 pub fn apply_aarnn_human_biomimicry_defaults(cfg: &mut NetworkConfig) {
     cfg.spike_io.profile = NetworkIoProfileSelector::Generic;
+    cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::human_cns();
     cfg.growth_enabled = true;
     cfg.use_morphology = true;
     cfg.morpho_growth_enabled = true;
@@ -1452,6 +1881,13 @@ pub fn apply_aarnn_biomimicry_profile_defaults(
         AarnnBiomimicryProfile::Hexapod => apply_aarnn_hexapod_biomimicry_defaults(cfg),
         AarnnBiomimicryProfile::ZebraFish => apply_aarnn_zebrafish_biomimicry_defaults(cfg),
     }
+    cfg.growth_io_ratio_policy = match profile {
+        AarnnBiomimicryProfile::Human => GrowthIoRatioPolicy::human_cns(),
+        AarnnBiomimicryProfile::Celegans => GrowthIoRatioPolicy::celegans(),
+        AarnnBiomimicryProfile::Drosophila => GrowthIoRatioPolicy::drosophila(),
+        AarnnBiomimicryProfile::Hexapod => GrowthIoRatioPolicy::hexapod(),
+        AarnnBiomimicryProfile::ZebraFish => GrowthIoRatioPolicy::zebrafish(),
+    };
 }
 
 /// Backfill profile-specific values only for fields absent from an imported `net` JSON object.
@@ -1478,6 +1914,7 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
     backfill!(io_channels_are_biological);
     backfill!(brain_regions);
     backfill!(growth_enabled);
+    backfill!(growth_io_ratio_policy);
     backfill!(use_morphology);
     backfill!(morpho_growth_enabled);
     backfill!(max_layers);
@@ -1571,6 +2008,7 @@ pub fn backfill_aarnn_biomimicry_profile_missing_fields(
 /// local coupling and restrained structural development.
 pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::celegans();
     cfg.spike_io.profile = NetworkIoProfileSelector::Celegans;
     // C. elegans imports contain 302 biological neurons. Sensory channels and
     // muscle targets are external adapters/readouts driven by that population.
@@ -1646,6 +2084,7 @@ pub fn apply_aarnn_celegans_biomimicry_defaults(cfg: &mut NetworkConfig) {
 /// active plasticity, and restrained developmental growth.
 pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::drosophila();
     cfg.spike_io.profile = NetworkIoProfileSelector::Drosophila;
 
     cfg.growth_enabled = true;
@@ -1720,6 +2159,7 @@ pub fn apply_aarnn_drosophila_biomimicry_defaults(cfg: &mut NetworkConfig) {
 /// compact thoracic coordination loops, no myelination, and 18 motor outputs.
 pub fn apply_aarnn_hexapod_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::hexapod();
     cfg.spike_io.profile = NetworkIoProfileSelector::Hexapod;
 
     cfg.growth_enabled = true;
@@ -1797,6 +2237,7 @@ pub fn apply_aarnn_hexapod_biomimicry_defaults(cfg: &mut NetworkConfig) {
 /// automatically by `encode_profile_inputs_with` / `decode_profile_outputs`.
 pub fn apply_aarnn_zebrafish_biomimicry_defaults(cfg: &mut NetworkConfig) {
     apply_aarnn_human_biomimicry_defaults(cfg);
+    cfg.growth_io_ratio_policy = GrowthIoRatioPolicy::zebrafish();
     cfg.spike_io.profile = NetworkIoProfileSelector::ZebraFish;
 
     cfg.growth_enabled = true;
@@ -2214,6 +2655,13 @@ pub struct NetworkConfig {
     /// Available neuron types and their biological parameters.
     pub neuron_types: Vec<NeuronTypeConfig>,
 
+    /// Profile-specific controller for adding sensory and motor neurons as the
+    /// hidden/interneuron population develops.  Known profiles use their
+    /// mapped populations; an unknown network uses the average of the
+    /// independent human, C. elegans, Drosophila and zebrafish source types.
+    #[serde(default = "GrowthIoRatioPolicy::unknown_network_average")]
+    pub growth_io_ratio_policy: GrowthIoRatioPolicy,
+
     // --- Growth (3D topology) Parameters ---
     // These are effective when the project is built with the "growth3d" feature.
     /// Master toggle for dynamic 3D growth in the Runner.
@@ -2556,6 +3004,7 @@ impl Default for NetworkConfig {
             brain_regions: Vec::new(),
             clumping_design: ClumpingDesign::None,
             neuron_types: Vec::new(),
+            growth_io_ratio_policy: GrowthIoRatioPolicy::human_cns(),
             growth_enabled: true,
             max_layers: 6,
             saturation_threshold: 0.5,
@@ -2762,6 +3211,15 @@ mod tests {
         assert!(!cfg.brain_regions.is_empty());
         assert!(!cfg.neuron_types.is_empty());
         assert!(cfg.growth_enabled);
+        assert!(cfg.growth_io_ratio_policy.enabled);
+        assert_eq!(
+            cfg.growth_io_ratio_policy.sensory_per_interneuron,
+            GrowthIoRatioPolicy::HUMAN_SENSORY_PER_INTERNEURON
+        );
+        assert_eq!(
+            cfg.growth_io_ratio_policy.motor_per_interneuron,
+            GrowthIoRatioPolicy::HUMAN_MOTOR_PER_INTERNEURON
+        );
         assert!(cfg.use_morphology);
         assert!(cfg.development_growth_interval_ms > 0.0);
         assert!(cfg.development_pruning_interval_ms > 0.0);
@@ -2813,6 +3271,98 @@ mod tests {
         assert!(cfg.aarnn_demyelination_rate > 0.0);
         assert!(cfg.aarnn_myelin_max_conduction_gain > cfg.aarnn_myelin_min_conduction_gain);
         assert_eq!(cfg.num_hidden_layers, 6);
+    }
+
+    #[test]
+    fn human_growth_population_ratios_ramp_without_early_io_overload() {
+        let policy = GrowthIoRatioPolicy::human_cns();
+        assert_eq!(policy.targets_for_interneurons(1), (0, 0));
+        assert_eq!(policy.targets_for_interneurons(8_599), (0, 0));
+        assert_eq!(policy.targets_for_interneurons(8_600), (1, 0));
+        assert_eq!(policy.targets_for_interneurons(172_000), (20, 1));
+
+        let final_counts = policy.population_for_total_volume(86_000_000_000);
+        assert_eq!(final_counts.total(), 86_000_000_000);
+        assert_eq!(final_counts.interneurons, 85_989_501_282);
+        assert_eq!(final_counts.sensory, 9_998_779);
+        assert_eq!(final_counts.motor, 499_939);
+    }
+
+    #[test]
+    fn mapped_profiles_use_their_canonical_io_ratios() {
+        let mut cfg = NetworkConfig::default();
+        apply_aarnn_celegans_biomimicry_defaults(&mut cfg);
+        assert_eq!(
+            cfg.growth_io_ratio_policy.targets_for_interneurons(302),
+            (24, 96)
+        );
+
+        apply_aarnn_drosophila_biomimicry_defaults(&mut cfg);
+        assert_eq!(
+            cfg.growth_io_ratio_policy.targets_for_interneurons(20_000),
+            (418, 48)
+        );
+
+        apply_aarnn_zebrafish_biomimicry_defaults(&mut cfg);
+        assert_eq!(
+            cfg.growth_io_ratio_policy.targets_for_interneurons(2_000),
+            (32, 32)
+        );
+
+        apply_aarnn_hexapod_biomimicry_defaults(&mut cfg);
+        assert_eq!(
+            cfg.growth_io_ratio_policy,
+            GrowthIoRatioPolicy::drosophila()
+        );
+    }
+
+    #[test]
+    fn growth_ratio_view_reports_exact_ratio_and_mature_targets() {
+        let view = GrowthIoRatioPolicy::human_cns().view(17_200, 1, 0, true);
+        assert_eq!(view.profile, "Human CNS / NAO");
+        assert_eq!(view.target_sensory, 2);
+        assert_eq!(view.target_motor, 0);
+        assert_eq!(view.sensory_ratio_text(), "1 sensory : 8,600 interneurons");
+        assert_eq!(view.motor_ratio_text(), "1 motor : 172,000 interneurons");
+        assert!(
+            view.population_text()
+                .contains("mature interneurons: 17,200")
+        );
+    }
+
+    #[test]
+    fn growth_ratio_view_keeps_legacy_human_policy_label() {
+        let mut policy = GrowthIoRatioPolicy::human_cns();
+        policy.sensory_ratio_numerator = 0;
+        policy.sensory_ratio_denominator = 0;
+        policy.motor_ratio_numerator = 0;
+        policy.motor_ratio_denominator = 0;
+        assert_eq!(policy.profile_label(), "Human CNS / NAO");
+    }
+
+    #[test]
+    fn growth_ratio_view_marks_external_connectome_io() {
+        let view = GrowthIoRatioPolicy::celegans().view(302, 24, 96, false);
+        assert_eq!(view.profile, "C. elegans");
+        assert!(!view.io_channels_are_biological);
+        assert_eq!(view.target_sensory, 24);
+        assert_eq!(view.target_motor, 96);
+        assert_eq!(
+            view.sensory_ratio_text(),
+            "24/302 sensory / interneurons (1 sensory : 12.58 interneurons)"
+        );
+    }
+
+    #[test]
+    fn unknown_network_average_is_not_human_only() {
+        let policy = GrowthIoRatioPolicy::unknown_network_average();
+        assert_eq!(policy.sensory_per_interneuron, 35);
+        assert_eq!(policy.motor_per_interneuron, 12);
+        assert_ne!(policy, GrowthIoRatioPolicy::human_cns());
+
+        let mut cfg = NetworkConfig::default();
+        apply_clumping_design(&mut cfg, ClumpingDesign::None);
+        assert_eq!(cfg.growth_io_ratio_policy, policy);
     }
 
     #[test]

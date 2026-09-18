@@ -109,9 +109,12 @@ fn grpc_max_message_bytes() -> usize {
 
 async fn connect_cluster_client(
     addr: String,
-) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, tonic::transport::Error> {
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
     let grpc_max_msg_bytes = grpc_max_message_bytes();
-    let client = DistributedNeuromorphicClient::connect(addr).await?;
+    let endpoint = aarnn_rust::management::grpc_client_endpoint(&addr)?;
+    let client = DistributedNeuromorphicClient::connect(endpoint)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(client
         .max_decoding_message_size(grpc_max_msg_bytes)
         .max_encoding_message_size(grpc_max_msg_bytes))
@@ -1702,6 +1705,10 @@ struct ManagementHttpMigrationQuery {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // --all-features links reqwest's aws-lc-rs and tonic's ring backend in
+    // this process. Select the provider explicitly before the first TLS
+    // handshake instead of relying on rustls process-global auto-detection.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
     validate_production_web_auth(&args)?;

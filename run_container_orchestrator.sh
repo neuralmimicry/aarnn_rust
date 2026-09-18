@@ -27,6 +27,7 @@ PODMAN_ARGS=(
     --rm
     --network=host
     --name "aarnn-orchestrator-$(date +%s)"
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
     -e NMD_TFLITE_ALLOW_LARGE=1
     -v "${OUTPUT_DIR}:/app/outputs:Z"
     -v "${LOG_DIR}:/app/logs:Z"

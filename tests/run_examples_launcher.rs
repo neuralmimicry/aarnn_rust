@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn launcher() -> String {
     fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run_examples.sh"))
@@ -7,29 +8,22 @@ fn launcher() -> String {
 }
 
 #[test]
-fn example_launcher_uses_the_local_non_management_profile() {
+fn example_launcher_uses_the_complete_feature_profile() {
     let source = launcher();
     assert!(
         source.contains("SCRIPT_DIR=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd)\""),
         "the launcher must anchor relative paths to its own checkout"
     );
     assert!(
-        source.contains("cargo build --release --locked --no-default-features \\\n        --bin aarnn_rust --bin web_ui"),
-        "the example launcher must build the local orchestrator profile explicitly"
-    );
-    assert!(
-        source.contains("--features \"engine_runtime,ui,cuda\""),
-        "the native example must build both OpenCL and CUDA candidates for latency selection"
+        source.contains("cargo build --release --locked --all-features \\\n        --bin aarnn_rust --bin web_ui"),
+        "the example launcher must build both binaries with the complete feature graph"
     );
     assert!(
         source.contains("--advertise-addr \"127.0.0.1:$NODE1_PORT\"")
             && source.contains("--advertise-addr \"127.0.0.1:$NODE2_PORT\""),
         "local nodes must advertise reachable loopback endpoints rather than wildcard bind addresses"
     );
-    assert!(
-        !source.contains("cargo build --release --all-features"),
-        "examples must not inherit the authenticated production management service"
-    );
+    assert!(source.contains("scripts/local_management_env.py"));
     assert!(source.contains("--execution-mode distributed,sharded"));
     assert!(source.contains("--execution-scope cluster"));
     assert!(source.contains("--execution-desired-shards 2"));
@@ -83,21 +77,13 @@ fn webcluster_launcher_uses_the_same_local_profile_and_dashboard_output() {
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run_webcluster.sh"))
         .expect("run_webcluster.sh must be present");
     assert!(
-        source.contains("cargo build --release --locked --no-default-features \\\n        --bin aarnn_rust --bin web_ui"),
-        "the webcluster launcher must not compile the authenticated all-features profile"
-    );
-    assert!(
-        source.contains("--features \"engine_runtime,ui,cuda\""),
-        "the webcluster launcher must build both GPU candidates for latency selection"
+        source.contains("cargo build --release --locked --all-features \\\n        --bin aarnn_rust --bin web_ui"),
+        "the webcluster launcher must compile the complete feature graph"
     );
     assert!(
         source.contains("--advertise-addr \"127.0.0.1:$NODE1_PORT\"")
             && source.contains("--advertise-addr \"127.0.0.1:$NODE2_PORT\""),
         "local nodes must advertise reachable loopback endpoints rather than wildcard bind addresses"
-    );
-    assert!(
-        !source.contains("cargo build --release --all-features"),
-        "the webcluster launcher must not inherit the authenticated management service"
     );
     assert!(
         source.contains("$WEB_UI_URL/api/config"),
@@ -107,6 +93,26 @@ fn webcluster_launcher_uses_the_same_local_profile_and_dashboard_output() {
         source.contains("echo \"Web dashboard URL (port $WEB_UI_PORT): $WEB_UI_URL\""),
         "the webcluster launcher must print the exact dashboard URL and port"
     );
+    assert!(source.contains("scripts/local_management_env.py"));
+}
+
+#[test]
+fn management_enabled_launchers_use_the_shared_profile_gate() {
+    for path in [
+        "scripts/run_cluster.sh",
+        "scripts/run_sim.sh",
+        "scripts/run_multi_robot_webots.sh",
+        "run_webot.sh",
+        "run_webcluster.sh",
+    ] {
+        let source = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))
+            .expect("local launcher must be present");
+        assert!(
+            source.contains("local_management_env.py")
+                || source.contains("webots_prepare_management_env"),
+            "{path} must prepare management credentials through the selected feature profile"
+        );
+    }
 }
 
 #[test]
@@ -129,10 +135,11 @@ fn parameterized_cluster_launcher_supports_standalone_single_and_multi_worker_mo
     assert!(source.contains("--execution-scope cluster"));
     assert!(source.contains("--execution-desired-shards"));
     assert!(source.contains("NM_DISTRIBUTE_STARTUP_SNAPSHOT=1"));
+    assert!(source.contains("local_management_env.py"));
 }
 
 #[test]
-fn webots_launcher_forwards_and_materializes_requested_cluster_workers() {
+fn webots_launcher_uses_explicit_profile_with_complete_graph_opt_in() {
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run_webot.sh"))
         .expect("run_webot.sh must be present");
     assert!(source.contains("--nodes <n>"));
@@ -143,7 +150,13 @@ fn webots_launcher_forwards_and_materializes_requested_cluster_workers() {
     );
     assert!(source.contains("Successfully joined orchestrator"));
     assert!(source.contains("worker processes: $NODE_COUNT"));
-    assert!(source.contains("engine_runtime,ui,robot_io,cuda"));
+    assert!(source.contains("webots_runtime_profile.sh"));
+    assert!(source.contains("webots_prepare_management_env"));
+    assert!(source.contains("--no-default-features"));
+    assert!(source.contains("--all-features"));
+    assert!(source.contains("SUPERVISED_PIDS"));
+    assert!(source.contains("wait_for_runtime_or_webots"));
+    assert!(source.contains("Stopping Webots because its neural runtime is no longer available."));
     assert!(source.contains("spec[\"execution_modes\"] = [\"distributed\", \"sharded\"]"));
     assert!(source.contains("spec[\"desired_shards\"] = desired_shards"));
     assert!(source.contains("--execution-mode distributed,sharded"));
@@ -159,6 +172,47 @@ fn webots_launcher_forwards_and_materializes_requested_cluster_workers() {
     assert!(multi_robot_source.contains("--nodes <n>"));
     assert!(multi_robot_source.contains("PASS_THROUGH_ARGS+=(--nodes \"$CLUSTER_NODE_COUNT\")"));
     assert!(multi_robot_source.contains("export NM_CLUSTER_NODES=\"$CLUSTER_NODE_COUNT\""));
+    assert!(multi_robot_source.contains("--all-features"));
+    assert!(multi_robot_source.contains("webots_prepare_management_env"));
+}
+
+#[test]
+fn webots_profile_args_survive_single_line_shell_parsing() {
+    let profile =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/webots_runtime_profile.sh");
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            "source \"$1\"; webots_cargo_profile_args engine_runtime,ui,robot_io,cuda",
+            "bash",
+            profile.to_str().expect("profile path must be UTF-8"),
+        ])
+        .output()
+        .expect("bash must execute the Webots profile helper");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .expect("profile output must be UTF-8")
+            .trim(),
+        "--no-default-features --features engine_runtime,ui,robot_io,cuda"
+    );
+
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            "source \"$1\"; webots_cargo_profile_args all-features",
+            "bash",
+            profile.to_str().expect("profile path must be UTF-8"),
+        ])
+        .output()
+        .expect("bash must execute the Webots profile helper");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .expect("profile output must be UTF-8")
+            .trim(),
+        "--all-features"
+    );
 }
 
 #[test]
@@ -174,9 +228,7 @@ fn simulator_launcher_forwards_node_count_to_the_distributed_webots_backend() {
     assert!(source.contains("--runtime cluster --no-webots --no-diag"));
     assert!(source.contains("target/release/tcp_aer_ipc_bridge"));
     assert!(
-        source.contains(
-            "cargo build --release --locked --no-default-features --features parallel --bin tcp_aer_ipc_bridge"
-        )
+        source.contains("cargo build --release --locked --all-features --bin tcp_aer_ipc_bridge")
     );
     assert!(!source.contains("tcp_aer_ipc_bridge.py"));
     assert!(source.contains("NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"));
@@ -251,6 +303,8 @@ fn robot_combo_launchers_and_container_workers_select_cluster_sharding() {
         assert!(source.contains("hierarchical_backup_sub_shards"));
         assert!(source.contains("backup_hosts_by_layer"));
         assert!(source.contains("backup_ready"));
+        assert!(source.contains("webots_runtime_profile"));
+        assert!(source.contains("prepare_management_environment"));
     }
 
     let entrypoint = fs::read_to_string(concat!(

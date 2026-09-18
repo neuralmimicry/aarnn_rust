@@ -73,6 +73,8 @@ network_drosophila.json
 *.rar
 data/
 *.mp4
+# Small checked-in media fixture used to verify video-container audio decoding.
+!tests/fixtures/video-with-audio.mp4
 log.txt
 check_errors.txt
 tracey.log*

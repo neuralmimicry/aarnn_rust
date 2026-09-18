@@ -8,6 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
+
 # Script to start two example networks:
 # 1. A standalone network running in a single process.
 # 2. A distributed network (orchestrator + node) with autodiscovery.
@@ -152,6 +154,15 @@ EXAMPLE_RUNTIME_ROOT="${EXAMPLE_RUNTIME_ROOT:-data/examples-runtime}"
 BIN_DIR="${AARNN_BIN_DIR:-target/release}"
 mkdir -p "$EXAMPLE_RUNTIME_ROOT"
 
+# --all-features includes management_v1. The shared helper keeps this
+# loopback launcher on the authenticated mTLS path used by the complete build.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to prepare the local management environment" >&2
+    exit 1
+fi
+eval "$(python3 "$SCRIPT_DIR/scripts/local_management_env.py" \
+    --runtime-root "$EXAMPLE_RUNTIME_ROOT" --shell)"
+
 # An explicit audio source is loaded by the native Rust UI at startup.  Keep
 # this opt-in so the example launcher remains useful on machines without the
 # operator's media files, while validating the requested source before any
@@ -230,14 +241,11 @@ echo "Building project..."
 if [ "${AARNN_SKIP_BUILD:-0}" = "1" ]; then
     echo "Skipping build (AARNN_SKIP_BUILD=1); using binaries from $BIN_DIR"
 else
-    # Keep the local example profile explicit.  In particular, do not use
-    # --all-features here: management_v1 is a production-only, authenticated
-    # control-plane profile and requires bearer credentials plus mTLS.
-    # Build both entry points in one package feature graph.  Building the
-    # binaries separately with different feature sets makes Cargo rebuild the
-    # shared library before the dashboard can start.
-    cargo build --release --locked --no-default-features \
-        --bin aarnn_rust --bin web_ui --features "engine_runtime,ui,cuda"
+    # Build both entry points in one complete package feature graph. Building
+    # the binaries separately with different feature sets makes Cargo rebuild
+    # the shared library before the dashboard can start.
+    cargo build --release --locked --all-features \
+        --bin aarnn_rust --bin web_ui
 fi
 
 # The live launcher below remains a compatibility smoke for the current
@@ -247,7 +255,7 @@ fi
 # ordinary example startup independent of Cargo's test profile.
 VERIFY_HIERARCHICAL_SHARDING="${AARNN_VERIFY_HIERARCHICAL_SHARDING:-0}"
 if [ "$VERIFY_HIERARCHICAL_SHARDING" = "1" ]; then
-    cargo test --locked --no-default-features --features parallel \
+    cargo test --locked --all-features \
         --test hierarchical_sharding -- --nocapture
     echo "Hierarchical network/area/layer/sub-shard latency verification passed."
 fi

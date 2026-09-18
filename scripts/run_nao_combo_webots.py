@@ -32,6 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+from webots_runtime_profile import (
+    cargo_feature_args,
+    prepare_management_environment,
+    runtime_profile,
+)
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 LOCAL_BIND_HOST = "127.0.0.1"
@@ -452,7 +458,7 @@ def resolve_runtime_binaries(args: argparse.Namespace, logs_dir: Path) -> tuple[
                 "aarnn_rust",
                 "--bin",
                 "web_ui",
-                "--all-features",
+                *cargo_feature_args(runtime_profile(args.all_features)),
             ],
             cwd=ROOT_DIR,
             log_path=logs_dir / "cargo_build.log",
@@ -916,6 +922,11 @@ def parse_args() -> argparse.Namespace:
             "nodes against a single sharded NAO Webots network."
         )
     )
+    parser.add_argument(
+        "--all-features",
+        action="store_true",
+        help="Build with Cargo's complete feature graph instead of the Webots profile.",
+    )
     parser.add_argument("--build", action="store_true", help="Force a fresh release build first.")
     parser.add_argument(
         "--no-webots",
@@ -1055,6 +1066,13 @@ def main() -> int:
         signal.signal(sig, _signal_handler)
 
     try:
+        try:
+            profile = runtime_profile(args.all_features)
+            os.environ.update(
+                prepare_management_environment(profile, logs_dir / "management-runtime")
+            )
+        except RuntimeError as exc:
+            raise LaunchError(str(exc)) from exc
         aarnn_bin, web_ui_bin = resolve_runtime_binaries(args, logs_dir)
         ensure_controller_binary(args, logs_dir)
 

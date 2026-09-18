@@ -10,6 +10,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
+
 usage() {
     cat <<'USAGE'
 Usage: scripts/run_cluster.sh [options]
@@ -34,8 +36,7 @@ Options:
   --web-port PORT            Fixed web UI port; otherwise auto.
   --no-web                   Do not start web_ui.
   --no-build                 Reuse binaries already in --bin-dir.
-  --features LIST             Cargo features for a build.
-                            Default: engine_runtime,ui,cuda.
+  --features LIST             Compatibility option; builds use --all-features.
   -h, --help                 Show this help.
 
 Environment equivalents:
@@ -57,7 +58,7 @@ NETWORK_PATH="${NETWORK_PATH:-}"
 BIN_DIR="${AARNN_BIN_DIR:-target/release}"
 LOG_DIR="${AARNN_CLUSTER_LOG_DIR:-logs/local-cluster}"
 RUNTIME_ROOT="${AARNN_CLUSTER_RUNTIME_ROOT:-data/local-cluster-runtime}"
-FEATURES="${AARNN_CLUSTER_FEATURES:-engine_runtime,ui,cuda}"
+FEATURES="${AARNN_CLUSTER_FEATURES:-all-features}"
 NO_WEB="${AARNN_CLUSTER_NO_WEB:-0}"
 NO_BUILD="${AARNN_CLUSTER_NO_BUILD:-0}"
 ORCH_PORT="${AARNN_CLUSTER_ORCHESTRATOR_PORT:-}"
@@ -121,10 +122,17 @@ if [[ -n "$NETWORK_PATH" && ! -f "$NETWORK_PATH" ]]; then
 fi
 
 if [[ "$NO_BUILD" != "1" ]]; then
-    echo "Building local cluster binaries with features: $FEATURES"
-    cargo build --release --locked --no-default-features \
-        --bin aarnn_rust --bin web_ui --features "$FEATURES"
+    echo "Building local cluster binaries with --all-features (requested profile: $FEATURES)"
+    cargo build --release --locked --all-features \
+        --bin aarnn_rust --bin web_ui
 fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to prepare the local management environment" >&2
+    exit 1
+fi
+eval "$(python3 "$ROOT_DIR/scripts/local_management_env.py" \
+    --runtime-root "$RUNTIME_ROOT" --shell)"
 
 AARNN_BIN="${BIN_DIR}/aarnn_rust"
 WEB_BIN="${BIN_DIR}/web_ui"

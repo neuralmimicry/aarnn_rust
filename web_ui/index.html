@@ -319,6 +319,9 @@
               <label class="check"><input type="checkbox" id="growth-3d" checked /> Enable growth 3D topology</label>
               <label class="check"><input type="checkbox" id="show-region-labels" checked /> Show region labels</label>
             </div>
+            <div class="panel-note" id="growth-io-ratio" aria-live="polite">
+              I/O ratio profile: waiting for network snapshot
+            </div>
           </section>
 
           <section class="panel">
@@ -328,6 +331,8 @@
               <select id="io-input-source">
                 <option value="none">Disabled</option>
                 <option value="aer-http-stream">HTTP/HTTPS AER stream (NDJSON)</option>
+                <option value="video-file">Video file</option>
+                <option value="camera">Camera</option>
               </select>
             </div>
             <div class="panel-row io-row">
@@ -338,6 +343,27 @@
               <label for="io-aer-base">AER base</label>
               <input id="io-aer-base" type="number" min="0" step="1" value="0" />
               <button class="btn ghost" id="io-source-toggle" type="button">Connect</button>
+            </div>
+            <div class="panel-row io-row" id="io-video-controls" hidden>
+              <input id="io-video-file" type="file" accept="video/*" hidden />
+              <button class="btn ghost" id="io-video-file-pick" type="button">Choose video</button>
+              <label class="io-device-field" for="io-camera-device">Camera
+                <select id="io-camera-device"><option value="">System camera</option></select>
+              </label>
+              <button class="btn ghost" id="io-camera-toggle" type="button">Start camera</button>
+              <button class="btn ghost" id="io-video-popout" type="button">Pop out video</button>
+            </div>
+            <div class="panel-row io-row" id="io-video-audio-controls" hidden>
+              <label class="check"><input type="checkbox" id="io-video-audio" /> Include microphone audio</label>
+              <label class="io-device-field" for="io-audio-device">Audio device
+                <select id="io-audio-device"><option value="">System microphone</option></select>
+              </label>
+              <button class="btn ghost" id="io-device-refresh" type="button">Refresh devices</button>
+              <span id="io-video-audio-status" class="panel-note">Audio is separate from camera permission.</span>
+            </div>
+            <div class="panel-row io-row" id="io-video-preview-row" hidden>
+              <video id="io-video-preview" class="io-video-preview" controls muted playsinline></video>
+              <div class="panel-body muted">Preview is display state. The governed video transducer remains separate from preview pixels.</div>
             </div>
             <div class="panel-row io-row">
               <div>Status: <span id="io-source-status" class="io-status io-status-idle">Disconnected</span></div>

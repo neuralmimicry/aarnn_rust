@@ -47,6 +47,16 @@ Locate Phase 7 management clients, browser asset/build paths (`app.js`, `index.h
 
 The intended modules are `peripheral/session`, `peripheral/clock`, `peripheral/admission`, `peripheral/multiplexer`, `device/usb_aer`, `transducer/{audio,video,aer,hid}`, `effect/commit`, `effect/dedupe`, `effect/safety`, `gateway/media`, `client_web/io`, `client_native/io`, `federation/link` and `federation/time`. USB/media adapters do not mutate neural state directly; transducers emit ordinary versioned causal events through the governed data plane.
 
+The current checkout resolves the implementation paths to `src/providers.rs` and
+`src/ui.rs` for the native Rust UI, `web_ui/index.html`, `web_ui/app.js` and
+`web_ui/style.css` for the browser shell, `apps/android/app/src/main/**` for
+the Android shell, and no checked-in `apps/ios` project. The existing visual
+providers produce sensory spikes but do not retain a preview frame; the web
+input panel only admits HTTP AER; Android reports camera/media unavailable;
+and the flat CLI has no video-file or camera source flags. This feature closes
+the user-visible preview/parity slice while retaining the governed admission
+boundary and recording the missing iOS project as a delivery constraint.
+
 ## Architecture and safety constraints
 
 External samples carry device/session sequence and capture-clock timestamps. A versioned calibration maps capture time to an eligible `LogicalTag` using declared rounding, uncertainty and late policy; arrival jitter affects latency metrics only. Sleep/clock jumps close one mapping and create another. Recorded replay pins raw input, clock map, transducer version/config, numerical profile and admission policy.
@@ -84,6 +94,17 @@ Add secure-context capability detection, consent/revocation, microphone/camera/d
 ### Milestone 8.5 — Rust workstation I/O
 
 Add OS capability reports, permission/hot-plug handling, non-blocking audio/video/display/focused-input pipelines, a narrow libusb/rusb-equivalent USB AER adapter and committed presentation. Use asynchronous/bounded USB transfer submission and completion; never block the render, audio or management runtime. Keep optional virtual HID behind a separately compiled/configured safety gate; run watchdog/emergency-stop tests per supported OS before enabling it anywhere.
+
+### Milestone 8.5a — Cross-product video preview and interface parity
+
+When the selected input is a video file or camera, retain only the latest
+bounded decoded frame for presentation in a native floating egui window, a
+browser video pop-out, and mobile preview dialogs/sheets. Keep raw preview
+pixels separate from admitted sensory events, preserve explicit stop/close
+state, and expose the same source vocabulary (`video-file` and `camera`) through
+the CLI and product capability reports. iOS source is added as a portable
+SwiftUI contract because the repository currently has no Xcode project; the
+actual signed application remains an external platform packaging gate.
 
 ### Milestone 8.6 — Federation and multi-workstation load
 
@@ -202,6 +223,35 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   tests into physical USB/Lightning/MFi, browser automation, native media,
   scientific or signed mobile evidence. Those required lanes remain blocked
   and `workstation_io` remains disabled.
+- [x] `2026-09-18 08:00Z` Completed milestone 8.5a's cross-product video
+  preview slice. Rust UI providers now retain one bounded latest RGB frame and
+  show it in a floating egui window; web, Android and the portable iOS
+  SwiftUI surface expose `video-file` and `camera` with explicit preview
+  lifecycle and pop-out controls; CLI `--video-file` and `--camera` select the
+  same native UI sources. `cargo fmt --all --check`, the feature-gated Rust
+  check, the bounded provider test, the web parity/browser-compatibility test,
+  `node --check web_ui/app.js`, Android JVM tests and `git diff --check` pass.
+  The iOS Xcode/signing gate and governed mobile AER admission remain open.
+- [x] `2026-09-18 11:45Z` Tidied the I/O dashboard around an explicit source
+  selection group and source-specific status/actions. Rust now enumerates all
+  Nokhwa cameras, preserves numeric or backend string identities, disambiguates
+  duplicate names, refreshes hot-plug state, stops capture when the selected
+  device disappears, and starts the selected device instead of camera 0. Video
+  containers with a decodable audio track are composed with the audio provider;
+  camera microphone pairing remains a separate opt-in and enables Graphic EQ
+  only after the audio provider starts. The web and Android surfaces now have
+  matching camera/audio selectors, refresh actions and audio/EQ state; iOS
+  enumerates camera devices and keeps audio permission separate. The focused
+  provider tests, feature check, browser parity test, Node syntax check and
+  Android JVM tests pass.
+- [x] `2026-09-18 13:10Z` Closed the reported video-audio EQ regression. MP4/MOV
+  audio probing now enables Symphonia ISO-MP4 support, selects only tracks with
+  a registered audio decoder, and accepts AAC containers whose channel count is
+  supplied by the decoder rather than the container metadata. Video startup
+  through the CLI now initializes the same Graphic EQ and audio diagnostics as
+  picker-based video selection. The permanent MP4/AAC fixture regression test,
+  focused provider suite, feature build, web parity test, Node syntax check and
+  diff validation pass.
 
 ## Validation and acceptance
 
@@ -243,6 +293,16 @@ reachable for rollback.
 - Initial decision: browser input is focused/consented and browser global HID output is unavailable. Authority: Sections 16.21 and 16.23.
 - Initial decision: native/global HID is optional and remains independently safety-gated after general workstation I/O completion. Authority: Sections 16.15, 16.19 and 16.23.
 - Initial decision: federation links use positive minimum delay unless a separately approved component design proves otherwise. Authority: Sections 12.2–12.3.
+- `2026-09-18 / DEC-0085A`: use one canonical source vocabulary (`video-file`
+  and `camera`) across Rust UI, web, Android, iOS and CLI. Preview pixels are
+  latest-frame UI state only and never become biological timestamps or causal
+  events. Authority: Sections 16.17–16.22 and `INV-002`, `INV-015`, `INV-017`.
+- `2026-09-18 / DEC-0085B`: camera identity is the backend-provided Nokhwa
+  index string, not a display name or an assumed numeric slot. Camera and
+  microphone permissions remain independent. A video file's audio track, or an
+  explicitly selected microphone companion for a camera, is composed at the
+  sensory boundary and is the only condition that turns on Graphic EQ for that
+  video session. Authority: Sections 16.17, 16.21 and `INV-017`.
 
 ## Outcomes & Retrospective
 
@@ -250,3 +310,9 @@ The governed reference contracts and host checks pass. Browser/native I/O,
 USB-AER, federation, scientific validation, migration/rollback and legacy
 removal evidence remain open, so the final definition-of-done gate is not
 claimed.
+
+The video preview slice is complete within those boundaries: preview pixels
+are display state only, source changes close stale previews, and each shipped
+surface has the same `video-file`/`camera` vocabulary and source-ready pop-out
+state. Mobile remains a preview/reference shell until its signed packaging and
+governed admission integrations are delivered.

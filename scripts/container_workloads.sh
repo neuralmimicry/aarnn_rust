@@ -21,12 +21,9 @@ aarnn_container_workload_features() {
     local workload="$1"
     aarnn_container_validate_workload "$workload" >/dev/null
     case "$workload" in
-        standalone) printf '%s' 'standalone_workload' ;;
-        orchestrator) printf '%s' 'orchestrator_workload' ;;
-        node) printf '%s' 'node_workload' ;;
-        stable-orchestrator|stable-node) printf '%s' 'stable_runtime_workload' ;;
-        web-ui) printf '%s' 'web_ui_workload' ;;
-        desktop-ui) printf '%s' 'desktop_ui_workload' ;;
+        standalone|orchestrator|node|stable-orchestrator|stable-node|web-ui|desktop-ui)
+            printf '%s' 'all-features'
+            ;;
     esac
 }
 

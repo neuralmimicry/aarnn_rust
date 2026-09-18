@@ -51,6 +51,7 @@ PODMAN_ARGS=(
     --userns=keep-id
     --user "$(id -u):$(id -g)"
     --name "aarnn-desktop-ui-$(date +%s)"
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
     -e DISPLAY="${DISPLAY}"
     -e XAUTHORITY=/tmp/.Xauthority
     -e XDG_CACHE_HOME=/tmp/cache

@@ -19,6 +19,7 @@ PODMAN_ARGS=(
     --rm
     --network=host
     --name "aarnn-web-ui-$(date +%s)"
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
     -v "${RUNTIME_ROOT_HOST}:/app/data/runtime:Z"
 )
 RUN_ARGS=(

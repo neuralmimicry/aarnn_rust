@@ -587,13 +587,37 @@ impl AxonSegIndex {
         let cs = cell_size.max(0.01);
         let dim = (2.0 / cs).ceil() as usize;
         let num_cells = dim.saturating_mul(dim).saturating_mul(dim);
+        // Estimate grid expansion before allocating and populating it. Long
+        // or diagonal segments can touch hundreds of cells, making repeated
+        // grid insertion much more expensive than the bounding-box octree.
+        let mut estimated_grid_refs = 0usize;
+        for seg in &segs {
+            let pad = contact_dist;
+            let min_gx = ((seg.min.x - pad) / cs).floor() as i64;
+            let max_gx = ((seg.max.x + pad) / cs).floor() as i64;
+            let min_gy = ((seg.min.y - pad) / cs).floor() as i64;
+            let max_gy = ((seg.max.y + pad) / cs).floor() as i64;
+            let min_gz = ((seg.min.z - pad) / cs).floor() as i64;
+            let max_gz = ((seg.max.z + pad) / cs).floor() as i64;
+            let cells_x = (max_gx - min_gx + 1).max(0) as usize;
+            let cells_y = (max_gy - min_gy + 1).max(0) as usize;
+            let cells_z = (max_gz - min_gz + 1).max(0) as usize;
+            let cells = cells_x.saturating_mul(cells_y).saturating_mul(cells_z);
+            if cells <= 512 {
+                estimated_grid_refs = estimated_grid_refs.saturating_add(cells);
+            }
+        }
         let use_octree = num_cells > 2_000_000
             || (segs.len() > 512 && num_cells > segs.len().saturating_mul(64));
+        let use_octree = use_octree
+            || estimated_grid_refs > 1_000_000
+            || (segs.len() > 512 && estimated_grid_refs > segs.len().saturating_mul(64));
         if use_octree {
             return AxonSegIndex::Octree(OctreeSegIndex::build(segs, cs));
         }
 
         let mut map: FastHashMap<u64, Vec<usize>> = FastHashMap::default();
+        map.reserve(estimated_grid_refs.min(1_000_000));
         for (idx, seg) in segs.iter().enumerate() {
             let pad = contact_dist;
             let min_gx = ((seg.min.x - pad) / cs).floor() as i64;
@@ -626,7 +650,7 @@ impl AxonSegIndex {
         }
     }
 
-    fn for_each_candidate<F: FnMut(SegRef) -> bool>(&self, p: Point3, r: f32, mut f: F) {
+    fn for_each_candidate<F: FnMut(usize, SegRef) -> bool>(&self, p: Point3, r: f32, mut f: F) {
         match self {
             AxonSegIndex::Grid {
                 cell_size,
@@ -646,7 +670,7 @@ impl AxonSegIndex {
                                 | ((((gz + dz + 1048576) & 0x1FFFFF) as u64) << 42);
                             if let Some(list) = map.get(&key) {
                                 for &idx in list {
-                                    if !f(segs[idx]) {
+                                    if !f(idx, segs[idx]) {
                                         return;
                                     }
                                 }
@@ -661,11 +685,32 @@ impl AxonSegIndex {
         }
     }
 
-    fn collect_candidates(&self, p: Point3, r: f32, out: &mut Vec<SegRef>) {
+    fn collect_candidates_bounded(
+        &self,
+        p: Point3,
+        r: f32,
+        limit: usize,
+        out: &mut Vec<SegRef>,
+        seen: &mut FastHashMap<u64, ()>,
+    ) {
         out.clear();
-        self.for_each_candidate(p, r, |seg| {
+        seen.clear();
+        if limit == 0 {
+            return;
+        }
+
+        // A segment can occupy several neighbouring cells after the contact
+        // radius is padded into the index.  Do not materialise every repeated
+        // reference only to discard it later at the per-tip check limit.
+        // The index position is unique and avoids rebuilding a packed endpoint
+        // key for every repeated grid-cell reference.  `seen` is caller-owned
+        // so its buckets are reused for every dendrite tip.
+        self.for_each_candidate(p, r, |idx, seg| {
+            if seen.insert(idx as u64, ()).is_some() {
+                return true;
+            }
             out.push(seg);
-            true
+            out.len() < limit
         });
     }
 }
@@ -903,7 +948,7 @@ impl OctreeSegNode {
         dx.mul_add(dx, dy.mul_add(dy, dz * dz))
     }
 
-    fn for_each_candidate<F: FnMut(SegRef) -> bool>(
+    fn for_each_candidate<F: FnMut(usize, SegRef) -> bool>(
         &self,
         p: Point3,
         r2: f32,
@@ -916,7 +961,7 @@ impl OctreeSegNode {
         for &idx in &self.indices {
             let seg = segs[idx];
             if Self::point_aabb_dist2(p, seg.min, seg.max) <= r2 {
-                if !f(seg) {
+                if !f(idx, seg) {
                     return false;
                 }
             }
@@ -4047,6 +4092,7 @@ impl Morphology {
         let should_log = unsafe { CALL_COUNT % 100 == 0 };
         let is_trace = std::env::var("NM_TRACE").is_ok();
         let mut stats = MorphoStats::default();
+        let mut phase_start = std::time::Instant::now();
 
         observe_time!("morphology/evolve");
         let mut res = EvolutionResult::default();
@@ -4515,6 +4561,10 @@ impl Morphology {
             soma.stimuli = (soma.stimuli * decay).clamp(0.1, 1.0);
         }
 
+        crate::obs::Metrics::global()
+            .record("morphology/evolve/grid_energy", phase_start.elapsed());
+        phase_start = std::time::Instant::now();
+
         // Identify broken synapses
         let mut old_idx = 0;
         let mut new_idx = 0;
@@ -4568,68 +4618,69 @@ impl Morphology {
         layers_axons_prune.extend(self.axons.iter_mut());
         for layer in layers_axons_prune {
             for axon in layer {
-                let mut to_remove = std::collections::HashSet::new();
-                let mut changed = true;
-                while changed {
-                    changed = false;
-                    for i in 0..axon.segments.len() {
-                        if to_remove.contains(&i) {
-                            continue;
-                        }
-                        let seg = &axon.segments[i];
+                let segment_count = axon.segments.len();
+                let mut to_remove = vec![false; segment_count];
+                let mut active_children = vec![0usize; segment_count];
+                for seg in &axon.segments {
+                    if let Some(parent) = seg.parent_idx.filter(|&p| p < segment_count) {
+                        active_children[parent] += 1;
+                    }
+                }
+                let original_children = active_children.clone();
 
-                        // Root of trunk is protected
-                        if seg.is_trunk && seg.parent_idx.is_none() {
-                            continue;
-                        }
+                // The previous implementation repeatedly scanned every child
+                // list and used a HashSet for each pass.  A queue plus child
+                // counts preserves the same upward-pruning rule in linear time
+                // while keeping the original stable segment order.
+                let mut pending = std::collections::VecDeque::with_capacity(segment_count);
+                pending.extend(0..segment_count);
+                while let Some(i) = pending.pop_front() {
+                    if to_remove[i] {
+                        continue;
+                    }
+                    let seg = &axon.segments[i];
 
-                        // Check bouton status
-                        let has_bouton = if let Some(syn_idx) = seg.syn_index {
-                            old_to_new[syn_idx].is_some()
-                        } else {
-                            false
-                        };
-                        let lost_bouton = seg.syn_index.is_some() && !has_bouton;
+                    // Root of trunk is protected.
+                    if seg.is_trunk && seg.parent_idx.is_none() {
+                        continue;
+                    }
 
-                        if !has_bouton {
-                            // Check if it has any active children
-                            let mut has_active_children = false;
-                            for (ci, cseg) in axon.segments.iter().enumerate() {
-                                if cseg.parent_idx == Some(i) && !to_remove.contains(&ci) {
-                                    has_active_children = true;
-                                    break;
-                                }
-                            }
+                    let has_bouton = seg
+                        .syn_index
+                        .map(|syn_idx| old_to_new[syn_idx].is_some())
+                        .unwrap_or(false);
+                    let lost_bouton = seg.syn_index.is_some() && !has_bouton;
+                    let is_original_leaf = original_children[i] == 0;
 
-                            let is_original_leaf =
-                                !axon.segments.iter().any(|s| s.parent_idx == Some(i));
-
-                            // Pruning triggers:
-                            // - Just lost bouton
-                            // - Is a leaf with low stimuli (failed to find contact)
-                            // - Was a parent but all children are pruned (upward propagation)
-                            if lost_bouton
-                                || (!has_active_children
-                                    && (seg.stimuli < break_threshold || !is_original_leaf))
-                            {
-                                to_remove.insert(i);
-                                changed = true;
-                            }
+                    // Pruning triggers:
+                    // - Just lost bouton
+                    // - Is a leaf with low stimuli (failed to find contact)
+                    // - Was a parent but all children are pruned
+                    if !has_bouton
+                        && (lost_bouton
+                            || (active_children[i] == 0
+                                && (seg.stimuli < break_threshold || !is_original_leaf)))
+                    {
+                        to_remove[i] = true;
+                        if let Some(parent) = seg.parent_idx.filter(|&p| p < segment_count) {
+                            active_children[parent] = active_children[parent].saturating_sub(1);
+                            pending.push_back(parent);
                         }
                     }
                 }
-                if !to_remove.is_empty() {
+
+                if to_remove.iter().any(|removed| *removed) {
                     let mut new_segs = Vec::new();
-                    let mut seg_old_to_new = std::collections::HashMap::new();
+                    let mut seg_old_to_new = vec![None; segment_count];
                     for (i, seg) in axon.segments.drain(..).enumerate() {
-                        if !to_remove.contains(&i) {
-                            seg_old_to_new.insert(i, new_segs.len());
+                        if !to_remove[i] {
+                            seg_old_to_new[i] = Some(new_segs.len());
                             new_segs.push(seg);
                         }
                     }
                     for seg in &mut new_segs {
                         if let Some(pidx) = seg.parent_idx {
-                            seg.parent_idx = seg_old_to_new.get(&pidx).copied();
+                            seg.parent_idx = seg_old_to_new.get(pidx).copied().flatten();
                         }
                     }
                     axon.segments = new_segs;
@@ -4642,60 +4693,57 @@ impl Morphology {
         layers_dends_prune.extend(self.dendrites.iter_mut());
         for layer in layers_dends_prune {
             for dend in layer {
-                let mut to_remove = std::collections::HashSet::new();
-                let mut changed = true;
-                while changed {
-                    changed = false;
-                    for i in 0..dend.tree.branches.len() {
-                        if to_remove.contains(&i) {
-                            continue;
-                        }
-                        let seg = &dend.tree.branches[i];
-                        if seg.is_trunk && seg.parent_idx.is_none() {
-                            continue;
-                        }
+                let segment_count = dend.tree.branches.len();
+                let mut to_remove = vec![false; segment_count];
+                let mut active_children = vec![0usize; segment_count];
+                for seg in &dend.tree.branches {
+                    if let Some(parent) = seg.parent_idx.filter(|&p| p < segment_count) {
+                        active_children[parent] += 1;
+                    }
+                }
+                let original_children = active_children.clone();
+                let mut pending = std::collections::VecDeque::with_capacity(segment_count);
+                pending.extend(0..segment_count);
+                while let Some(i) = pending.pop_front() {
+                    if to_remove[i] {
+                        continue;
+                    }
+                    let seg = &dend.tree.branches[i];
+                    if seg.is_trunk && seg.parent_idx.is_none() {
+                        continue;
+                    }
 
-                        let has_bouton = if let Some(syn_idx) = seg.syn_index {
-                            old_to_new[syn_idx].is_some()
-                        } else {
-                            false
-                        };
-                        let lost_bouton = seg.syn_index.is_some() && !has_bouton;
-
-                        if !has_bouton {
-                            let mut has_active_children = false;
-                            for (ci, cseg) in dend.tree.branches.iter().enumerate() {
-                                if cseg.parent_idx == Some(i) && !to_remove.contains(&ci) {
-                                    has_active_children = true;
-                                    break;
-                                }
-                            }
-
-                            let is_original_leaf =
-                                !dend.tree.branches.iter().any(|s| s.parent_idx == Some(i));
-
-                            if lost_bouton
-                                || (!has_active_children
-                                    && (seg.stimuli < break_threshold || !is_original_leaf))
-                            {
-                                to_remove.insert(i);
-                                changed = true;
-                            }
+                    let has_bouton = seg
+                        .syn_index
+                        .map(|syn_idx| old_to_new[syn_idx].is_some())
+                        .unwrap_or(false);
+                    let lost_bouton = seg.syn_index.is_some() && !has_bouton;
+                    let is_original_leaf = original_children[i] == 0;
+                    if !has_bouton
+                        && (lost_bouton
+                            || (active_children[i] == 0
+                                && (seg.stimuli < break_threshold || !is_original_leaf)))
+                    {
+                        to_remove[i] = true;
+                        if let Some(parent) = seg.parent_idx.filter(|&p| p < segment_count) {
+                            active_children[parent] = active_children[parent].saturating_sub(1);
+                            pending.push_back(parent);
                         }
                     }
                 }
-                if !to_remove.is_empty() {
+
+                if to_remove.iter().any(|removed| *removed) {
                     let mut new_segs = Vec::new();
-                    let mut seg_old_to_new = std::collections::HashMap::new();
+                    let mut seg_old_to_new = vec![None; segment_count];
                     for (i, seg) in dend.tree.branches.drain(..).enumerate() {
-                        if !to_remove.contains(&i) {
-                            seg_old_to_new.insert(i, new_segs.len());
+                        if !to_remove[i] {
+                            seg_old_to_new[i] = Some(new_segs.len());
                             new_segs.push(seg);
                         }
                     }
                     for seg in &mut new_segs {
                         if let Some(pidx) = seg.parent_idx {
-                            seg.parent_idx = seg_old_to_new.get(&pidx).copied();
+                            seg.parent_idx = seg_old_to_new.get(pidx).copied().flatten();
                         }
                     }
                     dend.tree.branches = new_segs;
@@ -4747,6 +4795,9 @@ impl Morphology {
             }
         }
 
+        crate::obs::Metrics::global().record("morphology/evolve/pruning", phase_start.elapsed());
+        phase_start = std::time::Instant::now();
+
         // Re-rebuild spatial grid for energy_at queries in growth loop
         self.populate_grid(attraction_r);
 
@@ -4756,6 +4807,12 @@ impl Morphology {
             let key = pack_neuron_pair(syn.pre_layer, syn.pre_id, syn.post_layer, syn.post_id);
             *pair_counts.entry(key).or_insert(0) += 1;
         }
+        // Keep final insertion deduplication O(1). `pair_counts` is also
+        // updated by exploratory contact/migration logic, so use a separate
+        // set for the endpoint pairs that have actually been accepted into
+        // `self.synapses`.
+        let mut accepted_pairs: FastHashMap<u64, ()> =
+            pair_counts.keys().copied().map(|key| (key, ())).collect();
         let mut pair_cap: usize = 1;
 
         // Track sensory connection counts to enforce the 6-connection limit
@@ -5372,7 +5429,12 @@ impl Morphology {
             self.update_synapse_pos(si, pos, is_pre);
         }
 
+        crate::obs::Metrics::global()
+            .record("morphology/evolve/growth_movement", phase_start.elapsed());
+        phase_start = std::time::Instant::now();
+
         // 3. Sprouting & Contact Detection
+        let axon_sprouting_start = std::time::Instant::now();
         let mut new_dendrite_branches = Vec::new();
         let mut new_axon_branches = Vec::new();
         let mut new_syns = Vec::new();
@@ -5484,8 +5546,14 @@ impl Morphology {
             }
         }
 
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/axon_sprouting",
+            axon_sprouting_start.elapsed(),
+        );
+
         // Build a spatial index for axon segments to optimize contact detection from O(N^2) to O(N)
         let axon_cs = contact_dist.max(0.01);
+        let index_build_start = std::time::Instant::now();
         let mut seg_refs: Vec<SegRef> = Vec::new();
         let mut small_net_segments: Vec<(isize, usize, usize)> = Vec::new();
         let mut segments_seen = 0usize;
@@ -5580,6 +5648,10 @@ impl Morphology {
         }
 
         let axon_index = AxonSegIndex::build(seg_refs, axon_cs, contact_dist);
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/index_build",
+            index_build_start.elapsed(),
+        );
 
         let mut budget_exhausted = false;
         let mut probe_rr = 0usize;
@@ -5601,7 +5673,13 @@ impl Morphology {
             pre_full_marks = vec![0u32; total_neurons];
         }
         let mut trace_synapse_count = 0usize;
-        let mut axon_candidates: Vec<SegRef> = Vec::new();
+        let mut axon_candidates: Vec<SegRef> = Vec::with_capacity(96);
+        let mut candidate_seen: FastHashMap<u64, ()> = FastHashMap::default();
+        candidate_seen.reserve(96);
+        let mut pre_probe_time = std::time::Duration::ZERO;
+        let mut candidate_collection_time = std::time::Duration::ZERO;
+        let mut candidate_evaluation_time = std::time::Duration::ZERO;
+        let mut fallback_probe_time = std::time::Duration::ZERO;
         'contact_all: for l_idx in -1..=(num_layers as isize) {
             let (skip_threshold, cap_base) = if is_aarnn {
                 let dyn_skip_base = (t_ema - t_dev * 0.5).max(ambient * 1.1);
@@ -5852,6 +5930,7 @@ impl Morphology {
                             }
                         }
                     }
+                    let pre_probe_start = std::time::Instant::now();
                     if !small_net_axon_by_neuron.is_empty() {
                         let total = small_net_axon_by_neuron.len();
                         let max_pre = 4usize.min(total.saturating_sub(1));
@@ -6490,6 +6569,7 @@ impl Morphology {
                             }
                         }
                     }
+                    pre_probe_time += pre_probe_start.elapsed();
                     if made_connection {
                         continue;
                     }
@@ -6507,8 +6587,17 @@ impl Morphology {
                     };
                     let mut checks_for_tip = 0usize;
                     let prev_candidates = stats.contact_candidates;
-                    axon_index.collect_candidates(tip, contact_dist, &mut axon_candidates);
+                    let candidate_collection_start = std::time::Instant::now();
+                    axon_index.collect_candidates_bounded(
+                        tip,
+                        contact_dist,
+                        max_checks_per_tip,
+                        &mut axon_candidates,
+                        &mut candidate_seen,
+                    );
+                    candidate_collection_time += candidate_collection_start.elapsed();
 
+                    let candidate_evaluation_start = std::time::Instant::now();
                     'contact_search: for seg in axon_candidates.iter() {
                         let al = seg.l;
                         let aj = seg.j;
@@ -6849,6 +6938,8 @@ impl Morphology {
                             stats.contact_too_far += 1;
                         }
                     }
+                    candidate_evaluation_time += candidate_evaluation_start.elapsed();
+                    let fallback_probe_start = std::time::Instant::now();
                     if stats.contact_candidates == prev_candidates && !small_net_segments.is_empty()
                     {
                         let probe_limit = 4usize;
@@ -7211,6 +7302,7 @@ impl Morphology {
                             probes += 1;
                         }
                     }
+                    fallback_probe_time += fallback_probe_start.elapsed();
                     if budget_exhausted {
                         break;
                     }
@@ -7223,6 +7315,26 @@ impl Morphology {
                 break 'contact_all;
             }
         }
+
+        crate::obs::Metrics::global()
+            .record("morphology/evolve/contact_detection", phase_start.elapsed());
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/index_collection",
+            candidate_collection_time,
+        );
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/pre_probe",
+            pre_probe_time,
+        );
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/candidate_evaluation",
+            candidate_evaluation_time,
+        );
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/contact_detection/fallback_probe",
+            fallback_probe_time,
+        );
+        phase_start = std::time::Instant::now();
 
         // Apply sprouting and new connections
         for (l, j, branch) in new_dendrite_branches {
@@ -7245,12 +7357,8 @@ impl Morphology {
         }
         for syn in new_syns {
             // Final deduplication before adding to flat vector
-            if !self.synapses.iter().any(|s| {
-                s.pre_layer == syn.pre_layer
-                    && s.pre_id == syn.pre_id
-                    && s.post_layer == syn.post_layer
-                    && s.post_id == syn.post_id
-            }) {
+            let pair_key = pack_neuron_pair(syn.pre_layer, syn.pre_id, syn.post_layer, syn.post_id);
+            if accepted_pairs.insert(pair_key, ()).is_none() {
                 let si = self.synapses.len();
                 // Link segment to synapse
                 if let Some(asi) = syn.axon_seg_idx {
@@ -7973,6 +8081,10 @@ impl Morphology {
         }
 
         // Apply spatial forces at the end so contact/migration are based on pre-move geometry
+        crate::obs::Metrics::global().record(
+            "morphology/evolve/connectivity_repair",
+            phase_start.elapsed(),
+        );
         self.apply_spatial_forces(config, is_aarnn, dt);
         self.update_skull_membrane(config, dt);
 

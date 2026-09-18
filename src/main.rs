@@ -450,6 +450,16 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     ui_remote_only: bool,
 
+    /// Select a video file as the visual input source for the UI.
+    /// The same source name is exposed by the web and mobile clients.
+    #[arg(long, conflicts_with = "camera")]
+    video_file: Option<String>,
+
+    /// Select the first available camera as the visual input source for the UI.
+    /// Camera permission and the webcam feature remain explicit prerequisites.
+    #[arg(long, default_value_t = false, conflicts_with = "video_file")]
+    camera: bool,
+
     /// Run as a distributed orchestrator
     #[arg(long, default_value_t = false)]
     orchestrator: bool,
@@ -2484,7 +2494,40 @@ fn maybe_apply_openmpi_bootstrap(_args: &mut Cli) -> anyhow::Result<()> {
 /// 2. **UI Mode**: Launches an interactive GUI for real-time observation and manipulation.
 /// 3. **Distributed Mode**: Participates in a multi-node simulation cluster (as orchestrator or node).
 fn main() -> anyhow::Result<()> {
+    // The complete feature graph also pulls reqwest's aws-lc-rs backend while
+    // tonic uses ring. Rustls cannot choose a provider when both are linked;
+    // install the tonic-compatible provider before any TLS listener/client is
+    // constructed. The result is ignored when another caller installed one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Cli::parse();
+
+    if args.video_file.is_some() || args.camera {
+        if !args.ui {
+            return Err(anyhow::anyhow!(
+                "--video-file and --camera require --ui so the selected visual source has a governed preview and input lifecycle"
+            ));
+        }
+        #[cfg(feature = "video_input")]
+        if let Some(path) = args.video_file.as_deref() {
+            unsafe { std::env::set_var("AARNN_VIDEO_FILE", path) };
+        }
+        #[cfg(not(feature = "video_input"))]
+        if args.video_file.is_some() {
+            return Err(anyhow::anyhow!(
+                "--video-file requires a binary built with --features video_input"
+            ));
+        }
+        #[cfg(feature = "webcam_input")]
+        if args.camera {
+            unsafe { std::env::set_var("AARNN_CAMERA_INPUT", "1") };
+        }
+        #[cfg(not(feature = "webcam_input"))]
+        if args.camera {
+            return Err(anyhow::anyhow!(
+                "--camera requires a binary built with --features webcam_input"
+            ));
+        }
+    }
 
     if args.stable_runtime_manifest.is_some() && (!args.node && !args.orchestrator) {
         return Err(anyhow::anyhow!(
@@ -3050,6 +3093,35 @@ fn main() -> anyhow::Result<()> {
         "[summary] Output layer neuron count: {}",
         sim_out.spikes_o.shape()[1]
     );
+    let mature_interneurons = sim_out
+        .spikes_h
+        .iter()
+        .map(|layer| layer.shape()[1] as u64)
+        .sum::<u64>();
+    let ratio_view = net_cfg.growth_io_ratio_policy.view(
+        mature_interneurons,
+        net_cfg.num_sensory_neurons as u64,
+        sim_out.spikes_o.shape()[1] as u64,
+        net_cfg.io_channels_are_biological,
+    );
+    nm_log!(
+        "[summary] Morphological I/O ratio profile: {}",
+        ratio_view.profile
+    );
+    nm_log!(
+        "[summary] Morphological I/O ratio: {}; {}",
+        ratio_view.sensory_ratio_text(),
+        ratio_view.motor_ratio_text()
+    );
+    nm_log!(
+        "[summary] Morphological I/O populations: {}",
+        ratio_view.population_text()
+    );
+    if !ratio_view.io_channels_are_biological {
+        nm_log!(
+            "[summary] Morphological I/O admission: external adapter/readout mapping (biological I/O admission disabled)"
+        );
+    }
 
     let w = &sim_out.weights;
     let count_nonzero =

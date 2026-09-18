@@ -101,9 +101,9 @@ install: nao_nn_controller_uds
 $(TARGET_DIR)/libaarnn_rust.so:
 	@echo "[Rust] Building cdylib (profile=$(PROFILE))..."
 ifneq ($(PROFILE),release)
-	cargo build --features $(RUST_FEATURES)
+	cargo build --all-features
 else
-	cargo build --release --features $(RUST_FEATURES)
+	cargo build --release --all-features
 endif
 	@# Verify FFI symbols are exported (best-effort)
 	@if command -v nm >/dev/null 2>&1; then \
@@ -117,8 +117,8 @@ nao_nn_controller: $(TARGET_DIR)/libaarnn_rust.so
 	@mkdir -p $(TARGET_DIR)
 	@# Ensure the cdylib actually exports the FFI symbols; if not, (re)build with features
 	@if ! nm -D $(LIB_SO) 2>/dev/null | grep -q " nm_init$$"; then \
-	  echo "[Rust] libaarnn_rust.so missing nm_init; rebuilding with --features $(RUST_FEATURES)..."; \
-	  if [ "$(PROFILE)" = "release" ]; then cargo build --release --features $(RUST_FEATURES); else cargo build --features $(RUST_FEATURES); fi; \
+	    echo "[Rust] libaarnn_rust.so missing nm_init; rebuilding with --all-features..."; \
+	  if [ "$(PROFILE)" = "release" ]; then cargo build --release --all-features; else cargo build --all-features; fi; \
 	  if ! nm -D $(LIB_SO) 2>/dev/null | grep -q " nm_init$$"; then \
 	    echo "[Error] nm_init still missing from $(LIB_SO). Please ensure feature 'ffi_bridge' is enabled."; \
 	    exit 2; \

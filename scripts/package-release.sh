@@ -251,16 +251,10 @@ build_binaries() {
     args+=(--target "$TARGET_TRIPLE")
   fi
 
-  case "$CARGO_FEATURES" in
-    ""|default)
-      ;;
-    all|all-features)
-      args+=(--all-features)
-      ;;
-    *)
-      args+=(--no-default-features --features "$CARGO_FEATURES")
-      ;;
-  esac
+  # Release artifacts are always compiled from the complete feature graph so
+  # parallel execution, morphology and non-blocking adapters cannot disappear
+  # because a workload selected a narrow compatibility profile.
+  args+=(--all-features)
 
   for bin in "${BUILD_TARGET_LIST[@]}"; do
     args+=(--bin "$bin")

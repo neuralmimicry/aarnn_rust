@@ -50,14 +50,18 @@ use crate::providers::VideoFileProvider;
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 use crate::providers::WebcamCaptureProvider;
 use crate::providers::{
-    AudioFileProvider, MAX_AUDIO_SENSORY_NEURONS, MicrophoneDeviceInfo, MicrophoneProvider,
-    RandomProvider, SensoryProvider, ThetaProvider, list_microphone_devices,
+    AudioFileProvider, CombinedVideoAudioProvider, MAX_AUDIO_SENSORY_NEURONS, MicrophoneDeviceInfo,
+    MicrophoneProvider, RandomProvider, SensoryProvider, ThetaProvider, VideoPreviewStore,
+    list_microphone_devices, new_video_preview_store,
 };
+#[cfg(feature = "webcam_input")]
+use crate::providers::{WebcamDeviceInfo, list_webcam_devices};
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
 #[cfg(feature = "ui")]
 use crate::runtime_api::{
     RemoteWorkspaceBinding, TokenBalanceResponse, WorkspaceControlAction, WorkspaceImportRequest,
+    WorkspaceSnapshotResponse,
 };
 use crate::sim::{Learning, NeuronModel};
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
@@ -1342,6 +1346,19 @@ enum ToolTaskResult {
     RemoteTokenBalance {
         result: Result<TokenBalanceResponse, String>,
     },
+    RemoteWorkspacePush {
+        workspace_id: String,
+        result: Result<(), String>,
+    },
+    RemoteWorkspacePull {
+        workspace_id: String,
+        result: Result<WorkspaceSnapshotResponse, String>,
+    },
+    RemoteWorkspaceControl {
+        workspace_id: String,
+        action: WorkspaceControlAction,
+        result: Result<(), String>,
+    },
 }
 
 #[cfg(feature = "ui")]
@@ -1570,6 +1587,10 @@ struct App {
     audio_file_path: Option<String>,
     audio_file_sample_rate: Option<u32>,
     audio_file_sample_count: Option<usize>,
+    video_preview: VideoPreviewStore,
+    video_preview_texture: Option<egui::TextureHandle>,
+    video_preview_sequence: u64,
+    video_preview_open: bool,
     sensory_count: usize,
     neuron_model: NeuronModelSel,
     izh_preset: IzhPreset,
@@ -1594,6 +1615,14 @@ struct App {
     microphone_devices: Vec<MicrophoneDeviceInfo>,
     microphone_device_id: Option<String>,
     microphone_devices_error: Option<String>,
+    video_audio_enabled: bool,
+    video_audio_active: bool,
+    #[cfg(feature = "webcam_input")]
+    webcam_devices: Vec<WebcamDeviceInfo>,
+    #[cfg(feature = "webcam_input")]
+    webcam_device_id: Option<String>,
+    #[cfg(feature = "webcam_input")]
+    webcam_devices_error: Option<String>,
     // GA Search
     ga_search: Option<GASearch>,
     ga_running: bool,
@@ -1856,6 +1885,7 @@ struct App {
     remote_token_error: Option<String>,
     remote_token_last_refresh: Option<Instant>,
     remote_token_refresh_inflight: bool,
+    remote_workspace_action_inflight: bool,
     // Distributed state
     distributed_node: Option<DistributedNode>,
     view_source: ViewSource,
@@ -1945,6 +1975,26 @@ fn microphone_display_label(
     };
     let default_marker = if device.is_default { " (default)" } else { "" };
     format!("{}{}{}", device.name, identity, default_marker)
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn webcam_display_label(device: &WebcamDeviceInfo, devices: &[WebcamDeviceInfo]) -> String {
+    let duplicate_name = devices
+        .iter()
+        .filter(|candidate| candidate.name == device.name)
+        .count()
+        > 1;
+    let identity = if duplicate_name || device.name.trim().is_empty() {
+        format!(" [{}]", device.id)
+    } else {
+        String::new()
+    };
+    let description = device.description.trim();
+    if description.is_empty() || description == device.name {
+        format!("{}{}", device.name, identity)
+    } else {
+        format!("{}{} — {}", device.name, identity, description)
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -2430,6 +2480,95 @@ impl App {
             }
         }
 
+        let video_preview = new_video_preview_store();
+        let mut startup_video_provider: Option<Box<dyn SensoryProvider + Send>> = None;
+        let mut startup_video_status = None;
+        let mut startup_camera_loaded = false;
+        let mut startup_video_audio_active = false;
+        #[cfg(feature = "webcam_input")]
+        let (webcam_devices, webcam_devices_error) = match list_webcam_devices() {
+            Ok(devices) => (devices, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        #[cfg(feature = "webcam_input")]
+        let startup_camera_id = std::env::var("AARNN_CAMERA_INDEX")
+            .ok()
+            .filter(|id| !id.trim().is_empty())
+            .or_else(|| webcam_devices.first().map(|device| device.id.clone()));
+        #[cfg(feature = "video_input")]
+        if let Ok(raw_path) = std::env::var("AARNN_VIDEO_FILE") {
+            let raw_path = raw_path.trim();
+            if !raw_path.is_empty() {
+                let path = std::path::Path::new(raw_path);
+                match VideoFileProvider::from_path_with_preview(
+                    path,
+                    runner.net.num_sensory_neurons,
+                    true,
+                    Some(video_preview.clone()),
+                ) {
+                    Ok(provider) => {
+                        let (provider, has_audio) = match AudioFileProvider::from_path(
+                            path,
+                            runner.net.num_sensory_neurons,
+                        ) {
+                            Ok(audio) => (
+                                Box::new(CombinedVideoAudioProvider::new(
+                                    Box::new(provider),
+                                    Box::new(audio),
+                                ))
+                                    as Box<dyn SensoryProvider + Send>,
+                                true,
+                            ),
+                            Err(_) => {
+                                (Box::new(provider) as Box<dyn SensoryProvider + Send>, false)
+                            }
+                        };
+                        startup_video_audio_active = has_audio;
+                        startup_video_status = Some(if has_audio {
+                            format!("Video input with audio EQ: {}", path.display())
+                        } else {
+                            format!("Video input (no decodable audio track): {}", path.display())
+                        });
+                        startup_video_provider = Some(provider);
+                    }
+                    Err(error) => {
+                        startup_video_status = Some(format!(
+                            "Video input failed for {}: {}",
+                            path.display(),
+                            error
+                        ));
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "webcam_input")]
+        if startup_video_provider.is_none()
+            && std::env::var("AARNN_CAMERA_INPUT")
+                .ok()
+                .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false)
+        {
+            match startup_camera_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("no webcam devices are currently available"))
+                .and_then(|device_id| {
+                    WebcamCaptureProvider::new_with_device_id(
+                        device_id,
+                        runner.net.num_sensory_neurons,
+                        Some(video_preview.clone()),
+                    )
+                }) {
+                Ok(provider) => {
+                    startup_video_status = Some("Camera input started".to_string());
+                    startup_camera_loaded = true;
+                    startup_video_provider = Some(Box::new(provider));
+                }
+                Err(error) => {
+                    startup_video_status = Some(format!("Camera input failed: {}", error));
+                }
+            }
+        }
+
         // An explicit startup audio source is useful for unattended examples and
         // QA, but it must go through the same validated provider as the file
         // picker.  A zero-sized snapshot has no input contract, so provision a
@@ -2597,9 +2736,12 @@ impl App {
         #[cfg(all(feature = "robot_io", unix))]
         let sim_ipc_stats = ipc_stats.clone();
         let startup_audio_loaded = startup_audio_provider.is_some();
+        let startup_video_loaded = startup_video_provider.is_some();
         let mut sim_provider: Box<dyn SensoryProvider + Send> =
             if let Some(provider) = startup_audio_provider {
                 Box::new(provider)
+            } else if let Some(provider) = startup_video_provider {
+                provider
             } else {
                 Box::new(RandomProvider::new(n_s, 0.02))
             };
@@ -2612,7 +2754,7 @@ impl App {
         let mut sim_ipc_service: Option<IpcUdsService> = early_ipc_service;
 
         let runner_start = std::time::Instant::now();
-        let sim_audio_diagnostic = startup_audio_loaded;
+        let sim_audio_diagnostic = startup_audio_loaded || startup_video_audio_active;
         std::thread::Builder::new()
             .name("simulation".into())
             .spawn(move || {
@@ -3893,9 +4035,13 @@ impl App {
                                             spike_len
                                         );
                                     }
+                                }
+                                // Publishing EQ data is required for every
+                                // audio provider, including files selected
+                                // after startup. The diagnostic flag controls
+                                // logging only and must not gate the UI feed.
                                 if let Ok(mut b) = sim_spectral.try_write() {
                                     *b = bands;
-                                }
                                 }
                             }
                         }
@@ -4064,29 +4210,39 @@ impl App {
             Ok(devices) => (devices, None),
             Err(error) => (Vec::new(), Some(error.to_string())),
         };
+        let mut startup_input_source = if startup_audio_loaded {
+            InputSource::AudioFile
+        } else {
+            InputSource::Random
+        };
+        #[cfg(feature = "video_input")]
+        if startup_video_loaded && !startup_camera_loaded {
+            startup_input_source = InputSource::VideoFile;
+        }
+        #[cfg(feature = "webcam_input")]
+        if startup_camera_loaded {
+            startup_input_source = InputSource::Webcam;
+        }
+        #[cfg(all(feature = "robot_io", unix))]
+        if !startup_audio_loaded && !startup_video_loaded && _ipc_enabled {
+            startup_input_source = InputSource::ExternalIpc;
+        }
 
         let mut app = Self {
             brain_id: brain_id.clone(),
             playing: false,
             loop_feedback: false,
-            input_source: if startup_audio_loaded {
-                InputSource::AudioFile
-            } else {
-                #[cfg(all(feature = "robot_io", unix))]
-                if _ipc_enabled {
-                    InputSource::ExternalIpc
-                } else {
-                    InputSource::Random
-                }
-                #[cfg(not(all(feature = "robot_io", unix)))]
-                InputSource::Random
-            },
+            input_source: startup_input_source,
             http_aer_source_url,
             http_aer_base,
             http_aer_status,
             audio_file_path: startup_audio_path,
             audio_file_sample_rate: startup_audio_sample_rate,
             audio_file_sample_count: startup_audio_sample_count,
+            video_preview,
+            video_preview_texture: None,
+            video_preview_sequence: 0,
+            video_preview_open: startup_video_loaded,
             sensory_count: n_s,
             neuron_model: match initial_model {
                 NeuronModel::Lif => NeuronModelSel::Lif,
@@ -4100,7 +4256,9 @@ impl App {
                 Learning::Oja => LearningSel::Oja,
                 Learning::Aarnn => LearningSel::Aarnn,
             },
-            status: startup_audio_status.unwrap_or_else(|| "Ready".to_string()),
+            status: startup_audio_status
+                .or(startup_video_status)
+                .unwrap_or_else(|| "Ready".to_string()),
             remote_only,
             runner,
             sim_tx,
@@ -4114,6 +4272,14 @@ impl App {
             microphone_devices,
             microphone_device_id: None,
             microphone_devices_error,
+            video_audio_enabled: false,
+            video_audio_active: startup_video_audio_active,
+            #[cfg(feature = "webcam_input")]
+            webcam_devices,
+            #[cfg(feature = "webcam_input")]
+            webcam_device_id: startup_camera_id,
+            #[cfg(feature = "webcam_input")]
+            webcam_devices_error,
             ga_search: None,
             ga_running: false,
             ga_panel_visible: false,
@@ -4203,7 +4369,7 @@ impl App {
             show_transmissions: false,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             transmissions_opacity: 0.8,
-            show_equalizer: startup_audio_loaded,
+            show_equalizer: startup_audio_loaded || startup_video_audio_active,
             probes: Vec::new(),
             next_probe_id: 1,
             scope_time_ms: 2000.0,
@@ -4420,6 +4586,7 @@ impl App {
             remote_token_error: None,
             remote_token_last_refresh: None,
             remote_token_refresh_inflight: false,
+            remote_workspace_action_inflight: false,
             initial_net_cfg,
             initial_lif,
             initial_stdp,
@@ -4571,52 +4738,107 @@ impl App {
         Ok(())
     }
 
-    fn pull_remote_workspace_snapshot(&mut self) -> Result<(), String> {
-        let binding = self
-            .remote_workspace_binding
-            .as_ref()
-            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
-            .clone();
-        let mut client = self.remote_workspace_client()?;
-        let snapshot = client
-            .workspace_snapshot(&binding.workspace_id)
-            .map_err(|err| err.to_string())?;
-
-        {
-            let mut runner = self
-                .runner
-                .try_write()
-                .map_err(|_| "Runner busy".to_string())?;
-            runner
-                .import_network_json(&snapshot.snapshot_json)
-                .map_err(|err| err.to_string())?;
-            self.initial_net_cfg = runner.net.clone();
-            self.initial_model = runner.neuron_model;
-            self.initial_learning = runner.learning;
+    /// Queue a remote workspace operation so the egui frame thread never waits
+    /// on HTTP or on serialising a potentially large network snapshot.
+    fn queue_remote_workspace_push(&mut self) {
+        if self.remote_workspace_action_inflight {
+            self.status = "A remote workspace operation is already running".to_string();
+            return;
         }
-
-        self.set_standalone_playing(false);
-        self.refresh_ui_buffers();
-        self.status = format!("Pulled remote workspace '{}'", binding.workspace_id);
-        Ok(())
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            self.status = "Remote workspace binding is not configured".to_string();
+            return;
+        };
+        let runner = self.runner.clone();
+        let tx = self.tool_task_tx.clone();
+        let workspace_id = binding.workspace_id.clone();
+        self.remote_workspace_action_inflight = true;
+        self.status = format!("Pushing remote workspace '{}'...", workspace_id);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                let snapshot_json = {
+                    let runner = runner.try_read().map_err(|_| "Runner busy".to_string())?;
+                    runner
+                        .export_network_json()
+                        .map_err(|err| err.to_string())?
+                };
+                let mut client = binding.client().map_err(|err| err.to_string())?;
+                client
+                    .import_workspace(
+                        &binding.workspace_id,
+                        &WorkspaceImportRequest {
+                            payload_json: snapshot_json,
+                            kind: Some(crate::engine::EnginePayloadKind::Snapshot),
+                            replace_baseline: Some(false),
+                            auto_start: Some(false),
+                            neuron_model: None,
+                            learning_rule: None,
+                        },
+                    )
+                    .map_err(|err| err.to_string())?;
+                Ok(())
+            })();
+            let _ = tx.send(ToolTaskResult::RemoteWorkspacePush {
+                workspace_id,
+                result,
+            });
+        });
     }
 
-    fn control_remote_workspace_backend(
-        &mut self,
-        action: WorkspaceControlAction,
-    ) -> Result<(), String> {
-        let binding = self
-            .remote_workspace_binding
-            .as_ref()
-            .ok_or_else(|| "Remote workspace binding is not configured".to_string())?
-            .clone();
-        let mut client = self.remote_workspace_client()?;
-        client
-            .control_workspace(&binding.workspace_id, action)
-            .map_err(|err| err.to_string())?;
-        self.queue_remote_token_refresh(true);
-        self.status = format!("Remote workspace '{}' {:?}", binding.workspace_id, action);
-        Ok(())
+    fn queue_remote_workspace_pull(&mut self) {
+        if self.remote_workspace_action_inflight {
+            self.status = "A remote workspace operation is already running".to_string();
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            self.status = "Remote workspace binding is not configured".to_string();
+            return;
+        };
+        let tx = self.tool_task_tx.clone();
+        let workspace_id = binding.workspace_id.clone();
+        self.remote_workspace_action_inflight = true;
+        self.status = format!("Pulling remote workspace '{}'...", workspace_id);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<WorkspaceSnapshotResponse, String> {
+                let mut client = binding.client().map_err(|err| err.to_string())?;
+                client
+                    .workspace_snapshot(&binding.workspace_id)
+                    .map_err(|err| err.to_string())
+            })();
+            let _ = tx.send(ToolTaskResult::RemoteWorkspacePull {
+                workspace_id,
+                result,
+            });
+        });
+    }
+
+    fn queue_remote_workspace_control(&mut self, action: WorkspaceControlAction) {
+        if self.remote_workspace_action_inflight {
+            self.status = "A remote workspace operation is already running".to_string();
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            self.status = "Remote workspace binding is not configured".to_string();
+            return;
+        };
+        let tx = self.tool_task_tx.clone();
+        let workspace_id = binding.workspace_id.clone();
+        self.remote_workspace_action_inflight = true;
+        self.status = format!("Remote workspace '{}' {:?}...", workspace_id, action);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                let mut client = binding.client().map_err(|err| err.to_string())?;
+                client
+                    .control_workspace(&binding.workspace_id, action)
+                    .map_err(|err| err.to_string())?;
+                Ok(())
+            })();
+            let _ = tx.send(ToolTaskResult::RemoteWorkspaceControl {
+                workspace_id,
+                action,
+                result,
+            });
+        });
     }
 
     fn add_remote_orchestrator_connection(&mut self, addr: &str) -> bool {
@@ -4942,6 +5164,34 @@ impl App {
         // Keep import/load responsive for very large models unless user explicitly asks.
         let total_hidden: usize = layer_sizes.iter().sum();
         total_hidden <= 8192
+    }
+
+    fn static_edge_draw_cap(
+        edge_count: usize,
+        overlay_density: usize,
+        layout_total_neurons: usize,
+        force_show_connections: bool,
+    ) -> usize {
+        if edge_count == 0 {
+            return 0;
+        }
+
+        // Cached edges already contain the requested per-target density.  For
+        // small networks, draw that complete requested view.  As the topology
+        // grows, keep the frame budget proportional to both the topology and
+        // the user's detail setting instead of imposing one global edge cap.
+        let density = overlay_density.clamp(1, 20);
+        let topology_budget = layout_total_neurons
+            .max(1)
+            .saturating_mul(density)
+            .max(4_096);
+        let large_model_budget = if force_show_connections {
+            topology_budget.saturating_mul(2).min(250_000)
+        } else {
+            topology_budget.min(120_000)
+        };
+
+        edge_count.min(large_model_budget)
     }
 
     fn compute_edges_from_snapshot(
@@ -6023,6 +6273,60 @@ impl App {
             Err(error) => {
                 self.microphone_devices_error = Some(error.to_string());
                 self.microphone_devices.clear();
+            }
+        }
+    }
+
+    #[cfg(feature = "webcam_input")]
+    fn refresh_webcam_devices(&mut self) {
+        match list_webcam_devices() {
+            Ok(devices) => {
+                if let Some(selected_id) = self.webcam_device_id.as_ref()
+                    && !devices.iter().any(|device| &device.id == selected_id)
+                {
+                    self.webcam_device_id = None;
+                    if self.cam_running {
+                        let n = self
+                            .runner
+                            .try_read()
+                            .map(|runner| runner.net.num_sensory_neurons)
+                            .unwrap_or(self.sensory_count);
+                        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(
+                            RandomProvider::new(n, self.random_spike_probability),
+                        )));
+                        self.cam_running = false;
+                        self.video_audio_active = false;
+                        self.video_preview_open = false;
+                        self.clear_video_preview();
+                        self.status =
+                            "Selected camera disappeared; capture stopped. Choose another camera"
+                                .to_string();
+                    }
+                }
+                self.webcam_devices = devices;
+                self.webcam_devices_error = None;
+            }
+            Err(error) => {
+                self.webcam_devices_error = Some(error.to_string());
+                self.webcam_devices.clear();
+                if self.cam_running {
+                    let n = self
+                        .runner
+                        .try_read()
+                        .map(|runner| runner.net.num_sensory_neurons)
+                        .unwrap_or(self.sensory_count);
+                    let _ =
+                        self.sim_tx
+                            .send(SimControl::SetProvider(Box::new(RandomProvider::new(
+                                n,
+                                self.random_spike_probability,
+                            ))));
+                    self.cam_running = false;
+                    self.video_audio_active = false;
+                    self.video_preview_open = false;
+                    self.clear_video_preview();
+                    self.status = "Webcam enumeration failed; capture stopped".to_string();
+                }
             }
         }
     }
@@ -7495,6 +7799,28 @@ fn pid_smooth_positions(
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
+fn sync_pid_position_state(state: &mut UiPid2State, position: egui::Pos2) {
+    state.pos = position;
+    state.prev_err = egui::Vec2::ZERO;
+    state.integral = egui::Vec2::ZERO;
+    state.initialized = true;
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn sync_pid_positions(states: &mut Vec<UiPid2State>, positions: &[egui::Pos2]) {
+    states.resize(positions.len(), UiPid2State::default());
+    for (state, position) in states.iter_mut().zip(positions.iter().copied()) {
+        sync_pid_position_state(state, position);
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn snap_pid_positions(states: &mut Vec<UiPid2State>, targets: &[egui::Pos2]) -> Vec<egui::Pos2> {
+    sync_pid_positions(states, targets);
+    targets.to_vec()
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
 fn pid_smooth_layered_positions(
     states: &mut Vec<Vec<UiPid2State>>,
     targets: &[Vec<egui::Pos2>],
@@ -7526,6 +7852,23 @@ fn pid_smooth_layered_positions(
         out.push(layer_out);
     }
     out
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn sync_pid_layered_positions(states: &mut Vec<Vec<UiPid2State>>, positions: &[Vec<egui::Pos2>]) {
+    states.resize_with(positions.len(), Vec::new);
+    for (layer_states, layer_positions) in states.iter_mut().zip(positions.iter()) {
+        sync_pid_positions(layer_states, layer_positions);
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn snap_pid_layered_positions(
+    states: &mut Vec<Vec<UiPid2State>>,
+    targets: &[Vec<egui::Pos2>],
+) -> Vec<Vec<egui::Pos2>> {
+    sync_pid_layered_positions(states, targets);
+    targets.to_vec()
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
@@ -7565,6 +7908,39 @@ fn pid_smooth_vec3(
     state.pos[1] += delta[1];
     state.pos[2] += delta[2];
     state.pos
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn snap_pid_vec3(state: &mut UiPid3State, target: [f32; 3]) -> [f32; 3] {
+    state.pos = target;
+    state.prev_err = [0.0; 3];
+    state.integral = [0.0; 3];
+    state.initialized = true;
+    target
+}
+
+#[cfg(all(test, feature = "ui", feature = "growth3d"))]
+mod topology_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn paused_topology_snap_does_not_interpolate_or_retain_stale_error() {
+        let target = egui::pos2(120.0, 80.0);
+        let mut states = vec![UiPid2State {
+            pos: egui::pos2(-400.0, 220.0),
+            prev_err: egui::vec2(50.0, -30.0),
+            integral: egui::vec2(10.0, 10.0),
+            initialized: true,
+        }];
+
+        let positions = snap_pid_positions(&mut states, &[target]);
+
+        assert_eq!(positions, vec![target]);
+        assert_eq!(states[0].pos, target);
+        assert_eq!(states[0].prev_err, egui::Vec2::ZERO);
+        assert_eq!(states[0].integral, egui::Vec2::ZERO);
+        assert!(states[0].initialized);
+    }
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
@@ -7693,6 +8069,26 @@ struct UiSnapshot {
     topo_output: Vec<crate::topology::Node3D>,
     #[cfg(feature = "growth3d")]
     topo_early: Vec<crate::topology::EarlyCell3D>,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+struct UiTopologySnapshot {
+    topo_sensory: Vec<crate::topology::Node3D>,
+    topo_hidden: Vec<Vec<crate::topology::Node3D>>,
+    topo_output: Vec<crate::topology::Node3D>,
+    topo_early: Vec<crate::topology::EarlyCell3D>,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+impl From<&UiSnapshot> for UiTopologySnapshot {
+    fn from(snapshot: &UiSnapshot) -> Self {
+        Self {
+            topo_sensory: snapshot.topo_sensory.clone(),
+            topo_hidden: snapshot.topo_hidden.clone(),
+            topo_output: snapshot.topo_output.clone(),
+            topo_early: snapshot.topo_early.clone(),
+        }
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -8140,6 +8536,12 @@ enum InputSource {
     #[cfg(feature = "robot_io")]
     ExternalIpc,
 }
+
+// Cross-product source names shared by the CLI and native/web/mobile shells.
+#[cfg(feature = "ui")]
+const VIDEO_FILE_INPUT_SOURCE_NAME: &str = "video-file";
+#[cfg(feature = "ui")]
+const CAMERA_INPUT_SOURCE_NAME: &str = "camera";
 
 #[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
@@ -9269,11 +9671,80 @@ impl App {
 }
 
 #[cfg(feature = "ui")]
+impl App {
+    fn is_video_input_source(source: InputSource) -> bool {
+        match source {
+            #[cfg(feature = "video_input")]
+            InputSource::VideoFile => true,
+            #[cfg(feature = "webcam_input")]
+            InputSource::Webcam => true,
+            _ => false,
+        }
+    }
+
+    fn clear_video_preview(&mut self) {
+        if let Ok(mut preview) = self.video_preview.lock() {
+            *preview = None;
+        }
+        self.video_preview_texture = None;
+        self.video_preview_sequence = 0;
+    }
+
+    fn render_video_preview(&mut self, ctx: &egui::Context) {
+        if let Some(frame) = self
+            .video_preview
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        {
+            if frame.sequence != self.video_preview_sequence {
+                let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
+                if let Some(texture) = self.video_preview_texture.as_mut() {
+                    texture.set(image, egui::TextureOptions::LINEAR);
+                } else {
+                    self.video_preview_texture = Some(ctx.load_texture(
+                        "aarnn-video-input-preview",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+                self.video_preview_sequence = frame.sequence;
+            }
+        }
+
+        if !self.video_preview_open {
+            return;
+        }
+        let mut open = self.video_preview_open;
+        egui::Window::new("Video input preview")
+            .open(&mut open)
+            .default_size(egui::vec2(640.0, 420.0))
+            .resizable(true)
+            .show(ctx, |ui| {
+                if let Some(texture) = self.video_preview_texture.as_ref() {
+                    let available = ui.available_size();
+                    let image_size = texture.size_vec2();
+                    let scale = (available.x / image_size.x)
+                        .min(available.y / image_size.y)
+                        .min(1.0)
+                        .max(0.05);
+                    ui.image((texture.id(), image_size * scale));
+                    ui.label("Preview pixels are display state; sensory admission uses the selected provider.");
+                } else {
+                    ui.label("Waiting for the first video frame…");
+                }
+            });
+        self.video_preview_open = open;
+    }
+}
+
+#[cfg(feature = "ui")]
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         observe_time!("App::update");
         observe_hit!("ui_frame");
+        self.render_video_preview(&ctx);
 
         #[cfg(feature = "ui_screenshot")]
         {
@@ -9343,7 +9814,11 @@ impl eframe::App for App {
         #[cfg(all(feature = "robot_io", unix))]
         let ipc_stats_arc = self.ipc_stats.clone();
 
-        let bands_guard = spectral_arc.try_read().ok();
+        // Copy the short-lived EQ snapshot and release the read lock before
+        // rendering the rest of the frame. The simulation thread publishes
+        // bands with try_write(); retaining this guard through the whole UI
+        // update can otherwise starve that publication and leave the EQ flat.
+        let bands_snapshot = spectral_arc.try_read().ok().map(|bands| bands.clone());
         #[cfg(all(feature = "robot_io", unix))]
         let ipc_stats_guard = ipc_stats_arc.try_read().ok();
 
@@ -10333,6 +10808,75 @@ impl eframe::App for App {
                             self.status = format!("{} import failed: {}", kind_str, e);
                         }
                     }
+                    ToolTaskResult::RemoteWorkspacePush {
+                        workspace_id,
+                        result,
+                    } => {
+                        self.remote_workspace_action_inflight = false;
+                        match result {
+                            Ok(()) => {
+                                self.status = format!("Pushed remote workspace '{}'", workspace_id);
+                                self.queue_remote_token_refresh(true);
+                            }
+                            Err(error) => {
+                                self.status = format!("Remote push failed: {}", error);
+                            }
+                        }
+                    }
+                    ToolTaskResult::RemoteWorkspacePull {
+                        workspace_id,
+                        result,
+                    } => {
+                        self.remote_workspace_action_inflight = false;
+                        match result {
+                            Ok(snapshot) => {
+                                let import_result = (|| -> Result<(), String> {
+                                    let mut runner = self
+                                        .runner
+                                        .try_write()
+                                        .map_err(|_| "Runner busy".to_string())?;
+                                    runner
+                                        .import_network_json(&snapshot.snapshot_json)
+                                        .map_err(|err| err.to_string())?;
+                                    self.initial_net_cfg = runner.net.clone();
+                                    self.initial_model = runner.neuron_model;
+                                    self.initial_learning = runner.learning;
+                                    Ok(())
+                                })();
+                                match import_result {
+                                    Ok(()) => {
+                                        self.set_standalone_playing(false);
+                                        self.refresh_ui_buffers();
+                                        self.status =
+                                            format!("Pulled remote workspace '{}'", workspace_id);
+                                    }
+                                    Err(error) => {
+                                        self.status = format!("Remote pull failed: {}", error);
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                self.status = format!("Remote pull failed: {}", error);
+                            }
+                        }
+                    }
+                    ToolTaskResult::RemoteWorkspaceControl {
+                        workspace_id,
+                        action,
+                        result,
+                    } => {
+                        self.remote_workspace_action_inflight = false;
+                        match result {
+                            Ok(()) => {
+                                self.status =
+                                    format!("Remote workspace '{}' {:?}", workspace_id, action);
+                                self.queue_remote_token_refresh(true);
+                            }
+                            Err(error) => {
+                                self.status = format!("Remote {:?} failed: {}", action, error);
+                            }
+                        }
+                    }
                     ToolTaskResult::RemoteTokenBalance { result } => {
                         self.remote_token_refresh_inflight = false;
                         self.remote_token_last_refresh = Some(Instant::now());
@@ -11185,31 +11729,52 @@ impl eframe::App for App {
                                 binding.workspace_id, binding.base_url
                             ));
                             ui.horizontal(|ui| {
-                                if ui.button("Pull").on_hover_text("Load the latest backend workspace snapshot into this UI session").clicked() {
-                                    if let Err(err) = self.pull_remote_workspace_snapshot() {
-                                        self.status = format!("Remote pull failed: {}", err);
-                                    }
+                                if ui
+                                    .add_enabled(
+                                        !self.remote_workspace_action_inflight,
+                                        egui::Button::new("Pull"),
+                                    )
+                                    .on_hover_text("Load the latest backend workspace snapshot into this UI session")
+                                    .clicked()
+                                {
+                                    self.queue_remote_workspace_pull();
                                 }
-                                if ui.button("Push").on_hover_text("Save the current UI snapshot back into the backend workspace").clicked() {
-                                    if let Err(err) = self.push_remote_workspace_snapshot() {
-                                        self.status = format!("Remote push failed: {}", err);
-                                    } else {
-                                        self.status = format!("Pushed remote workspace '{}'", binding.workspace_id);
-                                    }
+                                if ui
+                                    .add_enabled(
+                                        !self.remote_workspace_action_inflight,
+                                        egui::Button::new("Push"),
+                                    )
+                                    .on_hover_text("Save the current UI snapshot back into the backend workspace")
+                                    .clicked()
+                                {
+                                    self.queue_remote_workspace_push();
                                 }
                             });
                             ui.horizontal(|ui| {
-                                if ui.button("Start backend").on_hover_text("Resume background stepping in the backend runtime").clicked() {
-                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Start) {
-                                        self.status = format!("Remote start failed: {}", err);
-                                    }
+                                if ui
+                                    .add_enabled(
+                                        !self.remote_workspace_action_inflight,
+                                        egui::Button::new("Start backend"),
+                                    )
+                                    .on_hover_text("Resume background stepping in the backend runtime")
+                                    .clicked()
+                                {
+                                    self.queue_remote_workspace_control(WorkspaceControlAction::Start);
                                 }
-                                if ui.button("Stop backend").on_hover_text("Pause background stepping in the backend runtime").clicked() {
-                                    if let Err(err) = self.control_remote_workspace_backend(WorkspaceControlAction::Stop) {
-                                        self.status = format!("Remote stop failed: {}", err);
-                                    }
+                                if ui
+                                    .add_enabled(
+                                        !self.remote_workspace_action_inflight,
+                                        egui::Button::new("Stop backend"),
+                                    )
+                                    .on_hover_text("Pause background stepping in the backend runtime")
+                                    .clicked()
+                                {
+                                    self.queue_remote_workspace_control(WorkspaceControlAction::Stop);
                                 }
                             });
+                            if self.remote_workspace_action_inflight {
+                                ui.small("Remote workspace operation in progress...");
+                            }
                             ui.separator();
                             let neuron_count = self
                                 .runner
@@ -12846,6 +13411,46 @@ impl eframe::App for App {
                     let total_conn: usize = self.runner.try_read()
                         .map(|r| r.connection_counts().iter().sum::<usize>() + r.output_connection_count())
                         .unwrap_or(0);
+                    let ratio_policy = self.local_net.growth_io_ratio_policy.clone();
+                    let ratio_view = self
+                        .runner
+                        .try_read()
+                        .map(|r| {
+                            let mature_interneurons = (0..r.net.num_hidden_layers)
+                                .map(|layer| r.layer_size(layer) as u64)
+                                .sum::<u64>();
+                            ratio_policy.view(
+                                mature_interneurons,
+                                r.net.num_sensory_neurons as u64,
+                                r.net.num_output_neurons as u64,
+                                r.net.io_channels_are_biological,
+                            )
+                        })
+                        .unwrap_or_else(|_| {
+                            let mature_interneurons = (self.local_net.num_hidden_layers as u64)
+                                .saturating_mul(self.local_net.num_hidden_per_layer_initial as u64);
+                            ratio_policy.view(
+                                mature_interneurons,
+                                self.local_net.num_sensory_neurons as u64,
+                                self.local_net.num_output_neurons as u64,
+                                self.local_net.io_channels_are_biological,
+                            )
+                        });
+                    ui.group(|ui| {
+                        ui.label(format!("I/O ratio profile: {}", ratio_view.profile));
+                        ui.label(format!(
+                            "{} | {}",
+                            ratio_view.sensory_ratio_text(),
+                            ratio_view.motor_ratio_text()
+                        ));
+                        ui.label(ratio_view.population_text());
+                        if ratio_view.io_channels_are_biological {
+                            ui.label("Targets are admitted from mature interneurons; provisional early cells do not form I/O.");
+                        } else {
+                            ui.label("I/O is mapped external adapter/readout state; biological I/O admission is disabled.");
+                        }
+                    });
+                    ui.separator();
                     let net = &mut self.local_net;
                     let mut changed = false;
                     let mut growth_params_changed = false;
@@ -13472,26 +14077,53 @@ impl eframe::App for App {
                     let _ = self.sim_tx.send(SimControl::SetFeedback(self.loop_feedback));
                 }
                 ui.separator();
-                ui.label("Input source").on_hover_text("Choose the sensory spike source");
+                ui.label(egui::RichText::new("Input source").strong())
+                    .on_hover_text("Choose the sensory spike source");
                 let prev_input_source = self.input_source;
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.input_source, InputSource::Random, "Random").on_hover_text("Per-sensor Bernoulli spikes with tunable probability");
-                    ui.radio_value(&mut self.input_source, InputSource::Theta, "Theta").on_hover_text("Deterministic theta rhythm spikes (global oscillation)");
-                    ui.radio_value(&mut self.input_source, InputSource::ExternalHttpAer, "HTTP/HTTPS AER")
-                        .on_hover_text("Pull NDJSON AER frames from an HTTP/HTTPS stream and feed them into sensory spikes.");
-                    ui.radio_value(&mut self.input_source, InputSource::AudioFile, "Audio File").on_hover_text("Decode audio file → spectral bands → repeatable rate-coded spikes");
-                    ui.radio_value(&mut self.input_source, InputSource::Microphone, "Microphone").on_hover_text("Live mic capture → spectral bands → rate-coded spikes");
-                    #[cfg(feature = "image_input")]
-                    ui.radio_value(&mut self.input_source, InputSource::ImageFile, "Image").on_hover_text("Static picture → grayscale → downsample to sensory → spikes");
-                    #[cfg(feature = "video_input")]
-                    ui.radio_value(&mut self.input_source, InputSource::VideoFile, "Video").on_hover_text("Video file (.mp4) → grayscale → downsample → spikes");
-                    #[cfg(feature = "webcam_input")]
-                    ui.radio_value(&mut self.input_source, InputSource::Webcam, "Webcam").on_hover_text("Live camera → grayscale → downsample → spikes");
-                    #[cfg(feature = "robot_io")]
-                    ui.radio_value(&mut self.input_source, InputSource::ExternalIpc, "External (IPC)")
-                        .on_hover_text("Receive sensory spikes via AER (preferred) or legacy float frames over Unix Domain Socket; floats are thresholded to spikes.");
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("Choose one input").small().weak());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.radio_value(&mut self.input_source, InputSource::Random, "Random").on_hover_text("Per-sensor Bernoulli spikes with tunable probability");
+                        ui.radio_value(&mut self.input_source, InputSource::Theta, "Theta").on_hover_text("Deterministic theta rhythm spikes (global oscillation)");
+                        ui.radio_value(&mut self.input_source, InputSource::ExternalHttpAer, "HTTP/HTTPS AER")
+                            .on_hover_text("Pull NDJSON AER frames from an HTTP/HTTPS stream and feed them into sensory spikes.");
+                        ui.radio_value(&mut self.input_source, InputSource::AudioFile, "Audio file").on_hover_text("Decode audio file → spectral bands → repeatable rate-coded spikes");
+                        ui.radio_value(&mut self.input_source, InputSource::Microphone, "Microphone").on_hover_text("Live mic capture → spectral bands → rate-coded spikes");
+                        #[cfg(feature = "image_input")]
+                        ui.radio_value(&mut self.input_source, InputSource::ImageFile, "Image").on_hover_text("Static picture → grayscale → downsample to sensory → spikes");
+                        #[cfg(feature = "video_input")]
+                        ui.radio_value(&mut self.input_source, InputSource::VideoFile, "Video file").on_hover_text(format!("{}: video file (.mp4) → grayscale → downsample → spikes", VIDEO_FILE_INPUT_SOURCE_NAME));
+                        #[cfg(feature = "webcam_input")]
+                        ui.radio_value(&mut self.input_source, InputSource::Webcam, "Camera").on_hover_text(format!("{}: live camera → grayscale → downsample → spikes", CAMERA_INPUT_SOURCE_NAME));
+                        #[cfg(feature = "robot_io")]
+                        ui.radio_value(&mut self.input_source, InputSource::ExternalIpc, "External (IPC)")
+                            .on_hover_text("Receive sensory spikes via AER (preferred) or legacy float frames over Unix Domain Socket; floats are thresholded to spikes.");
+                    });
                 });
+                ui.label(egui::RichText::new(format!("Selected: {}", match self.input_source {
+                    InputSource::Random => "Random",
+                    InputSource::Theta => "Theta",
+                    InputSource::ExternalHttpAer => "HTTP/HTTPS AER",
+                    InputSource::AudioFile => "Audio file",
+                    InputSource::Microphone => "Microphone",
+                    #[cfg(feature = "image_input")]
+                    InputSource::ImageFile => "Image",
+                    #[cfg(feature = "video_input")]
+                    InputSource::VideoFile => "Video file",
+                    #[cfg(feature = "webcam_input")]
+                    InputSource::Webcam => "Camera",
+                    #[cfg(feature = "robot_io")]
+                    InputSource::ExternalIpc => "External IPC",
+                })).small().weak());
                 if self.input_source != prev_input_source {
+                    if Self::is_video_input_source(prev_input_source)
+                        || Self::is_video_input_source(self.input_source)
+                    {
+                        self.clear_video_preview();
+                    }
+                    if !Self::is_video_input_source(self.input_source) {
+                        self.video_preview_open = false;
+                    }
                     if !matches!(self.view_source, ViewSource::Standalone) {
                         self.set_distributed_input("", false);
                     }
@@ -13679,16 +14311,33 @@ impl eframe::App for App {
                     }
                     #[cfg(feature = "video_input")]
                     InputSource::VideoFile => {
-                        if ui.button("Choose Video...").on_hover_text("Open a video file (mp4, avi)").clicked() {
+                        ui.label(egui::RichText::new("Video file controls").strong());
+                        ui.horizontal(|ui| {
+                        if ui.button("Choose video…").on_hover_text("Open a video file (mp4, avi, mov, mkv)").clicked() {
                             if let Some(path) = rfd::FileDialog::new().add_filter("Video", &["mp4","avi","mov","mkv"]).pick_file() {
-                                match VideoFileProvider::from_path(&path, net_cloned.num_sensory_neurons, true) {
+                                self.clear_video_preview();
+                                match VideoFileProvider::from_path_with_preview(&path, net_cloned.num_sensory_neurons, true, Some(self.video_preview.clone())) {
                                     Ok(p) => {
-                                        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(p)));
+                                        let (provider, has_audio) = match AudioFileProvider::from_path(&path, net_cloned.num_sensory_neurons) {
+                                            Ok(audio) => (
+                                                Box::new(CombinedVideoAudioProvider::new(Box::new(p), Box::new(audio))) as Box<dyn SensoryProvider + Send>,
+                                                true,
+                                            ),
+                                            Err(_) => (Box::new(p) as Box<dyn SensoryProvider + Send>, false),
+                                        };
+                                        let _ = self.sim_tx.send(SimControl::SetProvider(provider));
                                         self.mic_running = false;
                                         #[cfg(feature = "webcam_input")]
                                         { self.cam_running = false; }
-                                        self.status = format!("Loaded video: {}", path.display());
+                                        self.video_audio_active = has_audio;
+                                        self.status = if has_audio {
+                                            format!("Loaded video with audio EQ: {}", path.display())
+                                        } else {
+                                            format!("Loaded video (no decodable audio track): {}", path.display())
+                                        };
                                         self.smoothed_equalizer_values.clear();
+                                        self.show_equalizer = has_audio;
+                                        self.video_preview_open = true;
                                     }
                                     Err(e) => {
                                         self.status = format!("Failed to open video: {}", e);
@@ -13698,22 +14347,132 @@ impl eframe::App for App {
                                 }
                             }
                         }
+                        if ui.button(if self.video_preview_open { "Hide Preview" } else { "Pop Out Preview" }).clicked() {
+                            self.video_preview_open = !self.video_preview_open;
+                        }
+                        });
+                        if self.video_audio_active {
+                            ui.colored_label(egui::Color32::LIGHT_GREEN, "Audio track detected • Graphic EQ enabled");
+                        } else {
+                            ui.label(egui::RichText::new("Audio: no decodable track detected").weak());
+                        }
                     }
                     #[cfg(feature = "webcam_input")]
                     InputSource::Webcam => {
-                        let label = if self.cam_running { "Stop Cam" } else { "Start Cam" };
+                        ui.label(egui::RichText::new("Camera controls").strong());
+                        let selected_camera_id = self.webcam_device_id.clone();
+                        let selected_camera_label = selected_camera_id
+                            .as_deref()
+                            .and_then(|id| self.webcam_devices.iter().find(|device| device.id == id))
+                            .map(|device| webcam_display_label(device, &self.webcam_devices))
+                            .unwrap_or_else(|| "Choose a camera".to_string());
+                        ui.horizontal(|ui| {
+                            ui.label("Device");
+                            egui::ComboBox::from_id_salt("webcam-device")
+                                .selected_text(selected_camera_label)
+                                .show_ui(ui, |ui| {
+                                    let mut selected = self.webcam_device_id.clone();
+                                    for device in self.webcam_devices.clone() {
+                                        let label = webcam_display_label(&device, &self.webcam_devices);
+                                        ui.selectable_value(&mut selected, Some(device.id), label);
+                                    }
+                                    if selected != self.webcam_device_id {
+                                        self.webcam_device_id = selected;
+                                        if self.cam_running {
+                                            self.status = "Camera selection changed; stop and restart capture".to_string();
+                                        }
+                                    }
+                                });
+                            if ui.button("Refresh").on_hover_text("Re-enumerate all cameras").clicked() {
+                                self.refresh_webcam_devices();
+                            }
+                        });
+                        if let Some(error) = self.webcam_devices_error.as_deref() {
+                            ui.colored_label(egui::Color32::LIGHT_RED, format!("Camera enumeration failed: {error}"));
+                        } else if self.webcam_devices.is_empty() {
+                            ui.colored_label(egui::Color32::YELLOW, "No camera devices are currently available");
+                        } else {
+                            ui.label(egui::RichText::new(format!("{} camera device(s) available", self.webcam_devices.len())).weak());
+                        }
+                        ui.checkbox(&mut self.video_audio_enabled, "Include microphone audio")
+                            .on_hover_text("Camera and microphone remain separate permissions. When enabled, the selected microphone is paired and Graphic EQ is shown only after it starts.");
+                        if self.video_audio_enabled {
+                            let selected_mic_id = self.microphone_device_id.clone();
+                            let selected_mic_label = selected_mic_id
+                                .as_deref()
+                                .and_then(|id| self.microphone_devices.iter().find(|device| device.id == id))
+                                .map(|device| microphone_display_label(device, &self.microphone_devices))
+                                .unwrap_or_else(|| "System default microphone".to_string());
+                            ui.horizontal(|ui| {
+                                ui.label("Audio device");
+                                egui::ComboBox::from_id_salt("webcam-audio-device")
+                                    .selected_text(selected_mic_label)
+                                    .show_ui(ui, |ui| {
+                                        let mut selected = self.microphone_device_id.clone();
+                                        ui.selectable_value(&mut selected, None, "System default microphone");
+                                        for device in self.microphone_devices.clone() {
+                                            let label = microphone_display_label(&device, &self.microphone_devices);
+                                            ui.selectable_value(&mut selected, Some(device.id), label);
+                                        }
+                                        self.microphone_device_id = selected;
+                                    });
+                                if ui.button("Refresh").on_hover_text("Re-enumerate microphones").clicked() {
+                                    self.refresh_microphone_devices();
+                                }
+                            });
+                            if let Some(error) = self.microphone_devices_error.as_deref() {
+                                ui.colored_label(egui::Color32::LIGHT_RED, format!("Audio enumeration failed: {error}"));
+                            } else if self.microphone_devices.is_empty() {
+                                ui.label(egui::RichText::new("No microphone input devices are currently available").weak());
+                            }
+                        }
+                        let label = if self.cam_running { "Stop camera" } else { "Start camera" };
+                        ui.horizontal(|ui| {
                         if ui.button(label).clicked() {
                             if self.cam_running {
                                 let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(net_cloned.num_sensory_neurons, self.random_spike_probability))));
                                 self.cam_running = false;
-                                self.status = "Webcam stopped".to_string();
+                                self.video_audio_active = false;
+                                self.video_preview_open = false;
+                                self.clear_video_preview();
+                                self.status = "Camera stopped".to_string();
                             } else {
-                                match WebcamCaptureProvider::new(0, net_cloned.num_sensory_neurons) {
+                                self.clear_video_preview();
+                                let Some(device_id) = self.webcam_device_id.clone() else {
+                                    self.status = "Choose an available camera before starting".to_string();
+                                    return;
+                                };
+                                match WebcamCaptureProvider::new_with_device_id(&device_id, net_cloned.num_sensory_neurons, Some(self.video_preview.clone())) {
                                     Ok(p) => {
-                                        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(p)));
+                                        let mut provider: Box<dyn SensoryProvider + Send> = Box::new(p);
+                                        let mut audio_active = false;
+                                        let mut audio_error = None;
+                                        if self.video_audio_enabled {
+                                            let audio = match self.microphone_device_id.as_deref() {
+                                                Some(id) => MicrophoneProvider::new_with_device_id(net_cloned.num_sensory_neurons, id),
+                                                None => MicrophoneProvider::new(net_cloned.num_sensory_neurons),
+                                            };
+                                            match audio {
+                                                Ok(audio) => {
+                                                    provider = Box::new(CombinedVideoAudioProvider::new(provider, Box::new(audio)));
+                                                    audio_active = true;
+                                                }
+                                                Err(error) => audio_error = Some(error.to_string()),
+                                            }
+                                        }
+                                        let _ = self.sim_tx.send(SimControl::SetProvider(provider));
                                         self.mic_running = false;
                                         self.cam_running = true;
-                                        self.status = "Webcam started".to_string();
+                                        self.video_audio_active = audio_active;
+                                        self.show_equalizer = audio_active;
+                                        self.video_preview_open = true;
+                                        self.status = if audio_active {
+                                            "Camera started with microphone audio • Graphic EQ enabled".to_string()
+                                        } else if let Some(error) = audio_error {
+                                            format!("Camera started without audio: {error}")
+                                        } else {
+                                            "Camera started".to_string()
+                                        };
                                         self.smoothed_equalizer_values.clear();
                                     }
                                     Err(e) => {
@@ -13723,6 +14482,13 @@ impl eframe::App for App {
                                     }
                                 }
                             }
+                        }
+                        if ui.button(if self.video_preview_open { "Hide Preview" } else { "Pop Out Preview" }).clicked() {
+                            self.video_preview_open = !self.video_preview_open;
+                        }
+                        });
+                        if self.video_audio_active {
+                            ui.colored_label(egui::Color32::LIGHT_GREEN, "Microphone audio active • Graphic EQ enabled");
                         }
                     }
                     InputSource::Microphone => {
@@ -14491,7 +15257,7 @@ impl eframe::App for App {
                         });
                         ui.separator();
                         // Provider band probes (if available)
-                        if let Some(bands) = bands_guard.as_deref() {
+                        if let Some(bands) = bands_snapshot.as_deref() {
                             ui.horizontal(|ui|{
                                 ui.label("Band b:");
                                 let mut b = 0usize; ui.add(egui::DragValue::new(&mut b).range(0..=bands.len().saturating_sub(1)));
@@ -15681,7 +16447,16 @@ impl eframe::App for App {
                     .map(|topo| topology_has_content(topo))
                     .unwrap_or(false);
             #[cfg(feature = "growth3d")]
-            let ui_snapshot_opt = self.ui_snapshot.try_read().ok().map(|s| s.clone());
+            let ui_snapshot_opt: Option<UiTopologySnapshot> = {
+                let snapshot_timer =
+                    crate::obs::DebugTimer::new("App::update/render/snapshot_topology_copy");
+                let snapshot = self.ui_snapshot.try_read().ok();
+                let topology = snapshot
+                    .as_ref()
+                    .map(|snapshot| UiTopologySnapshot::from(&**snapshot));
+                drop(snapshot_timer);
+                topology
+            };
             #[cfg(feature = "growth3d")]
             let snapshot_topology_allowed = matches!(self.view_source, ViewSource::Standalone);
             #[cfg(feature = "growth3d")]
@@ -15903,6 +16678,12 @@ impl eframe::App for App {
                     || snapshot_topology_available
                     || active_runner_topology_available
                     || cluster_topology_available;
+                // Topology interpolation is presentation state.  It must not
+                // advance while a standalone brain is stopped: otherwise the
+                // neurons appear to move before Start even though Runner::step
+                // and biological time are paused.  Camera interaction remains
+                // allowed to animate while the user is dragging.
+                let animate_topology = self.playing || camera_interacting;
                 #[cfg(feature = "growth3d")]
                 let keep_last_topology_projection = use_aarnn_layout
                     && !topo_enabled
@@ -16070,14 +16851,18 @@ impl eframe::App for App {
                             } else {
                                 (0.24, 0.10)
                             };
-                            let pivot_smoothed = pid_smooth_vec3(
-                                &mut self.cam_pivot_pid,
-                                pivot_target,
-                                dt_s,
-                                pivot_kp,
-                                0.0,
-                                pivot_kd,
-                            );
+                            let pivot_smoothed = if animate_topology {
+                                pid_smooth_vec3(
+                                    &mut self.cam_pivot_pid,
+                                    pivot_target,
+                                    dt_s,
+                                    pivot_kp,
+                                    0.0,
+                                    pivot_kd,
+                                )
+                            } else {
+                                snap_pid_vec3(&mut self.cam_pivot_pid, pivot_target)
+                            };
                             self.cam_pivot_world =
                                 (pivot_smoothed[0], pivot_smoothed[1], pivot_smoothed[2]);
                         }
@@ -16302,38 +17087,57 @@ impl eframe::App for App {
                         } else {
                             (0.30, 0.10)
                         };
-                        self.sensory_positions = pid_smooth_positions(
-                            &mut self.topo_pid_sensory,
-                            &target_sensory_positions,
-                            dt_s,
-                            pos_kp,
-                            0.0,
-                            pos_kd,
-                        );
-                        self.hidden_positions = pid_smooth_layered_positions(
-                            &mut self.topo_pid_hidden,
-                            &target_hidden_positions,
-                            dt_s,
-                            pos_kp,
-                            0.0,
-                            pos_kd,
-                        );
-                        self.output_positions = pid_smooth_positions(
-                            &mut self.topo_pid_output,
-                            &target_output_positions,
-                            dt_s,
-                            pos_kp,
-                            0.0,
-                            pos_kd,
-                        );
-                        self.early_positions = pid_smooth_positions(
-                            &mut self.topo_pid_early,
-                            &target_early_positions,
-                            dt_s,
-                            pos_kp,
-                            0.0,
-                            pos_kd,
-                        );
+                        if animate_topology {
+                            self.sensory_positions = pid_smooth_positions(
+                                &mut self.topo_pid_sensory,
+                                &target_sensory_positions,
+                                dt_s,
+                                pos_kp,
+                                0.0,
+                                pos_kd,
+                            );
+                            self.hidden_positions = pid_smooth_layered_positions(
+                                &mut self.topo_pid_hidden,
+                                &target_hidden_positions,
+                                dt_s,
+                                pos_kp,
+                                0.0,
+                                pos_kd,
+                            );
+                            self.output_positions = pid_smooth_positions(
+                                &mut self.topo_pid_output,
+                                &target_output_positions,
+                                dt_s,
+                                pos_kp,
+                                0.0,
+                                pos_kd,
+                            );
+                            self.early_positions = pid_smooth_positions(
+                                &mut self.topo_pid_early,
+                                &target_early_positions,
+                                dt_s,
+                                pos_kp,
+                                0.0,
+                                pos_kd,
+                            );
+                        } else {
+                            self.sensory_positions = snap_pid_positions(
+                                &mut self.topo_pid_sensory,
+                                &target_sensory_positions,
+                            );
+                            self.hidden_positions = snap_pid_layered_positions(
+                                &mut self.topo_pid_hidden,
+                                &target_hidden_positions,
+                            );
+                            self.output_positions = snap_pid_positions(
+                                &mut self.topo_pid_output,
+                                &target_output_positions,
+                            );
+                            self.early_positions = snap_pid_positions(
+                                &mut self.topo_pid_early,
+                                &target_early_positions,
+                            );
+                        }
                         let desired_center_2d = egui::pos2(x_ref + cam_pan.x, y_ref + cam_pan.y);
                         let mut centroid_correction = egui::Vec2::ZERO;
                         if let Some(curr_center_2d) = centroid_of_projected_positions(
@@ -16361,6 +17165,22 @@ impl eframe::App for App {
                             }
                         }
 
+                        if !animate_topology {
+                            // Centroid correction is part of the displayed
+                            // coordinate, so keep the paused PID state aligned
+                            // with the final pixels after recentering.
+                            sync_pid_positions(
+                                &mut self.topo_pid_sensory,
+                                &self.sensory_positions,
+                            );
+                            sync_pid_layered_positions(
+                                &mut self.topo_pid_hidden,
+                                &self.hidden_positions,
+                            );
+                            sync_pid_positions(&mut self.topo_pid_output, &self.output_positions);
+                            sync_pid_positions(&mut self.topo_pid_early, &self.early_positions);
+                        }
+
                         // Compute region label positions with smoothing
                         self.region_label_positions.clear();
                         if self.show_region_labels {
@@ -16377,10 +17197,14 @@ impl eframe::App for App {
                                     .region_label_target_states
                                     .entry(name.clone())
                                     .or_insert(target_raw);
-                                let target_tau_s = if camera_interacting { 0.10 } else { 0.26 };
-                                let target_alpha = 1.0 - (-dt_s / target_tau_s).exp();
-                                target_entry.x += (target_raw.x - target_entry.x) * target_alpha;
-                                target_entry.y += (target_raw.y - target_entry.y) * target_alpha;
+                                if animate_topology {
+                                    let target_tau_s = if camera_interacting { 0.10 } else { 0.26 };
+                                    let target_alpha = 1.0 - (-dt_s / target_tau_s).exp();
+                                    target_entry.x += (target_raw.x - target_entry.x) * target_alpha;
+                                    target_entry.y += (target_raw.y - target_entry.y) * target_alpha;
+                                } else {
+                                    *target_entry = target_raw;
+                                }
                                 let target_pos = *target_entry;
 
                                 // Keep the label on a stable side of its region target (sticky offset)
@@ -16406,19 +17230,23 @@ impl eframe::App for App {
                                 }
                                 let desired_label_pos =
                                     target_pos + sticky_dir.normalized() * label_distance;
-                                let label_tau_s = if camera_interacting { 0.09 } else { 0.34 };
-                                let label_alpha = 1.0 - (-dt_s / label_tau_s).exp();
-                                let mut step = (desired_label_pos - *label_entry) * label_alpha;
-                                let max_step = if camera_interacting {
-                                    220.0 * dt_s
+                                if animate_topology {
+                                    let label_tau_s = if camera_interacting { 0.09 } else { 0.34 };
+                                    let label_alpha = 1.0 - (-dt_s / label_tau_s).exp();
+                                    let mut step = (desired_label_pos - *label_entry) * label_alpha;
+                                    let max_step = if camera_interacting {
+                                        220.0 * dt_s
+                                    } else {
+                                        85.0 * dt_s
+                                    };
+                                    let step_len_sq = step.length_sq();
+                                    if step_len_sq > max_step * max_step {
+                                        step *= max_step / step_len_sq.sqrt();
+                                    }
+                                    *label_entry += step;
                                 } else {
-                                    85.0 * dt_s
-                                };
-                                let step_len_sq = step.length_sq();
-                                if step_len_sq > max_step * max_step {
-                                    step *= max_step / step_len_sq.sqrt();
+                                    *label_entry = desired_label_pos;
                                 }
-                                *label_entry += step;
 
                                 self.region_label_positions.push((name, *label_entry, target_pos));
                             }
@@ -17237,12 +18065,26 @@ impl eframe::App for App {
             // Optional: morphology synapse overlays (uses current 2D positions)
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             if show_morpho_overlays {
+                observe_time!("App::update/render/morphology_overlay");
                 if let Some(active_runner) = active_runner_opt {
                     if !active_runner.net.use_morphology {
                         // No morphology data to draw.
                     } else {
                 let mut drawn_count = 0usize;
-                let draw_cap = 5000usize;
+                let synapse_total = active_runner.morph.synapses.len();
+                // Morphology is authoritative simulation state, but this is a
+                // presentation-only projection.  Bound both the amount of
+                // geometry emitted and the list scanned per frame so a large
+                // or rapidly growing morphology cannot block egui or retain
+                // the runner read guard for an unbounded traversal.
+                let draw_cap = if synapse_total > 50_000 {
+                    500
+                } else if synapse_total > 10_000 {
+                    1_000
+                } else {
+                    2_000
+                };
+                let scan_cap = 20_000usize;
                 let draw_syn = |edge_shapes: &mut Vec<EdgeVisual>, p0: egui::Pos2, bend: Option<egui::Pos2>, p1: egui::Pos2, _color: egui::Color32, label_from: String, label_to: String, w: f32, kind: &'static str, is_longterm: bool| {
                     let mut color = if is_longterm {
                         egui::Color32::from_rgb(0, 255, 128) // Greenish for longterm
@@ -17272,7 +18114,7 @@ impl eframe::App for App {
                 // reserved first pass so a dense hidden topology cannot hide
                 // every H->O edge behind the morphology display cap.
                 for output_pass in 0..2 {
-                for syn in &active_runner.morph.synapses {
+                for syn in active_runner.morph.synapses.iter().take(scan_cap) {
                     let is_output = matches!(syn.kind, SynKind::Out);
                     if (output_pass == 0) != is_output { continue; }
                     if drawn_count >= draw_cap { break; }
@@ -17399,11 +18241,11 @@ impl eframe::App for App {
                     }
                 }
                 }
-                if drawn_count >= draw_cap {
+                if drawn_count >= draw_cap || synapse_total > scan_cap {
                     painter.text(
                         egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 26.0),
                         egui::Align2::LEFT_TOP,
-                        format!("(Display capped at {}/{} synapses)", draw_cap, active_runner.morph.synapses.len()),
+                        format!("(Display capped at {}/{} synapses; scan budget {})", draw_cap, synapse_total, scan_cap),
                         egui::FontId::proportional(12.0),
                         egui::Color32::YELLOW,
                     );
@@ -17728,7 +18570,18 @@ impl eframe::App for App {
                     && !camera_interacting;
 
                 if allow_cached_edges {
-                    for edge in &self.cached_edges {
+                    // Static edges are presentation-only. Keep their work
+                    // bounded even when a high-density cache was produced for
+                    // a large network. Cached edges are ordered with the
+                    // readout path first, so the cap preserves the most useful
+                    // projection while preventing a full-frame stall.
+                    let static_draw_cap = Self::static_edge_draw_cap(
+                        self.cached_edges.len(),
+                        overlay_density,
+                        layout_total_neurons,
+                        self.force_show_connections,
+                    );
+                    for edge in self.cached_edges.iter().take(static_draw_cap) {
                         let Some(p0) = get_pos(edge.from_layer, edge.from_idx, sensory_positions, hidden_positions, output_positions) else { continue; };
                         let Some(p1) = get_pos(edge.to_layer, edge.to_idx, sensory_positions, hidden_positions, output_positions) else { continue; };
                         let abs_w = edge.weight.abs();
@@ -18159,13 +19012,22 @@ impl eframe::App for App {
                 );
                 painter.rect_filled(rect, 6.0, egui::Color32::from_gray(20));
                 painter.rect_stroke(rect, 6.0, egui::Stroke { width: 1.0, color: egui::Color32::from_gray(80) }, egui::StrokeKind::Outside);
-                let title = String::from("Graphic EQ");
+                let cluster_projection = matches!(&view_source, ViewSource::ClusterGlobal(_));
+                let title = if cluster_projection {
+                    "Graphic EQ • unavailable for cluster projection"
+                } else {
+                    "Graphic EQ • audio FFT"
+                };
                 painter.text(rect.left_top() + egui::vec2(8.0, 4.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(12.0), egui::Color32::WHITE);
 
                 // Fetch bands and smooth
-                if let Some(b) = bands_guard.as_deref() {
+                if !cluster_projection {
+                    if let Some(b) = bands_snapshot.as_deref() {
                     if smoothed_equalizer_values.len() != b.len() { smoothed_equalizer_values = vec![0.0f32; b.len()]; }
                     for i in 0..b.len() { smoothed_equalizer_values[i] = 0.7*smoothed_equalizer_values[i] + 0.3*b[i].clamp(0.0, 1.0); }
+                    } else {
+                        for v in &mut smoothed_equalizer_values { *v *= 0.9; }
+                    }
                 } else {
                     for v in &mut smoothed_equalizer_values { *v *= 0.9; }
                 }

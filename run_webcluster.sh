@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
+
 # Script to start two example networks:
 # 1. A standalone network running in a single process.
 # 2. A distributed network (orchestrator + node) with autodiscovery.
@@ -101,6 +103,13 @@ EXAMPLE_RUNTIME_ROOT="${EXAMPLE_RUNTIME_ROOT:-data/examples-runtime}"
 BIN_DIR="${AARNN_BIN_DIR:-target/release}"
 mkdir -p "$EXAMPLE_RUNTIME_ROOT"
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to prepare the local management environment" >&2
+    exit 1
+fi
+eval "$(python3 "$SCRIPT_DIR/scripts/local_management_env.py" \
+    --runtime-root "$EXAMPLE_RUNTIME_ROOT" --shell)"
+
 CONFIG_ARG=()
 if [ -f "$CONFIG_PATH" ]; then
     CONFIG_ARG=(--config "$CONFIG_PATH")
@@ -121,12 +130,11 @@ echo "Building project..."
 if [ "${AARNN_SKIP_BUILD:-0}" = "1" ]; then
     echo "Skipping build (AARNN_SKIP_BUILD=1); using binaries from $BIN_DIR"
 else
-    # Keep this launcher on the local reference profile. The authenticated
-    # management_v1 profile is intentionally not part of example startup.
-    # Build both entry points in one package feature graph so Cargo does not
-    # rebuild the shared library between the orchestrator and dashboard.
-    cargo build --release --locked --no-default-features \
-        --bin aarnn_rust --bin web_ui --features "engine_runtime,ui,cuda"
+    # Build both entry points in one complete package feature graph so Cargo
+    # does not rebuild the shared library between the orchestrator and
+    # dashboard.
+    cargo build --release --locked --all-features \
+        --bin aarnn_rust --bin web_ui
 fi
 
 #echo "Starting Standalone Network (Brain ID: standalone)..."

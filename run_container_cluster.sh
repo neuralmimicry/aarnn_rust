@@ -54,6 +54,7 @@ ORCH_PODMAN_ARGS=(
     --rm
     --network=host
     --name "${ORCH_NAME}"
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
     -e NMD_TFLITE_ALLOW_LARGE=1
     -v "${OUTPUT_DIR}:/app/outputs:Z"
     -v "${LOG_DIR}:/app/logs:Z"
@@ -75,6 +76,7 @@ for i in $(seq 1 "${NODE_COUNT}"); do
     NODE_LOG="${LOG_DIR}/node_${i}.container.log"
     CONTAINERS+=("${NODE_NAME}")
     podman run --rm --network=host --name "${NODE_NAME}" \
+        -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}" \
         -e NMD_TFLITE_ALLOW_LARGE=1 \
         -v "${OUTPUT_DIR}:/app/outputs:Z" \
         -v "${LOG_DIR}:/app/logs:Z" \
@@ -93,6 +95,7 @@ WEB_UI_NAME="aarnn-web-ui-$(date +%s)"
 WEB_UI_LOG="${LOG_DIR}/web_ui.container.log"
 CONTAINERS+=("${WEB_UI_NAME}")
 podman run --rm --network=host --name "${WEB_UI_NAME}" \
+    -e NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}" \
     -v "${RUNTIME_ROOT_HOST}:/app/data/runtime:Z" \
     "${WEB_UI_IMAGE}" \
     --listen "0.0.0.0:${WEB_UI_PORT}" \

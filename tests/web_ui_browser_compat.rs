@@ -145,6 +145,57 @@ fn browser_aer_crc_uses_the_shared_binary_wire_layout() {
 }
 
 #[test]
+fn video_input_source_parity_is_present_across_ui_and_cli_surfaces() {
+    let native = read_asset("src/ui.rs");
+    let cli = read_asset("src/main.rs");
+    let web = read_asset("web_ui/index.html");
+    let web_app = read_asset("web_ui/app.js");
+    let android =
+        read_asset("apps/android/app/src/main/java/com/neuralmimicry/aarnn/MainActivity.kt");
+    let android_capabilities =
+        read_asset("apps/android/app/src/main/java/com/neuralmimicry/aarnn/AndroidCapabilities.kt");
+    let ios = read_asset("apps/ios/AarnnVideoInputView.swift");
+
+    for source in [&native, &cli, &web, &web_app, &android, &ios] {
+        assert!(
+            source.contains("video-file"),
+            "video-file source missing from one interface"
+        );
+        assert!(
+            source.contains("camera"),
+            "camera source missing from one interface"
+        );
+    }
+    assert!(native.contains("Pop Out Preview") && native.contains("render_video_preview"));
+    assert!(native.contains("list_webcam_devices") && native.contains("webcam-device"));
+    assert!(native.contains("new_with_device_id") && native.contains("CombinedVideoAudioProvider"));
+    assert!(native.contains("Graphic EQ enabled"));
+    assert!(
+        native.contains("show_equalizer: startup_audio_loaded || startup_video_audio_active"),
+        "CLI/startup video audio must enable the native Graphic EQ"
+    );
+    assert!(
+        native
+            .contains("sim_audio_diagnostic = startup_audio_loaded || startup_video_audio_active"),
+        "startup video audio must use the same diagnostic path as audio-file input"
+    );
+    assert!(web.contains("io-video-popout") && web_app.contains("openVideoPopout"));
+    assert!(web.contains("io-camera-device") && web.contains("io-audio-device"));
+    assert!(web_app.contains("enumerateDevices") && web_app.contains("videoAudioEnabled"));
+    assert!(web_app.contains("getUserMedia({ video, audio })"));
+    assert!(android.contains("Pop out video") && android.contains("VideoPreviewDialog"));
+    assert!(android.contains("Camera.open(cameraIndex)") && android.contains("cameraCount"));
+    assert!(android.contains("Include microphone audio"));
+    assert!(android_capabilities.contains("camera_preview"));
+    assert!(
+        android_capabilities.contains("\"video-file\"")
+            && android_capabilities.contains("\"camera\"")
+    );
+    assert!(cli.contains("video_file") && cli.contains("camera"));
+    assert!(ios.contains("DiscoverySession") && ios.contains("includeAudio"));
+}
+
+#[test]
 fn webgl_simulator_is_shipped_through_the_authenticated_gateway() {
     let html = read_asset("web_ui/webgl-sim.html");
     let source = read_asset("web_ui/webgl-sim.js");
@@ -193,4 +244,40 @@ fn webgl_simulator_is_shipped_through_the_authenticated_gateway() {
         "WebGL launcher must build and validate the IPC-capable cluster binary"
     );
     assert!(!source.contains("KeyboardEvent") && !source.contains("pointerlock"));
+}
+
+#[test]
+fn activity_polling_coalesces_and_rejects_stale_sources() {
+    let app = read_asset("web_ui/app.js");
+    assert!(app.contains("activityFetchInFlight"));
+    assert!(app.contains("activityFetchQueued"));
+    assert!(app.contains("const requestSeq = ++activityRequestSeq"));
+    assert!(app.contains("requestSeq === activityRequestSeq"));
+    assert!(app.contains("finally {\n    activityFetchInFlight = false"));
+}
+
+#[test]
+fn native_remote_workspace_actions_are_backgrounded() {
+    let native = read_asset("src/ui.rs");
+    assert!(native.contains("queue_remote_workspace_push"));
+    assert!(native.contains("queue_remote_workspace_pull"));
+    assert!(native.contains("queue_remote_workspace_control"));
+    assert!(native.contains("ToolTaskResult::RemoteWorkspacePush"));
+    assert!(native.contains("ToolTaskResult::RemoteWorkspacePull"));
+    assert!(native.contains("ToolTaskResult::RemoteWorkspaceControl"));
+    assert!(native.contains("remote_workspace_action_inflight"));
+    assert!(native.contains("std::thread::spawn(move ||"));
+    assert!(!native.contains("self.pull_remote_workspace_snapshot()"));
+    assert!(!native.contains("self.control_remote_workspace_backend("));
+}
+
+#[test]
+fn android_refresh_is_off_main_thread_and_coalesced() {
+    let controller = read_asset(
+        "apps/android/app/src/main/java/com/neuralmimicry/aarnn/RemoteConnectionController.kt",
+    );
+    assert!(controller.contains("Executors.newSingleThreadExecutor"));
+    assert!(controller.contains("AtomicBoolean"));
+    assert!(controller.contains("refreshInFlight.compareAndSet(false, true)"));
+    assert!(controller.contains("refreshInFlight.set(false)"));
 }

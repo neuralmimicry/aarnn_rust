@@ -3,7 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+source "$ROOT_DIR/scripts/webots_runtime_profile.sh"
+export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 ROBOT_PROFILES_PY="$ROOT_DIR/scripts/robot_profiles.py"
+
+LOCAL_MANAGEMENT_ROOT="${NM_LOCAL_MANAGEMENT_ROOT:-$ROOT_DIR/data/webots-runtime}"
 
 if [ ! -f "$ROBOT_PROFILES_PY" ]; then
   echo "Missing shared robot profile helper: $ROBOT_PROFILES_PY"
@@ -30,6 +34,7 @@ WORLD_FILE="${WORLD_FILE:-$ROOT_DIR/webots_world/worlds/multi_neuroworld.wbt}"
 TMP_CELEGANS_WORLD="${TMP_CELEGANS_WORLD:-/tmp/aarnn_tmp_celegans_assets_ignore.wbt}"
 TMP_DROSOPHILA_WORLD="${TMP_DROSOPHILA_WORLD:-/tmp/aarnn_tmp_drosophila_assets_ignore.wbt}"
 WEBOTS_RUNTIME_ROOT="${WEBOTS_RUNTIME_ROOT:-${NM_RUNTIME_ROOT:-$ROOT_DIR/data/runtime}}"
+WEBOTS_RUNTIME_FEATURES="$(webots_runtime_profile)"
 WEBOTS_RUNTIME_USER="${WEBOTS_RUNTIME_USER:-webots}"
 WEBOTS_WORKSPACE_PREFIX="${WEBOTS_WORKSPACE_PREFIX:-webots}"
 WEBOTS_WORKSPACE_AUTOSAVE_STEPS="${WEBOTS_WORKSPACE_AUTOSAVE_STEPS:-10}"
@@ -274,6 +279,8 @@ Options:
   --nodes <n>                Total cluster worker processes; forwarded to
                              run_webot.sh (default: 1). At least one worker
                              is required per configured brain.
+  --all-features             Opt into Cargo's complete feature graph. The
+                             default is the explicit Webots runtime profile.
   --help                     Show this help.
 
 Environment:
@@ -355,6 +362,10 @@ while [ "$#" -gt 0 ]; do
       CLUSTER_NODE_COUNT="${1#*=}"
       PASS_THROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
       ;;
+    --all-features)
+      WEBOTS_RUNTIME_FEATURES=all-features
+      export NM_WEBOTS_RUNTIME_FEATURES=all-features
+      ;;
     --help|-h)
       usage
       exit 0
@@ -380,6 +391,7 @@ if ! [[ "$CLUSTER_NODE_COUNT" =~ ^[0-9]+$ ]] || [ "$CLUSTER_NODE_COUNT" -lt 1 ];
   exit 1
 fi
 export NM_CLUSTER_NODES="$CLUSTER_NODE_COUNT"
+webots_prepare_management_env "$WEBOTS_RUNTIME_FEATURES" "$LOCAL_MANAGEMENT_ROOT"
 if webots_recording_requested && [ "$UI_MODE" != "cli" ]; then
   if [ "$UI_MODE_SET_BY_USER" -eq 1 ]; then
     echo "Webots recording enabled; overriding --ui-mode $UI_MODE with cli so AARNN runs headless during capture."
@@ -2001,9 +2013,12 @@ if [ "$UI_MODE" = "rust" ]; then
 fi
 
 if [ "$UI_MODE" = "cli" ]; then
-  EXTRA_ARGS=()
+  # CLI mode is headless at the control-plane level.  The IPC-owning worker
+  # still needs its UI/IPC runtime, but the orchestrator has no presentation
+  # work to perform and must not start a dashboard render/snapshot loop.
+  EXTRA_ARGS=(--no-orchestrator-ui --node-ui-hidden)
   if [ "$REMOTE_COMPUTE" = "1" ] || [ "$REMOTE_COMPUTE" = "true" ]; then
-    EXTRA_ARGS+=(--runtime cluster --node-ui-hidden)
+    EXTRA_ARGS+=(--runtime cluster)
   else
     EXTRA_ARGS+=(--runtime uds)
   fi
@@ -2038,10 +2053,9 @@ trap cleanup EXIT
 
 if ! pass_through_has_arg "--no-build"; then
   echo "Prebuilding local web runtime binaries..."
-  WEBOTS_RUNTIME_FEATURES="${NM_WEBOTS_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
-  export NM_WEBOTS_RUNTIME_FEATURES="$WEBOTS_RUNTIME_FEATURES"
-  cargo build --release --no-default-features --bin aarnn_rust --features "$WEBOTS_RUNTIME_FEATURES"
-  cargo build --release --no-default-features --bin web_ui --features "$WEBOTS_RUNTIME_FEATURES"
+  read -r -a CARGO_RUNTIME_ARGS <<< "$(webots_cargo_profile_args "$WEBOTS_RUNTIME_FEATURES")"
+  cargo build --release "${CARGO_RUNTIME_ARGS[@]}" --bin aarnn_rust
+  cargo build --release "${CARGO_RUNTIME_ARGS[@]}" --bin web_ui
   PREBUILT_LOCAL_WEB_RUNTIME=1
 fi
 
