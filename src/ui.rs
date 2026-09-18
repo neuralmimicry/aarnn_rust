@@ -9632,76 +9632,152 @@ impl eframe::App for App {
             if placement_ready {
                 if let Some((node_id, addr_value)) = request_target {
                     let addr_opt = Some(addr_value);
-                if let Some(mut addr) = addr_opt {
-                    if !addr.is_empty() {
-                        if !addr.starts_with("http://") && !addr.starts_with("https://") {
-                            addr = format!("http://{}", addr);
+                    if let Some(mut addr) = addr_opt {
+                        if !addr.is_empty() {
+                            if !addr.starts_with("http://") && !addr.starts_with("https://") {
+                                addr = format!("http://{}", addr);
+                            }
+                            let now = std::time::Instant::now();
+                            let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
+                                now.duration_since(t) > std::time::Duration::from_secs(2)
+                            });
+                            let needs_refresh = self.cluster_snapshot_network_id.as_deref()
+                                != Some(net_id)
+                                || self.cluster_snapshot_node_id.as_deref() != Some(&node_id);
+                            if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
+                                self.cluster_snapshot_inflight = true;
+                                self.cluster_snapshot_network_id = Some(net_id.clone());
+                                self.cluster_snapshot_node_id = Some(node_id.clone());
+                                let tx = self.cluster_snapshot_tx.clone();
+                                let net_id_clone = net_id.clone();
+                                let node_id_clone = node_id.clone();
+                                let rt = self.runtime_handle.clone();
+                                rt.spawn(async move {
+                                    match connect_cluster_client(addr.clone()).await {
+                                        Ok(mut client) => {
+                                            match client
+                                                .get_cluster_network_snapshot(Request::new(
+                                                    ClusterNetworkSnapshotRequest {
+                                                        network_id: net_id_clone.clone(),
+                                                    },
+                                                ))
+                                                .await
+                                            {
+                                                Ok(resp) => {
+                                                    match decode_cluster_snapshot_projection(
+                                                        resp.into_inner(),
+                                                        &net_id_clone,
+                                                        None,
+                                                    ) {
+                                                        Ok((snap, shard_count, cluster_digest)) => {
+                                                            let _ =
+                                                                tx.send(ClusterSnapshotMsg::Ok {
+                                                                    network_id: net_id_clone,
+                                                                    node_id: node_id_clone,
+                                                                    snap,
+                                                                    shard_count,
+                                                                    cluster_digest,
+                                                                });
+                                                        }
+                                                        Err(error) => {
+                                                            let _ =
+                                                                tx.send(ClusterSnapshotMsg::Err {
+                                                                    network_id: net_id_clone,
+                                                                    node_id: node_id_clone,
+                                                                    error,
+                                                                });
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                        network_id: net_id_clone,
+                                                        node_id: node_id_clone,
+                                                        error: format!(
+                                                            "snapshot request failed: {}",
+                                                            e
+                                                        ),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                network_id: net_id_clone,
+                                                node_id: node_id_clone,
+                                                error: format!("snapshot connect failed: {}", e),
+                                            });
+                                        }
+                                    }
+                                });
+                            }
                         }
+                    }
+                } else if let Some(node) = self.distributed_node.clone() {
+                    let local_node_id = {
+                        if let Ok(state) = node.state.try_read() {
+                            Some(state.node_id.clone())
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(local_node_id) = local_node_id {
                         let now = std::time::Instant::now();
                         let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
                             now.duration_since(t) > std::time::Duration::from_secs(2)
                         });
                         let needs_refresh = self.cluster_snapshot_network_id.as_deref()
                             != Some(net_id)
-                            || self.cluster_snapshot_node_id.as_deref() != Some(&node_id);
+                            || self.cluster_snapshot_node_id.as_deref()
+                                != Some(local_node_id.as_str());
                         if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
                             self.cluster_snapshot_inflight = true;
                             self.cluster_snapshot_network_id = Some(net_id.clone());
-                            self.cluster_snapshot_node_id = Some(node_id.clone());
+                            self.cluster_snapshot_node_id = Some(local_node_id.clone());
                             let tx = self.cluster_snapshot_tx.clone();
                             let net_id_clone = net_id.clone();
-                            let node_id_clone = node_id.clone();
+                            let node_id_clone = local_node_id.clone();
+                            let node_clone = node.clone();
                             let rt = self.runtime_handle.clone();
                             rt.spawn(async move {
-                                match connect_cluster_client(addr.clone()).await {
-                                    Ok(mut client) => {
-                                        match client
-                                            .get_cluster_network_snapshot(Request::new(
-                                                ClusterNetworkSnapshotRequest {
-                                                    network_id: net_id_clone.clone(),
-                                                },
-                                            ))
-                                            .await
-                                        {
-                                                    Ok(resp) => match decode_cluster_snapshot_projection(
-                                                        resp.into_inner(),
-                                                        &net_id_clone,
-                                                        None,
-                                                    ) {
-                                                Ok((snap, shard_count, cluster_digest)) => {
-                                                    let _ = tx.send(ClusterSnapshotMsg::Ok {
-                                                        network_id: net_id_clone,
-                                                        node_id: node_id_clone,
-                                                        snap,
-                                                        shard_count,
-                                                        cluster_digest,
-                                                    });
-                                                }
-                                                Err(error) => {
-                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                        network_id: net_id_clone,
-                                                        node_id: node_id_clone,
-                                                        error,
-                                                    });
-                                                }
-                                            },
-                                            Err(e) => {
-                                                let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                    network_id: net_id_clone,
-                                                    node_id: node_id_clone,
-                                                    error: format!(
-                                                        "snapshot request failed: {}",
-                                                        e
-                                                    ),
-                                                });
-                                            }
+                                match node_clone
+                                    .get_cluster_network_snapshot(Request::new(
+                                        ClusterNetworkSnapshotRequest {
+                                            network_id: net_id_clone.clone(),
+                                        },
+                                    ))
+                                    .await
+                                {
+                                    Ok(response) => match decode_cluster_snapshot_projection(
+                                        response.into_inner(),
+                                        &net_id_clone,
+                                        Some(&node_id_clone),
+                                    ) {
+                                        Ok((snap, shard_count, cluster_digest)) => {
+                                            let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                                network_id: net_id_clone,
+                                                node_id: node_id_clone,
+                                                snap,
+                                                shard_count,
+                                                cluster_digest,
+                                            });
                                         }
-                                    }
-                                    Err(e) => {
+                                        Err(error) => {
+                                            let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                network_id: net_id_clone,
+                                                node_id: node_id_clone,
+                                                error,
+                                            });
+                                        }
+                                    },
+                                    Err(error) => {
                                         let _ = tx.send(ClusterSnapshotMsg::Err {
                                             network_id: net_id_clone,
                                             node_id: node_id_clone,
-                                            error: format!("snapshot connect failed: {}", e),
+                                            error: format!(
+                                                "cluster snapshot request failed: {}",
+                                                error
+                                            ),
                                         });
                                     }
                                 }
@@ -9709,624 +9785,567 @@ impl eframe::App for App {
                         }
                     }
                 }
-            } else if let Some(node) = self.distributed_node.clone() {
-                let local_node_id = {
-                    if let Ok(state) = node.state.try_read() {
-                        Some(state.node_id.clone())
-                    } else {
-                        None
-                    }
-                };
-                if let Some(local_node_id) = local_node_id {
-                    let now = std::time::Instant::now();
-                    let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
-                        now.duration_since(t) > std::time::Duration::from_secs(2)
-                    });
-                    let needs_refresh = self.cluster_snapshot_network_id.as_deref() != Some(net_id)
-                        || self.cluster_snapshot_node_id.as_deref() != Some(local_node_id.as_str());
-                    if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
-                        self.cluster_snapshot_inflight = true;
-                        self.cluster_snapshot_network_id = Some(net_id.clone());
-                        self.cluster_snapshot_node_id = Some(local_node_id.clone());
-                        let tx = self.cluster_snapshot_tx.clone();
-                        let net_id_clone = net_id.clone();
-                        let node_id_clone = local_node_id.clone();
-                        let node_clone = node.clone();
-                        let rt = self.runtime_handle.clone();
-                        rt.spawn(async move {
-                            match node_clone
-                                .get_cluster_network_snapshot(Request::new(
-                                    ClusterNetworkSnapshotRequest {
-                                        network_id: net_id_clone.clone(),
-                                    },
-                                ))
-                                .await
-                            {
-                                Ok(response) => match decode_cluster_snapshot_projection(
-                                    response.into_inner(),
-                                    &net_id_clone,
-                                    Some(&node_id_clone),
-                                ) {
-                                    Ok((snap, shard_count, cluster_digest)) => {
-                                        let _ = tx.send(ClusterSnapshotMsg::Ok {
-                                            network_id: net_id_clone,
-                                            node_id: node_id_clone,
-                                            snap,
-                                            shard_count,
-                                            cluster_digest,
-                                        });
-                                    }
-                                    Err(error) => {
-                                        let _ = tx.send(ClusterSnapshotMsg::Err {
-                                            network_id: net_id_clone,
-                                            node_id: node_id_clone,
-                                            error,
-                                        });
-                                    }
-                                },
-                                Err(error) => {
-                                    let _ = tx.send(ClusterSnapshotMsg::Err {
-                                        network_id: net_id_clone,
-                                        node_id: node_id_clone,
-                                        error: format!(
-                                            "cluster snapshot request failed: {}",
-                                            error
-                                        ),
-                                    });
-                                }
-                            }
-                        });
-                    }
-                }
             }
-        }
 
-        while let Ok(msg) = self.remote_status_rx.try_recv() {
-            match msg {
-                RemoteStatusMsg::Update {
-                    addr,
-                    nodes,
-                    networks,
-                } => {
-                    self.remote_statuses.insert(
+            while let Ok(msg) = self.remote_status_rx.try_recv() {
+                match msg {
+                    RemoteStatusMsg::Update {
                         addr,
-                        RemoteStatusSnapshot {
-                            nodes,
-                            networks,
-                            last_error: None,
-                            last_update: std::time::Instant::now(),
-                        },
-                    );
-                }
-                RemoteStatusMsg::Error { addr, error } => {
-                    let entry = self
-                        .remote_statuses
-                        .entry(addr)
-                        .or_insert(RemoteStatusSnapshot {
-                            nodes: HashMap::new(),
-                            networks: HashMap::new(),
-                            last_error: None,
-                            last_update: std::time::Instant::now(),
-                        });
-                    entry.last_error = Some(error);
-                    entry.last_update = std::time::Instant::now();
+                        nodes,
+                        networks,
+                    } => {
+                        self.remote_statuses.insert(
+                            addr,
+                            RemoteStatusSnapshot {
+                                nodes,
+                                networks,
+                                last_error: None,
+                                last_update: std::time::Instant::now(),
+                            },
+                        );
+                    }
+                    RemoteStatusMsg::Error { addr, error } => {
+                        let entry =
+                            self.remote_statuses
+                                .entry(addr)
+                                .or_insert(RemoteStatusSnapshot {
+                                    nodes: HashMap::new(),
+                                    networks: HashMap::new(),
+                                    last_error: None,
+                                    last_update: std::time::Instant::now(),
+                                });
+                        entry.last_error = Some(error);
+                        entry.last_update = std::time::Instant::now();
+                    }
                 }
             }
-        }
 
-        while let Ok(msg) = self.tool_task_rx.try_recv() {
-            match msg {
-                ToolTaskResult::TfliteImport {
-                    path,
-                    json,
-                    stdout,
-                    stderr,
-                    error,
-                } => {
-                    if let Some(err) = error {
-                        let details = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
-                        };
-                        if details.is_empty() {
-                            self.status = format!("TFLite import failed: {}", err);
-                            self.last_import_report =
-                                Some(format!("TFLite import failed: {}", err));
-                        } else {
-                            self.status = format!("TFLite import failed: {} ({})", err, details);
-                            self.last_import_report =
-                                Some(format!("TFLite import failed: {} ({})", err, details));
-                        }
-                        nm_log!("[import] TFLite failed: {} {}", err, details);
-                        continue;
-                    }
-                    let Some(json) = json else {
-                        self.status = "TFLite import failed: missing output JSON".to_string();
-                        self.last_import_report =
-                            Some("TFLite import failed: missing output JSON".to_string());
-                        nm_log!("[import] TFLite failed: missing output JSON");
-                        continue;
-                    };
-                    let mut parsed = match serde_json::from_str::<serde_json::Value>(&json) {
-                        Ok(v) => v,
-                        Err(e) => {
+            while let Ok(msg) = self.tool_task_rx.try_recv() {
+                match msg {
+                    ToolTaskResult::TfliteImport {
+                        path,
+                        json,
+                        stdout,
+                        stderr,
+                        error,
+                    } => {
+                        if let Some(err) = error {
                             let details = if stderr.trim().is_empty() {
                                 stdout.trim()
                             } else {
                                 stderr.trim()
                             };
                             if details.is_empty() {
-                                self.status = format!("TFLite import failed: invalid JSON ({})", e);
+                                self.status = format!("TFLite import failed: {}", err);
                                 self.last_import_report =
-                                    Some(format!("TFLite import failed: invalid JSON ({})", e));
+                                    Some(format!("TFLite import failed: {}", err));
                             } else {
+                                self.status =
+                                    format!("TFLite import failed: {} ({})", err, details);
+                                self.last_import_report =
+                                    Some(format!("TFLite import failed: {} ({})", err, details));
+                            }
+                            nm_log!("[import] TFLite failed: {} {}", err, details);
+                            continue;
+                        }
+                        let Some(json) = json else {
+                            self.status = "TFLite import failed: missing output JSON".to_string();
+                            self.last_import_report =
+                                Some("TFLite import failed: missing output JSON".to_string());
+                            nm_log!("[import] TFLite failed: missing output JSON");
+                            continue;
+                        };
+                        let mut parsed = match serde_json::from_str::<serde_json::Value>(&json) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let details = if stderr.trim().is_empty() {
+                                    stdout.trim()
+                                } else {
+                                    stderr.trim()
+                                };
+                                if details.is_empty() {
+                                    self.status =
+                                        format!("TFLite import failed: invalid JSON ({})", e);
+                                    self.last_import_report =
+                                        Some(format!("TFLite import failed: invalid JSON ({})", e));
+                                } else {
+                                    self.status = format!(
+                                        "TFLite import failed: invalid JSON ({}) ({})",
+                                        e, details
+                                    );
+                                    self.last_import_report = Some(format!(
+                                        "TFLite import failed: invalid JSON ({}) ({})",
+                                        e, details
+                                    ));
+                                }
+                                nm_log!("[import] TFLite failed: invalid JSON ({}) {}", e, details);
+                                continue;
+                            }
+                        };
+                        let mut missing = Vec::new();
+                        if parsed.get("net").is_none() {
+                            missing.push("net");
+                        }
+                        if parsed.get("w_in").is_none() {
+                            missing.push("w_in");
+                        }
+                        if parsed.get("w_out").is_none() {
+                            missing.push("w_out");
+                        }
+                        if !missing.is_empty() {
+                            let details = if stderr.trim().is_empty() {
+                                stdout.trim()
+                            } else {
+                                stderr.trim()
+                            };
+                            if details.is_empty() {
                                 self.status = format!(
-                                    "TFLite import failed: invalid JSON ({}) ({})",
-                                    e, details
+                                    "TFLite import failed: missing fields {}",
+                                    missing.join(", ")
                                 );
                                 self.last_import_report = Some(format!(
-                                    "TFLite import failed: invalid JSON ({}) ({})",
-                                    e, details
+                                    "TFLite import failed: missing fields {}",
+                                    missing.join(", ")
+                                ));
+                            } else {
+                                self.status = format!(
+                                    "TFLite import failed: missing fields {} ({})",
+                                    missing.join(", "),
+                                    details
+                                );
+                                self.last_import_report = Some(format!(
+                                    "TFLite import failed: missing fields {} ({})",
+                                    missing.join(", "),
+                                    details
                                 ));
                             }
-                            nm_log!("[import] TFLite failed: invalid JSON ({}) {}", e, details);
-                            continue;
-                        }
-                    };
-                    let mut missing = Vec::new();
-                    if parsed.get("net").is_none() {
-                        missing.push("net");
-                    }
-                    if parsed.get("w_in").is_none() {
-                        missing.push("w_in");
-                    }
-                    if parsed.get("w_out").is_none() {
-                        missing.push("w_out");
-                    }
-                    if !missing.is_empty() {
-                        let details = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
-                        };
-                        if details.is_empty() {
-                            self.status = format!(
-                                "TFLite import failed: missing fields {}",
+                            nm_log!(
+                                "[import] TFLite failed: missing fields {}",
                                 missing.join(", ")
                             );
-                            self.last_import_report = Some(format!(
-                                "TFLite import failed: missing fields {}",
-                                missing.join(", ")
-                            ));
-                        } else {
-                            self.status = format!(
-                                "TFLite import failed: missing fields {} ({})",
-                                missing.join(", "),
-                                details
-                            );
-                            self.last_import_report = Some(format!(
-                                "TFLite import failed: missing fields {} ({})",
-                                missing.join(", "),
-                                details
-                            ));
-                        }
-                        nm_log!(
-                            "[import] TFLite failed: missing fields {}",
-                            missing.join(", ")
-                        );
-                        continue;
-                    }
-                    let allow_large = std::env::var("NMD_TFLITE_ALLOW_LARGE")
-                        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
-                        .unwrap_or(false);
-                    let max_layers = std::env::var("NMD_TFLITE_MAX_LAYERS")
-                        .ok()
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(16);
-                    let max_params = std::env::var("NMD_TFLITE_MAX_PARAMS")
-                        .ok()
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(2_000_000);
-                    let mut total_params = 0usize;
-                    let mut hidden_layers = 0usize;
-                    let mut oversize = None;
-                    let matrix_info = |val: &serde_json::Value| -> Option<(usize, usize, usize)> {
-                        let rows = val.get("rows")?.as_u64()? as usize;
-                        let cols = val.get("cols")?.as_u64()? as usize;
-                        let data_len = val
-                            .get("data")
-                            .and_then(|d| d.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        Some((rows, cols, data_len))
-                    };
-                    if let Some(w_in) = parsed.get("w_in").and_then(matrix_info) {
-                        total_params = total_params.saturating_add(w_in.0.saturating_mul(w_in.1));
-                    }
-                    if let Some(w_out) = parsed.get("w_out").and_then(matrix_info) {
-                        total_params = total_params.saturating_add(w_out.0.saturating_mul(w_out.1));
-                    }
-                    if let Some(arr) = parsed.get("w_hh_fwd").and_then(|v| v.as_array()) {
-                        hidden_layers = arr.len() + 1;
-                        for mat in arr {
-                            if let Some((rows, cols, _)) = matrix_info(mat) {
-                                total_params =
-                                    total_params.saturating_add(rows.saturating_mul(cols));
-                                if rows.saturating_mul(cols) > max_params {
-                                    oversize = Some((rows, cols));
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if !allow_large
-                        && (hidden_layers > max_layers
-                            || total_params > max_params
-                            || oversize.is_some())
-                    {
-                        let msg = if let Some((r, c)) = oversize {
-                            format!(
-                                "TFLite import rejected: layer {}x{} too large (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
-                                r, c
-                            )
-                        } else if hidden_layers > max_layers {
-                            format!(
-                                "TFLite import rejected: {} hidden layers > {} (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
-                                hidden_layers, max_layers
-                            )
-                        } else {
-                            format!(
-                                "TFLite import rejected: {} params > {} (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
-                                total_params, max_params
-                            )
-                        };
-                        self.status = msg.clone();
-                        self.last_import_report = Some(msg.clone());
-                        nm_log!("[import] {}", msg);
-                        continue;
-                    }
-                    if let Some(obj) = parsed.as_object_mut() {
-                        if !obj.contains_key("w_hh_fwd") {
-                            obj.insert(
-                                "w_hh_fwd".to_string(),
-                                serde_json::Value::Array(Vec::new()),
-                            );
-                        }
-                        if !obj.contains_key("w_hh_bwd") {
-                            obj.insert(
-                                "w_hh_bwd".to_string(),
-                                serde_json::Value::Array(Vec::new()),
-                            );
-                        }
-                        if !obj.contains_key("w_hh_rec") {
-                            obj.insert(
-                                "w_hh_rec".to_string(),
-                                serde_json::Value::Array(Vec::new()),
-                            );
-                        }
-                    }
-                    let json = match serde_json::to_string(&parsed) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            self.status = format!("TFLite import failed: normalize JSON ({})", e);
-                            self.last_import_report =
-                                Some(format!("TFLite import failed: normalize JSON ({})", e));
-                            nm_log!("[import] TFLite failed: normalize JSON ({})", e);
                             continue;
                         }
-                    };
-                    let path_for_pending = path.clone();
-                    let json_for_sim = json.clone();
-                    let view_source = self.view_source.clone();
-                    match view_source {
-                        ViewSource::Standalone => {
-                            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-                            match self
-                                .sim_tx
-                                .send(SimControl::ImportNetworkWithReply(json_for_sim, reply_tx))
-                            {
-                                Ok(()) => {
-                                    self.force_show_connections = false;
-                                    self.pending_edge_cache = false;
-                                    self.edge_cache_inflight = false;
-                                    self.cached_edges.clear();
-                                    self.cached_layer_sizes.clear();
-                                    self.cached_conn_counts.clear();
-                                    self.cached_output_conn_count = None;
-                                    #[cfg(feature = "growth3d")]
-                                    {
-                                        self.cached_edge_topo = None;
+                        let allow_large = std::env::var("NMD_TFLITE_ALLOW_LARGE")
+                            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+                            .unwrap_or(false);
+                        let max_layers = std::env::var("NMD_TFLITE_MAX_LAYERS")
+                            .ok()
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(16);
+                        let max_params = std::env::var("NMD_TFLITE_MAX_PARAMS")
+                            .ok()
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(2_000_000);
+                        let mut total_params = 0usize;
+                        let mut hidden_layers = 0usize;
+                        let mut oversize = None;
+                        let matrix_info =
+                            |val: &serde_json::Value| -> Option<(usize, usize, usize)> {
+                                let rows = val.get("rows")?.as_u64()? as usize;
+                                let cols = val.get("cols")?.as_u64()? as usize;
+                                let data_len = val
+                                    .get("data")
+                                    .and_then(|d| d.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0);
+                                Some((rows, cols, data_len))
+                            };
+                        if let Some(w_in) = parsed.get("w_in").and_then(matrix_info) {
+                            total_params =
+                                total_params.saturating_add(w_in.0.saturating_mul(w_in.1));
+                        }
+                        if let Some(w_out) = parsed.get("w_out").and_then(matrix_info) {
+                            total_params =
+                                total_params.saturating_add(w_out.0.saturating_mul(w_out.1));
+                        }
+                        if let Some(arr) = parsed.get("w_hh_fwd").and_then(|v| v.as_array()) {
+                            hidden_layers = arr.len() + 1;
+                            for mat in arr {
+                                if let Some((rows, cols, _)) = matrix_info(mat) {
+                                    total_params =
+                                        total_params.saturating_add(rows.saturating_mul(cols));
+                                    if rows.saturating_mul(cols) > max_params {
+                                        oversize = Some((rows, cols));
+                                        break;
                                     }
-                                    #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                                    {
-                                        self.cached_skull_membrane = None;
-                                    }
-                                    self.pending_import = Some(PendingImport {
-                                        path: path_for_pending,
-                                        kind: ImportKind::Tflite,
-                                        stdout,
-                                        stderr,
-                                        rx: reply_rx,
-                                        result: None,
-                                    });
-                                    self.status = "Applying TFLite import...".to_string();
-                                    self.last_import_report =
-                                        Some("Applying TFLite import...".to_string());
-                                    nm_log!("[import] TFLite applying import");
-                                }
-                                Err(_) => {
-                                    self.status = "TFLite import failed: simulation channel closed"
-                                        .to_string();
-                                    self.last_import_report = Some(
-                                        "TFLite import failed: simulation channel closed"
-                                            .to_string(),
-                                    );
-                                    nm_log!("[import] TFLite failed: simulation channel closed");
                                 }
                             }
                         }
-                        ViewSource::LocalManaged(id) => {
-                            match self.import_network_json_to_local_managed(
-                                &id,
-                                &json,
-                                ImportKind::Tflite,
-                                &path,
-                            ) {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    self.status = format!("TFLite import failed: {}", e);
-                                    self.last_import_report =
-                                        Some(format!("TFLite import failed: {}", e));
-                                }
+                        if !allow_large
+                            && (hidden_layers > max_layers
+                                || total_params > max_params
+                                || oversize.is_some())
+                        {
+                            let msg = if let Some((r, c)) = oversize {
+                                format!(
+                                    "TFLite import rejected: layer {}x{} too large (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
+                                    r, c
+                                )
+                            } else if hidden_layers > max_layers {
+                                format!(
+                                    "TFLite import rejected: {} hidden layers > {} (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
+                                    hidden_layers, max_layers
+                                )
+                            } else {
+                                format!(
+                                    "TFLite import rejected: {} params > {} (set NMD_TFLITE_ALLOW_LARGE=1 to override)",
+                                    total_params, max_params
+                                )
+                            };
+                            self.status = msg.clone();
+                            self.last_import_report = Some(msg.clone());
+                            nm_log!("[import] {}", msg);
+                            continue;
+                        }
+                        if let Some(obj) = parsed.as_object_mut() {
+                            if !obj.contains_key("w_hh_fwd") {
+                                obj.insert(
+                                    "w_hh_fwd".to_string(),
+                                    serde_json::Value::Array(Vec::new()),
+                                );
+                            }
+                            if !obj.contains_key("w_hh_bwd") {
+                                obj.insert(
+                                    "w_hh_bwd".to_string(),
+                                    serde_json::Value::Array(Vec::new()),
+                                );
+                            }
+                            if !obj.contains_key("w_hh_rec") {
+                                obj.insert(
+                                    "w_hh_rec".to_string(),
+                                    serde_json::Value::Array(Vec::new()),
+                                );
                             }
                         }
-                        ViewSource::ClusterGlobal(_) => {
-                            self.status =
-                                "TFLite import not supported for cluster view".to_string();
-                            self.last_import_report =
-                                Some("TFLite import not supported for cluster view".to_string());
-                        }
-                    }
-                }
-                ToolTaskResult::TflitePickCanceled => {
-                    self.status = "TFLite import canceled".to_string();
-                    self.last_import_report = Some("TFLite import canceled".to_string());
-                    nm_log!("[import] TFLite canceled");
-                }
-                ToolTaskResult::PythonResolved { result } => match result {
-                    Ok(p) => {
-                        self.python_path = Some(p.clone());
-                        self.status = format!("Using Python: {}", p);
-                    }
-                    Err(e) => {
-                        self.status = format!("Python not found: {}", e);
-                    }
-                },
-                ToolTaskResult::FileWrite { kind, path, error } => {
-                    if let Some(e) = error {
-                        self.status = format!("Write failed: {}", e);
-                    } else {
-                        let label = match kind {
-                            FileTaskKind::SaveConfig => "config",
-                            FileTaskKind::SaveNetwork => "network snapshot",
-                            FileTaskKind::SaveProbes => "probes",
-                            _ => "file",
+                        let json = match serde_json::to_string(&parsed) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                self.status =
+                                    format!("TFLite import failed: normalize JSON ({})", e);
+                                self.last_import_report =
+                                    Some(format!("TFLite import failed: normalize JSON ({})", e));
+                                nm_log!("[import] TFLite failed: normalize JSON ({})", e);
+                                continue;
+                            }
                         };
-                        self.status = format!("Saved {} to {}", label, path.display());
-                    }
-                }
-                ToolTaskResult::FileRead {
-                    kind,
-                    path,
-                    data,
-                    error,
-                } => {
-                    if let Some(e) = error {
-                        self.status = format!("Read failed: {}", e);
-                        continue;
-                    }
-                    let Some(data) = data else {
-                        self.status = "Read failed: empty file".to_string();
-                        continue;
-                    };
-                    match kind {
-                        FileTaskKind::LoadConfig => {
-                            match serde_json::from_str::<NetworkConfig>(&data) {
-                                Ok(mut net) => {
-                                    if net.clumping_design != ClumpingDesign::None
-                                        && net.num_hidden_layers <= 1
-                                    {
-                                        apply_clumping_layer_defaults(&mut net);
-                                    }
-                                    let view_source = self.view_source.clone();
-                                    match view_source {
-                                        ViewSource::Standalone => {
-                                            self.local_net = net.clone();
-                                            let _ = self.sim_tx.send(SimControl::RecreateRunner(
-                                                lif_cloned.clone(),
-                                                stdp_cloned.clone(),
-                                                net,
-                                                model_cloned,
-                                                learning_cloned,
-                                            ));
-                                            self.refresh_ui_buffers();
-                                            self.status = format!(
-                                                "Loaded and applied config from {}",
-                                                path.display()
-                                            );
+                        let path_for_pending = path.clone();
+                        let json_for_sim = json.clone();
+                        let view_source = self.view_source.clone();
+                        match view_source {
+                            ViewSource::Standalone => {
+                                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                                match self.sim_tx.send(SimControl::ImportNetworkWithReply(
+                                    json_for_sim,
+                                    reply_tx,
+                                )) {
+                                    Ok(()) => {
+                                        self.force_show_connections = false;
+                                        self.pending_edge_cache = false;
+                                        self.edge_cache_inflight = false;
+                                        self.cached_edges.clear();
+                                        self.cached_layer_sizes.clear();
+                                        self.cached_conn_counts.clear();
+                                        self.cached_output_conn_count = None;
+                                        #[cfg(feature = "growth3d")]
+                                        {
+                                            self.cached_edge_topo = None;
                                         }
-                                        ViewSource::LocalManaged(id) => {
-                                            match self.apply_config_to_local_managed(&id, net) {
-                                                Ok(()) => {
-                                                    self.refresh_ui_buffers();
-                                                    self.status = format!(
-                                                        "Loaded config for local managed network from {}",
-                                                        path.display()
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    self.status = format!("Load failed: {}", e);
+                                        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                                        {
+                                            self.cached_skull_membrane = None;
+                                        }
+                                        self.pending_import = Some(PendingImport {
+                                            path: path_for_pending,
+                                            kind: ImportKind::Tflite,
+                                            stdout,
+                                            stderr,
+                                            rx: reply_rx,
+                                            result: None,
+                                        });
+                                        self.status = "Applying TFLite import...".to_string();
+                                        self.last_import_report =
+                                            Some("Applying TFLite import...".to_string());
+                                        nm_log!("[import] TFLite applying import");
+                                    }
+                                    Err(_) => {
+                                        self.status =
+                                            "TFLite import failed: simulation channel closed"
+                                                .to_string();
+                                        self.last_import_report = Some(
+                                            "TFLite import failed: simulation channel closed"
+                                                .to_string(),
+                                        );
+                                        nm_log!(
+                                            "[import] TFLite failed: simulation channel closed"
+                                        );
+                                    }
+                                }
+                            }
+                            ViewSource::LocalManaged(id) => {
+                                match self.import_network_json_to_local_managed(
+                                    &id,
+                                    &json,
+                                    ImportKind::Tflite,
+                                    &path,
+                                ) {
+                                    Ok(()) => {}
+                                    Err(e) => {
+                                        self.status = format!("TFLite import failed: {}", e);
+                                        self.last_import_report =
+                                            Some(format!("TFLite import failed: {}", e));
+                                    }
+                                }
+                            }
+                            ViewSource::ClusterGlobal(_) => {
+                                self.status =
+                                    "TFLite import not supported for cluster view".to_string();
+                                self.last_import_report = Some(
+                                    "TFLite import not supported for cluster view".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    ToolTaskResult::TflitePickCanceled => {
+                        self.status = "TFLite import canceled".to_string();
+                        self.last_import_report = Some("TFLite import canceled".to_string());
+                        nm_log!("[import] TFLite canceled");
+                    }
+                    ToolTaskResult::PythonResolved { result } => match result {
+                        Ok(p) => {
+                            self.python_path = Some(p.clone());
+                            self.status = format!("Using Python: {}", p);
+                        }
+                        Err(e) => {
+                            self.status = format!("Python not found: {}", e);
+                        }
+                    },
+                    ToolTaskResult::FileWrite { kind, path, error } => {
+                        if let Some(e) = error {
+                            self.status = format!("Write failed: {}", e);
+                        } else {
+                            let label = match kind {
+                                FileTaskKind::SaveConfig => "config",
+                                FileTaskKind::SaveNetwork => "network snapshot",
+                                FileTaskKind::SaveProbes => "probes",
+                                _ => "file",
+                            };
+                            self.status = format!("Saved {} to {}", label, path.display());
+                        }
+                    }
+                    ToolTaskResult::FileRead {
+                        kind,
+                        path,
+                        data,
+                        error,
+                    } => {
+                        if let Some(e) = error {
+                            self.status = format!("Read failed: {}", e);
+                            continue;
+                        }
+                        let Some(data) = data else {
+                            self.status = "Read failed: empty file".to_string();
+                            continue;
+                        };
+                        match kind {
+                            FileTaskKind::LoadConfig => {
+                                match serde_json::from_str::<NetworkConfig>(&data) {
+                                    Ok(mut net) => {
+                                        if net.clumping_design != ClumpingDesign::None
+                                            && net.num_hidden_layers <= 1
+                                        {
+                                            apply_clumping_layer_defaults(&mut net);
+                                        }
+                                        let view_source = self.view_source.clone();
+                                        match view_source {
+                                            ViewSource::Standalone => {
+                                                self.local_net = net.clone();
+                                                let _ =
+                                                    self.sim_tx.send(SimControl::RecreateRunner(
+                                                        lif_cloned.clone(),
+                                                        stdp_cloned.clone(),
+                                                        net,
+                                                        model_cloned,
+                                                        learning_cloned,
+                                                    ));
+                                                self.refresh_ui_buffers();
+                                                self.status = format!(
+                                                    "Loaded and applied config from {}",
+                                                    path.display()
+                                                );
+                                            }
+                                            ViewSource::LocalManaged(id) => {
+                                                match self.apply_config_to_local_managed(&id, net) {
+                                                    Ok(()) => {
+                                                        self.refresh_ui_buffers();
+                                                        self.status = format!(
+                                                            "Loaded config for local managed network from {}",
+                                                            path.display()
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        self.status = format!("Load failed: {}", e);
+                                                    }
                                                 }
                                             }
-                                        }
-                                        ViewSource::ClusterGlobal(_) => {
-                                            self.status =
-                                                "Load Config not supported for cluster view"
-                                                    .to_string();
+                                            ViewSource::ClusterGlobal(_) => {
+                                                self.status =
+                                                    "Load Config not supported for cluster view"
+                                                        .to_string();
+                                            }
                                         }
                                     }
+                                    Err(e) => {
+                                        self.status = format!("Load failed: {}", e);
+                                    }
+                                }
+                            }
+                            FileTaskKind::LoadNetwork => {
+                                let json = data;
+                                let path_for_pending = path.clone();
+                                let json_for_sim = json.clone();
+                                let view_source = self.view_source.clone();
+                                match view_source {
+                                    ViewSource::Standalone => {
+                                        let res = self.queue_import(
+                                            ImportKind::Standard,
+                                            path_for_pending,
+                                            json_for_sim,
+                                            String::new(),
+                                            String::new(),
+                                        );
+                                        if let Err(e) = res {
+                                            self.status = format!("Load failed: {}", e);
+                                        }
+                                    }
+                                    ViewSource::LocalManaged(id) => {
+                                        match self.import_network_json_to_local_managed(
+                                            &id,
+                                            &json,
+                                            ImportKind::Standard,
+                                            &path,
+                                        ) {
+                                            Ok(()) => {}
+                                            Err(e) => {
+                                                self.status = format!("Load failed: {}", e);
+                                            }
+                                        }
+                                    }
+                                    ViewSource::ClusterGlobal(_) => {
+                                        self.status = "Load Network not supported for cluster view"
+                                            .to_string();
+                                    }
+                                }
+                            }
+                            FileTaskKind::LoadProbes => match self.import_probes_json(&data) {
+                                Ok(()) => {
+                                    self.status = format!("Loaded probes from {}", path.display());
                                 }
                                 Err(e) => {
                                     self.status = format!("Load failed: {}", e);
                                 }
-                            }
+                            },
+                            _ => {}
                         }
-                        FileTaskKind::LoadNetwork => {
-                            let json = data;
-                            let path_for_pending = path.clone();
-                            let json_for_sim = json.clone();
-                            let view_source = self.view_source.clone();
-                            match view_source {
-                                ViewSource::Standalone => {
-                                    let res = self.queue_import(
-                                        ImportKind::Standard,
-                                        path_for_pending,
-                                        json_for_sim,
-                                        String::new(),
-                                        String::new(),
-                                    );
-                                    if let Err(e) = res {
-                                        self.status = format!("Load failed: {}", e);
-                                    }
-                                }
-                                ViewSource::LocalManaged(id) => {
-                                    match self.import_network_json_to_local_managed(
-                                        &id,
-                                        &json,
-                                        ImportKind::Standard,
-                                        &path,
-                                    ) {
-                                        Ok(()) => {}
-                                        Err(e) => {
-                                            self.status = format!("Load failed: {}", e);
-                                        }
-                                    }
-                                }
-                                ViewSource::ClusterGlobal(_) => {
-                                    self.status =
-                                        "Load Network not supported for cluster view".to_string();
-                                }
-                            }
-                        }
-                        FileTaskKind::LoadProbes => match self.import_probes_json(&data) {
-                            Ok(()) => {
-                                self.status = format!("Loaded probes from {}", path.display());
-                            }
-                            Err(e) => {
-                                self.status = format!("Load failed: {}", e);
-                            }
-                        },
-                        _ => {}
                     }
-                }
-                ToolTaskResult::ToolExport {
-                    kind,
-                    path,
-                    stdout,
-                    stderr,
-                    error,
-                } => {
-                    let kind_str = match kind {
-                        ToolExportKind::Onnx => "ONNX",
-                        ToolExportKind::PyNN => "PyNN",
-                        ToolExportKind::Nir => "NIR",
-                        ToolExportKind::NeuroML => "NeuroML",
-                        ToolExportKind::Tflite => "TFLite",
-                        ToolExportKind::Biox6 => "BIO X6",
-                        ToolExportKind::Biox6Preview => "BIO X6 preview",
-                    };
-                    if let Some(e) = error {
-                        let details = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
+                    ToolTaskResult::ToolExport {
+                        kind,
+                        path,
+                        stdout,
+                        stderr,
+                        error,
+                    } => {
+                        let kind_str = match kind {
+                            ToolExportKind::Onnx => "ONNX",
+                            ToolExportKind::PyNN => "PyNN",
+                            ToolExportKind::Nir => "NIR",
+                            ToolExportKind::NeuroML => "NeuroML",
+                            ToolExportKind::Tflite => "TFLite",
+                            ToolExportKind::Biox6 => "BIO X6",
+                            ToolExportKind::Biox6Preview => "BIO X6 preview",
                         };
-                        if details.is_empty() {
-                            self.status = format!("{} export failed: {}", kind_str, e);
+                        if let Some(e) = error {
+                            let details = if stderr.trim().is_empty() {
+                                stdout.trim()
+                            } else {
+                                stderr.trim()
+                            };
+                            if details.is_empty() {
+                                self.status = format!("{} export failed: {}", kind_str, e);
+                            } else {
+                                self.status =
+                                    format!("{} export failed: {} ({})", kind_str, e, details);
+                            }
                         } else {
+                            let details = if stderr.trim().is_empty() {
+                                stdout.trim()
+                            } else {
+                                stderr.trim()
+                            };
+                            if details.is_empty() {
+                                self.status =
+                                    format!("Exported {} to {}", kind_str, path.display());
+                            } else {
+                                self.status = format!(
+                                    "Exported {} to {} ({})",
+                                    kind_str,
+                                    path.display(),
+                                    details
+                                );
+                            }
+                        }
+                    }
+                    ToolTaskResult::ToolImport {
+                        kind,
+                        path,
+                        json,
+                        stdout,
+                        stderr,
+                        error,
+                    } => {
+                        let kind_str = match kind {
+                            ImportKind::Tflite => "TFLite",
+                            ImportKind::Onnx => "ONNX",
+                            ImportKind::NeuroML => "NeuroML",
+                            ImportKind::PyNN => "PyNN",
+                            ImportKind::Nir => "NIR",
+                            ImportKind::Standard => "Network",
+                        };
+                        if let Some(e) = error {
+                            let details = if stderr.trim().is_empty() {
+                                stdout.trim()
+                            } else {
+                                stderr.trim()
+                            };
+                            if details.is_empty() {
+                                self.status = format!("{} import failed: {}", kind_str, e);
+                            } else {
+                                self.status =
+                                    format!("{} import failed: {} ({})", kind_str, e, details);
+                            }
+                            continue;
+                        }
+                        let Some(json) = json else {
                             self.status =
-                                format!("{} export failed: {} ({})", kind_str, e, details);
-                        }
-                    } else {
-                        let details = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
+                                format!("{} import failed: missing output JSON", kind_str);
+                            continue;
                         };
-                        if details.is_empty() {
-                            self.status = format!("Exported {} to {}", kind_str, path.display());
-                        } else {
-                            self.status = format!(
-                                "Exported {} to {} ({})",
-                                kind_str,
-                                path.display(),
-                                details
-                            );
-                        }
-                    }
-                }
-                ToolTaskResult::ToolImport {
-                    kind,
-                    path,
-                    json,
-                    stdout,
-                    stderr,
-                    error,
-                } => {
-                    let kind_str = match kind {
-                        ImportKind::Tflite => "TFLite",
-                        ImportKind::Onnx => "ONNX",
-                        ImportKind::NeuroML => "NeuroML",
-                        ImportKind::PyNN => "PyNN",
-                        ImportKind::Nir => "NIR",
-                        ImportKind::Standard => "Network",
-                    };
-                    if let Some(e) = error {
-                        let details = if stderr.trim().is_empty() {
-                            stdout.trim()
-                        } else {
-                            stderr.trim()
-                        };
-                        if details.is_empty() {
+                        if let Err(e) = self.queue_import(kind, path, json, stdout, stderr) {
                             self.status = format!("{} import failed: {}", kind_str, e);
-                        } else {
-                            self.status =
-                                format!("{} import failed: {} ({})", kind_str, e, details);
-                        }
-                        continue;
-                    }
-                    let Some(json) = json else {
-                        self.status = format!("{} import failed: missing output JSON", kind_str);
-                        continue;
-                    };
-                    if let Err(e) = self.queue_import(kind, path, json, stdout, stderr) {
-                        self.status = format!("{} import failed: {}", kind_str, e);
-                    }
-                }
-                ToolTaskResult::RemoteTokenBalance { result } => {
-                    self.remote_token_refresh_inflight = false;
-                    self.remote_token_last_refresh = Some(Instant::now());
-                    match result {
-                        Ok(balance) => {
-                            self.remote_token_balance = Some(balance);
-                            self.remote_token_error = None;
-                        }
-                        Err(error) => {
-                            self.remote_token_error = Some(error);
                         }
                     }
-                }
+                    ToolTaskResult::RemoteTokenBalance { result } => {
+                        self.remote_token_refresh_inflight = false;
+                        self.remote_token_last_refresh = Some(Instant::now());
+                        match result {
+                            Ok(balance) => {
+                                self.remote_token_balance = Some(balance);
+                                self.remote_token_error = None;
+                            }
+                            Err(error) => {
+                                self.remote_token_error = Some(error);
+                            }
+                        }
+                    }
                 }
             }
         }
