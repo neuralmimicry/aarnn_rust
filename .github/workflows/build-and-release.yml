@@ -753,8 +753,26 @@ jobs:
                     bash -c 'set -euo pipefail; gh release delete-asset "$1" "$2" --yes' \
                     _ "${RELEASE_TAG}"
               fi
+
+              # GitHub's release asset API is eventually consistent. Confirm
+              # that concurrent deletion has completed before uploading the
+              # replacement set; --clobber can still return 422 when an old
+              # asset name is visible during that window.
+              for attempt in 1 2 3 4 5 6; do
+                mapfile -t remaining_assets < <(
+                  gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name'
+                )
+                if [[ ${#remaining_assets[@]} -eq 0 ]]; then
+                  break
+                fi
+                if [[ "${attempt}" -eq 6 ]]; then
+                  echo "::error::Timed out waiting for old release assets to disappear: ${remaining_assets[*]}"
+                  exit 1
+                fi
+                sleep $((attempt * 2))
+              done
             fi
-            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+            gh release upload "${RELEASE_TAG}" "${files[@]}"
             exit 0
           fi
 

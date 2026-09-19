@@ -30,6 +30,7 @@ REGISTRY_USERNAME=${REGISTRY_USERNAME:-${GHCR_USERNAME:-${GITHUB_USER:-""}}}
 REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${GITHUB_TOKEN:-""}}}
 CONTAINER_DEB_STAGE_DIR=${CONTAINER_DEB_STAGE_DIR:-"${ROOT_DIR}/dist/container"}
 CONTAINER_DEB_CACHE_DIR=${CONTAINER_DEB_CACHE_DIR:-"${ROOT_DIR}/.container-cache/debs"}
+REQUIRED_CARGO_FEATURES=${AARNN_REQUIRED_CARGO_FEATURES:-all-features}
 
 KNOWN_ARCHES=("amd64" "arm64-4k")
 WORKLOADS=()
@@ -133,6 +134,10 @@ prepare_workload_package() {
 
     local features="$(aarnn_container_workload_features "$workload")"
     local targets="$(aarnn_container_workload_targets "$workload")"
+    if [ "$REQUIRED_CARGO_FEATURES" = "all-features" ] && [ "$features" != "all-features" ]; then
+        echo "error: workload ${workload} resolved to '${features}', but all-features is required" >&2
+        exit 1
+    fi
     local prep_args=(
         --workload "$workload"
         --arch "$HOST_ARCH"

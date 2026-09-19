@@ -872,6 +872,13 @@ unsafe fn configure_openmp_runtime_env() {
     }
 }
 
+fn configured_tokio_worker_threads() -> Option<usize> {
+    std::env::var("TOKIO_WORKER_THREADS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+}
+
 #[derive(Debug, Deserialize)]
 struct OrchestratorNetworkSpec {
     network_id: String,
@@ -2807,6 +2814,9 @@ fn main() -> anyhow::Result<()> {
     let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
     rt_builder.enable_all();
     rt_builder.thread_name("nm-tokio");
+    if let Some(worker_threads) = configured_tokio_worker_threads() {
+        rt_builder.worker_threads(worker_threads);
+    }
     crate::affinity::configure_tokio_runtime_affinity(&mut rt_builder, "nm-tokio");
     let rt = rt_builder.build()?;
     let _guard = rt.enter();
