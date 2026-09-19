@@ -954,8 +954,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Container images use their role-specific feature set. The verify
-          # jobs remain responsible for the all-features build and test gate.
+          # Container images use the complete feature graph so the deployed
+          # runtime includes the current parallel/non-blocking code paths. The
+          # verify jobs remain responsible for the all-features build and test
+          # gate.
           source scripts/container_workloads.sh
           requested_features="${{ github.event_name == 'workflow_dispatch' && inputs.cargo_features || '' }}"
           if [[ -n "${requested_features}" ]]; then

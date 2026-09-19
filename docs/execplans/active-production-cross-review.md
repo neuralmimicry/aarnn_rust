@@ -39,6 +39,14 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [x] `2026-09-19` Fixed the x64 CI test regression from commit `8ef72b0`.
+  The complete feature graph is intentional for container images so deployed
+  runtimes include the current parallel/non-blocking paths. Updated the
+  stable workload regression expectation and the workflow comment to record
+  that contract; the focused `container_workload_profiles` test now passes
+  locally. The opt-in stable migration feature remains available as a named
+  Cargo profile for deployments that require that narrower boundary.
+
 - [x] `2026-09-18` Implemented the Webots runtime/performance pass. Webots
   launchers now use the explicit `engine_runtime,ui,robot_io,cuda` profile by
   default and accept `--all-features` (or `NM_WEBOTS_RUNTIME_FEATURES=all`) as

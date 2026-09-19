@@ -21,7 +21,7 @@ fn container_entrypoint_forwards_provider_bound_node_identity() {
 }
 
 #[test]
-fn stable_container_workloads_use_the_authenticated_live_profile() {
+fn stable_container_workloads_use_the_complete_live_profile() {
     let script = workload_script().to_str().expect("UTF-8 repository path");
     let output = Command::new("bash")
         .arg("-c")
@@ -37,7 +37,7 @@ fn stable_container_workloads_use_the_authenticated_live_profile() {
     let stdout = String::from_utf8(output.stdout).expect("helper output is UTF-8");
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
-        vec!["stable_runtime_workload", "stable_runtime_workload"]
+        vec!["all-features", "all-features"]
     );
 }
 
