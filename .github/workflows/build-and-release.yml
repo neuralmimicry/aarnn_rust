@@ -716,7 +716,15 @@ jobs:
             ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
         run: |
           set -euo pipefail
-          mapfile -d '' files < <(find dist -type f -print0 | sort -z)
+          # download-artifact also retrieves simulator evidence. Those
+          # artifacts contain generic names such as result.json and run.log;
+          # upload only the release formats emitted by package-linux so
+          # evidence files cannot collide with release assets.
+          mapfile -d '' files < <(
+            find dist -type f \
+              \( -name '*.deb' -o -name '*.tar.gz' -o -name '*.sha256.txt' \) \
+              -print0 | sort -z
+          )
           if [[ ${#files[@]} -eq 0 ]]; then
             echo "::error::No packaged artifacts were downloaded"
             exit 1
