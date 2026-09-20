@@ -50,6 +50,11 @@ on:
         description: "Cargo features to build for container images"
         required: false
         default: "all-features"
+      publish_only:
+        description: "Publish manifests and aliases for an existing immutable container build"
+        required: false
+        type: boolean
+        default: false
       run_version_bump:
         description: "Run automated Cargo version bump and tagging"
         required: false
@@ -117,7 +122,8 @@ jobs:
     name: Verify (${{ matrix.runner_arch }})
     if: >-
       github.event_name != 'workflow_dispatch' ||
-      (!inputs.run_version_bump && !inputs.sync_wiki && inputs.environment == '')
+      (!inputs.run_version_bump && !inputs.sync_wiki && inputs.environment == '' &&
+       !inputs.publish_only)
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 90
     env:
@@ -1118,7 +1124,14 @@ jobs:
 
   container-manifest:
     name: Container Manifest (${{ matrix.workload }})
-    if: github.event_name == 'push'
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' &&
+         needs.container-build.result == 'success' &&
+         needs.release-meta.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_only)
+      )
     needs:
       - container-build
       - release-meta
@@ -1128,6 +1141,10 @@ jobs:
       matrix:
         workload: [orchestrator, node, web-ui]
     runs-on: ubuntu-24.04
+    env:
+      # Recovery publication must point at the immutable build that already
+      # exists in GHCR, rather than at the SHA of this recovery dispatch.
+      BUILD_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.build_id || github.sha }}
     # Each matrix entry owns a distinct workload tag family, so registry
     # mutations and verification can proceed independently.
     concurrency:
@@ -1179,7 +1196,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          build="${GITHUB_SHA}"
+          build="${BUILD_ID}"
           manifest="${image}:${build}-${{ matrix.workload }}"
           podman manifest rm "${manifest}" >/dev/null 2>&1 || true
           podman image rm -f "${manifest}" >/dev/null 2>&1 || true
@@ -1198,7 +1215,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          build="${GITHUB_SHA}"
+          build="${BUILD_ID}"
           branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
           branch_manifest="${image}:${branch_tag}-${{ matrix.workload }}"
           podman manifest rm "${branch_manifest}" >/dev/null 2>&1 || true
@@ -1246,7 +1263,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          build="${GITHUB_SHA}"
+          build="${BUILD_ID}"
           version_tag="${RELEASE_TAG:-${GITHUB_REF_NAME}}"
           version_manifest="${image}:${version_tag}-${{ matrix.workload }}"
           podman manifest rm "${version_manifest}" >/dev/null 2>&1 || true
@@ -1289,7 +1306,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          build="${GITHUB_SHA}"
+          build="${BUILD_ID}"
 
           verify_ref() {
             local ref="$1"
