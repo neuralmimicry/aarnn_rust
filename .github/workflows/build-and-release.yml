@@ -9,6 +9,11 @@ on:
     branches:
       - main
       - master
+    # Version tags are publication metadata for the branch build. They must
+    # not start a second full verify/package/container matrix for the same
+    # commit.
+    tags-ignore:
+      - '**'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -104,7 +109,9 @@ env:
 
 concurrency:
   group: unified-ci-cd-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer push supersedes an older build. Keeping both matrices alive only
+  # serializes on the shared ARM runner and republishes stale aliases.
+  cancel-in-progress: true
 jobs:
   verify:
     name: Verify (${{ matrix.runner_arch }})
