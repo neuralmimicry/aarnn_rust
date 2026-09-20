@@ -9,8 +9,6 @@ on:
     branches:
       - main
       - master
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       publish_release:
@@ -18,16 +16,12 @@ on:
         required: false
         type: boolean
         default: false
-      draft_release:
-        description: "Mark a manually published release as draft"
+      release_mode:
+        description: "Publication mode for a manually selected release"
         required: false
-        type: boolean
-        default: false
-      prerelease:
-        description: "Mark a manually published release as prerelease"
-        required: false
-        type: boolean
-        default: false
+        type: choice
+        options: [release, draft, prerelease]
+        default: release
       build_id:
         description: "Immutable container build ID to promote (defaults to current SHA)"
         required: false
@@ -62,20 +56,18 @@ on:
         type: choice
         options: [patch, minor, major]
         default: patch
-      branch:
-        description: "Branch to bump and tag (defaults to triggering ref branch)"
-        required: false
-        default: ""
       sync_wiki:
         description: "Sync .github/wiki/Home.md to the GitHub wiki"
         required: false
         type: boolean
         default: false
 
-# Push-triggered container jobs publish the immutable SHA manifests used by
-# the deployment roles, promote the main branch's node image to the developer
-# blue track, and then create the next patch version tag. Manual dispatch keeps
-# the existing explicit promotion and version-bump controls.
+# Push-triggered jobs publish the immutable SHA assets used by the deployment
+# roles, promote the main branch's node image to the developer blue track, and
+# then create the next patch version tag. The generated tag is deliberately not
+# a second workflow trigger: the main-branch run resolves the tag on the same
+# commit and publishes the immutable release assets from its single build.
+# Manual dispatch still supports selecting a v* tag directly.
 
 permissions:
   contents: read
@@ -357,13 +349,24 @@ jobs:
               publish_release="true"
             fi
           elif [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/heads/* ]]; then
-            # Keep a rolling GitHub Release containing the artifacts from the
-            # latest completely successful branch push.  This is deliberately
-            # separate from immutable v* releases, but uses the same package
-            # jobs and therefore cannot publish until every package succeeds.
-            release_tag="latest"
-            artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
-            publish_release="true"
+            # Version Bump and Tag pushes the version commit and its v* tag in
+            # one operation. Resolve that tag from the remote so this branch
+            # run owns both the verification and the immutable release. A
+            # normal branch push keeps the rolling latest release behaviour.
+            mapfile -t matching_tags < <(
+              git ls-remote --refs origin 'refs/tags/v*' |
+                awk -v sha="${GITHUB_SHA}" '$1 == sha {sub("^refs/tags/", "", $2); print $2}' |
+                sort -V
+            )
+            if [[ ${#matching_tags[@]} -gt 0 ]]; then
+              release_tag="${matching_tags[${#matching_tags[@]}-1]}"
+              artifact_version="${release_tag#v}"
+              publish_release="true"
+            else
+              release_tag="latest"
+              artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
+              publish_release="true"
+            fi
           else
             artifact_version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
           fi
@@ -391,19 +394,21 @@ jobs:
     if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     # Package and container matrix jobs share the single ARM64 self-hosted
-    # runner.  A workflow-level concurrency group does not serialize jobs
-    # within one workflow, so use the runner architecture as the resource
-    # lock to prevent two rootless Podman/Rust jobs filling qc00/qc01 at once.
+    # runner. Their matching architecture concurrency groups serialize that
+    # shared host, while allowing hosted amd64 and self-hosted arm64 work to
+    # proceed independently.
     concurrency:
-      group: aarnn-build-runner-${{ matrix.runner_arch }}-${{ github.ref }}
+      group: >-
+        aarnn-build-runner-${{ matrix.runner_arch }}-${{
+          matrix.runner_arch == 'ARM64' && 'shared' || matrix.ubuntu_label
+        }}-${{ github.ref }}
       cancel-in-progress: false
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # qc01 provides the ARM64 runner. Serialize packaging jobs so two
-      # ARM64 rootless Podman containers cannot contend for the same host
-      # keyring quota; each job still receives isolated storage below.
-      max-parallel: 1
+      # The architecture concurrency group below remains the resource lock;
+      # this limit lets the X64 and ARM64 groups make progress in parallel.
+      max-parallel: 4
       matrix:
         include:
           - runner_arch: X64
@@ -711,9 +716,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
           DRAFT_RELEASE: >-
-            ${{ github.event_name == 'workflow_dispatch' && inputs.draft_release }}
+            ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'draft' }}
           MANUAL_PRERELEASE: >-
-            ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+            ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'prerelease' }}
         run: |
           set -euo pipefail
           # download-artifact also retrieves simulator evidence. Those
@@ -807,23 +812,23 @@ jobs:
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
     if: github.event_name == 'push'
-    # The ARM package matrix and the ARM container matrix share qc01. Make
-    # packaging an explicit prerequisite rather than relying only on the
-    # runner concurrency lock: GitHub may evict a waiting matrix request when
-    # a higher-priority container request is queued, which previously dropped
-    # the Ubuntu 25.04 ARM package and therefore skipped release publication.
     needs:
       - verify
       - package-linux
-    # Keep ARM package and container compilation mutually exclusive on the
-    # self-hosted fleet.  This protects the runner's disk and memory while
-    # retaining parallelism for the hosted X64 jobs.
+    # The container jobs consume the already-built release package. Their
+    # architecture locks protect the shared ARM host while allowing the hosted
+    # amd64 workload images to build concurrently.
     concurrency:
-      group: aarnn-build-runner-${{ matrix.runner_arch }}-${{ github.ref }}
+      group: >-
+        aarnn-build-runner-${{ matrix.runner_arch }}-${{
+          matrix.runner_arch == 'ARM64' && 'shared' || matrix.workload
+        }}-${{ github.ref }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
-      max-parallel: 1
+      # The architecture concurrency group below limits each runner class to
+      # one active job, while this allows the X64 and ARM64 groups to overlap.
+      max-parallel: 9
       matrix:
         include:
           - workload: orchestrator
@@ -993,19 +998,29 @@ jobs:
           fi
           echo "AARNN_WORKLOAD_FEATURES=${workload_features}" >> "$GITHUB_ENV"
 
-      - name: Prepare Debian package for container build
+      - name: Download release package for container build
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-assets-*-ubuntu24.04
+          path: repo-build-release/dist/container
+          merge-multiple: true
+
+      - name: Select package for container architecture
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/package-release.sh scripts/prepare_container_package.sh
-          ./scripts/prepare_container_package.sh \
-            --workload "${{ matrix.workload }}" \
-            --arch "${{ matrix.arch }}" \
-            --output-dir ./dist/container \
-            --cache-dir ./.container-cache/debs-ci \
-            --force \
-            --cargo-features "$AARNN_WORKLOAD_FEATURES" \
-            --cargo-build-targets "aarnn_rust web_ui"
+          shopt -s nullglob
+          packages=(./dist/container/*_${{ matrix.arch }}.deb)
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "Expected one ${{ matrix.arch }} Ubuntu 24.04 package, found ${#packages[@]}"
+            printf '%s\n' ./dist/container/*
+            exit 1
+          fi
+          for package in ./dist/container/*.deb; do
+            if [[ "$package" != "${packages[0]}" ]]; then
+              rm -f "$package"
+            fi
+          done
 
       - name: Smoke install container Debian package in Ubuntu 24.04
         shell: bash
@@ -1099,20 +1114,19 @@ jobs:
   container-manifest:
     name: Container Manifest (${{ matrix.workload }})
     if: github.event_name == 'push'
-    needs: container-build
+    needs:
+      - container-build
+      - release-meta
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 3
       matrix:
         workload: [orchestrator, node, web-ui]
     runs-on: ubuntu-24.04
-    # Every matrix entry publishes the same branch/latest aliases for its
-    # workload family.  GitHub can schedule matrix jobs from this workflow
-    # concurrently even with max-parallel set, so serialize the registry
-    # mutation explicitly or one workload can overwrite another's manifest
-    # while it is being verified.
+    # Each matrix entry owns a distinct workload tag family, so registry
+    # mutations and verification can proceed independently.
     concurrency:
-      group: aarnn-container-manifest-${{ github.ref }}
+      group: aarnn-container-manifest-${{ github.ref }}-${{ matrix.workload }}
       cancel-in-progress: false
     permissions:
       packages: write
@@ -1215,13 +1229,20 @@ jobs:
           podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
 
       - name: Publish version and latest tags on release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (
+            needs.release-meta.outputs.release_tag != '' &&
+            startsWith(needs.release-meta.outputs.release_tag, 'v')
+          )
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           build="${GITHUB_SHA}"
-          version_tag="${GITHUB_REF_NAME}"
+          version_tag="${RELEASE_TAG:-${GITHUB_REF_NAME}}"
           version_manifest="${image}:${version_tag}-${{ matrix.workload }}"
           podman manifest rm "${version_manifest}" >/dev/null 2>&1 || true
           podman image rm -f "${version_manifest}" >/dev/null 2>&1 || true
@@ -1237,23 +1258,29 @@ jobs:
           podman manifest add "${version_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
           podman manifest push --all "${version_hwe_manifest}" "docker://${version_hwe_manifest}"
 
-          latest_manifest="${image}:latest-${{ matrix.workload }}"
-          podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
-          podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
-          podman manifest create "${latest_manifest}"
-          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
-          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
-          podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
-          latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
-          podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-          podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-          podman manifest create "${latest_hwe_manifest}"
-          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
-          podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
-          echo "Published ${image}:${version_tag} and ${image}:latest"
+          # A branch push already publishes latest in the branch-alias step.
+          # Keep this fallback for an explicitly dispatched v* tag run.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            latest_manifest="${image}:latest-${{ matrix.workload }}"
+            podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
+            podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
+            podman manifest create "${latest_manifest}"
+            podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
+            podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
+            podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
+            latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
+            podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+            podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
+            podman manifest create "${latest_hwe_manifest}"
+            podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
+            podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
+          fi
+          echo "Published ${image}:${version_tag}"
 
       - name: Verify published manifests include amd64 and arm64
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release-meta.outputs.release_tag }}
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
@@ -1278,6 +1305,11 @@ jobs:
             verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
             verify_ref "${image}:${branch_tag}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
             verify_ref "${image}:latest-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
+            if [[ "${RELEASE_TAG}" == v* ]]; then
+              verify_ref "${image}:${RELEASE_TAG}-${{ matrix.workload }}" "linux/amd64"
+              verify_ref "${image}:${RELEASE_TAG}-${{ matrix.workload }}" "linux/arm64"
+              verify_ref "${image}:${RELEASE_TAG}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
+            fi
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/arm64"
@@ -1370,7 +1402,7 @@ jobs:
         with:
           token: ${{ secrets.X_GITHUB_TOKEN }}
           fetch-depth: 0
-          ref: ${{ inputs.branch || github.ref }}
+          ref: ${{ github.ref }}
           path: repo-build-release
 
       - name: Compute next version

@@ -65,7 +65,7 @@ GitHub Actions binary release automation lives in `.github/workflows/build-and-r
 - `scripts/package-release.sh --version <cargo-version> --output-dir ./dist` builds the release tarball and checksum manifest.
 - `scripts/package-release.sh --version <cargo-version> --output-dir ./dist --platform linux-x86_64 --deb-arch amd64` also emits a Debian package for Linux.
 - manual `workflow_dispatch` runs can package artifacts from any ref.
-- publish steps only run from a `v*` tag ref, either automatically on tag push or manually from `workflow_dispatch`.
+- automatically generated version commits publish their matching `v*` release from the single `main` push build; manually dispatched runs can still select a `v*` tag ref.
 
 The binary release workflow packages `aarnn_rust`, `web_ui`, and the base runtime config. Linux CI now validates `.deb` artifacts on both `amd64` and `arm64` runners. The unified `.github/workflows/build-and-release.yml` workflow also handles multi-arch container build, manifest publish, and promotion.
 

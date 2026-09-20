@@ -2985,3 +2985,43 @@ no native engine content hash is presented as biological or physics equivalence.
   that probe. The next benchmark must first resolve that registration issue,
   then compare identical fresh-state runs with the same autosave and IPC
   settings.
+
+## Verification update — 2026-09-20: Actions workflow duplication and scheduling
+
+- [x] Inspected the canonical workflow at `.github/workflows/build-and-release.yml`
+  and the supporting workflows under `.github/workflows/`. The unified workflow
+  owns verification, Linux package publication, multi-architecture container
+  images/manifests, rolling/latest promotion, version bumping and wiki sync;
+  `minecraft.yml` is a path-scoped simulator contract lane and
+  `publish-ui-arm64.yml` is an explicit HWE publication lane.
+- [x] Reviewed the three most recent unified runs with `gh run list` and
+  `gh run view`: runs `35493916852` (`v0.1.28`, in progress), `35493916612`
+  (`main`, in progress), and `35454272269` (the preceding successful `main`
+  run). Runs `35493916852` and `35493916612` were created at the same second
+  for SHA `1e8d3b9a4db1c4bfbbf4b471b553bc7cda0fa610`; one was triggered by the
+  generated tag and one by the branch update. Both repeated verification and
+  Linux packaging, and both entered the container build graph. The tag run is
+  therefore duplicate work for the same immutable source.
+- [x] Confirmed that `package-linux` has four matrix entries but
+  `max-parallel: 1`, and `container-build` has nine entries but
+  `max-parallel: 1`. Their architecture concurrency groups protect the shared
+  ARM runner, but the matrix-wide limit also serialises independent hosted
+  amd64 work. The prior successful run spent roughly 16 hours in the package
+  and container queues, including repeated arm64 variants.
+- [x] Optimised the workflow so the branch run for an automatically generated
+  version commit discovers the matching `v*` tag, publishes the immutable
+  release/container aliases from that one build, and the redundant tag-triggered
+  build is suppressed. Container image jobs now reuse the Ubuntu 24.04 package
+  artifacts from `package-linux` instead of recompiling the same all-feature
+  package for every workload/architecture variant. Matrix parallelism is
+  enabled across independent hosted amd64 jobs and the shared ARM lock remains
+  one-at-a-time; the three independent workload manifest publishers also run
+  concurrently. Manual dispatch retains tag selection while its controls now
+  fit GitHub's ten-input limit.
+- [x] Validation passed with `git diff --check`, Ruby YAML parsing for every
+  workflow, the branch/tag resolution probe for `v0.1.28`, and
+  `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+  .github/workflows/*.yml` finding no new workflow or changed-step errors
+  after the changed warning was removed. The command still exits non-zero for
+  two pre-existing ShellCheck style warnings in untouched workflow scripts
+  (`SC2129` and `SC2016`).
