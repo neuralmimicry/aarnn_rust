@@ -258,25 +258,23 @@ jobs:
       - name: Check build
         run: cargo check --locked --all-features --lib --bins
 
-      - name: Run tests
+      - name: Run library and web UI tests
         env:
           NM_DISABLE_OPENCL: "1"
-        # The hosted x64 job runs the complete test and integration matrix.
-        # Building every ARM test harness on qc00 duplicates several GiB of
-        # objects while the same host is serving training and inference.
+        # Keep the large unit-test process separate from integration harnesses.
+        # Cargo otherwise runs every harness concurrently; the all-feature
+        # library suite can consume the hosted runner's CPU long enough to
+        # starve the runtime-manager scheduler and make its liveness test
+        # report a false failure. Both invocations reuse the same target tree,
+        # so this serialises execution without duplicating compilation.
         if: matrix.runner_arch != 'ARM64'
-        # `--all-targets` takes precedence over `--lib` and makes Cargo build
-        # test harnesses for every example and benchmark. Those targets are
-        # already compiled by the preceding `cargo check`; linking all of them
-        # kept the ARM64 linker silent for over 30 minutes before cancellation.
-        # The CLI binary re-declares the library modules, so its test harness
-        # only duplicates the library suite. Keep library, web UI and
-        # integration tests; every target remains compile-checked above.
-        run: >-
-          cargo test --locked --all-features
-          --lib
-          --bin web_ui
-          --test '*'
+        run: cargo test --locked --all-features --lib --bin web_ui
+
+      - name: Run integration tests
+        env:
+          NM_DISABLE_OPENCL: "1"
+        if: matrix.runner_arch != 'ARM64'
+        run: cargo test --locked --all-features --test '*'
 
       - name: Run doctests and Phase 0 fixture
         env:

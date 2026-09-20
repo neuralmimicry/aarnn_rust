@@ -21,7 +21,7 @@ async fn wait_for_workspace_step(
     // CI runs this readiness check after the full library suite.  Keep the
     // assertion bounded, but allow a loaded runner time to schedule the
     // runtime worker before treating a healthy startup as a failure.
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let detail = runtime
             .workspace_detail(user_id, workspace_id)
@@ -40,7 +40,7 @@ async fn wait_for_workspace_step(
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_manager_persists_and_resumes_workspace_state() {
     let root = temp_runtime_dir();
     let runtime = RuntimeManager::new(RuntimeConfig {

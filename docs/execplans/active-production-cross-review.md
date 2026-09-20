@@ -39,6 +39,18 @@ claim durable shard ownership or quorum authority.
 
 ## Current status
 
+- [x] `2026-09-20` Diagnosed the Kubernetes AARNN orchestrator rollout
+  failure on `spirit`: the pod pulled the expected image and exited with code
+  1 because the shared all-feature binary started `management_v1` without
+  `NM_MANAGEMENT_BEARER_TOKEN`. The ordinary Ansible deployment does not
+  provide the management bearer, mTLS files or durable management state; its
+  intended profile is the existing distributed data plane. Added the explicit
+  `NM_MANAGEMENT_ENABLED` runtime gate and set it to `0` for ordinary AARNN
+  Kubernetes workloads while the stable migration profile sets it to `1` with
+  its existing fail-closed credentials. Focused startup-profile tests and
+  Ansible syntax validation passed; a fresh image build and deployment rollout
+  remain required before claiming the live pod recovered.
+
 - [x] `2026-09-19` Fixed the x64 CI test regression from commit `8ef72b0`.
   The complete feature graph is intentional for container images so deployed
   runtimes include the current parallel/non-blocking paths. Updated the
@@ -3025,3 +3037,39 @@ no native engine content hash is presented as biological or physics equivalence.
   after the changed warning was removed. The command still exits non-zero for
   two pre-existing ShellCheck style warnings in untouched workflow scripts
   (`SC2129` and `SC2016`).
+
+## Verification update — 2026-09-20 10:00Z: CI test scheduling and deployment gates
+
+- [x] Reproduced the failed `runtime_manager_persists_and_resumes_workspace_state`
+  test from run `35498950750`. The test was one of several Cargo harnesses
+  launched beside the all-feature library suite; the scheduler remained at
+  step 0 for the 15-second bound while the other tests completed. The focused
+  all-feature harness passed locally with `NM_DISABLE_OPENCL=1`.
+- [x] Updated `.github/workflows/build-and-release.yml` to execute the large
+  library/web UI test group and the integration test group as separate steps.
+  Cargo reuses the same target directory, so this removes CPU contention without
+  recompiling the graph or duplicating package/container work. The runtime
+  persistence test now uses a two-worker Tokio harness and a 30-second bounded
+  readiness window.
+- [x] Validation passed for the all-feature library and web UI group: 419 library
+  tests and 15 web UI tests. The complete `runtime_manager` integration harness
+  passed all four tests with the CI OpenCL-disabled environment. A local
+  wildcard integration build without the workflow's resource limits hit the
+  host linker with `SIGBUS`; this is retained as a local capacity limitation,
+  not a Rust test assertion failure. The workflow's `CARGO_BUILD_JOBS=2`, zero
+  incremental/debug artifacts and runner disk controls remain in effect.
+- [x] Ansible syntax validation passed for
+  `swarmhpc/ansible/continuum_tenant_aarnn_site.yml`. The accelerator facts are
+  now derived before their environment/assertion consumers, and mutable AARNN
+  aliases such as `latest` probe the complete commit-qualified orchestrator,
+  web UI and node image set before allowing a local rebuild. Explicit component
+  image references and intentional rebuild flags remain deliberate overrides.
+- [ ] A new successful GitHub Actions run containing the runtime gate has not
+  yet published the replacement image. The live Kubernetes orchestrator still
+  requires redeployment against that new digest before rollout recovery can be
+  claimed.
+- [x] `2026-09-20 10:05Z` Stopped the local resource-limited wildcard build after
+  disk pressure was reported. The ignored `target/debug` cache had grown to
+  174 GB (including 69 GB incremental state and 101 GB test dependencies); it
+  was removed with `find` while preserving source, Git data, release output and
+  QA evidence. Free space increased from approximately 2 GB to 176 GB.

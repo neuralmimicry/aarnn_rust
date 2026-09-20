@@ -4867,19 +4867,40 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
 /// policy in one small function makes the worker cutover auditable and keeps
 /// the non-management build free of role-only dead-code warnings.
 #[cfg(any(feature = "management_v1", test))]
-const fn exposes_management_service(is_orchestrator: bool) -> bool {
+fn management_enabled_from_env(value: Option<&str>) -> bool {
+    match value.map(str::trim).map(str::to_ascii_lowercase) {
+        // Keep existing all-feature local launchers compatible. Production
+        // deployment templates opt out explicitly unless they provide the
+        // complete authenticated management profile.
+        None => true,
+        Some(value) => matches!(value.as_str(), "1" | "true" | "yes" | "on"),
+    }
+}
+
+#[cfg(any(feature = "management_v1", test))]
+fn exposes_management_service(is_orchestrator: bool) -> bool {
     is_orchestrator
+        && management_enabled_from_env(std::env::var("NM_MANAGEMENT_ENABLED").ok().as_deref())
 }
 
 #[cfg(test)]
 mod management_startup_tests {
-    use super::{apply_io_contract, exposes_management_service};
+    use super::{apply_io_contract, exposes_management_service, management_enabled_from_env};
     use crate::config::NetworkConfig;
 
     #[test]
     fn workers_do_not_expose_management_service() {
         assert!(!exposes_management_service(false));
-        assert!(exposes_management_service(true));
+        assert!(management_enabled_from_env(None));
+    }
+
+    #[test]
+    fn management_profile_requires_explicit_enablement_when_overridden() {
+        assert!(management_enabled_from_env(Some("1")));
+        assert!(management_enabled_from_env(Some("true")));
+        assert!(!management_enabled_from_env(Some("0")));
+        assert!(!management_enabled_from_env(Some("false")));
+        assert!(!management_enabled_from_env(Some("unexpected")));
     }
 
     #[test]
