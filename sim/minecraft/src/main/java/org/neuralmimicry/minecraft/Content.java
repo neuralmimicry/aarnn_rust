@@ -41,7 +41,10 @@ public final class Content {
     }
     /** Wall-clock transport budget only; never changes Rust's negotiated biological step. */
     public static int frameTimeoutMillis(Profile p) {
-        return p.kind().equals("fly")?60000:p.kind().equals("fish")?10000:2500;
+        // A hexapod frame is a three-hop AER exchange when the dual-brain
+        // launcher is active. Leave enough wall-clock budget for the first
+        // growing runner step and the return path before failing closed.
+        return p.id().equals("hexapod")?10000:p.kind().equals("fly")?60000:p.kind().equals("fish")?10000:2500;
     }
     /** Right-handed catalogue (X forward, Y left, Z up) -> Minecraft (X east, Y up, Z south). */
     public static double[] toMinecraft(double[] v, double scale) {

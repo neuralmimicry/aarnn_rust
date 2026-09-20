@@ -157,7 +157,7 @@ public final class BridgeMain {
                     "time_source","legacy_AER1_reply","quality","legacy_uncommitted","content_digest",Content.DATA.digest());
             } catch(Exception error) {
                 faulted=true;close();
-                System.err.println("Rust route "+profile.id()+" fault: "+error.getClass().getSimpleName());
+                System.err.println("Rust route "+profile.id()+" fault: "+error.getClass().getSimpleName()+": "+error.getMessage());
                 throw new IOException("Ambiguous backend",error);
             }
         }

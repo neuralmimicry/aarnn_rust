@@ -70,6 +70,11 @@ Canonical sources:
 - `scripts/qa/run_minecraft.py`, `probe_minecraft_{neural,bedrock}.py`,
   `bedrock_native_probe.js`, contract/detection/port fixtures and `tools/xtask`:
   bounded native/reference lanes and retained evidence.
+- `scripts/run_minecraft_dual_aer_growth.sh` and
+  `scripts/qa/minecraft_dual_aer_growth.py`: additive two-runner hexapod
+  experiment. The proxy preserves the Java companion's legacy AER1 framing,
+  inserts two explicit +1 ms causal hops, and records fixture control scores and
+  growth evidence. It does not replace the production AARNN-AER/1 path.
 - `scripts/package_minecraft.py`: isolated Bedrock regeneration comparison,
   Java acceptance/source hashes, pinned official prerequisites and SHA256SUMS.
 
@@ -230,6 +235,101 @@ on retry. Only a proved startup bind race gets up to three fresh port attempts.
 - [ ] Bedrock client screenshots, Unity Editor build and calibrated cross-engine
   biological/physics parity remain distinct unavailable/unmet acceptance lanes.
 
+- [x] `2026-09-20` Added the bounded dual-brain experiment. Two independently
+  generated hexapod configs are routed through separate `aarnn_tcp_server`
+  processes and the Java bridge's one-profile route. The proxy records
+  A-to-B and B-to-A AER frame hops, returned logical timestamps, growth events
+  and the fixture's isolated-versus-coupled motor score. The verified headless
+  command was `./scripts/run_minecraft_dual_aer_growth.sh --no-engine
+  --iterations 12`; its retained receipt recorded 12 frames and two growth
+  paths. The bounded combiner now models B's delayed AER output as an
+  inhibitory gate over A's final motor spikes; this avoids treating two
+  saturated spike sets as a stronger command. The 24-frame rerun in
+  `target/qa/minecraft-dual-aer-pKUiLJ/result.json` recorded both AER directions,
+  195 growth log events and a fixture-score increase from `0.8263888889` for
+  isolated A to `0.8333333333` for the coupled output. This remains a legacy
+  AER1 fixture result and is not a claim of learned Minecraft physics control.
+
+- [x] `2026-09-20` Corrected the launcher integration after the first operator
+  run. Engine mode now selects a loopback HTTP port, writes that endpoint into
+  the generated Minecraft config and keeps the bridge and client on the same
+  route. The launcher prints readiness for brain A, brain B, the dual AER
+  fabric and the Java bridge, and writes a failure receipt after any later
+  control assertion so startup evidence survives cleanup. A headless one-frame check retained evidence in
+  `target/qa/minecraft-dual-aer-VDNUX0/result.json`; both brain listeners and
+  both growth paths were present, while the separate control-improvement
+  assertion remained correctly failed.
+
+- [x] `2026-09-20` Fixed the in-game connection failure shown by the operator.
+  The installed Java config had an empty `hexapod.networkId`, so
+  `/aarnn connect hexapod` rejected the binding before opening the bridge. Live
+  launcher mode now atomically prepares the hexapod binding, records the prior
+  config in the run receipt, and keeps both brain processes and the bridge alive
+  until Ctrl-C. A bounded live launch with `--no-keep-alive --iterations 1`
+  verified the endpoint, binding dimensions and fixture path; a keep-alive
+  smoke was stopped after printing the interactive commands. The Minecraft
+  process must be restarted from the launcher started by this run when its
+  previous process did not inherit `AARNN_MINECRAFT_TOKEN`.
+
+- [x] `2026-09-20` Fixed the follow-up operator failure where Minecraft opened
+  only the ordinary last-played world with no visible neural body. The live
+  launcher now writes an explicit `autoConnectOnStart` hexapod profile and the
+  Fabric server builds the lab, arms the configured route and teleports the
+  first player to the hexapod plot once chunks are ready. Ordinary configs
+  remain disarmed because the automatic path is opt-in. The server emits a
+  HUD indicator and logs the automatic connection; `/aarnn status` remains the
+  authoritative frame and spike check.
+
+- [x] `2026-09-20` Replaced repeated in-game status/chat output with a compact
+  Fabric HUD indicator in the upper-left: grey is offline/disarmed, yellow is
+  connecting, green is active and red is faulted. Automatic startup now makes
+  one connection attempt per server session and leaves a fault visible for
+  operator recovery instead of reconnecting every tick. The live launcher also
+  starts Minecraft at the first logical step after its bounded fixture feed so
+  the fixture route cannot reject the real hexapod as stale.
+
+- [x] `2026-09-20` Reduced the connection HUD to a text-free traffic-light
+  button in the upper-left. Automatic startup no longer writes success, failure
+  or visit guidance into the player's scrolling chat; the three lamps provide
+  the persistent visual state and `/aarnn status` remains available on demand.
+
+- [x] `2026-09-20` Hardened repeated launcher runs after a stale bridge on the
+  fixed default port caused a new token to receive HTTP 401 from the old
+  process. Engine mode now selects a free loopback HTTP port and writes that
+  endpoint into the generated Minecraft config. Startup waits for an
+  authenticated bridge health response and fails immediately if the child
+  bridge exits or another process owns the requested port.
+
+- [x] `2026-09-20` Fixed live-session contention in engine mode. The bounded
+  fixture driver is now restricted to `--no-engine` QA; engine mode waits for
+  actual Minecraft hexapod frames and reports failure if they do not arrive.
+  The traffic-light HUD now truly dims inactive lamps, and `/aarnn status`
+  reports one compact hexapod line instead of flooding chat with every saved
+  lab profile.
+
+- [x] `2026-09-20 14:46Z` Removed the remaining manual launcher/world-selection
+  step for the installed Java profile. `scripts/minecraft.py launch --direct`
+  now resolves inherited Minecraft/Fabric library metadata, starts Fabric Loader
+  with Java 25 and uses `--quickPlaySingleplayer`; the dual-brain runner invokes
+  this path with `New World` by default and accepts `AARNN_MINECRAFT_WORLD` for
+  another existing world. Direct launch was verified from a stopped client: the
+  log loaded Fabric Loader 0.19.5, AARNN 0.1.0 and Fabric API 0.160.0+26.2.
+  The bounded live run `scripts/run_minecraft_dual_aer_growth.sh
+  --no-keep-alive --iterations 4` then passed with 19 frontend frames, A-to-B
+  and B-to-A traffic, growth events from both brains, and control improvement
+  from `0.8245614035` isolated to `0.8333333333` coupled in
+  `target/qa/minecraft-dual-aer-wBwMci/result.json`.
+
+- [x] `2026-09-20 14:57Z` Fixed the transparent hexapod reported in the 26.2
+  screenshot. The custom mesh had been submitted through `debugQuads`, whose
+  translucent pipeline does not write depth, so clouds could be drawn over the
+  body. Both Java renderers now use an opaque, no-cull entity cutout layer with
+  explicit texture, overlay, lightmap and normal attributes. The installed 26.2
+  mod matches the rebuilt artifact SHA256
+  `0c2802660972423c5e92862db3770afef3333a7a2d8f4a26c94514b7700784b8`.
+  The installed 26.2 smoke run passed with 14 live frames and both AER
+  directions; 26.2 and 1.21.1 Gradle test/parity suites also pass.
+
 - [x] `2026-09-15 15:12Z` Social/participant refresh: Java native all-six NPC sensing,
   clean save and JAR/world build pass in `world-9qrr1mf7/`. Bedrock timer-offset,
   ordinary-player command, API/detection/port suite passes in `bedrock-ezsbn3o3/`.
@@ -296,6 +396,9 @@ prefers an available Java launcher/profile, then BDS; Java engine preflight
 reports missing Fabric/API/mod artifacts instead of silently switching frontends.
 Forced editions never silently switch.
 `--no-engine` permits brain/companion hosts without a game installation.
+The dual-brain hexapod runner uses the direct Fabric path so the compatible
+profile and configured world are selected automatically; ordinary launcher use
+remains available through `scripts/minecraft.py launch` without `--direct`.
 
 Generated artefacts are additive. Remove the adapter from a backed-up test instance
 to roll back; do not open a modded save without its mod/backup. Per-run BDS settings
@@ -368,6 +471,12 @@ is independent of port availability and must never be bypassed.
   a saved lab can arm legacy sandbox inference. The review updates only the
   entity content marker after validating the complete profile set; it never
   silently retags a partial lab or restores neural state.
+- `2026-09-20 MC-009`: Keep the dual-brain experiment in the legacy AER1
+  compatibility lane. The Java companion has one profile route, so a local proxy
+  is the narrowest way to exercise two independent Rust runners and preserve
+  causal ordering. A fixture score may be reported as improved only when the
+  measured coupled score is positive; no production protocol or biological
+  control claim is promoted from this sandbox.
 
 ## Outcomes & Retrospective
 

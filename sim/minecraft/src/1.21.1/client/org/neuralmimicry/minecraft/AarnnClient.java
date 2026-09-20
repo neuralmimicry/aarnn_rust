@@ -15,6 +15,9 @@ import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.resources.ResourceLocation;
 
 public final class AarnnClient implements ClientModInitializer {
+    private static final ResourceLocation BODY_TEXTURE =
+            ResourceLocation.withDefaultNamespace("textures/block/white_concrete.png");
+
     @Override public void onInitializeClient() {
         EntityRendererRegistry.register(AarnnMod.HABITAT,Renderer::new);
         EntityRendererRegistry.register(AarnnMod.ROBOT,Renderer::new);
@@ -24,7 +27,7 @@ public final class AarnnClient implements ClientModInitializer {
         private final Map<Integer,Cached> cache=new LinkedHashMap<>();
         Renderer(EntityRendererProvider.Context context) { super(context); }
         @Override public ResourceLocation getTextureLocation(SceneEntity e) {
-            return ResourceLocation.withDefaultNamespace("textures/block/white_concrete.png");
+            return BODY_TEXTURE;
         }
         @Override public boolean shouldRender(SceneEntity e,Frustum f,double x,double y,double z) {
             return e.shouldRenderAtSqrDistance(e.distanceToSqr(x,y,z)) && f.isVisible(e.getBoundingBox().inflate(4));
@@ -43,11 +46,15 @@ public final class AarnnClient implements ClientModInitializer {
             if(!e.habitatEntity()) stack.mulPose(Axis.YP.rotationDegrees(yaw));
             float scale=(float)(Content.HALF_EXTENT*(e.habitatEntity()?1:p.body_length()));
             stack.scale(scale,scale,scale);
-            var vertex=buffers.getBuffer(RenderType.debugQuads());
+            // debugQuads is translucent and does not write depth. Use the
+            // opaque no-cull entity layer so clouds cannot show through the body.
+            var vertex=buffers.getBuffer(RenderType.entityCutoutNoCull(BODY_TEXTURE));
             float[] mesh=old.mesh;
             for(int i=0;i<mesh.length;i+=18) for(int j:new int[]{0,1,2,2}) {
                 int k=i+j*6;
-                vertex.addVertex(stack.last(),mesh[k],mesh[k+2],-mesh[k+1]).setColor(mesh[k+3],mesh[k+4],mesh[k+5],1);
+                vertex.addVertex(stack.last(),mesh[k],mesh[k+2],-mesh[k+1])
+                        .setColor(mesh[k+3],mesh[k+4],mesh[k+5],1)
+                        .setUv(0,0).setUv1(0,0).setUv2(0xF000,0x00F0).setNormal(0,1,0);
             }
             stack.popPose();
             super.render(e,yaw,partial,stack,buffers,light);

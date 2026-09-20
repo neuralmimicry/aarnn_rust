@@ -15278,6 +15278,10 @@ impl Runner {
 
                     if did_growth_event {
                         observe_hit!("growth_spawn");
+                        nm_err!(
+                            "[growth] committed developmental event; total_neurons={}",
+                            self.total_neurons()
+                        );
                     }
                 }
             } else {
@@ -19502,7 +19506,6 @@ impl Runner {
             region_name,
             target_type_name,
         });
-
         if let Some(cooldown_layer) = self.since_growth_ms.get_mut(act.layer) {
             if act.parent < cooldown_layer.len() {
                 cooldown_layer[act.parent] = 0.0;

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minecraft capability detection. Reads version/mod metadata, never account or credential files."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import sys
 import zipfile
 import socket
 import time
+import uuid
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -232,6 +234,97 @@ def select_edition(requested, java_report, bedrock_report):
     return 'bedrock' if bedrock_report.get('server') else 'java'
 
 
+def _version_chain(directory, version_id):
+    chain = []
+    current = version_id
+    seen = set()
+    while current:
+        if current in seen:
+            raise ValueError('Minecraft version metadata inheritance cycle')
+        seen.add(current)
+        path = directory / 'versions' / current / f'{current}.json'
+        data = read_json(path, 4 * 1024 * 1024)
+        chain.append((current, data))
+        current = data.get('inheritsFrom')
+    return list(reversed(chain))
+
+
+def _offline_uuid(username):
+    digest = bytearray(hashlib.md5(('OfflinePlayer:' + username).encode()).digest())
+    digest[6] = (digest[6] & 0x0f) | 0x30
+    digest[8] = (digest[8] & 0x3f) | 0x80
+    return str(uuid.UUID(bytes=bytes(digest)))
+
+
+def _library_artifact_path(name):
+    parts = name.split(':')
+    if len(parts) < 3:
+        return None
+    group, artifact, version = parts[:3]
+    classifier = parts[3] if len(parts) > 3 else None
+    filename = f'{artifact}-{version}' + (f'-{classifier}' if classifier else '') + '.jar'
+    return Path(*group.split('.')) / artifact / version / filename
+
+
+def direct_fabric_launch(result, world):
+    """Start the detected Fabric client directly, bypassing launcher GUI selection."""
+    directory = Path(result['directory']).expanduser()
+    game_dir = Path(result['game_directory']).expanduser()
+    version_id = next((item['id'] for item in result['compatible_loader_profiles']
+                       if item['profile_id'] == result.get('selected_profile')), None)
+    if not version_id:
+        raise RuntimeError('no compatible Fabric version selected')
+    chain = _version_chain(directory, version_id)
+    classpath = []
+    for current, data in chain:
+        version_jar = directory / 'versions' / current / f'{current}.jar'
+        if version_jar.is_file():
+            classpath.append(str(version_jar))
+        for library in data.get('libraries', []):
+            artifact = library.get('downloads', {}).get('artifact', {})
+            path = artifact.get('path')
+            if not path:
+                path = str(_library_artifact_path(library.get('name', '')) or '')
+            if path:
+                jar = directory / 'libraries' / path
+                if jar.is_file():
+                    classpath.append(str(jar))
+    if not classpath:
+        raise RuntimeError('no Minecraft/Fabric classpath artifacts found')
+    classpath = list(dict.fromkeys(classpath))
+    asset_index = next((data.get('assetIndex', {}).get('id') for _, data in reversed(chain)
+                        if data.get('assetIndex', {}).get('id')), None)
+    if not asset_index:
+        raise RuntimeError('Minecraft asset index is missing from version metadata')
+    native_dirs = sorted({str(path.parent) for path in (directory / 'bin').rglob('*.so')})
+    native_root = directory / 'bin'
+    for path in (native_root / 'java', native_root / 'jna', native_root / 'lwjgl', native_root / 'netty'):
+        if path.is_dir():
+            native_dirs.append(str(path))
+    username = os.environ.get('NM_MINECRAFT_USERNAME', 'AARNN')
+    java_path = result['java']['path']
+    command = [java_path, '-Xms2G', '-Xmx4G', '-XX:+UseCompactObjectHeaders',
+               '-XX:+UseStringDeduplication', '-XX:+UseZGC',
+               '--enable-native-access=ALL-UNNAMED',
+               f'-Djava.library.path={os.pathsep.join(dict.fromkeys(native_dirs))}',
+               '-DFabricMcEmu=', '-cp', os.pathsep.join(classpath),
+               'net.fabricmc.loader.impl.launch.knot.KnotClient',
+               '--username', username, '--version', version_id,
+               '--gameDir', str(game_dir), '--assetsDir', str(directory / 'assets'),
+               '--assetIndex', asset_index,
+               '--uuid', _offline_uuid(username), '--accessToken', '0',
+               '--clientId', '0', '--xuid', '0', '--versionType', 'release',
+               '--quickPlaySingleplayer', world]
+    launch_log = game_dir / 'aarnn-direct-launch.log'
+    log_stream = launch_log.open('ab')
+    process = subprocess.Popen(command, cwd=game_dir, stdin=subprocess.DEVNULL,
+                               stdout=log_stream, stderr=subprocess.STDOUT,
+                               start_new_session=True)
+    log_stream.close()
+    print(f'Direct Fabric {version_id} launch started (pid {process.pid}); quick-playing {world}; log {launch_log}.')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['doctor', 'java', 'launch', 'wait-bridge', 'edition', 'artifact'])
@@ -244,6 +337,8 @@ def main():
                         default=os.environ.get('NM_MINECRAFT_VERSION'))
     parser.add_argument('--kind', choices=['mod', 'bridge'], default='mod')
     parser.add_argument('--require', choices=['engine', 'bridge'], default='engine')
+    parser.add_argument('--direct', action='store_true', help='launch the detected Java/Fabric client without launcher GUI selection')
+    parser.add_argument('--world', default='New World', help='singleplayer world for direct Java launch')
     args = parser.parse_args()
     if args.command == 'wait-bridge':
         deadline = time.monotonic() + 75
@@ -318,9 +413,11 @@ def main():
         print('No engine or brain was launched. See sim/minecraft/README.md. Use --no-engine on hosts serving only Rust brains.', file=sys.stderr)
         return 3
     if args.command == 'launch':
+        if args.direct and edition == 'java':
+            return direct_fabric_launch(result, args.world)
         command = ['open', result['launcher']] if sys.platform == 'darwin' else [result['launcher']]
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"Select the detected Fabric {result.get('selected_profile') or result['required_minecraft']} profile in the launcher; no launcher account settings were changed.")
+        print(f"Minecraft launcher opened for detected Fabric {result.get('selected_profile') or result['required_minecraft']}; select Play to start the world.")
     return 0
 
 

@@ -88,6 +88,22 @@ AARNN mod as one profile, so a 1.21.1 jar is never accepted for 26.2 or vice ver
 Duplicate mod IDs, corrupt metadata and an occupied companion port are rejected.
 Only a verified, authenticated companion readiness response permits client launch.
 
+For the installed Java profile, the dual-brain hexapod runner bypasses launcher
+profile selection and starts the detected Fabric Loader directly. It quick-plays
+the configured single-player world, so no manual Fabric installation or world
+selection is required:
+
+```sh
+scripts/run_minecraft_dual_aer_growth.sh --no-keep-alive --iterations 4
+```
+
+The default world is `New World`; set `AARNN_MINECRAFT_WORLD` to quick-play a
+different existing world. The direct launcher writes client startup output to
+`~/.minecraft/aarnn-direct-launch.log`. This path still requires the compatible
+Fabric profile, Java runtime and AARNN mod/API jars reported by the detector.
+The ordinary `scripts/minecraft.py launch` command keeps its launcher-GUI path
+unless `--direct` is supplied.
+
 The common launcher accepts `--sim minecraft`; its convenience wrapper is
 `scripts/run_minecraft_sim.sh`. It checks prerequisites before starting brains.
 Use `--no-engine` on a host serving brains/bridge without a Minecraft client.
@@ -260,6 +276,11 @@ into AER1 events, negotiates 1 ms Rust steps, validates output addresses and
 preserves the legacy reply timestamp. This is not the future AARNN-AER/1
 peripheral protocol and does not certify production capture-clock mapping,
 EffectId fencing, durable admission or committed-output semantics.
+
+Java scene meshes use an opaque, depth-writing cutout layer. The white texture
+only supplies the entity render pipeline; catalogue colours remain vertex
+colours. This keeps clouds and terrain behind the hexapod while preserving
+double-sided schematic geometry.
 
 Content/transducer parity does not establish biological adequacy or identical
 physics/trajectories across simulators. Prior Unity toolchain absence, native

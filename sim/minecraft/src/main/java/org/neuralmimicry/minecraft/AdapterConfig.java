@@ -14,6 +14,10 @@ public final class AdapterConfig {
     public String endpoint="http://127.0.0.1:62620/api/aer/infer";
     public String tokenEnvironment="AARNN_MINECRAFT_TOKEN";
     public String contentDigest=Content.DATA.digest();
+    /** Opt-in launcher integration for the local dual-brain experiment. */
+    public boolean autoConnectOnStart=false;
+    public String autoConnectProfile="";
+    public boolean autoVisitProfile=false;
     public Map<String,Gateway.Binding> bindings=new LinkedHashMap<>();
     public static AdapterConfig read(Path path) throws java.io.IOException {
         if(!Files.exists(path)) {

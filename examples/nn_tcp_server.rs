@@ -41,6 +41,8 @@ use aarnn_rust::bridge::{IoMapping, PortKind, PortSpec, Quantizer};
 use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};
 #[cfg(feature = "ui")]
 use aarnn_rust::runner::Runner;
+#[cfg(feature = "ui")]
+use aarnn_rust::sim::{Learning, NeuronModel};
 
 // ---------------------------------------------------------------------------
 // Handshake frame (same schema as nn_uds_server)
@@ -85,6 +87,8 @@ struct ServerArgs {
     enable_ui: bool,
     aer_sensory_base: u32,
     aer_output_base: u32,
+    neuron_model: NeuronModel,
+    learning: Learning,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
@@ -99,6 +103,8 @@ fn parse_server_args() -> ServerArgs {
     let mut enable_ui = false;
     let mut aer_sensory_base = 4096u32;
     let mut aer_output_base = 16384u32;
+    let mut neuron_model = NeuronModel::Lif;
+    let mut learning = Learning::Stdp;
     let mut args_iterator = std::env::args().skip(1);
     while let Some(arg) = args_iterator.next() {
         match arg.as_str() {
@@ -142,6 +148,16 @@ fn parse_server_args() -> ServerArgs {
                     aer_output_base = value.parse().unwrap_or(aer_output_base);
                 }
             }
+            "--model" => {
+                if let Some(value) = args_iterator.next() {
+                    neuron_model = NeuronModel::from_str(&value).unwrap_or(neuron_model);
+                }
+            }
+            "--learning" => {
+                if let Some(value) = args_iterator.next() {
+                    learning = Learning::from_str(&value).unwrap_or(learning);
+                }
+            }
             "--ui" => enable_ui = true,
             _ => {}
         }
@@ -156,6 +172,8 @@ fn parse_server_args() -> ServerArgs {
         enable_ui,
         aer_sensory_base,
         aer_output_base,
+        neuron_model,
+        learning,
     }
 }
 
@@ -357,15 +375,20 @@ fn load_startup_model(server_args: &ServerArgs) -> (NetworkConfig, Option<String
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io"))]
-fn build_runner(base_config: &NetworkConfig, snapshot_json: Option<&str>) -> Runner {
+fn build_runner(
+    base_config: &NetworkConfig,
+    snapshot_json: Option<&str>,
+    neuron_model: NeuronModel,
+    learning: Learning,
+) -> Runner {
     let lif_params = LIFParams::default();
     let stdp_params = STDPParams::default();
     let mut runner = Runner::new(
         lif_params,
         stdp_params,
         base_config.clone(),
-        aarnn_rust::sim::NeuronModel::Lif,
-        aarnn_rust::sim::Learning::Stdp,
+        neuron_model,
+        learning,
     );
     if let Some(json) = snapshot_json {
         if let Err(err) = runner.import_network_json(json) {
@@ -755,13 +778,15 @@ fn main() -> io::Result<()> {
     let (startup_cfg, startup_snapshot_json, initial_s, initial_o) =
         load_startup_model(&server_args);
     eprintln!(
-        "[nn_tcp_server] addr={}, S={} O={} thr={} ui={} \
+        "[nn_tcp_server] addr={}, S={} O={} thr={} ui={} model={} learning={} \
          aer_s_base={} aer_o_base={} config={} network={}",
         server_args.tcp_addr,
         initial_s,
         initial_o,
         server_args.spike_threshold,
         server_args.enable_ui,
+        server_args.neuron_model.to_str(),
+        server_args.learning.to_str(),
         server_args.aer_sensory_base,
         server_args.aer_output_base,
         server_args.config_path.as_deref().unwrap_or("none"),
@@ -783,6 +808,8 @@ fn main() -> io::Result<()> {
     let shared_runner = Arc::new(Mutex::new(build_runner(
         &startup_cfg,
         startup_snapshot_json.as_deref(),
+        server_args.neuron_model,
+        server_args.learning,
     )));
 
     let listener = TcpListener::bind(&server_args.tcp_addr)?;

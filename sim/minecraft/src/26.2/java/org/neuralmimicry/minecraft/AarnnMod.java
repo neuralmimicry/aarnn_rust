@@ -13,6 +13,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.level.portal.TeleportTransition;
@@ -22,6 +23,11 @@ public final class AarnnMod implements ModInitializer {
     private final NaoChat naoChat=new NaoChat();
     private record Deferred(CommandSourceStack source,String action,String profile,int deadline) {}
     private final java.util.List<Deferred> pending=new java.util.ArrayList<>();
+    private final java.util.Map<MinecraftServer,AdapterConfig> automaticRuns=new java.util.WeakHashMap<>();
+    private final java.util.Set<MinecraftServer> automaticBuilds=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private final java.util.Set<MinecraftServer> automaticAttempts=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private final java.util.Set<MinecraftServer> automaticVisits=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger("aarnn");
     public static Identifier id(String path) { return Identifier.fromNamespaceAndPath("aarnn",path); }
     public static final EntityType<SceneEntity> HABITAT=Registry.register(BuiltInRegistries.ENTITY_TYPE,id("habitat"),
             EntityType.Builder.<SceneEntity>of(SceneEntity::new,MobCategory.MISC).sized(32,16)
@@ -50,11 +56,14 @@ public final class AarnnMod implements ModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(server-> {
             naoChat.close(server);
             pending.removeIf(command->command.source().getServer()==server);
+            automaticRuns.remove(server); automaticBuilds.remove(server);
+            automaticAttempts.remove(server); automaticVisits.remove(server);
             var level=server.getLevel(LabWorld.KEY);
             if(level!=null) LabWorld.scenes(level).forEach(e->e.stop("server stopping"));
         });
         ServerTickEvents.END_SERVER_TICK.register(server->{
             naoChat.tick(server);
+            autoStartConfiguredLab(server);
             var commands=new java.util.ArrayList<Deferred>();
             var iterator=pending.iterator();
             while(iterator.hasNext()) {
@@ -71,6 +80,45 @@ public final class AarnnMod implements ModInitializer {
             catch(Exception error) { org.slf4j.LoggerFactory.getLogger("aarnn").error("AARNN config invalid; inference remains disarmed"); }
         });
     }
+
+    /** Opt-in launcher path that makes a configured neural run visible in-game. */
+    private void autoStartConfiguredLab(MinecraftServer server) {
+        try {
+            var config=automaticRuns.get(server);
+            if(config==null) {
+                config=AdapterConfig.read(FabricLoader.getInstance().getConfigDir().resolve("aarnn.json"));
+                if(!config.autoConnectOnStart || config.autoConnectProfile==null
+                        || config.autoConnectProfile.isBlank()) return;
+                automaticRuns.put(server,config);
+            }
+            var level=LabWorld.level(server);
+            if(!LabWorld.ready(level)) return;
+            if(!automaticBuilds.contains(server)) {
+                LabWorld.build(level);
+                automaticBuilds.add(server);
+            }
+            var robot=LabWorld.robot(level,config.autoConnectProfile);
+            if(automaticAttempts.add(server)) {
+                try {
+                    robot.connect(config);
+                    LOG.info("AARNN auto-connected profile={} network={} endpoint=loopback", robot.profile().id(), robot.boundNetwork());
+                } catch(Exception error) {
+                    robot.stop("fault: automatic connection failed");
+                    LOG.warn("AARNN automatic connection failed: {}", safeMessage(error));
+                }
+            }
+            if(config.autoVisitProfile && !automaticVisits.contains(server)) {
+                var player=server.getPlayerList().getPlayers().stream().findFirst().orElse(null);
+                if(player!=null) {
+                    var c=LabWorld.centre(config.autoConnectProfile);
+                    player.teleport(new TeleportTransition(level,new Vec3(c[0],c[1]+1,c[2]+12),Vec3.ZERO,180,15,TeleportTransition.DO_NOTHING));
+                    automaticVisits.add(server);
+                }
+            }
+        } catch(Exception error) {
+            LOG.warn("AARNN automatic launcher setup pending: {}", safeMessage(error));
+        }
+    }
     private int run(CommandSourceStack source,String action,String profile) {
         try {
             var level=LabWorld.level(source.getServer());
@@ -84,9 +132,8 @@ public final class AarnnMod implements ModInitializer {
                 case "world" -> { LabWorld.build(level); source.sendSuccess(()->Component.literal("AARNN lab ready: six profiles. /aarnn visit celegans"),false); }
                 case "stop" -> LabWorld.scenes(level).forEach(e->e.stop("disarmed by operator"));
                 case "status" -> {
-                    source.sendSuccess(()->Component.literal("Content "+Content.DATA.digest()+" · reference sandbox"),false);
-                    for(var e:LabWorld.scenes(level)) if(!e.habitatEntity())
-                        source.sendSuccess(()->Component.literal(e.profile().id()+": "+e.profile().sensory()+" / "+e.profile().output()+" · "+e.status()+" · "+e.contentStatus()+" · "+e.telemetry()),false);
+                    var e=LabWorld.robot(level,"hexapod");
+                    source.sendSuccess(()->Component.literal("AARNN hexapod: "+e.status()+" · "+e.telemetry()),false);
                 }
                 case "review" -> {
                     int count=LabWorld.reviewContent(level);
