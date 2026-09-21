@@ -9,6 +9,12 @@ on:
     branches:
       - main
       - master
+    # Version Bump and Tag commits only Cargo metadata. They are already
+    # produced by the successful source build above; starting another full
+    # verify/package/container matrix would cancel or duplicate that build.
+    paths-ignore:
+      - Cargo.toml
+      - Cargo.lock
     # Version tags are publication metadata for the branch build. They must
     # not start a second full verify/package/container matrix for the same
     # commit.
