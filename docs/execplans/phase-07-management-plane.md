@@ -254,6 +254,17 @@ Implement resources, grants, bindings, capability reports, actuator lease record
   adapter until deployed executor registration and replicated authority are
   integrated.
 
+- [x] `2026-09-22 09:18Z` Authenticated remote runtime access was verified
+  against `https://aarnn.neuralmimicry.ai` for `pbisaacs`. The Rust
+  runtime client now resolves the owner returned by the authenticated
+  workspace list and includes `owner=system` for the shared System Neural
+  Network on detail, activity, topology, snapshot, control, import and delete
+  routes. The live CLI returned the running 2100-neuron, eight-node workspace.
+  Android now defaults to the HTTPS gateway, and `apps/ios/AarnnRemoteSession.swift`
+  provides the same cookie-backed login and owner-scoped workspace contract.
+- [!] The signed iOS application/Xcode project and production `management_v1`
+  quorum/security cutover remain separate packaging and authority gates.
+
 ## Validation and acceptance
 
 - `UT-FENCE-001`: stale term/token/generation fails at event, log, checkpoint and output boundaries.

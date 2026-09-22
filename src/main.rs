@@ -499,6 +499,11 @@ struct Cli {
     #[arg(long)]
     orchestrator_addr: Option<String>,
 
+    /// Bearer token for authenticated remote orchestrator gRPC control/status calls.
+    /// Falls back to NM_ORCHESTRATOR_BEARER_TOKEN when omitted.
+    #[arg(long)]
+    orchestrator_bearer_token: Option<String>,
+
     /// Network ID to send a control command to via the orchestrator.
     /// Optional only when the orchestrator currently exposes exactly one network.
     /// Example: --orchestrator-addr http://localhost:50051 \
@@ -1367,6 +1372,19 @@ fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
         })?;
 
     let rt = tokio::runtime::Runtime::new()?;
+    let bearer_token = args
+        .orchestrator_bearer_token
+        .clone()
+        .or_else(|| std::env::var("NM_ORCHESTRATOR_BEARER_TOKEN").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or(&value)
+                .to_owned()
+        });
     rt.block_on(async move {
         let endpoint = crate::management::grpc_client_endpoint(&addr)
             .map_err(|error| anyhow::anyhow!(error))?;
@@ -1376,8 +1394,17 @@ fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
         let network_id = match explicit_network_id {
             Some(id) => id,
             None => {
+                let mut request = Request::new(StatusRequest {});
+                if let Some(token) = bearer_token.as_deref() {
+                    request.metadata_mut().insert(
+                        "authorization",
+                        format!("Bearer {token}")
+                            .parse()
+                            .map_err(|error| anyhow::anyhow!("invalid orchestrator bearer token: {error}"))?,
+                    );
+                }
                 let status = client
-                    .get_system_status(Request::new(StatusRequest {}))
+                    .get_system_status(request)
                     .await
                     .map_err(|s| anyhow::anyhow!("gRPC status error: {}", s))?
                     .into_inner();
@@ -1416,8 +1443,17 @@ fn handle_cluster_control(args: &Cli) -> anyhow::Result<()> {
                 action: action as i32,
             })),
         };
+        let mut request = Request::new(req);
+        if let Some(token) = bearer_token.as_deref() {
+            request.metadata_mut().insert(
+                "authorization",
+                format!("Bearer {token}")
+                    .parse()
+                    .map_err(|error| anyhow::anyhow!("invalid orchestrator bearer token: {error}"))?,
+            );
+        }
         client
-            .update_network(Request::new(req))
+            .update_network(request)
             .await
             .map_err(|s| anyhow::anyhow!("gRPC error: {}", s))?;
         println!(

@@ -120,6 +120,32 @@ async fn connect_cluster_client(
         .max_encoding_message_size(grpc_max_msg_bytes))
 }
 
+fn authenticated_grpc_request<T>(message: T) -> Request<T> {
+    let mut request = Request::new(message);
+    let token = std::env::var("NM_ORCHESTRATOR_BEARER_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("NM_MANAGEMENT_BEARER_TOKEN").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or(&value)
+                .to_owned()
+        });
+    if let Some(token) = token {
+        attach_grpc_bearer(&mut request, &token);
+    }
+    request
+}
+
+fn attach_grpc_bearer<T>(request: &mut Request<T>, token: &str) {
+    if let Ok(value) = format!("Bearer {token}").parse() {
+        request.metadata_mut().insert("authorization", value);
+    }
+}
+
 fn grpc_status_to_http(status: &tonic::Status) -> StatusCode {
     match status.code() {
         tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
@@ -141,6 +167,11 @@ struct Args {
     /// Default orchestrator address (e.g., http://host:50051).
     #[arg(long)]
     orchestrator: Option<String>,
+
+    /// Bearer token forwarded to the configured remote orchestrator gRPC endpoint.
+    /// Falls back to NM_ORCHESTRATOR_BEARER_TOKEN.
+    #[arg(long)]
+    orchestrator_bearer_token: Option<String>,
 
     /// Network/brain ID to select when the control surface and simulator open.
     #[arg(long)]
@@ -707,6 +738,9 @@ fn apply_env_overrides(args: &mut Args) {
     if args.orchestrator.is_none() {
         args.orchestrator =
             env_opt("AARNN_ORCHESTRATOR_ADDR").or_else(|| env_opt("NM_ORCHESTRATOR_ADDR"));
+    }
+    if args.orchestrator_bearer_token.is_none() {
+        args.orchestrator_bearer_token = env_opt("NM_ORCHESTRATOR_BEARER_TOKEN");
     }
     if args.runtime_root.trim() == "data/runtime" {
         if let Some(runtime_root) =
@@ -1711,6 +1745,14 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
+    if let Some(token) = args
+        .orchestrator_bearer_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        unsafe { std::env::set_var("NM_ORCHESTRATOR_BEARER_TOKEN", token) };
+    }
     validate_production_web_auth(&args)?;
     let auth_mode_val = AuthMode::parse(&args.auth_mode);
     let central_auth = match args.central_auth_api_base.clone() {
@@ -5223,7 +5265,7 @@ async fn status(
     };
 
     let resp = match client
-        .get_system_status(Request::new(StatusRequest {}))
+        .get_system_status(authenticated_grpc_request(StatusRequest {}))
         .await
     {
         Ok(resp) => resp.into_inner(),
@@ -5452,7 +5494,7 @@ async fn snapshot(
         };
 
         match client
-            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+            .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
                 cut_epoch: 0,
             }))
@@ -5516,7 +5558,9 @@ async fn cluster_snapshot(
         }
     };
     match client
-        .get_cluster_network_snapshot(Request::new(ClusterNetworkSnapshotRequest { network_id }))
+        .get_cluster_network_snapshot(authenticated_grpc_request(ClusterNetworkSnapshotRequest {
+            network_id,
+        }))
         .await
     {
         Ok(response) => (StatusCode::OK, {
@@ -6215,7 +6259,7 @@ async fn activity(
         };
 
         match client
-            .get_network_activity(Request::new(NetworkActivityRequest {
+            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
                 network_id: network_id.clone(),
             }))
             .await
@@ -6310,7 +6354,7 @@ async fn update_network(
     });
 
     let resp = match client
-        .update_network(Request::new(NetworkUpdateRequest {
+        .update_network(authenticated_grpc_request(NetworkUpdateRequest {
             network_id: payload.network_id,
             update: Some(update),
         }))
@@ -6385,7 +6429,7 @@ async fn control_network(
     });
 
     let resp = match client
-        .update_network(Request::new(NetworkUpdateRequest {
+        .update_network(authenticated_grpc_request(NetworkUpdateRequest {
             network_id: payload.network_id,
             update: Some(update),
         }))
@@ -6653,7 +6697,7 @@ async fn export(
         };
 
         match client
-            .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+            .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
                 cut_epoch: 0,
             }))
@@ -6829,7 +6873,7 @@ async fn fetch_workspace_distribution_by_network(
     let target_addr = normalize_target_addr(orchestrator);
     let mut client = connect_cluster_client(target_addr).await.ok()?;
     let status = client
-        .get_system_status(Request::new(StatusRequest {}))
+        .get_system_status(authenticated_grpc_request(StatusRequest {}))
         .await
         .ok()?
         .into_inner();
@@ -6971,7 +7015,7 @@ async fn fetch_network_config(
             )
         })?;
     let snapshot_json = client
-        .get_network_snapshot(Request::new(NetworkSnapshotRequest {
+        .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
             network_id: network_id.to_string(),
             cut_epoch: 0,
         }))
@@ -7103,7 +7147,7 @@ async fn send_aer_batches(
     let (tx, rx) = mpsc::channel::<SpikeBatch>(batches.len().clamp(1, 256));
     let outbound = ReceiverStream::new(rx);
     let response = client
-        .stream_spikes(Request::new(outbound))
+        .stream_spikes(authenticated_grpc_request(outbound))
         .await
         .map_err(|e| {
             (
@@ -7161,7 +7205,7 @@ async fn send_aer_inference(
     // the sensory frame. Returning a later step avoids mislabelling unrelated
     // output that happened while the frame was still in transit.
     let injected_at_step = activity_client
-        .get_network_activity(Request::new(NetworkActivityRequest {
+        .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
             network_id: network_id.clone(),
         }))
         .await
@@ -7190,7 +7234,7 @@ async fn send_aer_inference(
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
         let activity = match activity_client
-            .get_network_activity(Request::new(NetworkActivityRequest {
+            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
                 network_id: network_id.clone(),
             }))
             .await
@@ -8226,7 +8270,7 @@ async fn resolve_network_addrs(
         })?;
 
     let status = client
-        .get_system_status(Request::new(StatusRequest {}))
+        .get_system_status(authenticated_grpc_request(StatusRequest {}))
         .await
         .map_err(|e| {
             (
@@ -8358,6 +8402,19 @@ async fn resolve_network_addr(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_grpc_requests_carry_bearer_credentials() {
+        let mut request = Request::new(StatusRequest {});
+        attach_grpc_bearer(&mut request, "remote-token");
+        assert_eq!(
+            request
+                .metadata()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer remote-token")
+        );
+    }
 
     #[test]
     fn session_cookie_security_is_explicitly_configurable() {

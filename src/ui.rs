@@ -1550,7 +1550,27 @@ enum RemoteStatusMsg {
 #[cfg(feature = "ui")]
 struct RemoteConnection {
     addr: String,
+    bearer_token: Option<String>,
     stop: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "ui")]
+fn authenticated_grpc_request<T>(
+    message: T,
+    bearer_token: Option<&str>,
+) -> Result<Request<T>, String> {
+    let mut request = Request::new(message);
+    let Some(token) = bearer_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(request);
+    };
+    let value = format!("Bearer {token}")
+        .parse()
+        .map_err(|error| format!("invalid orchestrator bearer token: {error}"))?;
+    request.metadata_mut().insert("authorization", value);
+    Ok(request)
 }
 
 #[cfg(feature = "ui")]
@@ -1891,6 +1911,7 @@ struct App {
     view_source: ViewSource,
     view_node_filter: Option<String>,
     remote_addr_input: String,
+    remote_bearer_input: String,
     remote_connections: Vec<RemoteConnection>,
     remote_status_tx: std::sync::mpsc::Sender<RemoteStatusMsg>,
     remote_status_rx: std::sync::mpsc::Receiver<RemoteStatusMsg>,
@@ -4522,6 +4543,8 @@ impl App {
             view_source: ViewSource::Standalone,
             view_node_filter: None,
             remote_addr_input: String::new(),
+            remote_bearer_input: std::env::var("NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN")
+                .unwrap_or_default(),
             remote_connections: Vec::new(),
             remote_status_tx,
             remote_status_rx,
@@ -4853,6 +4876,21 @@ impl App {
         let stop_clone = stop.clone();
         let tx = self.remote_status_tx.clone();
         let addr_clone = addr.clone();
+        let bearer_token = self
+            .remote_bearer_input
+            .trim()
+            .strip_prefix("Bearer ")
+            .or_else(|| self.remote_bearer_input.trim().strip_prefix("bearer "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                std::env::var("NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN")
+                    .ok()
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+            });
+        let request_token = bearer_token.clone();
         let rt = self.runtime_handle.clone();
         rt.spawn(async move {
             loop {
@@ -4861,32 +4899,39 @@ impl App {
                 }
                 match connect_cluster_client(addr_clone.clone()).await {
                     Ok(mut client) => {
-                        match client
-                            .get_system_status(Request::new(StatusRequest {}))
-                            .await
-                        {
-                            Ok(resp) => {
-                                let status = resp.into_inner();
-                                let nodes = status
-                                    .nodes
-                                    .into_iter()
-                                    .map(|n| (n.node_id.clone(), n))
-                                    .collect();
-                                let networks = status
-                                    .networks
-                                    .into_iter()
-                                    .map(|n| (n.network_id.clone(), n))
-                                    .collect();
-                                let _ = tx.send(RemoteStatusMsg::Update {
-                                    addr: addr_clone.clone(),
-                                    nodes,
-                                    networks,
-                                });
-                            }
-                            Err(e) => {
+                        let request =
+                            authenticated_grpc_request(StatusRequest {}, request_token.as_deref());
+                        match request {
+                            Ok(request) => match client.get_system_status(request).await {
+                                Ok(resp) => {
+                                    let status = resp.into_inner();
+                                    let nodes = status
+                                        .nodes
+                                        .into_iter()
+                                        .map(|n| (n.node_id.clone(), n))
+                                        .collect();
+                                    let networks = status
+                                        .networks
+                                        .into_iter()
+                                        .map(|n| (n.network_id.clone(), n))
+                                        .collect();
+                                    let _ = tx.send(RemoteStatusMsg::Update {
+                                        addr: addr_clone.clone(),
+                                        nodes,
+                                        networks,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(RemoteStatusMsg::Error {
+                                        addr: addr_clone.clone(),
+                                        error: format!("Status error: {}", e),
+                                    });
+                                }
+                            },
+                            Err(error) => {
                                 let _ = tx.send(RemoteStatusMsg::Error {
                                     addr: addr_clone.clone(),
-                                    error: format!("Status error: {}", e),
+                                    error,
                                 });
                             }
                         }
@@ -4901,8 +4946,11 @@ impl App {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         });
-        self.remote_connections
-            .push(RemoteConnection { addr, stop });
+        self.remote_connections.push(RemoteConnection {
+            addr,
+            bearer_token,
+            stop,
+        });
         true
     }
 
@@ -4927,6 +4975,19 @@ impl App {
             .into_iter()
             .filter(|endpoint| self.add_remote_orchestrator_connection(endpoint))
             .count()
+    }
+
+    fn remote_bearer_token_for(&self, addr: &str) -> Option<String> {
+        self.remote_connections
+            .iter()
+            .find(|connection| connection.addr == addr)
+            .and_then(|connection| connection.bearer_token.clone())
+            .or_else(|| {
+                std::env::var("NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN")
+                    .ok()
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+            })
     }
 
     fn apply_aarnn_bio_defaults(&mut self) {
@@ -10126,18 +10187,22 @@ impl eframe::App for App {
                                 let tx = self.cluster_snapshot_tx.clone();
                                 let net_id_clone = net_id.clone();
                                 let node_id_clone = node_id.clone();
+                                let bearer_token = self.remote_bearer_token_for(&addr);
                                 let rt = self.runtime_handle.clone();
                                 rt.spawn(async move {
                                     match connect_cluster_client(addr.clone()).await {
                                         Ok(mut client) => {
-                                            match client
-                                                .get_cluster_network_snapshot(Request::new(
-                                                    ClusterNetworkSnapshotRequest {
-                                                        network_id: net_id_clone.clone(),
-                                                    },
-                                                ))
-                                                .await
-                                            {
+                                            let request = authenticated_grpc_request(
+                                                ClusterNetworkSnapshotRequest {
+                                                    network_id: net_id_clone.clone(),
+                                                },
+                                                bearer_token.as_deref(),
+                                            );
+                                            match request {
+                                                Ok(request) => match client
+                                                    .get_cluster_network_snapshot(request)
+                                                    .await
+                                                {
                                                 Ok(resp) => {
                                                     match decode_cluster_snapshot_projection(
                                                         resp.into_inner(),
@@ -10172,6 +10237,14 @@ impl eframe::App for App {
                                                             "snapshot request failed: {}",
                                                             e
                                                         ),
+                                                    });
+                                                }
+                                                },
+                                                Err(error) => {
+                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                        network_id: net_id_clone.clone(),
+                                                        node_id: node_id_clone.clone(),
+                                                        error: format!("snapshot request authentication failed: {error}"),
                                                     });
                                                 }
                                             }
@@ -12209,6 +12282,15 @@ impl eframe::App for App {
                             let _ = self.add_remote_orchestrator_connection(&addr_input);
                         }
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Bearer token");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.remote_bearer_input)
+                                .password(true)
+                                .hint_text("optional; also NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN"),
+                        );
+                    });
+                    ui.label("The token is sent as gRPC Authorization metadata and kept only for this UI session.");
 
                     if self.remote_connections.is_empty() {
                         ui.label("(none)");

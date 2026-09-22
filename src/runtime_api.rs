@@ -140,6 +140,10 @@ fn url_encode_form_component(value: &str) -> String {
     encoded
 }
 
+fn url_encode_query_component(value: &str) -> String {
+    url_encode_form_component(value).replace('+', "%20")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct TokenLedgerEntry {
     pub tx_id: String,
@@ -263,6 +267,7 @@ pub struct BlockingRuntimeClient {
     runtime_user: Option<String>,
     runtime_password: Option<String>,
     runtime_access_token: Option<String>,
+    workspace_owners: HashMap<String, String>,
     auth_mode: RuntimeAuthMode,
     authenticated: bool,
 }
@@ -306,6 +311,7 @@ impl BlockingRuntimeClient {
             runtime_user,
             runtime_password,
             runtime_access_token,
+            workspace_owners: HashMap::new(),
             auth_mode: RuntimeAuthMode::Unknown,
             authenticated: false,
         })
@@ -327,7 +333,14 @@ impl BlockingRuntimeClient {
     }
 
     pub fn list_workspaces(&mut self) -> anyhow::Result<Vec<WorkspaceSummary>> {
-        self.request_json(Method::GET, "/api/runtime/workspaces")
+        let workspaces: Vec<WorkspaceSummary> =
+            self.request_json(Method::GET, "/api/runtime/workspaces")?;
+        self.workspace_owners = workspaces
+            .iter()
+            .filter(|workspace| !workspace.workspace_id.trim().is_empty())
+            .map(|workspace| (workspace.workspace_id.clone(), workspace.owner_id.clone()))
+            .collect();
+        Ok(workspaces)
     }
 
     pub fn create_workspace(
@@ -341,37 +354,29 @@ impl BlockingRuntimeClient {
         &mut self,
         workspace_id: &str,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
-        self.request_json(
-            Method::GET,
-            &format!("/api/runtime/workspaces/{}", workspace_id),
-        )
+        let path = self.workspace_path(workspace_id, "")?;
+        self.request_json(Method::GET, &path)
     }
 
     pub fn delete_workspace(&mut self, workspace_id: &str) -> anyhow::Result<serde_json::Value> {
-        self.request_json(
-            Method::DELETE,
-            &format!("/api/runtime/workspaces/{}", workspace_id),
-        )
+        let path = self.workspace_path(workspace_id, "")?;
+        self.request_json(Method::DELETE, &path)
     }
 
     pub fn workspace_snapshot(
         &mut self,
         workspace_id: &str,
     ) -> anyhow::Result<WorkspaceSnapshotResponse> {
-        self.request_json(
-            Method::GET,
-            &format!("/api/runtime/workspaces/{}/snapshot", workspace_id),
-        )
+        let path = self.workspace_path(workspace_id, "/snapshot")?;
+        self.request_json(Method::GET, &path)
     }
 
     pub fn workspace_activity(
         &mut self,
         workspace_id: &str,
     ) -> anyhow::Result<WorkspaceActivityResponse> {
-        self.request_json(
-            Method::GET,
-            &format!("/api/runtime/workspaces/{}/activity", workspace_id),
-        )
+        let path = self.workspace_path(workspace_id, "/activity")?;
+        self.request_json(Method::GET, &path)
     }
 
     pub fn workspace_topology(
@@ -380,13 +385,11 @@ impl BlockingRuntimeClient {
         max_nodes: usize,
         max_edges: usize,
     ) -> anyhow::Result<WorkspaceTopologyResponse> {
-        self.request_json(
-            Method::GET,
-            &format!(
-                "/api/runtime/workspaces/{}/topology?max_nodes={}&max_edges={}",
-                workspace_id, max_nodes, max_edges
-            ),
-        )
+        let path = self.workspace_path(
+            workspace_id,
+            &format!("/topology?max_nodes={}&max_edges={}", max_nodes, max_edges),
+        )?;
+        self.request_json(Method::GET, &path)
     }
 
     pub fn control_workspace(
@@ -394,11 +397,8 @@ impl BlockingRuntimeClient {
         workspace_id: &str,
         action: WorkspaceControlAction,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
-        self.request_json_with_body(
-            Method::POST,
-            &format!("/api/runtime/workspaces/{}/control", workspace_id),
-            &WorkspaceControlRequest { action },
-        )
+        let path = self.workspace_path(workspace_id, "/control")?;
+        self.request_json_with_body(Method::POST, &path, &WorkspaceControlRequest { action })
     }
 
     pub fn import_workspace(
@@ -406,11 +406,35 @@ impl BlockingRuntimeClient {
         workspace_id: &str,
         req: &WorkspaceImportRequest,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
-        self.request_json_with_body(
-            Method::POST,
-            &format!("/api/runtime/workspaces/{}/import", workspace_id),
-            req,
-        )
+        let path = self.workspace_path(workspace_id, "/import")?;
+        self.request_json_with_body(Method::POST, &path, req)
+    }
+
+    /// Resolve the owner of a workspace exposed by the authenticated runtime
+    /// session. Administrators can see the shared `system` workspace, but the
+    /// API deliberately requires that owner to be stated on every workspace
+    /// route so an ordinary user cannot guess into another tenant's data.
+    fn workspace_path(&mut self, workspace_id: &str, suffix: &str) -> anyhow::Result<String> {
+        if !self.workspace_owners.contains_key(workspace_id) {
+            let _ = self.list_workspaces()?;
+        }
+        let owner = self
+            .workspace_owners
+            .get(workspace_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("workspace '{}' was not found", workspace_id))?;
+        let path = format!("/api/runtime/workspaces/{}{}", workspace_id, suffix);
+        let current_user = self.runtime_user.as_deref().unwrap_or_default().trim();
+        if owner.trim().is_empty() || owner.eq_ignore_ascii_case(current_user) {
+            return Ok(path);
+        }
+        let separator = if path.contains('?') { '&' } else { '?' };
+        Ok(format!(
+            "{}{}owner={}",
+            path,
+            separator,
+            url_encode_query_component(&owner)
+        ))
     }
 
     fn request_json<T: DeserializeOwned>(

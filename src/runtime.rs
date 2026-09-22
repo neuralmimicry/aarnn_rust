@@ -636,8 +636,26 @@ impl ContinuumAutoscaler {
         let mut client = DistributedNeuromorphicClient::connect(normalize_grpc_addr(addr))
             .await
             .context("failed to connect to orchestrator for autoscaler telemetry")?;
+        let mut request = Request::new(StatusRequest {});
+        if let Some(token) = std::env::var("NM_ORCHESTRATOR_BEARER_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .strip_prefix("Bearer ")
+                    .or_else(|| value.strip_prefix("bearer "))
+                    .unwrap_or(&value)
+                    .to_owned()
+            })
+        {
+            let metadata = format!("Bearer {token}")
+                .parse()
+                .map_err(|error| anyhow::anyhow!("invalid orchestrator bearer token: {error}"))?;
+            request.metadata_mut().insert("authorization", metadata);
+        }
         let status = client
-            .get_system_status(Request::new(StatusRequest {}))
+            .get_system_status(request)
             .await
             .context("failed to query orchestrator status")?
             .into_inner();

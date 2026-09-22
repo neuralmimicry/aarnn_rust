@@ -192,7 +192,7 @@ private fun VideoPreviewDialog(mode: String, videoUri: String?, cameraIndex: Int
 private fun AarnnRemoteScreen() {
     val controller = remember { RemoteConnectionController() }
     val context = LocalContext.current
-    var endpoint by rememberSaveable { mutableStateOf("http://192.168.1.2") }
+    var endpoint by rememberSaveable { mutableStateOf("https://aarnn.neuralmimicry.ai") }
     var virtualHost by rememberSaveable { mutableStateOf("aarnn.neuralmimicry.ai") }
     var username by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }

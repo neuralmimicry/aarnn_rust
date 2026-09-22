@@ -113,6 +113,15 @@ The web UI and Rust UI connect to the orchestrator, not independently to every
 worker. Their status/node selectors therefore include native nodes as soon as
 those nodes join and disappear after stale membership is pruned.
 
+Authenticated remote orchestrators accept a bearer token on every gRPC status,
+snapshot, control, and AER request. Configure the web gateway with
+`NM_ORCHESTRATOR_BEARER_TOKEN`; the Rust CLI accepts
+`--orchestrator-bearer-token` or the same environment variable. The native Rust
+UI exposes a password-style Bearer token field in **Remote Orchestrators** and
+also reads `NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN`. Browser login remains the
+gateway session login, while Android and iOS use the gateway's `/api/login`
+session and never connect directly to port 50051.
+
 ## Continuum Autoscaler + Tracey Recruit
 
 When runtime autoscaling is enabled, AARNN sends a Tracey recruit block with every
