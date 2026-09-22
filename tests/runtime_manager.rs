@@ -21,7 +21,11 @@ async fn wait_for_workspace_step(
     // CI runs this readiness check after the full library suite.  Keep the
     // assertion bounded, but allow a loaded runner time to schedule the
     // runtime worker before treating a healthy startup as a failure.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // The x64 verification runner can be heavily loaded after the full test
+    // suite has built and exercised the morphology paths.  Workspace startup
+    // is still bounded, but the readiness assertion must not turn scheduler
+    // contention into a false persistence failure.
+    let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let detail = runtime
             .workspace_detail(user_id, workspace_id)
