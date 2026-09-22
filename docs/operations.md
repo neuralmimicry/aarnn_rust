@@ -122,6 +122,18 @@ also reads `NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN`. Browser login remains the
 gateway session login, while Android and iOS use the gateway's `/api/login`
 session and never connect directly to port 50051.
 
+To launch the native UI as a remote client, use `--ui-remote-only` with the
+remote endpoint and token. It implies `--ui`; do not add `--orchestrator` or
+`--node`, because those flags start a local distributed role and require a
+separate local management principal and state configuration:
+
+```bash
+target/debug/aarnn_rust \
+  --ui-remote-only \
+  --orchestrator-addr='http://aarnn-orchestrator.neuralmimicry.ai:50051' \
+  --orchestrator-bearer-token="$AARNN_ORCHESTRATOR_TOKEN"
+```
+
 ## Continuum Autoscaler + Tracey Recruit
 
 When runtime autoscaling is enabled, AARNN sends a Tracey recruit block with every

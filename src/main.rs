@@ -2529,6 +2529,24 @@ fn maybe_apply_openmpi_bootstrap(_args: &mut Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn normalize_ui_mode(args: &mut Cli) -> anyhow::Result<()> {
+    if !args.ui_remote_only {
+        return Ok(());
+    }
+
+    if args.orchestrator || args.node {
+        return Err(anyhow::anyhow!(
+            "--ui-remote-only is a remote client mode and cannot be combined with --orchestrator or --node; remove the local role flag"
+        ));
+    }
+
+    // The flag's documented meaning is to launch the UI without local
+    // simulation stepping. Treat it as the UI selector as well so callers do
+    // not need the redundant --ui flag.
+    args.ui = true;
+    Ok(())
+}
+
 /// Main entry point for the AARNN.
 ///
 /// This function coordinates configuration loading, network building, and simulation execution.
@@ -2543,6 +2561,8 @@ fn main() -> anyhow::Result<()> {
     // constructed. The result is ignored when another caller installed one.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Cli::parse();
+
+    normalize_ui_mode(&mut args)?;
 
     if args.video_file.is_some() || args.camera {
         if !args.ui {
@@ -2668,6 +2688,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     maybe_apply_openmpi_bootstrap(&mut args)?;
+    // OpenMPI may infer a local role after initial CLI normalization. Apply
+    // the remote-only guard again so an inferred orchestrator/node cannot
+    // accidentally start an authenticated local management service.
+    normalize_ui_mode(&mut args)?;
     unsafe {
         configure_openmp_runtime_env();
     }
@@ -2998,6 +3022,7 @@ fn main() -> anyhow::Result<()> {
             remote_workspace_binding,
             aer_cfg.clone(),
             configured_orchestrator_endpoints(&args),
+            args.orchestrator_bearer_token.clone(),
             rt.handle().clone(),
         );
     }
@@ -4921,8 +4946,34 @@ fn exposes_management_service(is_orchestrator: bool) -> bool {
 
 #[cfg(test)]
 mod management_startup_tests {
-    use super::{apply_io_contract, exposes_management_service, management_enabled_from_env};
+    use super::{
+        Cli, apply_io_contract, exposes_management_service, management_enabled_from_env,
+        normalize_ui_mode,
+    };
     use crate::config::NetworkConfig;
+    use clap::Parser;
+
+    #[test]
+    fn remote_only_mode_selects_ui_without_a_local_role() {
+        let mut args = Cli::try_parse_from(["aarnn_rust", "--ui-remote-only"]).unwrap();
+
+        normalize_ui_mode(&mut args).unwrap();
+
+        assert!(args.ui);
+        assert!(args.ui_remote_only);
+        assert!(!args.orchestrator);
+        assert!(!args.node);
+    }
+
+    #[test]
+    fn remote_only_mode_rejects_local_orchestrator_role() {
+        let mut args =
+            Cli::try_parse_from(["aarnn_rust", "--ui-remote-only", "--orchestrator"]).unwrap();
+
+        let error = normalize_ui_mode(&mut args).unwrap_err().to_string();
+
+        assert!(error.contains("cannot be combined with --orchestrator"));
+    }
 
     #[test]
     fn workers_do_not_expose_management_service() {

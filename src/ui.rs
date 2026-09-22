@@ -1109,6 +1109,7 @@ pub(crate) fn launch_ui(
     remote_workspace_binding: Option<RemoteWorkspaceBinding>,
     aer_cfg: Option<AerIoConfig>,
     startup_remote_orchestrators: Vec<String>,
+    remote_bearer_token: Option<String>,
     runtime_handle: tokio::runtime::Handle,
 ) -> anyhow::Result<()> {
     let ui_hidden = std::env::var("NM_UI_HIDDEN")
@@ -1155,6 +1156,7 @@ pub(crate) fn launch_ui(
                 remote_workspace_binding,
                 aer_cfg,
                 startup_remote_orchestrators,
+                remote_bearer_token,
                 runtime_handle,
             )))
         }),
@@ -2453,6 +2455,7 @@ impl App {
         remote_workspace_binding: Option<RemoteWorkspaceBinding>,
         aer_cfg: Option<AerIoConfig>,
         startup_remote_orchestrators: Vec<String>,
+        remote_bearer_token: Option<String>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
         // Claim the IPC endpoint before importing a potentially large snapshot or
@@ -4543,8 +4546,9 @@ impl App {
             view_source: ViewSource::Standalone,
             view_node_filter: None,
             remote_addr_input: String::new(),
-            remote_bearer_input: std::env::var("NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN")
-                .unwrap_or_default(),
+            remote_bearer_input: remote_bearer_token.unwrap_or_else(|| {
+                std::env::var("NM_UI_REMOTE_ORCHESTRATOR_BEARER_TOKEN").unwrap_or_default()
+            }),
             remote_connections: Vec::new(),
             remote_status_tx,
             remote_status_rx,

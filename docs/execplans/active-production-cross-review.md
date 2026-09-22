@@ -3074,6 +3074,18 @@ no native engine content hash is presented as biological or physics equivalence.
   was removed with `find` while preserving source, Git data, release output and
   QA evidence. Free space increased from approximately 2 GB to 176 GB.
 
+## Verification update — 2026-09-22: remote UI startup contract
+
+- [x] Diagnosed the remote UI startup failure: `--orchestrator` started a local
+  all-feature management service, but only the remote client bearer token was
+  supplied, so the local service failed closed with `management principal is
+  not configured`.
+- [x] `--ui-remote-only` now implies `--ui`, rejects local `--orchestrator` or
+  `--node` roles, and forwards `--orchestrator-bearer-token` into the remote UI
+  connection. OpenMPI-inferred local roles receive the same guard.
+- [x] Added the corrected remote UI command to `docs/operations.md`. Focused
+  UI-profile tests pass: 6 tests passed; formatting and whitespace checks pass.
+
 ## Verification update — 2026-09-22: ARM matrix cancellation and publication recovery
 
 - [x] Reviewed run `35714382288` with authenticated `gh` CLI and inspected its
