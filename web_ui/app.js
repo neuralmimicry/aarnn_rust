@@ -908,7 +908,10 @@ function runtimeUserLabel() {
   return authenticatedUsername() || "authenticated";
 }
 function clusterModeAllowed() {
-  return state.authMode === "none";
+  // An authenticated principal with AARNN observation access may inspect the
+  // configured shared System Neural Network. Workspace mode remains the
+  // fallback for principals that only have tenant-runtime access.
+  return state.authMode === "none" || hasAarnnObserveAccess();
 }
 function generatedManagementClient() {
   if (typeof window.AARNNGeneratedManagementClient !== "function") {

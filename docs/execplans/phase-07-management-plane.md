@@ -295,6 +295,31 @@ Reference policy and stale-term operation checks pass. Consensus, generated
 client consumption, live security/accessibility evidence and direct-worker
 closure remain open; Phase 8 governed I/O cannot be promoted before this gate.
 
+## Progress update — 2026-09-22
+
+- [x] Diagnosed the deployed AARNN browser defect: local login and central
+  access exchange both succeed, but authenticated browser sessions were forced
+  into the tenant workspace-only view while shared cluster endpoints returned
+  `403`. The configured `neuralmimicry-shared-snn` network therefore could not
+  be selected or observed.
+- [x] Changed the web client to permit cluster mode for an authenticated
+  principal with `aarnn:observe`, and removed the redundant handler-level
+  blanket denial. The existing API middleware continues to enforce observe,
+  use and control requirements for every shared-cluster route.
+- [~] Focused Rust verification is running before the ARM64 web UI image is
+  published and rolled out. Live browser acceptance will verify authenticated
+  `pbisaacs`, the default System Neural Network, a neuron count above 2,100,
+  and active growth.
+
+### Decision Log — WEB-SHARED-CLUSTER-AUTH
+
+- 2026-09-22 / `WEB-SHARED-CLUSTER-AUTH`: Authenticated users with explicit
+  AARNN service access may use the shared cluster browser surface. Server-side
+  route requirements remain authoritative; UI visibility is only a client
+  convenience. This restores the configured system-network observability
+  without granting access to users who lack the existing observe/use/control
+  grants.
+
 ## Progress update — 2026-08-31
 
 - [x] Added the missing web-gateway route for the generated browser management

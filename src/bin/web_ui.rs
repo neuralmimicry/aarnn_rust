@@ -3438,21 +3438,6 @@ async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     })
 }
 
-fn forbid_shared_cluster_api(state: &AppState) -> Option<axum::response::Response> {
-    if state.auth.mode == AuthMode::None {
-        return None;
-    }
-    Some(
-        (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "shared cluster-wide APIs are disabled for authenticated sessions; use /api/runtime/workspaces/*"
-            })),
-        )
-            .into_response(),
-    )
-}
-
 async fn me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -5205,9 +5190,6 @@ async fn status(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatusQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let addr = query
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -5425,9 +5407,6 @@ async fn snapshot(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -5508,9 +5487,6 @@ async fn cluster_snapshot(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let Some(network_id) = query.network_id else {
         return (
             StatusCode::BAD_REQUEST,
@@ -6194,9 +6170,6 @@ async fn activity(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ActivityQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -6298,9 +6271,6 @@ async fn update_network(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UpdateNetworkPayload>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let addr = payload
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -6363,9 +6333,6 @@ async fn control_network(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ControlNetworkPayload>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let addr = payload
         .addr
         .or_else(|| state.default_orchestrator.clone())
@@ -6641,9 +6608,6 @@ async fn export(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ExportQuery>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -7256,9 +7220,6 @@ async fn aer_infer(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AerInferencePayload>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     if payload.network_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -7954,9 +7915,6 @@ async fn aer_inject(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<AerInjectPayload>,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -8016,9 +7974,6 @@ async fn aer_stream(
     Query(query): Query<AerStreamQuery>,
     body: axum::body::Body,
 ) -> impl IntoResponse {
-    if let Some(resp) = forbid_shared_cluster_api(state.as_ref()) {
-        return resp;
-    }
     let orchestrator_addr =
         match resolve_addr_or_default(query.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -8454,6 +8409,22 @@ mod tests {
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/runtime/status"),
             Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/status"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/snapshot"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/activity"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/control_network"),
+            Some(AccessRequirement::aarnn_use())
         );
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/management/status"),
