@@ -3073,3 +3073,23 @@ no native engine content hash is presented as biological or physics equivalence.
   174 GB (including 69 GB incremental state and 101 GB test dependencies); it
   was removed with `find` while preserving source, Git data, release output and
   QA evidence. Free space increased from approximately 2 GB to 176 GB.
+
+## Verification update — 2026-09-22: ARM matrix cancellation and publication recovery
+
+- [x] Reviewed run `35714382288` with authenticated `gh` CLI and inspected its
+  job annotations. The six ARM container entries shared one concurrency group;
+  GitHub retains only one pending request per group, so later matrix entries
+  cancelled earlier pending entries even though `cancel-in-progress` was false.
+  The run consequently lacked immutable ARM tags and skipped its manifest jobs.
+- [~] The active recovery is running on `qc00`; its queued entries are being
+  recovered sequentially while the registry is checked for the nine required
+  immutable workload/variant tags.
+- [x] Changed package locks to be unique per runner architecture and Ubuntu
+  artifact, and container locks to be unique per workload and variant. The
+  physical `qc00` runner still serializes its own jobs, while GitHub retains
+  every matrix entry. Container job names now include the variant.
+- [x] Reduced manual dispatch to GitHub's ten-input limit by replacing the
+  separate `publish_release` boolean with `release_mode=none|release|draft|prerelease`.
+- [x] Ruby YAML parsing and `git diff --check` pass. Actionlint reports only
+  the two existing ShellCheck style warnings at the package and release shell
+  blocks; no changed workflow expression or event error remains.

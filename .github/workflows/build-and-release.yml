@@ -22,17 +22,12 @@ on:
       - '**'
   workflow_dispatch:
     inputs:
-      publish_release:
-        description: "Publish a GitHub release from the selected v* tag ref"
-        required: false
-        type: boolean
-        default: false
       release_mode:
-        description: "Publication mode for a manually selected release"
+        description: "Publication mode for a manually selected release (none skips release publication)"
         required: false
         type: choice
-        options: [release, draft, prerelease]
-        default: release
+        options: [none, release, draft, prerelease]
+        default: none
       build_id:
         description: "Immutable container build ID to promote (defaults to current SHA)"
         required: false
@@ -348,7 +343,7 @@ jobs:
         shell: bash
         env:
           MANUAL_PUBLISH_REQUEST: >-
-            ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || false }}
+            ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode != 'none' || false }}
         run: |
           set -euo pipefail
           cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -411,14 +406,12 @@ jobs:
     if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     # Package and container matrix jobs share the single ARM64 self-hosted
-    # runner. Their matching architecture concurrency groups serialize that
-    # shared host, while allowing hosted amd64 and self-hosted arm64 work to
-    # proceed independently.
+    # runner. The runner itself serializes execution; the lock is unique per
+    # Ubuntu artifact so GitHub retains every queued matrix entry instead of
+    # replacing the single pending entry for a shared architecture group.
     concurrency:
       group: >-
-        aarnn-build-runner-${{ matrix.runner_arch }}-${{
-          matrix.runner_arch == 'ARM64' && 'shared' || matrix.ubuntu_label
-        }}-${{ github.ref }}
+        aarnn-build-runner-${{ matrix.runner_arch }}-${{ matrix.ubuntu_label }}-${{ github.ref }}
       cancel-in-progress: false
     timeout-minutes: 120
     strategy:
@@ -827,24 +820,25 @@ jobs:
           gh release create "${args[@]}"
 
   container-build:
-    name: Container Build (${{ matrix.workload }}, ${{ matrix.arch }}, ${{ matrix.runner_arch }})
+    name: Container Build (${{ matrix.workload }}, ${{ matrix.variant }}, ${{ matrix.runner_arch }})
     if: github.event_name == 'push'
     needs:
       - verify
       - package-linux
-    # The container jobs consume the already-built release package. Their
-    # architecture locks protect the shared ARM host while allowing the hosted
-    # amd64 workload images to build concurrently.
+    # The container jobs consume the already-built release package. Each
+    # workload/variant has its own queue lock: qc00 still runs one job at a
+    # time, while GitHub retains all ARM variants and hosted amd64 jobs can
+    # proceed concurrently.
     concurrency:
       group: >-
-        aarnn-build-runner-${{ matrix.runner_arch }}-${{
-          matrix.runner_arch == 'ARM64' && 'shared' || matrix.workload
-        }}-${{ github.ref }}
+        aarnn-build-runner-${{ matrix.runner_arch }}-${{ matrix.workload }}-${{ matrix.variant }}-${{ github.ref }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
-      # The architecture concurrency group below limits each runner class to
-      # one active job, while this allows the X64 and ARM64 groups to overlap.
+      # Independent matrix entries may be dispatched concurrently. A physical
+      # self-hosted runner still accepts one job at a time, and the unique
+      # concurrency keys prevent GitHub's one-pending-request rule from
+      # cancelling sibling ARM variants.
       max-parallel: 9
       matrix:
         include:
