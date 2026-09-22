@@ -3105,3 +3105,25 @@ no native engine content hash is presented as biological or physics equivalence.
 - [x] Ruby YAML parsing and `git diff --check` pass. Actionlint reports only
   the two existing ShellCheck style warnings at the package and release shell
   blocks; no changed workflow expression or event error remains.
+
+## Verification update — 2026-09-22: remote UI status and CUDA diagnostic
+
+- [x] Reproduced the reported native UI state from the supplied screenshot.
+  The CUDA log reports an unsupported NVRTC PTX version, then successfully
+  loads the device-matched CUBIN fallback and selects CUDA; this is a warning
+  about the optional PTX path, not a CUDA backend initialization failure.
+- [x] Verified the remote endpoint from the workstation: DNS resolves
+  `aarnn-orchestrator.neuralmimicry.ai` to `192.168.1.61`, TCP/50051 accepts
+  connections, and the port returns the expected plaintext HTTP/2 gRPC
+  response. The live k3s pod is Ready and its logs show eight connected nodes
+  and active networks.
+- [x] Hardened the native UI remote status loop with the shared gRPC endpoint
+  and TLS policy, configurable connect/RPC deadlines, an immediate connecting
+  state, and explicit timeout/error rendering. The existing deployment timeout
+  variables are reused (`NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS` and
+  `NM_ORCHESTRATOR_RPC_TIMEOUT_MS`).
+- [x] `cargo check --features ui`, `cargo fmt --check`, and `git diff --check`
+  pass. A bounded hidden remote-UI launch reached the simulation startup path;
+  no `aarnn_cuda_*` temporary files were left in `/tmp`, and root filesystem
+  free space remained approximately 212 GB. The live endpoint was separately
+  verified as Ready with active networks and eight connected nodes.

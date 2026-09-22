@@ -494,8 +494,9 @@ impl Program {
                 let module = match ctx.load_module(ptx) {
                     Ok(module) => module,
                     Err(ptx_error) => {
+                        let ptx_error_text = format!("{ptx_error:?}");
                         crate::nm_log!(
-                            "[warn] CUDA PTX load failed: {ptx_error:?}; trying a device-matched CUBIN fallback."
+                            "[info] CUDA PTX is incompatible with the installed driver ({ptx_error_text}); trying a device-matched CUBIN fallback."
                         );
                         let cubin = compile_cuda_cubin(source, ctx).map_err(|error| {
                             crate::nm_log!(
@@ -503,8 +504,13 @@ impl Program {
                             );
                             ClError::from(ptx_error)
                         })?;
-                        ctx.load_module(Ptx::from_binary(cubin))
-                            .map_err(ClError::from)?
+                        let module = ctx
+                            .load_module(Ptx::from_binary(cubin))
+                            .map_err(ClError::from)?;
+                        crate::nm_log!(
+                            "[info] CUDA device-matched CUBIN fallback loaded successfully."
+                        );
+                        module
                     }
                 };
                 return Ok(Self {

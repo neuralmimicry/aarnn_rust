@@ -134,12 +134,32 @@ fn grpc_max_message_bytes() -> usize {
 }
 
 #[cfg(feature = "ui")]
+fn remote_orchestrator_timeout(var: &str, default: Duration) -> Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .filter(|duration| !duration.is_zero())
+        .unwrap_or(default)
+}
+
 async fn connect_cluster_client(
     addr: String,
-) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, tonic::transport::Error> {
+) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
     let grpc_max_msg_bytes = grpc_max_message_bytes();
-    let client = DistributedNeuromorphicClient::connect(addr).await?;
-    Ok(client
+    let connect_timeout =
+        remote_orchestrator_timeout("NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS", Duration::from_secs(5));
+    let rpc_timeout =
+        remote_orchestrator_timeout("NM_ORCHESTRATOR_RPC_TIMEOUT_MS", Duration::from_secs(8));
+    let endpoint = crate::management::grpc_client_endpoint(&addr)
+        .map_err(|error| format!("invalid gRPC endpoint: {error}"))?
+        .connect_timeout(connect_timeout)
+        .timeout(rpc_timeout);
+    let channel = endpoint
+        .connect()
+        .await
+        .map_err(|error| format!("connect failed: {error}"))?;
+    Ok(DistributedNeuromorphicClient::new(channel)
         .max_decoding_message_size(grpc_max_msg_bytes)
         .max_encoding_message_size(grpc_max_msg_bytes))
 }
@@ -1534,6 +1554,7 @@ struct RemoteStatusSnapshot {
     networks: HashMap<String, NetworkStatus>,
     last_error: Option<String>,
     last_update: std::time::Instant,
+    connected: bool,
 }
 
 #[cfg(feature = "ui")]
@@ -4896,6 +4917,16 @@ impl App {
             });
         let request_token = bearer_token.clone();
         let rt = self.runtime_handle.clone();
+        self.remote_statuses.insert(
+            addr.clone(),
+            RemoteStatusSnapshot {
+                nodes: HashMap::new(),
+                networks: HashMap::new(),
+                last_error: None,
+                last_update: std::time::Instant::now(),
+                connected: false,
+            },
+        );
         rt.spawn(async move {
             loop {
                 if stop_clone.load(Ordering::SeqCst) {
@@ -4906,32 +4937,52 @@ impl App {
                         let request =
                             authenticated_grpc_request(StatusRequest {}, request_token.as_deref());
                         match request {
-                            Ok(request) => match client.get_system_status(request).await {
-                                Ok(resp) => {
-                                    let status = resp.into_inner();
-                                    let nodes = status
-                                        .nodes
-                                        .into_iter()
-                                        .map(|n| (n.node_id.clone(), n))
-                                        .collect();
-                                    let networks = status
-                                        .networks
-                                        .into_iter()
-                                        .map(|n| (n.network_id.clone(), n))
-                                        .collect();
-                                    let _ = tx.send(RemoteStatusMsg::Update {
-                                        addr: addr_clone.clone(),
-                                        nodes,
-                                        networks,
-                                    });
+                            Ok(request) => {
+                                let rpc_timeout = remote_orchestrator_timeout(
+                                    "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
+                                    Duration::from_secs(8),
+                                );
+                                match tokio::time::timeout(
+                                    rpc_timeout,
+                                    client.get_system_status(request),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(resp)) => {
+                                        let status = resp.into_inner();
+                                        let nodes = status
+                                            .nodes
+                                            .into_iter()
+                                            .map(|n| (n.node_id.clone(), n))
+                                            .collect();
+                                        let networks = status
+                                            .networks
+                                            .into_iter()
+                                            .map(|n| (n.network_id.clone(), n))
+                                            .collect();
+                                        let _ = tx.send(RemoteStatusMsg::Update {
+                                            addr: addr_clone.clone(),
+                                            nodes,
+                                            networks,
+                                        });
+                                    }
+                                    Ok(Err(e)) => {
+                                        let _ = tx.send(RemoteStatusMsg::Error {
+                                            addr: addr_clone.clone(),
+                                            error: format!("Status error: {}", e),
+                                        });
+                                    }
+                                    Err(_) => {
+                                        let _ = tx.send(RemoteStatusMsg::Error {
+                                            addr: addr_clone.clone(),
+                                            error: format!(
+                                                "Status request timed out after {:?}",
+                                                rpc_timeout
+                                            ),
+                                        });
+                                    }
                                 }
-                                Err(e) => {
-                                    let _ = tx.send(RemoteStatusMsg::Error {
-                                        addr: addr_clone.clone(),
-                                        error: format!("Status error: {}", e),
-                                    });
-                                }
-                            },
+                            }
                             Err(error) => {
                                 let _ = tx.send(RemoteStatusMsg::Error {
                                     addr: addr_clone.clone(),
@@ -10353,6 +10404,7 @@ impl eframe::App for App {
                                 networks,
                                 last_error: None,
                                 last_update: std::time::Instant::now(),
+                                connected: true,
                             },
                         );
                     }
@@ -10365,8 +10417,10 @@ impl eframe::App for App {
                                     networks: HashMap::new(),
                                     last_error: None,
                                     last_update: std::time::Instant::now(),
+                                    connected: false,
                                 });
                         entry.last_error = Some(error);
+                        entry.connected = false;
                         entry.last_update = std::time::Instant::now();
                     }
                 }
@@ -12310,16 +12364,21 @@ impl eframe::App for App {
                             }
                         });
                         if let Some(snapshot) = self.remote_statuses.get(&conn.addr) {
-                            ui.label(format!("Nodes: {}", snapshot.nodes.len()));
-                            ui.label(format!("Networks: {}", snapshot.networks.len()));
                             if let Some(err) = &snapshot.last_error {
                                 ui.colored_label(egui::Color32::LIGHT_RED, err);
+                            } else if !snapshot.connected {
+                                ui.label(format!(
+                                    "Connecting... ({}s)",
+                                    snapshot.last_update.elapsed().as_secs()
+                                ));
                             } else {
+                                ui.label(format!("Nodes: {}", snapshot.nodes.len()));
+                                ui.label(format!("Networks: {}", snapshot.networks.len()));
                                 let age = snapshot.last_update.elapsed().as_secs();
                                 ui.label(format!("Last update: {}s ago", age));
                             }
                         } else {
-                            ui.label("Status: pending...");
+                            ui.label("Connecting...");
                         }
                     }
                     if let Some(idx) = remove_idx {
