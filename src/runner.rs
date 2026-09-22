@@ -6313,6 +6313,19 @@ impl Runner {
         if let Some(runtime_state) = snapshot_runtime_state {
             self.apply_snapshot_runtime_state(runtime_state);
         }
+        #[cfg(feature = "growth3d")]
+        if self.net.growth_bootstrap_target_neurons > 0 {
+            let target = self.net.growth_bootstrap_target_neurons;
+            let before = self.total_neurons();
+            self.grow_to_neuron_target(target);
+            self.net.growth_bootstrap_target_neurons = 0;
+            nm_log!(
+                "[growth] imported snapshot bootstrap: {} -> {} neurons (target={})",
+                before,
+                self.total_neurons(),
+                target
+            );
+        }
         // Presence counters are structural persisted state. Restore them only
         // after the final topology/state dimensions exist; restoring before
         // reset made an additional import lose counters and broke replay
@@ -18285,6 +18298,38 @@ impl Runner {
         } else {
             hidden_total
         }
+    }
+
+    /// Add mature neurons to an imported topology until it reaches `target`.
+    ///
+    /// Normal developmental growth intentionally uses provisional early cells.
+    /// A production snapshot bootstrap has a different requirement: it must
+    /// make a known-size network available atomically while retaining all of
+    /// the imported weights and topology.  Grow the terminal hidden layer so
+    /// the existing network remains the parent structure for every new cell.
+    #[cfg(feature = "growth3d")]
+    pub fn grow_to_neuron_target(&mut self, target: usize) -> usize {
+        if target <= self.total_neurons() {
+            return self.total_neurons();
+        }
+        let layer = self.net.num_hidden_layers.saturating_sub(1);
+        if layer >= self.net.num_hidden_layers || self.layer_size(layer) == 0 {
+            return self.total_neurons();
+        }
+
+        let mut parent = 0usize;
+        while self.total_neurons() < target {
+            let before = self.total_neurons();
+            let parent_count = self.layer_size(layer).max(1);
+            self.spawn_neuron_in_layer(layer, parent % parent_count);
+            if self.total_neurons() <= before {
+                break;
+            }
+            parent = parent.saturating_add(1);
+        }
+        self.ensure_state_dimensions();
+        self.sync_presence_sizes();
+        self.total_neurons()
     }
 
     #[allow(dead_code)]

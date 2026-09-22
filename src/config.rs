@@ -2948,6 +2948,11 @@ pub struct NetworkConfig {
     pub development_pruning_interval_ms: f32,
     /// Minimum interval (ms) between sensory/output interface formation passes.
     pub development_io_formation_interval_ms: f32,
+    /// One-shot target used when importing a persisted snapshot. If non-zero,
+    /// the runner grows the imported topology to at least this many biological
+    /// neurons before the snapshot is made live, then clears the request.
+    #[serde(default)]
+    pub growth_bootstrap_target_neurons: usize,
     /// Capacity limit for the number of connections a sensory neuron can maintain.
     pub max_sensory_connections: usize,
     /// Capacity limit for the number of connections an output neuron can receive.
@@ -3144,6 +3149,7 @@ impl Default for NetworkConfig {
             neuron_removal_delay_ms: 180000.0,
             development_pruning_interval_ms: 50.0,
             development_io_formation_interval_ms: 500.0,
+            growth_bootstrap_target_neurons: 0,
             max_sensory_connections: 4,
             max_output_connections: 4,
             component_pruning_threshold: 0.01,

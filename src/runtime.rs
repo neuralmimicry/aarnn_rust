@@ -163,6 +163,53 @@ fn read_dir_paths(root: &Path, label: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn cleanup_stale_atomic_temps(root: &Path, max_age: Duration) -> anyhow::Result<usize> {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(max_age)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let mut removed = 0usize;
+    for entry in std::fs::read_dir(root)
+        .with_context(|| format!("failed to scan atomic temp dir '{}'", root.display()))?
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                nm_err!(
+                    "[warn] failed reading atomic temp dir '{}': {}",
+                    root.display(),
+                    err
+                );
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.contains(".tmp-") {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                nm_err!(
+                    "[warn] failed stating atomic temp '{}': {}",
+                    entry.path().display(),
+                    err
+                );
+                continue;
+            }
+        };
+        if metadata
+            .modified()
+            .ok()
+            .is_some_and(|modified| modified < cutoff)
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed = removed.saturating_add(1);
+        }
+    }
+    Ok(removed)
+}
+
 fn file_modified_ms(path: &Path) -> anyhow::Result<Option<u64>> {
     if !path.exists() {
         return Ok(None);
@@ -2129,6 +2176,19 @@ impl RuntimeManager {
                     continue;
                 }
             } {
+                match cleanup_stale_atomic_temps(&workspace_dir, Duration::from_secs(600)) {
+                    Ok(removed) if removed > 0 => nm_log!(
+                        "[runtime] removed {} stale atomic temp files from '{}'",
+                        removed,
+                        workspace_dir.display()
+                    ),
+                    Ok(_) => {}
+                    Err(err) => nm_err!(
+                        "[warn] failed cleaning stale atomic temps in '{}': {}",
+                        workspace_dir.display(),
+                        err
+                    ),
+                }
                 let manifest_path = workspace_dir.join(MANIFEST_FILE);
                 if !manifest_path.exists() {
                     continue;
