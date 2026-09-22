@@ -488,9 +488,13 @@
       <button class="btn small" id="graph-add-probe" type="button">Add Probe</button>
     </div>
 
-    <script src="/service-access.js"></script>
-    <script src="/management-client.generated.js"></script>
-    <script src="/aer-transport.js"></script>
-    <script src="/app.js"></script>
+    <!-- Keep the browser on the same frontend revision as the server.  The
+         query string is changed with each published UI revision so a browser
+         that previously cached an older bundle cannot remain in workspace
+         mode after the shared-network access rollout. -->
+    <script src="/service-access.js?v=af91fee"></script>
+    <script src="/management-client.generated.js?v=af91fee"></script>
+    <script src="/aer-transport.js?v=af91fee"></script>
+    <script src="/app.js?v=af91fee"></script>
   </body>
 </html>
