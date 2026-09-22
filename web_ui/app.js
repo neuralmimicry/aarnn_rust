@@ -2574,6 +2574,19 @@ async function loadRuntimeStatus() {
       state.runtime.activeWorkspace = "";
       saveActiveWorkspace();
     }
+    // Authenticated users with AARNN observation access should open on the
+    // configured shared System Neural Network. Keep the cluster view
+    // available as an explicit selector option, but do not make an empty
+    // cluster view the default when the runtime exposes the shared workspace.
+    if (!state.runtime.activeWorkspace && bootstrapDefaultNetwork) {
+      const defaultWorkspace = state.runtime.workspaces.find(workspace =>
+        (workspace.network_id || workspace.workspace_id) === bootstrapDefaultNetwork
+      );
+      if (defaultWorkspace) {
+        state.runtime.activeWorkspace = workspaceSelectionKeyFor(defaultWorkspace);
+        saveActiveWorkspace();
+      }
+    }
     if (!clusterModeAllowed()) {
       if (!state.runtime.activeWorkspace) {
         var _state$runtime$worksp;
