@@ -163,6 +163,8 @@ fn webots_launcher_uses_explicit_profile_with_complete_graph_opt_in() {
     assert!(source.contains("--execution-scope cluster"));
     assert!(source.contains("--execution-desired-shards \"$NODE_COUNT\""));
     assert!(source.contains("registered node IDs:"));
+    assert!(source.contains("node_cmd+=(--headless-ipc)"));
+    assert!(source.contains("elif [ \"$NODE_UI\" -eq 1 ]; then\n            node_cmd+=(--ui)"));
 
     let multi_robot_source = fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -222,6 +224,7 @@ fn simulator_launcher_forwards_node_count_to_the_distributed_webots_backend() {
     assert!(source.contains("--node <n>"));
     assert!(source.contains("--node|--nodes"));
     assert!(source.contains("WEBOTS_PASSTHROUGH_ARGS+=(--nodes \"$CLUSTER_NODE_COUNT\")"));
+    assert!(source.contains("WEBOTS_PASSTHROUGH_ARGS+=(--no-build)"));
     assert!(source.contains("start_distributed_tcp_servers"));
     assert!(source.contains("grep -F 'registered node IDs:'"));
     assert!(source.contains("# Keep the orchestrator dashboard visible for simulator runs."));
@@ -266,6 +269,82 @@ fn simulator_launcher_forwards_node_count_to_the_distributed_webots_backend() {
     .expect("scripts/run_unity_sim.sh must be present");
     assert!(unity_source.contains("--node <count>"));
     assert!(unity_source.contains("distributed cluster runtime"));
+}
+
+#[test]
+fn gated_simulator_frontends_arm_after_their_environment_handshake() {
+    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/run_sim.sh"))
+        .expect("scripts/run_sim.sh must be present");
+    assert!(source.contains("source \"$ROOT_DIR/scripts/webots_runtime_profile.sh\""));
+    assert!(source.contains("-u NM_GRPC_TLS_CERT"));
+    assert!(source.contains("webots_profile_has_feature \"$runtime_features\" management_v1"));
+
+    let minecraft = source
+        .find("minecraft_bridge_pid=\"$!\"")
+        .expect("Minecraft bridge startup must be present");
+    let minecraft_start = &source[minecraft..];
+    let minecraft_wait = minecraft_start
+        .find("wait-bridge --pid \"$minecraft_bridge_pid\"")
+        .expect("Minecraft must wait for the companion bridge");
+    let minecraft_arm = minecraft_start
+        .find("arm_distributed_networks")
+        .expect("Minecraft distributed mode must arm after its bridge is ready");
+    let minecraft_launch = minecraft_start
+        .find("if [ \"$minecraft_edition\" = bedrock ]")
+        .expect("Minecraft engine launch must follow bridge setup");
+    assert!(minecraft_wait < minecraft_arm && minecraft_arm < minecraft_launch);
+
+    let unity = source
+        .find("  unity)\n")
+        .expect("Unity dispatch must be present");
+    let unity_start = &source[unity..];
+    let unity_wait = unity_start
+        .find("wait_for_environment_bridges_ready")
+        .expect("Unity distributed mode must wait for its bridge handshake");
+    let unity_arm = unity_start
+        .find("arm_distributed_networks")
+        .expect("Unity distributed mode must arm after its bridge handshake");
+    let unity_serve = unity_start
+        .find("serve_and_wait")
+        .expect("Unity must retain its editor-driven wait path");
+    assert!(unity_wait < unity_arm && unity_arm < unity_serve);
+
+    let unreal = source
+        .find("  unreal)\n")
+        .expect("Unreal dispatch must be present");
+    let unreal_start = &source[unreal..];
+    let unreal_wait = unreal_start
+        .find("wait_for_environment_bridges_ready")
+        .expect("Unreal distributed mode must wait for its bridge handshake");
+    let unreal_arm = unreal_start
+        .find("arm_distributed_networks")
+        .expect("Unreal distributed mode must arm after its bridge handshake");
+    assert!(unreal_wait < unreal_arm);
+}
+
+#[test]
+fn webgl_launcher_uses_the_same_explicit_local_runtime_profile() {
+    let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/run_sim.sh"))
+        .expect("scripts/run_sim.sh must be present");
+    let launch = source
+        .split("launch_webgl() {")
+        .nth(1)
+        .expect("WebGL launcher must be present");
+    assert!(launch.contains("WEBGL_RUNTIME_FEATURES"));
+    assert!(launch.contains("webots_cargo_profile_args \"$WEBGL_RUNTIME_FEATURES\""));
+    assert!(
+        launch.contains(
+            "cargo build --release --locked \"${webgl_runtime_args[@]}\" --bin aarnn_rust"
+        )
+    );
+    assert!(launch.contains(
+        "cargo build --release --locked --no-default-features --features engine_runtime --bin web_ui"
+    ));
+    assert!(launch.contains("export NM_WEBOTS_RUNTIME_FEATURES=\"$WEBGL_RUNTIME_FEATURES\""));
+    assert!(launch.contains("web_ui_env=("));
+    assert!(launch.contains("-u NM_GRPC_TLS_CERT"));
+    assert!(launch.contains("--no-webots --no-diag --no-orchestrator-ui"));
+    assert!(launch.contains("--node-ui-hidden"));
 }
 
 #[test]

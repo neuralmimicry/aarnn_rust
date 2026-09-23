@@ -11,7 +11,7 @@ const cases = content.profiles.map(p => {
     profile:p.id, motion:world.motion(p,outputs), outputs,
     frames:poses.map(([x,y,heading]) => ({x,y,heading,values:world.sense(p,h,{x,z:y,heading,actuators:outputs},history)})),
     meshes:[false,true].map(anatomy => {
-      const mesh = world.geometry(p.parts,anatomy,outputs,p.kind,p.muscle_channels);
+      const mesh = world.geometry(p.parts,anatomy,outputs,p.kind,p.muscle_channels,p.output_names);
       const indices = Array.from({length:1000},(_,i)=>Math.floor(i*(mesh.length-1)/999));
       return {anatomy,count:mesh.length,indices,values:indices.map(i=>mesh[i])};
     })

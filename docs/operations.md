@@ -134,6 +134,18 @@ target/debug/aarnn_rust \
   --orchestrator-bearer-token="$AARNN_ORCHESTRATOR_TOKEN"
 ```
 
+From a source checkout, the equivalent command is:
+
+```bash
+cargo run --bin aarnn_rust --features ui -- \
+  --ui-remote-only \
+  --orchestrator-addr='http://aarnn-orchestrator.neuralmimicry.ai:50051' \
+  --orchestrator-bearer-token="$AARNN_ORCHESTRATOR_TOKEN"
+```
+
+The desktop `ui` feature includes `growth3d`, which is required for displaying
+the biological topology supplied by the remote network.
+
 ## Continuum Autoscaler + Tracey Recruit
 
 When runtime autoscaling is enabled, AARNN sends a Tracey recruit block with every

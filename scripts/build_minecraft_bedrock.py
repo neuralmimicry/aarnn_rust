@@ -47,9 +47,41 @@ def slices(shape):
     return result
 
 
+def hexapod_joint_name(side,leg,depth):
+    return f'aarnn_joint_{side}_{leg}_{depth}'
+
+
+def hexapod_joint_specs(profile):
+    if profile['kind']!='hexapod':return []
+    result=[]
+    for side in (-1,1):
+        for leg in range(3):
+            body_x=.27-.27*leg
+            pivots=((body_x,side*.23,.01),(body_x,side*.44,-.07),(body_x,side*.57,-.17))
+            for depth,pivot in enumerate(pivots):
+                parent=hexapod_joint_name(side,leg,depth-1) if depth else None
+                result.append((hexapod_joint_name(side,leg,depth),pivot,parent))
+    return result
+
+
+def hexapod_endpoint_names(profile):
+    if profile['kind']!='hexapod':return []
+    names=[]
+    for side in ('l','r'):
+        for leg in ('f','m','r'):
+            for joint in ('coxa','femur','tibia'):names.append(f'{side}{leg}_{joint}')
+    return names
+
+
 def geometry(profile,objects,colours,anatomy=False,habitat=False):
     scale=256*(1 if habitat else profile['body_length'])
     bones=[]
+    if not habitat:
+        for name,pivot,parent in hexapod_joint_specs(profile):
+            converted=[pivot[0]*scale,pivot[2]*scale,-pivot[1]*scale]
+            bone=dict(name=name,pivot=converted,rotation=[0,0,0],cubes=[])
+            if parent:bone['parent']=parent
+            bones.append(bone)
     for obj in objects:
         if obj['material']=='water' or obj['internal'] and not anatomy:continue
         if anatomy and ((profile['kind']=='worm' and obj['id'].startswith('cuticle_')) or (profile['kind']=='fish' and obj['id'].startswith('myomere_'))):continue
@@ -64,7 +96,14 @@ def geometry(profile,objects,colours,anatomy=False,habitat=False):
             cubes.append(dict(origin=[round(position[i]-converted_size[i]/2,6) for i in range(3)],
                               size=[round(v,6) for v in converted_size],
                               uv={face:dict(uv=uv,uv_size=[1,1]) for face in ('north','south','east','west','up','down')}))
-        bones.append(dict(name=obj['id'].replace('.','_'),pivot=centre,rotation=[0,math.degrees(obj['yaw']),0],cubes=cubes))
+        bone=dict(name=obj['id'].replace('.','_'),pivot=centre,rotation=[0,math.degrees(obj['yaw']),0],cubes=cubes)
+        if not habitat and profile['kind']=='hexapod' and obj['anchor'].startswith('leg_'):
+            side,leg=obj['anchor'].split('_')[1:]
+            if obj['id'].startswith('foot_'):depth=2
+            elif obj['id'].startswith(('servo_','link_')):depth=int(obj['id'].rsplit('_',1)[1])
+            else:depth=-1
+            if 0<=depth<=2:bone['parent']=hexapod_joint_name(int(side),int(leg),depth)
+        bones.append(bone)
     name=profile['id']+('_habitat' if habitat else '_anatomy' if anatomy else '')
     return {'format_version':'1.12.0','minecraft:geometry':[dict(description=dict(identifier='geometry.aarnn.'+name,
         texture_width=64,texture_height=64,visible_bounds_width=40,visible_bounds_height=24,visible_bounds_offset=[0,8,0]),bones=bones)]}
@@ -90,7 +129,23 @@ def generate(directory):
             if not habitat:write('resource/models/entity/'+name+'_anatomy.geo.json',geometry(p,p['parts'],colours,anatomy=True))
             description=dict(identifier='aarnn:'+name,materials={'default':'entity_alphatest'},textures={'default':'textures/aarnn/palette'},geometry=geom,render_controllers=['controller.render.aarnn_habitat' if habitat else 'controller.render.aarnn_robot'])
             properties={'aarnn:anatomy':dict(type='bool',default=False,client_sync=True)}
-            if not habitat and p['kind'] in ('worm','fish'):
+            if not habitat and p['kind']=='hexapod':
+                endpoint_names=hexapod_endpoint_names(p)
+                if endpoint_names!=[n.split('_',3)[3] for n in p['output_names']]:raise ValueError('Hexapod output catalogue is not canonical')
+                properties.update({'aarnn:joint_'+joint:dict(type='float',range=[0.0,1.0],default=0.0,client_sync=True) for joint in endpoint_names})
+                animation='animation.aarnn.'+name+'.joints'
+                description.update(animations={'joints':animation},scripts={'animate':['joints']})
+                animated={}
+                for depth,joint in enumerate(('coxa','femur','tibia')):
+                    axis=[0,1,0] if depth==0 else [1,0,0]
+                    for side in (-1,1):
+                        for leg in range(3):
+                            suffix=('l' if side>0 else 'r')+('f' if leg==0 else 'm' if leg==1 else 'r')+'_'+joint
+                            expression="query.property('aarnn:joint_"+suffix+"') * 40.0"
+                            rotation=[expression if axis[i] else 0 for i in range(3)]
+                            animated[hexapod_joint_name(side,leg,depth)]=dict(rotation=rotation)
+                write('resource/animations/'+name+'.animation.json',{'format_version':'1.8.0','animations':{animation:dict(loop=True,bones=animated)}})
+            elif not habitat and p['kind'] in ('worm','fish'):
                 count=24 if p['kind']=='worm' else 12
                 properties.update({'aarnn:bend_'+str(i):dict(type='float',range=[-1.0,1.0],default=0.0,client_sync=True) for i in range(count)})
                 animation='animation.aarnn.'+name+'.activity'

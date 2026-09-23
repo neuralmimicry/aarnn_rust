@@ -59,7 +59,15 @@ use crate::config::{
 #[cfg(feature = "growth3d")]
 use crate::config::{DevelopmentStage, DevelopmentStageMode};
 use crate::config::{IzhikevichParams, LIFParams, NetworkConfig, NeuromodSignal, STDPParams};
+#[cfg(feature = "growth3d")]
+use crate::deterministic::{LogicalTag, NeuronId, StateDigestBuilder, SubShardId};
 use crate::field_events::{FieldEvent, FieldKind, FieldReduction, FieldScope};
+#[cfg(feature = "growth3d")]
+use crate::hierarchical_sharding::{
+    BiologicalAreaVolume, BiologicalEllipsoid, BiologicalGrowthDecision, BiologicalGrowthSpace,
+    BiologicalMembrane, BiologicalNeuronPlacement, BiologicalOwnershipMap,
+    BiologicalTopologyTransaction, stable_area_id, stable_biological_neuron_id,
+};
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{EvolutionResult, Morphology};
 use crate::network::{BuiltNetwork, build_network};
@@ -70,7 +78,7 @@ use crate::topology::{EarlyCell3D, EarlyCellPhase, Node3D, Topology3D};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(feature = "opencl")]
 use std::ptr;
 #[cfg(feature = "opencl")]
@@ -356,6 +364,18 @@ pub struct SnapshotRuntimeState {
     pub target_num_output: usize,
     #[cfg(feature = "growth3d")]
     pub spawn_energy_depletion_zones: Vec<SpawnEnergyDepletionZone>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub biological_neuron_ids: Vec<Vec<NeuronId>>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub biological_ownership: Option<BiologicalOwnershipMap>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub biological_growth_space: Option<BiologicalGrowthSpace>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub biological_pressure_samples: BTreeMap<u64, u32>,
     pub spk_hist_h: Vec<Vec<Vec<i8>>>,
     pub spk_hist_s: Vec<Vec<i8>>,
     pub hist_len: usize,
@@ -1346,6 +1366,20 @@ pub struct Runner {
     #[cfg(feature = "growth3d")]
     // Localized depletion zones: each neuron spawn halves local energy around this region.
     spawn_energy_depletion_zones: Vec<SpawnEnergyDepletionZone>,
+    #[cfg(feature = "growth3d")]
+    /// Stable biological identities parallel to `topo.layers`; dense indices
+    /// are execution coordinates and may change during migration.
+    pub biological_neuron_ids: Vec<Vec<NeuronId>>,
+    #[cfg(feature = "growth3d")]
+    /// The single active biological ownership view for this runner.
+    pub biological_ownership: Option<BiologicalOwnershipMap>,
+    #[cfg(feature = "growth3d")]
+    /// Area volumes and enclosing membrane used by authoritative growth
+    /// admission. Workers consume the committed value rather than inventing
+    /// independent geometry.
+    pub biological_growth_space: Option<BiologicalGrowthSpace>,
+    #[cfg(feature = "growth3d")]
+    pub biological_pressure_samples: BTreeMap<u64, u32>,
     #[cfg(feature = "growth3d")]
     spawn_override: Option<SpawnPlacementOverride>,
     // Spike history per hidden layer for AARNN delays (most-recent at front)
@@ -5101,6 +5135,14 @@ impl Runner {
             #[cfg(feature = "growth3d")]
             spawn_energy_depletion_zones: Vec::new(),
             #[cfg(feature = "growth3d")]
+            biological_neuron_ids: Vec::new(),
+            #[cfg(feature = "growth3d")]
+            biological_ownership: None,
+            #[cfg(feature = "growth3d")]
+            biological_growth_space: None,
+            #[cfg(feature = "growth3d")]
+            biological_pressure_samples: BTreeMap::new(),
+            #[cfg(feature = "growth3d")]
             spawn_override: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             morpho_accumulated_dt: 0.0,
@@ -5458,6 +5500,14 @@ impl Runner {
             target_num_output: self.target_num_output,
             #[cfg(feature = "growth3d")]
             spawn_energy_depletion_zones: self.spawn_energy_depletion_zones.clone(),
+            #[cfg(feature = "growth3d")]
+            biological_neuron_ids: self.biological_neuron_ids.clone(),
+            #[cfg(feature = "growth3d")]
+            biological_ownership: self.biological_ownership.clone(),
+            #[cfg(feature = "growth3d")]
+            biological_growth_space: self.biological_growth_space.clone(),
+            #[cfg(feature = "growth3d")]
+            biological_pressure_samples: self.biological_pressure_samples.clone(),
             spk_hist_h: self
                 .spk_hist_h
                 .iter()
@@ -5643,6 +5693,10 @@ impl Runner {
             self.target_num_sensory = state.target_num_sensory.max(self.net.num_sensory_neurons);
             self.target_num_output = state.target_num_output.max(self.net.num_output_neurons);
             self.spawn_energy_depletion_zones = state.spawn_energy_depletion_zones;
+            self.biological_neuron_ids = state.biological_neuron_ids;
+            self.biological_ownership = state.biological_ownership;
+            self.biological_growth_space = state.biological_growth_space;
+            self.biological_pressure_samples = state.biological_pressure_samples;
         }
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -6236,6 +6290,12 @@ impl Runner {
             } else {
                 self.rebuild_default_topology();
             }
+            if snapshot_runtime_state.is_none() {
+                self.biological_neuron_ids.clear();
+                self.biological_ownership = None;
+                self.biological_growth_space = None;
+                self.biological_pressure_samples.clear();
+            }
             // rebuild histories and morphology
             self.spk_hist_h.clear();
             for l in 0..l_count {
@@ -6313,6 +6373,8 @@ impl Runner {
         if let Some(runtime_state) = snapshot_runtime_state {
             self.apply_snapshot_runtime_state(runtime_state);
         }
+        #[cfg(feature = "growth3d")]
+        self.ensure_biological_growth_state();
         #[cfg(feature = "growth3d")]
         if self.net.growth_bootstrap_target_neurons > 0 {
             let target = self.net.growth_bootstrap_target_neurons;
@@ -6760,6 +6822,310 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    fn biological_area_label(node: &Node3D, layer: usize, index: usize) -> String {
+        node.region_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| format!("topology:l{layer}:block{}", index / 32))
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn biological_ids_in_topology(&mut self) {
+        self.biological_neuron_ids
+            .resize_with(self.topo.layers.len(), Vec::new);
+        for (layer, nodes) in self.topo.layers.iter().enumerate() {
+            self.biological_neuron_ids[layer].truncate(nodes.len());
+            while self.biological_neuron_ids[layer].len() < nodes.len() {
+                let index = self.biological_neuron_ids[layer].len();
+                self.biological_neuron_ids[layer].push(stable_biological_neuron_id(
+                    "runner",
+                    &format!("layer:{layer}:index:{index}"),
+                ));
+            }
+        }
+        self.biological_neuron_ids.truncate(self.topo.layers.len());
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn rebuild_biological_ownership(&mut self) {
+        self.biological_ids_in_topology();
+        let mut placements = Vec::new();
+        for (layer, nodes) in self.topo.layers.iter().enumerate() {
+            for (index, node) in nodes.iter().enumerate() {
+                let neuron_id = self.biological_neuron_ids[layer][index];
+                let area_label = Self::biological_area_label(node, layer, index);
+                placements.push(BiologicalNeuronPlacement {
+                    neuron_id,
+                    area_id: stable_area_id(&area_label),
+                    area_label,
+                    layer: layer as u32,
+                    sub_shard_id: SubShardId::new(neuron_id.raw())
+                        .expect("biological neuron ID is non-zero"),
+                    active_node: "local".to_owned(),
+                });
+            }
+        }
+        self.biological_ownership = BiologicalOwnershipMap::new(
+            crate::deterministic::TopologyGeneration::INITIAL,
+            crate::deterministic::PartitionGeneration::INITIAL,
+            placements,
+        )
+        .ok();
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn build_biological_growth_space(&self) -> Option<BiologicalGrowthSpace> {
+        let points = self
+            .topo
+            .layers
+            .iter()
+            .flat_map(|nodes| nodes.iter().map(|node| [node.x, node.y, node.z]))
+            .collect::<Vec<_>>();
+        if points.is_empty() {
+            return None;
+        }
+        let mut area_points = BTreeMap::<String, Vec<[f32; 3]>>::new();
+        for (layer, nodes) in self.topo.layers.iter().enumerate() {
+            for (index, node) in nodes.iter().enumerate() {
+                area_points
+                    .entry(Self::biological_area_label(node, layer, index))
+                    .or_default()
+                    .push([node.x, node.y, node.z]);
+            }
+        }
+        let bounds = |values: &[[f32; 3]]| {
+            let mut min = [f32::INFINITY; 3];
+            let mut max = [f32::NEG_INFINITY; 3];
+            for point in values {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
+                }
+            }
+            let centre = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
+            let radii =
+                std::array::from_fn(|axis| ((max[axis] - min[axis]) * 0.5 + 0.06).max(0.06));
+            (centre, radii)
+        };
+        let (membrane_centre, cloud_radii) = bounds(&points);
+        let membrane_radii = cloud_radii.map(|radius| (radius * 1.9).max(0.24));
+        let membrane = BiologicalMembrane {
+            volume: BiologicalEllipsoid::new(membrane_centre, membrane_radii).ok()?,
+            maximum_radii: membrane_radii.map(|radius| (radius * 4.0).max(1.5)),
+            maximum_expansion_per_transaction: self
+                .net
+                .spawn_radius
+                .abs()
+                .mul_add(2.0, 0.08)
+                .clamp(0.08, 0.4),
+            pressure_threshold: 3,
+        };
+        let areas = area_points
+            .into_iter()
+            .map(|(label, points)| {
+                let (centre, radii) = bounds(&points);
+                BiologicalAreaVolume {
+                    area_id: stable_area_id(&label),
+                    volume: BiologicalEllipsoid::new(centre, radii).expect("area geometry valid"),
+                }
+            })
+            .collect();
+        BiologicalGrowthSpace::new(membrane, areas).ok()
+    }
+
+    #[cfg(feature = "growth3d")]
+    fn ensure_biological_growth_state(&mut self) {
+        self.biological_ids_in_topology();
+        if self.biological_ownership.is_none() {
+            self.rebuild_biological_ownership();
+        }
+        if self.biological_growth_space.is_none() {
+            self.biological_growth_space = self.build_biological_growth_space();
+        }
+    }
+
+    /// Publish ownership and geometry before dense runner vectors are changed.
+    /// A rejected membrane/area decision therefore cannot leave a half-created
+    /// neuron behind.
+    #[cfg(feature = "growth3d")]
+    fn admit_biological_growth(
+        &mut self,
+        source_layer: usize,
+        source_index: usize,
+        target_layer: usize,
+        point: [f32; 3],
+    ) -> Option<(NeuronId, [f32; 3], String)> {
+        self.ensure_biological_growth_state();
+        let parent_id = *self
+            .biological_neuron_ids
+            .get(source_layer)?
+            .get(source_index)?;
+        let ownership = self.biological_ownership.as_ref()?.clone();
+        let parent_owner = ownership.owner(parent_id)?.clone();
+        let space = self.biological_growth_space.as_ref()?.clone();
+        let pressure = self
+            .biological_pressure_samples
+            .get(&parent_owner.area_id)
+            .copied()
+            .unwrap_or_default();
+        let decision = space
+            .assess_growth(
+                parent_owner.area_id,
+                point,
+                (self.net.min_node_sep * 0.5).max(0.01),
+                pressure,
+            )
+            .ok()?;
+        let mut admitted_point = point;
+        let proposed_space = match &decision {
+            BiologicalGrowthDecision::AwaitingMembranePressure { .. } => {
+                self.biological_pressure_samples
+                    .insert(parent_owner.area_id, pressure.saturating_add(1));
+                return None;
+            }
+            BiologicalGrowthDecision::ConstrainedByMembrane => return None,
+            BiologicalGrowthDecision::WithinArea { .. }
+            | BiologicalGrowthDecision::MigrateToArea { .. } => None,
+            BiologicalGrowthDecision::AttachToNearestArea { point, .. } => {
+                admitted_point = *point;
+                None
+            }
+            BiologicalGrowthDecision::ExpandArea { .. }
+            | BiologicalGrowthDecision::ExpandMembrane { .. } => {
+                Some(space.apply_decision(&decision).ok()?)
+            }
+        };
+        self.biological_pressure_samples
+            .remove(&parent_owner.area_id);
+        let destination_area = match decision {
+            BiologicalGrowthDecision::MigrateToArea { to_area_id, .. }
+            | BiologicalGrowthDecision::AttachToNearestArea {
+                area_id: to_area_id,
+                ..
+            } => to_area_id,
+            _ => parent_owner.area_id,
+        };
+        let destination_label = self
+            .topo
+            .layers
+            .iter()
+            .enumerate()
+            .flat_map(|(layer, nodes)| {
+                nodes.iter().enumerate().map(move |(index, node)| {
+                    (
+                        stable_area_id(&Self::biological_area_label(node, layer, index)),
+                        Self::biological_area_label(node, layer, index),
+                    )
+                })
+            })
+            .find(|(area_id, _)| *area_id == destination_area)
+            .map(|(_, label)| label)
+            .unwrap_or_else(|| parent_owner.area_label.clone());
+        let neuron_id = stable_biological_neuron_id(
+            "runner",
+            &format!(
+                "growth:parent:{}:target-layer:{}:target-index:{}:tick:{}",
+                parent_id.raw(),
+                target_layer,
+                self.biological_neuron_ids
+                    .get(target_layer)
+                    .map(Vec::len)
+                    .unwrap_or_default(),
+                self.t
+            ),
+        );
+        if ownership.owner(neuron_id).is_some() {
+            return None;
+        }
+        let destination = BiologicalNeuronPlacement {
+            neuron_id,
+            area_id: destination_area,
+            area_label: destination_label.clone(),
+            layer: target_layer as u32,
+            sub_shard_id: SubShardId::new(neuron_id.raw()).expect("growth ID is non-zero"),
+            active_node: "local".to_owned(),
+        };
+        let mut digest = StateDigestBuilder::default();
+        digest.add_domain(
+            "runner-growth-state:v1",
+            serde_json::to_vec(&(parent_id, target_layer, admitted_point, self.t)).ok()?,
+        );
+        let transaction = BiologicalTopologyTransaction {
+            base_topology_generation: ownership.topology_generation(),
+            base_partition_generation: ownership.partition_generation(),
+            effective_tag: LogicalTag::new(self.t as u64, 0),
+            transfers: vec![crate::hierarchical_sharding::BiologicalNeuronTransfer {
+                neuron_id,
+                source: None,
+                parent_neuron: Some(parent_id),
+                origin: (destination_area != parent_owner.area_id).then_some(parent_owner),
+                destination,
+                state_digest: digest.finish(),
+                synapse_ids: Vec::new(),
+            }],
+            base_growth_space_digest: proposed_space.as_ref().map(|_| space.digest()),
+            growth_space: proposed_space,
+        };
+        let commit = ownership
+            .apply_transaction_with_space(transaction, Some(&space))
+            .ok()?;
+        self.biological_ownership = Some(commit.ownership);
+        if let Some(next_space) = commit.growth_space {
+            self.biological_growth_space = Some(next_space);
+        }
+        Some((neuron_id, admitted_point, destination_label))
+    }
+
+    /// Publish an existing neuron's dense-layer reassignment before the
+    /// compatibility runner moves its execution vectors. The biological
+    /// identity and area remain the same; only the virtual layer coordinate
+    /// changes at the generation boundary.
+    #[cfg(feature = "growth3d")]
+    fn publish_biological_layer_migration(
+        &mut self,
+        neuron_id: NeuronId,
+        target_layer: usize,
+    ) -> bool {
+        self.ensure_biological_growth_state();
+        let Some(ownership) = self.biological_ownership.as_ref().cloned() else {
+            return false;
+        };
+        let Some(source) = ownership.owner(neuron_id).cloned() else {
+            return false;
+        };
+        let mut destination = source.clone();
+        destination.layer = target_layer as u32;
+        let mut digest = StateDigestBuilder::default();
+        digest.add_domain(
+            "runner-layer-migration:v1",
+            serde_json::to_vec(&(neuron_id, target_layer, self.t)).unwrap_or_default(),
+        );
+        let transaction = BiologicalTopologyTransaction {
+            base_topology_generation: ownership.topology_generation(),
+            base_partition_generation: ownership.partition_generation(),
+            effective_tag: LogicalTag::new(self.t as u64, 0),
+            transfers: vec![crate::hierarchical_sharding::BiologicalNeuronTransfer {
+                neuron_id,
+                source: Some(source),
+                parent_neuron: None,
+                origin: None,
+                destination,
+                state_digest: digest.finish(),
+                synapse_ids: Vec::new(),
+            }],
+            base_growth_space_digest: None,
+            growth_space: None,
+        };
+        let Ok(commit) = ownership.apply_transaction(transaction) else {
+            return false;
+        };
+        self.biological_ownership = Some(commit.ownership);
+        true
+    }
+
+    #[cfg(feature = "growth3d")]
     pub fn rebuild_default_topology(&mut self) {
         use crate::topology::{Node3D, Topology3D};
         let mut topo = Topology3D::new();
@@ -6866,6 +7232,11 @@ impl Runner {
             }
         }
         self.topo = topo;
+        self.biological_neuron_ids.clear();
+        self.biological_ownership = None;
+        self.biological_growth_space = None;
+        self.biological_pressure_samples.clear();
+        self.ensure_biological_growth_state();
         self.early_cell_next_id = 1;
         self.spawn_override = None;
     }
@@ -15276,15 +15647,16 @@ impl Runner {
                                     );
                                 }
                             } else {
-                                self.spawn_neuron_in_layer(l, pj);
-                                did_spawn = true;
-                                did_growth_event = true;
-                                self.last_global_growth_ms = 0.0;
-                                nm_log!(
-                                    "[growth] Spontaneous neuron addition in layer {}: parent index {}",
-                                    l,
-                                    pj
-                                );
+                                did_spawn = self.spawn_neuron_in_layer(l, pj);
+                                did_growth_event = did_spawn;
+                                if did_spawn {
+                                    self.last_global_growth_ms = 0.0;
+                                    nm_log!(
+                                        "[growth] Spontaneous neuron addition in layer {}: parent index {}",
+                                        l,
+                                        pj
+                                    );
+                                }
                             }
                         }
                     }
@@ -17848,9 +18220,9 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
-    fn spawn_neuron_l0(&mut self, parent_j: usize) {
+    fn spawn_neuron_l0(&mut self, parent_j: usize) -> bool {
         if self.is_at_max_neurons() {
-            return;
+            return false;
         }
         // Preconditions: growth enabled, operating with single hidden layer.
         let num_sensory_neurons = self.net.num_sensory_neurons;
@@ -17882,19 +18254,30 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let spawn_override = self.spawn_override.take();
-        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
-            (
-                override_pos.x,
-                override_pos.y,
-                override_pos.z,
-                override_pos.region_name,
-                override_pos.type_name,
-            )
-        } else {
-            let (sx, sy, sz) = self.place_node_near(0, (px, py, pz));
-            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, 0);
-            (sx, sy, sz, region_name, type_name)
+        let (mut nx, mut ny, mut nz, _original_region_name, type_name) =
+            if let Some(override_pos) = spawn_override {
+                (
+                    override_pos.x,
+                    override_pos.y,
+                    override_pos.z,
+                    override_pos.region_name,
+                    override_pos.type_name,
+                )
+            } else {
+                let (sx, sy, sz) = self.place_node_near(0, (px, py, pz));
+                let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, 0);
+                (sx, sy, sz, region_name, type_name)
+            };
+        let Some((new_biological_id, admitted_point, admitted_area_label)) =
+            self.admit_biological_growth(0, parent_j, 0, [nx, ny, nz])
+        else {
+            return false;
         };
+        (nx, ny, nz) = (admitted_point[0], admitted_point[1], admitted_point[2]);
+        // Biological admission owns the area assignment. Keep the spatial
+        // label in sync when a loose neuron is projected into its nearest
+        // occupied area.
+        let region_name = Some(admitted_area_label);
         self.topo.add_neuron(
             0,
             Node3D {
@@ -17906,6 +18289,7 @@ impl Runner {
                 type_name: type_name.clone(),
             },
         );
+        self.biological_neuron_ids[0].push(new_biological_id);
         self.register_spawn_energy_consumption((nx, ny, nz));
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -18277,6 +18661,7 @@ impl Runner {
         if self.net.use_morphology {
             self.rebuild_syn_maps_from_morph();
         }
+        true
     }
 
     pub fn layer_size(&self, l: usize) -> usize {
@@ -19846,6 +20231,8 @@ impl Runner {
                 .ok()
             })
             .collect();
+        #[cfg(not(feature = "opencl"))]
+        let gpu_candidate_masks: Vec<Option<Vec<i8>>> = vec![None; num_hidden_layers];
         // Limit to a single spawn per step globally to avoid bursts that can destabilize shapes early on
         let mut global_cap = 1usize;
         for l in 0..num_hidden_layers {
@@ -19915,17 +20302,19 @@ impl Runner {
                 continue;
             }
 
-            if act.target_layer == act.layer {
-                self.spawn_neuron_in_layer(act.layer, act.parent);
+            let spawned = if act.target_layer == act.layer {
+                self.spawn_neuron_in_layer(act.layer, act.parent)
             } else {
                 // ensure target layer exists, then spawn into that layer using parent for migration across interface
                 if act.target_layer == self.net.num_hidden_layers {
                     self.ensure_layer_exists(act.target_layer);
                 }
-                self.spawn_neuron_into_next_layer(act.layer, act.parent);
+                self.spawn_neuron_into_next_layer(act.layer, act.parent)
+            };
+            if spawned {
+                did_growth = true;
+                current_total += 1;
             }
-            did_growth = true;
-            current_total += 1;
         }
         if did_growth {
             // reset global cooldown timer after any spawn
@@ -20133,11 +20522,10 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
-    fn spawn_neuron_in_layer(&mut self, l: usize, parent_j: usize) {
+    fn spawn_neuron_in_layer(&mut self, l: usize, parent_j: usize) -> bool {
         // Same-layer spawn generalized; delegate to l0 for l==0
         if l == 0 {
-            self.spawn_neuron_l0(parent_j);
-            return;
+            return self.spawn_neuron_l0(parent_j);
         }
 
         nm_log!(
@@ -20169,19 +20557,27 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let spawn_override = self.spawn_override.take();
-        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
-            (
-                override_pos.x,
-                override_pos.y,
-                override_pos.z,
-                override_pos.region_name,
-                override_pos.type_name,
-            )
-        } else {
-            let (sx, sy, sz) = self.place_node_near(l, (px, py, pz));
-            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, l);
-            (sx, sy, sz, region_name, type_name)
+        let (mut nx, mut ny, mut nz, _original_region_name, type_name) =
+            if let Some(override_pos) = spawn_override {
+                (
+                    override_pos.x,
+                    override_pos.y,
+                    override_pos.z,
+                    override_pos.region_name,
+                    override_pos.type_name,
+                )
+            } else {
+                let (sx, sy, sz) = self.place_node_near(l, (px, py, pz));
+                let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, l);
+                (sx, sy, sz, region_name, type_name)
+            };
+        let Some((new_biological_id, admitted_point, admitted_area_label)) =
+            self.admit_biological_growth(l, parent_j, l, [nx, ny, nz])
+        else {
+            return false;
         };
+        (nx, ny, nz) = (admitted_point[0], admitted_point[1], admitted_point[2]);
+        let region_name = Some(admitted_area_label);
         self.topo.add_neuron(
             l,
             Node3D {
@@ -20193,6 +20589,7 @@ impl Runner {
                 type_name: type_name.clone(),
             },
         );
+        self.biological_neuron_ids[l].push(new_biological_id);
         self.register_spawn_energy_consumption((nx, ny, nz));
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -20770,14 +21167,15 @@ impl Runner {
         }
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
+        true
     }
 
     #[cfg(feature = "growth3d")]
-    fn spawn_neuron_into_next_layer(&mut self, l: usize, parent_j: usize) {
+    fn spawn_neuron_into_next_layer(&mut self, l: usize, parent_j: usize) -> bool {
         // Add a neuron to layer l+1, migrating a portion of parent_j's outgoing weights to it as incoming from l
         let target = l + 1;
         if target >= self.effective_max_layers() {
-            return;
+            return false;
         }
         self.ensure_layer_exists(target);
         let (in_l, out_l) = self.get_io_layers();
@@ -20803,19 +21201,27 @@ impl Runner {
             (0.0, 0.0, 0.0)
         };
         let spawn_override = self.spawn_override.take();
-        let (nx, ny, nz, region_name, type_name) = if let Some(override_pos) = spawn_override {
-            (
-                override_pos.x,
-                override_pos.y,
-                override_pos.z,
-                override_pos.region_name,
-                override_pos.type_name,
-            )
-        } else {
-            let (sx, sy, sz) = self.place_node_near(target, (px, py, pz));
-            let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, target);
-            (sx, sy, sz, region_name, type_name)
+        let (mut nx, mut ny, mut nz, _original_region_name, type_name) =
+            if let Some(override_pos) = spawn_override {
+                (
+                    override_pos.x,
+                    override_pos.y,
+                    override_pos.z,
+                    override_pos.region_name,
+                    override_pos.type_name,
+                )
+            } else {
+                let (sx, sy, sz) = self.place_node_near(target, (px, py, pz));
+                let (region_name, type_name) = self.allocate_region_and_type(sx, sy, sz, target);
+                (sx, sy, sz, region_name, type_name)
+            };
+        let Some((new_biological_id, admitted_point, admitted_area_label)) =
+            self.admit_biological_growth(l, parent_j, target, [nx, ny, nz])
+        else {
+            return false;
         };
+        (nx, ny, nz) = (admitted_point[0], admitted_point[1], admitted_point[2]);
+        let region_name = Some(admitted_area_label);
         self.topo.add_neuron(
             target,
             Node3D {
@@ -20827,6 +21233,7 @@ impl Runner {
                 type_name: type_name.clone(),
             },
         );
+        self.biological_neuron_ids[target].push(new_biological_id);
         self.register_spawn_energy_consumption((nx, ny, nz));
 
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -21217,6 +21624,7 @@ impl Runner {
         }
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
+        true
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -21300,6 +21708,18 @@ impl Runner {
         }
         self.ensure_layer_exists(target_l);
         let new_j = self.layer_size(target_l);
+
+        let Some(biological_id) = self
+            .biological_neuron_ids
+            .get(l)
+            .and_then(|ids| ids.get(j))
+            .copied()
+        else {
+            return;
+        };
+        if !self.publish_biological_layer_migration(biological_id, target_l) {
+            return;
+        }
 
         nm_log!(
             "[growth] Reassigning neuron {}:{} to next layer {}:{}",
@@ -21398,6 +21818,8 @@ impl Runner {
         let mut node = self.topo.layers[l].remove(j);
         node.layer = target_l;
         self.topo.layers[target_l].push(node);
+        let biological_id = self.biological_neuron_ids[l].remove(j);
+        self.biological_neuron_ids[target_l].push(biological_id);
         for cell in &mut self.topo.early_cells {
             if cell.source_layer == l {
                 if cell.source_parent == j {
@@ -21664,6 +22086,11 @@ impl Runner {
                 layer.remove(j);
             }
         }
+        if let Some(layer_ids) = self.biological_neuron_ids.get_mut(l) {
+            if j < layer_ids.len() {
+                layer_ids.remove(j);
+            }
+        }
         for cell in &mut self.topo.early_cells {
             if cell.source_layer == l {
                 if cell.source_parent > j {
@@ -21894,6 +22321,139 @@ mod tests {
         net.growth_cooldown_ms = 0.0;
         net.global_growth_cooldown_ms = 0.0;
         Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn)
+    }
+
+    fn mk_runner_with_two_biological_areas() -> Runner {
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.growth_enabled = true;
+        net.min_node_sep = 0.02;
+        let mut runner = Runner::new(lif, stdp, net, NeuronModel::Lif, Learning::Stdp);
+        runner.topo.layers[0][0].x = -0.5;
+        runner.topo.layers[0][0].y = 0.0;
+        runner.topo.layers[0][0].z = 0.0;
+        runner.topo.layers[0][0].region_name = Some("left".to_owned());
+        runner.topo.layers[0][1].x = 0.5;
+        runner.topo.layers[0][1].y = 0.0;
+        runner.topo.layers[0][1].z = 0.0;
+        runner.topo.layers[0][1].region_name = Some("right".to_owned());
+        runner.biological_ownership = None;
+        runner.biological_growth_space = None;
+        runner.biological_pressure_samples.clear();
+        runner.ensure_biological_growth_state();
+        runner
+    }
+
+    #[test]
+    fn runner_growth_commits_one_owner_before_appending_dense_state() {
+        let mut runner = mk_runner_with_two_biological_areas();
+        let before_generation = runner
+            .biological_ownership
+            .as_ref()
+            .expect("growth state should be initialised")
+            .topology_generation();
+        runner.spawn_override = Some(SpawnPlacementOverride {
+            x: 0.35,
+            y: 0.0,
+            z: 0.0,
+            region_name: Some("left".to_owned()),
+            type_name: None,
+        });
+
+        assert!(runner.spawn_neuron_l0(0));
+        assert_eq!(runner.layer_size(0), 3);
+        let neuron_id = *runner.biological_neuron_ids[0].last().unwrap();
+        let owner = runner
+            .biological_ownership
+            .as_ref()
+            .unwrap()
+            .owner(neuron_id)
+            .expect("grown neuron must have one biological owner");
+        assert_eq!(owner.area_label, "right");
+        assert_eq!(owner.active_node, "local");
+        assert_eq!(
+            runner.topo.layers[0][2].region_name.as_deref(),
+            Some("right")
+        );
+        assert!(runner.topo.layers[0][2].x > 0.35);
+        assert_eq!(
+            runner.biological_ownership.as_ref().unwrap().neuron_count(),
+            3
+        );
+        assert_eq!(
+            runner
+                .biological_ownership
+                .as_ref()
+                .unwrap()
+                .topology_generation()
+                .raw(),
+            before_generation.raw() + 1
+        );
+    }
+
+    #[test]
+    fn runner_growth_rejects_unbounded_membrane_position_without_dense_mutation() {
+        let mut runner = mk_runner();
+        let before_ids = runner.biological_neuron_ids.clone();
+        let before_generation = runner
+            .biological_ownership
+            .as_ref()
+            .unwrap()
+            .topology_generation();
+        for _ in 0..5 {
+            runner.spawn_override = Some(SpawnPlacementOverride {
+                x: 10.0,
+                y: 0.0,
+                z: 0.0,
+                region_name: None,
+                type_name: None,
+            });
+            assert!(!runner.spawn_neuron_l0(0));
+        }
+        assert_eq!(runner.biological_neuron_ids, before_ids);
+        assert_eq!(runner.layer_size(0), 1);
+        assert_eq!(
+            runner
+                .biological_ownership
+                .as_ref()
+                .unwrap()
+                .topology_generation(),
+            before_generation
+        );
+    }
+
+    #[test]
+    fn runner_growth_snapshot_roundtrip_preserves_biological_ownership_and_space() {
+        let mut runner = mk_runner();
+        let spawn_x = runner.topo.layers[0][0].x + 0.01;
+        runner.spawn_override = Some(SpawnPlacementOverride {
+            x: spawn_x,
+            y: 0.0,
+            z: 0.0,
+            region_name: None,
+            type_name: None,
+        });
+        assert!(runner.spawn_neuron_l0(0));
+        let expected_ownership = runner.biological_ownership.clone();
+        let expected_space = runner.biological_growth_space.clone();
+        let expected_ids = runner.biological_neuron_ids.clone();
+        let snapshot = runner
+            .export_network_json()
+            .expect("growth snapshot should serialise");
+
+        let mut restored = mk_runner();
+        restored
+            .import_network_json(&snapshot)
+            .expect("growth snapshot should restore");
+        assert_eq!(restored.biological_neuron_ids, expected_ids);
+        assert_eq!(restored.biological_ownership, expected_ownership);
+        assert_eq!(restored.biological_growth_space, expected_space);
+        assert!(restored.biological_pressure_samples.is_empty());
     }
 
     #[test]

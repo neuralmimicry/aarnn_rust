@@ -49,4 +49,27 @@ final class ParityTest {
     @Test void importedFlyOutputsRemainDistinct() {
         assertNotEquals(Content.profile("drosophila_banc").output_names(),Content.profile("drosophila_fafb").output_names());
     }
+
+    @Test void hexapodMotorChannelsUseNamedEndpointsAndMoveTheirLegGeometry() {
+        var p=Content.profile("hexapod");
+        var expected=List.of(
+                "hex_o_000_lf_coxa","hex_o_001_lf_femur","hex_o_002_lf_tibia",
+                "hex_o_003_lm_coxa","hex_o_004_lm_femur","hex_o_005_lm_tibia",
+                "hex_o_006_lr_coxa","hex_o_007_lr_femur","hex_o_008_lr_tibia",
+                "hex_o_009_rf_coxa","hex_o_010_rf_femur","hex_o_011_rf_tibia",
+                "hex_o_012_rm_coxa","hex_o_013_rm_femur","hex_o_014_rm_tibia",
+                "hex_o_015_rr_coxa","hex_o_016_rr_femur","hex_o_017_rr_tibia");
+        assertEquals(expected,p.output_names(),"Minecraft endpoint order must match the authored AER output map");
+        assertEquals(0,Meshes.hexapodActuatorIndex(p,"lf_coxa"));
+        assertEquals(8,Meshes.hexapodActuatorIndex(p,"lr_tibia"));
+        assertEquals(9,Meshes.hexapodActuatorIndex(p,"rf_coxa"));
+        assertEquals(17,Meshes.hexapodActuatorIndex(p,"rr_tibia"));
+
+        var neutral=Meshes.build(p.parts(),false,new double[p.output()],p);
+        for(int channel=0;channel<p.output();channel++) {
+            double[] active=new double[p.output()]; active[channel]=1;
+            assertFalse(java.util.Arrays.equals(neutral,Meshes.build(p.parts(),false,active,p)),
+                    "motor channel "+channel+" must reach a visible leg endpoint");
+        }
+    }
 }

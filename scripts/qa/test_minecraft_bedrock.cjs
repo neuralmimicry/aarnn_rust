@@ -24,6 +24,15 @@ async function main(){
     const geometry=JSON.parse(fs.readFileSync(path.join(packs,'resource/models/entity',p.id+'.geo.json')))['minecraft:geometry'][0];
     assert.ok(geometry.bones.length>20);assert.ok(geometry.bones.length<=512);
     for(const b of geometry.bones)for(const cube of b.cubes){assert.ok(cube.origin.every(Number.isFinite));assert.ok(cube.size.every(n=>Number.isFinite(n)&&n>0));}
+    if(p.kind==='hexapod') {
+      const endpointNames=['lf_coxa','lf_femur','lf_tibia','lm_coxa','lm_femur','lm_tibia','lr_coxa','lr_femur','lr_tibia','rf_coxa','rf_femur','rf_tibia','rm_coxa','rm_femur','rm_tibia','rr_coxa','rr_femur','rr_tibia'];
+      const entity=JSON.parse(fs.readFileSync(path.join(packs,'server/entities/hexapod.json')));
+      const props=entity['minecraft:entity'].description.properties;
+      assert.deepEqual(endpointNames.map(n=>props['aarnn:joint_'+n]?.default),endpointNames.map(()=>0));
+      const animation=JSON.parse(fs.readFileSync(path.join(packs,'resource/animations/hexapod.animation.json')));
+      assert.equal(Object.keys(animation.animations['animation.aarnn.hexapod.joints'].bones).length,18);
+      assert.ok(geometry.bones.some(b=>b.parent==='aarnn_joint_1_0_0'));
+    }
     let resolve,seen;
     const session=new Session(p,content.digest,(body,timeout)=>{seen={body,timeout};return new Promise(r=>{resolve=r;});});
     const pending=session.submit(new Array(p.sensory).fill(.7),100);await Promise.resolve();
@@ -83,6 +92,9 @@ async function main(){
   for(const p of content.profiles)events.command({id:'aarnn:connect',message:p.id,sourceType:'Server'});
   for(let i=0;i<4;i++){tick++;intervals.forEach(fn=>fn());await new Promise(setImmediate);}
   for(const p of content.profiles)assert.match(entities.find(e=>e.typeId==='aarnn:'+p.id).nameTag,/ · armed$/);
+  const hexapod=entities.find(e=>e.typeId==='aarnn:hexapod');
+  assert.equal(hexapod.getProperty('aarnn:joint_lf_coxa'),1);
+  assert.equal(hexapod.getProperty('aarnn:joint_lm_coxa'),0);
   const nao=entities.find(e=>e.typeId==='aarnn:nao');
   Object.assign(ordinary,{id:'ordinary',dimension,location:{...nao.location},isValid:true,sendMessage:()=>{}});
   assert.equal(commands.get('aarnn:nao').spec.permissionLevel,0);

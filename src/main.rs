@@ -719,9 +719,16 @@ struct Cli {
     #[arg(long, default_value = "default")]
     brain_id: String,
 
-    /// Automatically start in IPC mode and bind the socket (requires --ui)
+    /// Automatically start in IPC mode and bind the socket (requires --ui or
+    /// --headless-ipc)
     #[arg(long, default_value_t = false)]
     ipc: bool,
+
+    /// Run the IPC-backed simulation without creating a native Rust UI window.
+    /// This is used by simulator launchers that keep the simulator renderer
+    /// visible while the AARNN runtime remains headless.
+    #[arg(long, default_value_t = false, conflicts_with = "ui")]
+    headless_ipc: bool,
 
     /// Enable 3D growth of hidden topology (requires --features growth3d)
     #[arg(long, default_value_t = true)]
@@ -2897,7 +2904,7 @@ fn main() -> anyhow::Result<()> {
     // presence as its readiness signal and must be able to connect during that
     // work.  The bound server is transferred into the UI simulation thread.
     #[cfg(all(feature = "ui", feature = "robot_io", unix))]
-    let early_ipc_service = if args.ui && args.ipc {
+    let early_ipc_service = if (args.ui || args.headless_ipc) && args.ipc {
         ui::bind_ipc_endpoint(&args.brain_id, &net_cfg, aer_cfg.as_ref())
     } else {
         None
@@ -2999,6 +3006,25 @@ fn main() -> anyhow::Result<()> {
 
     // Interactive Mode: Launch the real-time visualization interface.
     // This branches away from the standard batch execution path.
+    #[cfg(feature = "ui")]
+    if args.headless_ipc {
+        return ui::launch_headless_ipc(
+            net_cfg,
+            args.brain_id.clone(),
+            args.ipc,
+            #[cfg(all(feature = "ui", feature = "robot_io", unix))]
+            early_ipc_service,
+            distributed_node,
+            args.ui_remote_only,
+            startup_snapshot_json,
+            remote_workspace_binding,
+            aer_cfg.clone(),
+            configured_orchestrator_endpoints(&args),
+            args.orchestrator_bearer_token.clone(),
+            rt.handle().clone(),
+        );
+    }
+
     #[cfg(feature = "ui")]
     if args.ui {
         let mut net_cfg = net_cfg; // Re-use or reload config for UI consistency
@@ -4802,12 +4828,17 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                             if !resp.peers.is_empty() || !resp.network_peers.is_empty() {
                                 let mut state = node_inner.state.write().await;
                                 if !resp.peers.is_empty() {
-                                    state.peers = resp.peers.drain().collect();
                                     let now = std::time::Instant::now();
-                                    state.peer_last_seen.clear();
-                                    let peer_ids: Vec<String> =
-                                        state.peers.keys().cloned().collect();
-                                    for node_id in peer_ids {
+                                    // A single delayed heartbeat response can
+                                    // legitimately omit a peer while the
+                                    // orchestrator is refreshing its view.
+                                    // Refresh observations that are present and
+                                    // let the bounded stale grace period expire
+                                    // an actually lost peer. Clearing this map on
+                                    // every partial response made worker comms
+                                    // flicker between active and inactive.
+                                    for (node_id, address) in resp.peers.drain() {
+                                        state.peers.insert(node_id.clone(), address);
                                         state.peer_last_seen.insert(node_id, now);
                                     }
                                 }

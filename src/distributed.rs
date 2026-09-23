@@ -3514,6 +3514,18 @@ fn hosted_layers_for_assignment(active_layers: &[u32], backup_layers: &[u32]) ->
     layers
 }
 
+/// Return the legacy runner range for the layers this worker actively owns.
+///
+/// A `LoadNetwork` command also carries warm backup layers so a worker can be
+/// promoted without another model transfer. Those layers are placement data;
+/// they are not biological ownership. The runner projection used by cluster
+/// snapshot assembly must therefore be based on `active_layers` only.
+fn layer_range_for_active_layers(active_layers: &[u32]) -> Option<std::ops::Range<usize>> {
+    let min = active_layers.iter().min().copied()? as usize;
+    let max = active_layers.iter().max().copied()? as usize;
+    Some(min..max.saturating_add(1))
+}
+
 /// Make every policy-selected worker visible in the executable placement.
 ///
 /// The compatibility LoadNetwork command owns complete biological layers. A
@@ -6169,13 +6181,21 @@ impl DistributedNode {
             for node_id in node_ids {
                 let (layers, redundant_layers) = if use_distribution_layers {
                     if let Some(range) = net_status.distribution.get(&node_id) {
-                        let layers: Vec<u32> = range
+                        let active_layers: Vec<u32> = range
                             .layers
                             .iter()
                             .copied()
                             .filter(|l| (*l as usize) < net_status.num_layers as usize)
                             .collect();
-                        (layers.clone(), layers)
+                        let redundant_layers: Vec<u32> = range
+                            .backup_layers
+                            .iter()
+                            .copied()
+                            .filter(|l| (*l as usize) < net_status.num_layers as usize)
+                            .collect();
+                        let layers =
+                            hosted_layers_for_assignment(&active_layers, &redundant_layers);
+                        (layers, redundant_layers)
                     } else {
                         (Vec::new(), Vec::new())
                     }
@@ -7417,11 +7437,16 @@ impl DistributedNode {
         // causal admission has been attempted, otherwise a retry could apply
         // the same neural boundary through two independent paths.
         if live_causal_transport_enabled() {
-            for (key, addr) in targets {
-                if let Err(error) = self
-                    .send_causal_batches(network_id, &key, &addr, batches)
-                    .await
-                {
+            let deliveries =
+                futures_util::future::join_all(targets.into_iter().map(|(key, addr)| async move {
+                    let result = self
+                        .send_causal_batches(network_id, &key, &addr, batches)
+                        .await;
+                    (key, result)
+                }))
+                .await;
+            for (key, result) in deliveries {
+                if let Err(error) = result {
                     nm_err!(
                         "[warn] authoritative causal forwarding to {} failed: {}",
                         key,
@@ -7434,171 +7459,186 @@ impl DistributedNode {
             return;
         }
 
+        let mut forwarding_tasks = Vec::with_capacity(targets.len());
         for (key, addr) in targets {
-            #[cfg(feature = "openmpi")]
-            let mpi_rank_opt = if crate::openmpi_runtime::spike_transport_available() {
-                mpi_rank_from_node_id(&key)
-            } else {
-                None
-            };
-            #[cfg(not(feature = "openmpi"))]
-            let mpi_rank_opt: Option<i32> = None;
-
-            let (sender_opt, preferred_transport) = {
-                let mut state = self.state.write().await;
-                let sender_opt = if let Some(handle) = state.spike_streams.get(&key) {
-                    if !handle.tx.is_closed() {
-                        Some(handle.tx.clone())
-                    } else {
-                        state.spike_streams.remove(&key);
-                        None
-                    }
+            let node = self.clone();
+            let batches = batches.to_vec();
+            forwarding_tasks.push(tokio::spawn(async move {
+                #[cfg(feature = "openmpi")]
+                let mpi_rank_opt = if crate::openmpi_runtime::spike_transport_available() {
+                    mpi_rank_from_node_id(&key)
                 } else {
                     None
                 };
-                let preferred = state.choose_spike_transport(
-                    &key,
-                    sender_opt.is_some(),
-                    mpi_rank_opt.is_some(),
-                );
-                (sender_opt, preferred)
-            };
+                #[cfg(not(feature = "openmpi"))]
+                let mpi_rank_opt: Option<i32> = None;
 
-            let mut methods = vec![preferred_transport];
-            if mpi_rank_opt.is_some() && !methods.contains(&SpikeTransportMethod::Mpi) {
-                methods.push(SpikeTransportMethod::Mpi);
-            }
-            if preferred_transport != SpikeTransportMethod::PersistentStream && sender_opt.is_some()
-            {
-                methods.push(SpikeTransportMethod::PersistentStream);
-            }
-            if !methods.contains(&SpikeTransportMethod::BurstStream) {
-                methods.push(SpikeTransportMethod::BurstStream);
-            }
+                let (sender_opt, preferred_transport) = {
+                    let mut state = node.state.write().await;
+                    let sender_opt = if let Some(handle) = state.spike_streams.get(&key) {
+                        if !handle.tx.is_closed() {
+                            Some(handle.tx.clone())
+                        } else {
+                            state.spike_streams.remove(&key);
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let preferred = state.choose_spike_transport(
+                        &key,
+                        sender_opt.is_some(),
+                        mpi_rank_opt.is_some(),
+                    );
+                    (sender_opt, preferred)
+                };
 
-            let mut remaining: Vec<SpikeBatch> = batches.to_vec();
-            let mut delivered = false;
-
-            for method in methods {
-                if remaining.is_empty() {
-                    delivered = true;
-                    break;
+                let mut methods = vec![preferred_transport];
+                if mpi_rank_opt.is_some() && !methods.contains(&SpikeTransportMethod::Mpi) {
+                    methods.push(SpikeTransportMethod::Mpi);
+                }
+                if preferred_transport != SpikeTransportMethod::PersistentStream
+                    && sender_opt.is_some()
+                {
+                    methods.push(SpikeTransportMethod::PersistentStream);
+                }
+                if !methods.contains(&SpikeTransportMethod::BurstStream) {
+                    methods.push(SpikeTransportMethod::BurstStream);
                 }
 
-                match method {
-                    SpikeTransportMethod::Mpi => {
-                        let Some(dest_rank) = mpi_rank_opt else {
-                            let mut state = self.state.write().await;
-                            state.record_spike_transport_failure(&key, method);
-                            continue;
-                        };
-                        let mpi_start = std::time::Instant::now();
-                        match self
-                            .send_spike_batches_mpi(&key, dest_rank, remaining.clone())
-                            .await
-                        {
-                            Ok(()) => {
-                                let mut state = self.state.write().await;
-                                state.record_spike_transport_success(
-                                    &key,
-                                    method,
-                                    mpi_start.elapsed(),
-                                );
-                                remaining.clear();
-                                delivered = true;
-                                break;
-                            }
-                            Err(e) => {
-                                nm_err!("[warn] MPI spike forwarding to {} failed: {}", key, e);
-                                let mut state = self.state.write().await;
-                                state.record_spike_transport_failure(&key, method);
-                            }
-                        }
+                let mut remaining: Vec<SpikeBatch> = batches.to_vec();
+                let mut delivered = false;
+
+                for method in methods {
+                    if remaining.is_empty() {
+                        delivered = true;
+                        break;
                     }
-                    SpikeTransportMethod::PersistentStream => {
-                        let Some(sender) = sender_opt.clone() else {
-                            let mut state = self.state.write().await;
-                            state.record_spike_transport_failure(&key, method);
-                            continue;
-                        };
-                        let stream_start = std::time::Instant::now();
-                        let mut sent_count = 0usize;
-                        let mut stream_closed = false;
-                        for batch in &remaining {
-                            match sender.try_send(batch.clone()) {
-                                Ok(_) => sent_count += 1,
-                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => break,
-                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                    stream_closed = true;
+
+                    match method {
+                        SpikeTransportMethod::Mpi => {
+                            let Some(dest_rank) = mpi_rank_opt else {
+                                let mut state = node.state.write().await;
+                                state.record_spike_transport_failure(&key, method);
+                                continue;
+                            };
+                            let mpi_start = std::time::Instant::now();
+                            match node
+                                .send_spike_batches_mpi(&key, dest_rank, remaining.clone())
+                                .await
+                            {
+                                Ok(()) => {
+                                    let mut state = node.state.write().await;
+                                    state.record_spike_transport_success(
+                                        &key,
+                                        method,
+                                        mpi_start.elapsed(),
+                                    );
+                                    remaining.clear();
+                                    delivered = true;
                                     break;
+                                }
+                                Err(e) => {
+                                    nm_err!("[warn] MPI spike forwarding to {} failed: {}", key, e);
+                                    let mut state = node.state.write().await;
+                                    state.record_spike_transport_failure(&key, method);
                                 }
                             }
                         }
+                        SpikeTransportMethod::PersistentStream => {
+                            let Some(sender) = sender_opt.clone() else {
+                                let mut state = node.state.write().await;
+                                state.record_spike_transport_failure(&key, method);
+                                continue;
+                            };
+                            let stream_start = std::time::Instant::now();
+                            let mut sent_count = 0usize;
+                            let mut stream_closed = false;
+                            for batch in &remaining {
+                                match sender.try_send(batch.clone()) {
+                                    Ok(_) => sent_count += 1,
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => break,
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        stream_closed = true;
+                                        break;
+                                    }
+                                }
+                            }
 
-                        if sent_count == remaining.len() {
-                            let mut state = self.state.write().await;
-                            state.record_spike_transport_success(
-                                &key,
-                                method,
-                                stream_start.elapsed(),
-                            );
-                            delivered = true;
-                            break;
-                        }
-
-                        remaining = remaining.split_off(sent_count);
-                        let mut state = self.state.write().await;
-                        state.record_spike_transport_failure(&key, method);
-                        if stream_closed {
-                            state.spike_streams.remove(&key);
-                            state.spike_stream_backoff.insert(
-                                key.clone(),
-                                std::time::Instant::now() + Duration::from_secs(2),
-                            );
-                        }
-                    }
-                    SpikeTransportMethod::BurstStream => {
-                        self.request_spike_stream(key.clone(), addr.clone()).await;
-                        let burst_start = std::time::Instant::now();
-                        let burst_result = tokio::time::timeout(
-                            spike_burst_timeout(),
-                            self.send_spike_batches_burst(&key, &addr, remaining.clone()),
-                        )
-                        .await;
-                        match burst_result {
-                            Ok(Ok(())) => {
-                                let mut state = self.state.write().await;
+                            if sent_count == remaining.len() {
+                                let mut state = node.state.write().await;
                                 state.record_spike_transport_success(
                                     &key,
                                     method,
-                                    burst_start.elapsed(),
+                                    stream_start.elapsed(),
                                 );
-                                remaining.clear();
                                 delivered = true;
                                 break;
                             }
-                            Ok(Err(e)) => {
-                                nm_err!("[warn] burst spike forwarding to {} failed: {}", key, e);
-                                let mut state = self.state.write().await;
-                                state.record_spike_transport_failure(&key, method);
-                            }
-                            Err(_) => {
-                                nm_err!(
-                                    "[warn] burst spike forwarding to {} timed out after {:?}",
-                                    key,
-                                    spike_burst_timeout()
+
+                            remaining = remaining.split_off(sent_count);
+                            let mut state = node.state.write().await;
+                            state.record_spike_transport_failure(&key, method);
+                            if stream_closed {
+                                state.spike_streams.remove(&key);
+                                state.spike_stream_backoff.insert(
+                                    key.clone(),
+                                    std::time::Instant::now() + Duration::from_secs(2),
                                 );
-                                let mut state = self.state.write().await;
-                                state.record_spike_transport_failure(&key, method);
+                            }
+                        }
+                        SpikeTransportMethod::BurstStream => {
+                            node.request_spike_stream(key.clone(), addr.clone()).await;
+                            let burst_start = std::time::Instant::now();
+                            let burst_result = tokio::time::timeout(
+                                spike_burst_timeout(),
+                                node.send_spike_batches_burst(&key, &addr, remaining.clone()),
+                            )
+                            .await;
+                            match burst_result {
+                                Ok(Ok(())) => {
+                                    let mut state = node.state.write().await;
+                                    state.record_spike_transport_success(
+                                        &key,
+                                        method,
+                                        burst_start.elapsed(),
+                                    );
+                                    remaining.clear();
+                                    delivered = true;
+                                    break;
+                                }
+                                Ok(Err(e)) => {
+                                    nm_err!(
+                                        "[warn] burst spike forwarding to {} failed: {}",
+                                        key,
+                                        e
+                                    );
+                                    let mut state = node.state.write().await;
+                                    state.record_spike_transport_failure(&key, method);
+                                }
+                                Err(_) => {
+                                    nm_err!(
+                                        "[warn] burst spike forwarding to {} timed out after {:?}",
+                                        key,
+                                        spike_burst_timeout()
+                                    );
+                                    let mut state = node.state.write().await;
+                                    state.record_spike_transport_failure(&key, method);
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if !delivered && !remaining.is_empty() {
-                let mut state = self.state.write().await;
-                state.record_spike_drop(&key, remaining.len() as u64);
+                if !delivered && !remaining.is_empty() {
+                    let mut state = node.state.write().await;
+                    state.record_spike_drop(&key, remaining.len() as u64);
+                }
+            }));
+        }
+        for task in forwarding_tasks {
+            if let Err(error) = task.await {
+                nm_err!("[warn] worker spike forwarding task failed: {}", error);
             }
         }
     }
@@ -8023,31 +8063,39 @@ impl DistributedNode {
                     &node_statuses_snapshot,
                     &transport_stats_snapshot,
                 );
-                let mut node_assignments = planner_result
-                    .as_ref()
-                    .map(|(assignments, _)| assignments.clone())
-                    .or_else(|| {
-                        preserve_sharded_node_assignments(
-                            &previous_distribution,
-                            &eligible_nodes,
-                            total_layers,
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        build_sharded_node_assignments_preferred(
-                            &target_node_capacities,
-                            total_layers,
-                            preferred_ipc_node,
-                        )
-                    });
+                // A valid published assignment is authoritative while the
+                // workers report noisy capacity/latency telemetry. Running
+                // the hierarchical planner first made every heartbeat able
+                // to replace a healthy layer map; with warm compatibility
+                // copies that alternated between one active owner and all
+                // workers, racing the LoadNetwork commands and erasing the
+                // biological projection. Replan only when the current map is
+                // incomplete or the eligible target set has changed.
+                let mut node_assignments = preserve_sharded_node_assignments(
+                    &previous_distribution,
+                    &eligible_nodes,
+                    total_layers,
+                );
+                if node_assignments.is_none() {
+                    node_assignments = planner_result
+                        .as_ref()
+                        .map(|(assignments, _)| assignments.clone());
+                    if let Some((_, telemetry)) = planner_result.as_ref() {
+                        hierarchical_plan_telemetry = Some(telemetry.clone());
+                    }
+                }
+                let mut node_assignments = node_assignments.unwrap_or_else(|| {
+                    build_sharded_node_assignments_preferred(
+                        &target_node_capacities,
+                        total_layers,
+                        preferred_ipc_node,
+                    )
+                });
                 ensure_selected_targets_represented(
                     &mut node_assignments,
                     &target_node_capacities,
                     total_layers,
                 );
-                if let Some((_, telemetry)) = planner_result {
-                    hierarchical_plan_telemetry = Some(telemetry);
-                }
 
                 for (node_id, layers, redundant) in node_assignments {
                     let hosted_layers = hosted_layers_for_assignment(&layers, &redundant);
@@ -8226,7 +8274,13 @@ impl DistributedNode {
                         );
                         return;
                     }
-                    let layers_changed = net.assigned_layers != cmd.layers
+                    let active_layers = cmd
+                        .layers
+                        .iter()
+                        .copied()
+                        .filter(|layer| !cmd.redundant_layers.contains(layer))
+                        .collect::<Vec<_>>();
+                    let layers_changed = net.assigned_layers != active_layers
                         || net.redundant_layers != cmd.redundant_layers;
                     let depth_changed = net.desired_aarnn_depth != cmd.desired_aarnn_depth;
                     let incoming_cfg_fp = (!cmd.config_json.is_empty())
@@ -8270,7 +8324,10 @@ impl DistributedNode {
                             ""
                         }
                     );
-                    net.assigned_layers = cmd.layers;
+                    // `cmd.layers` is the hosted union used to transfer a
+                    // warm copy. Keep the worker's biological ownership
+                    // projection separate from that placement union.
+                    net.assigned_layers = active_layers;
                     net.redundant_layers = cmd.redundant_layers;
                     net.desired_aarnn_depth = cmd.desired_aarnn_depth;
                     net.remote_spikes_fwd.clear();
@@ -8301,7 +8358,7 @@ impl DistributedNode {
                                     net.assigned_layers.iter().max(),
                                 ) {
                                     net.runner.layer_range =
-                                        Some(*min as usize..(*max as usize + 1));
+                                        layer_range_for_active_layers(&[*min, *max]);
                                     #[cfg(feature = "growth3d")]
                                     if !has_snapshot_topo {
                                         net.runner.rebuild_default_topology();
@@ -8316,13 +8373,13 @@ impl DistributedNode {
                             net.last_config_fingerprint = incoming_cfg_fp;
                         }
                     }
-                    if layers_changed && !net.assigned_layers.is_empty() {
-                        if let (Some(min), Some(max)) = (
-                            net.assigned_layers.iter().min(),
-                            net.assigned_layers.iter().max(),
-                        ) {
-                            net.runner.layer_range = Some(*min as usize..(*max as usize + 1));
-                        }
+                    if layers_changed && !cmd.layers.is_empty() {
+                        let range_layers = if net.assigned_layers.is_empty() {
+                            &cmd.layers
+                        } else {
+                            &net.assigned_layers
+                        };
+                        net.runner.layer_range = layer_range_for_active_layers(range_layers);
                     }
                     if !cmd.neuron_model.is_empty() {
                         if let Some(m) = NeuronModel::from_str(&cmd.neuron_model) {
@@ -8419,10 +8476,23 @@ impl DistributedNode {
                         }
                     }
 
+                    let active_layers = cmd
+                        .layers
+                        .iter()
+                        .copied()
+                        .filter(|layer| !cmd.redundant_layers.contains(layer))
+                        .collect::<Vec<_>>();
                     if !cmd.layers.is_empty() {
-                        let min = *cmd.layers.iter().min().unwrap() as usize;
-                        let max = *cmd.layers.iter().max().unwrap() as usize + 1;
-                        runner.layer_range = Some(min..max);
+                        // A warm-only compatibility copy has no active
+                        // layers, but still needs the hosted range for a
+                        // future promotion. Active owners must exclude warm
+                        // backup layers from their biological runner range.
+                        let range_layers = if active_layers.is_empty() {
+                            &cmd.layers
+                        } else {
+                            &active_layers
+                        };
+                        runner.layer_range = layer_range_for_active_layers(range_layers);
                         #[cfg(feature = "growth3d")]
                         if !snapshot_has_topo {
                             runner.rebuild_default_topology();
@@ -8524,7 +8594,7 @@ impl DistributedNode {
                             durable_owner,
                             #[cfg(feature = "superdense_executor")]
                             superdense: SuperdenseController::new(),
-                            assigned_layers: cmd.layers,
+                            assigned_layers: active_layers,
                             redundant_layers: cmd.redundant_layers,
                             remote_spikes_fwd: recovered_channel
                                 .remote_spikes_fwd
@@ -11545,13 +11615,21 @@ mod tests {
             r#type: proto::network_command::CommandType::LoadNetwork as i32,
             network_id: "alpha".to_string(),
             config_json: snapshot_json.clone().into_bytes(),
-            layers: vec![0],
-            redundant_layers: Vec::new(),
+            layers: vec![0, 1],
+            redundant_layers: vec![1],
             desired_aarnn_depth: 1,
             neuron_model: "lif".to_string(),
             learning_rule: "stdp".to_string(),
         })
         .await;
+        {
+            let state = node.state.read().await;
+            let network = state.networks.get("alpha").expect("network loaded");
+            let network = network.read().await;
+            assert_eq!(network.assigned_layers, vec![0]);
+            assert_eq!(network.redundant_layers, vec![1]);
+            assert_eq!(network.runner.layer_range, Some(0usize..1usize));
+        }
         node.state.write().await.network_registry.insert(
             "alpha".to_string(),
             NetworkStatus {
@@ -12429,6 +12507,60 @@ mod tests {
                 ("node-b".to_string(), Vec::new(), vec![0]),
                 ("node-c".to_string(), Vec::new(), vec![0]),
             ]
+        );
+    }
+
+    #[test]
+    fn runner_projection_range_excludes_warm_backup_layers() {
+        assert_eq!(layer_range_for_active_layers(&[1]), Some(1usize..2usize));
+        assert_eq!(
+            layer_range_for_active_layers(&[0, 1, 2, 3, 4, 5, 6]),
+            Some(0usize..7usize)
+        );
+        assert_eq!(layer_range_for_active_layers(&[]), None);
+    }
+
+    #[test]
+    fn healthy_sharded_assignment_is_preserved_during_telemetry_churn() {
+        let previous = HashMap::from([
+            (
+                "ipc".to_string(),
+                LayerRange {
+                    layers: vec![0],
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: Vec::new(),
+                },
+            ),
+            (
+                "worker-01".to_string(),
+                LayerRange {
+                    layers: Vec::new(),
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![0],
+                },
+            ),
+            (
+                "worker-02".to_string(),
+                LayerRange {
+                    layers: Vec::new(),
+                    layer_neuron_counts: HashMap::new(),
+                    backup_layers: vec![0],
+                },
+            ),
+        ]);
+        let eligible = HashSet::from([
+            "ipc".to_string(),
+            "worker-01".to_string(),
+            "worker-02".to_string(),
+        ]);
+
+        assert_eq!(
+            preserve_sharded_node_assignments(&previous, &eligible, 1),
+            Some(vec![
+                ("ipc".to_string(), vec![0], Vec::new()),
+                ("worker-01".to_string(), Vec::new(), vec![0]),
+                ("worker-02".to_string(), Vec::new(), vec![0]),
+            ])
         );
     }
 

@@ -35,8 +35,8 @@ use crate::distributed::{
     DistributedNode, ManagedNetwork,
     proto::{
         ClusterNetworkSnapshotRequest, ClusterNetworkSnapshotResponse, ControlUpdate,
-        NetworkStatus, NetworkUpdateRequest, NodeStatus, StatusRequest, control_update,
-        distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus, StatusRequest,
+        control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
         distributed_neuromorphic_server::DistributedNeuromorphic, network_update_request,
     },
 };
@@ -162,6 +162,51 @@ async fn connect_cluster_client(
     Ok(DistributedNeuromorphicClient::new(channel)
         .max_decoding_message_size(grpc_max_msg_bytes)
         .max_encoding_message_size(grpc_max_msg_bytes))
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+async fn fetch_biological_topology_witness(
+    addr: String,
+    network_id: String,
+    node_id: String,
+    bearer_token: Option<String>,
+) -> Result<Box<crate::runner::Snapshot>, String> {
+    let mut client = connect_cluster_client(addr.clone()).await?;
+    let request = authenticated_grpc_request(
+        NetworkSnapshotRequest {
+            network_id: network_id.clone(),
+            cut_epoch: 0,
+        },
+        bearer_token.as_deref(),
+    )?;
+    let response = client
+        .get_network_snapshot(request)
+        .await
+        .map_err(|error| format!("biological topology witness request failed: {error}"))?
+        .into_inner();
+    if response.network_id != network_id {
+        return Err(format!(
+            "topology witness node '{}' returned network '{}' instead of '{}'",
+            node_id, response.network_id, network_id
+        ));
+    }
+    let snapshot = crate::runner::decode_snapshot_with_profile_backfill(&response.snapshot_json)
+        .map_err(|error| format!("topology witness snapshot parse failed: {error}"))?;
+    let topology = snapshot.topo.as_ref().ok_or_else(|| {
+        format!(
+            "topology witness node '{}' has no biological topology",
+            node_id
+        )
+    })?;
+    if topology.layers.len() != snapshot.net.num_hidden_layers
+        || topology.layers.iter().any(Vec::is_empty)
+    {
+        return Err(format!(
+            "topology witness node '{}' has incomplete biological layers",
+            node_id
+        ));
+    }
+    Ok(Box::new(snapshot))
 }
 
 #[cfg(feature = "ui")]
@@ -918,12 +963,12 @@ impl IpcUdsService {
 
     fn send_outputs(&self, outputs: &[f32]) -> bool {
         self.commands
-            .send(IpcCommand::SendOutputs(outputs.to_vec()))
+            .try_send(IpcCommand::SendOutputs(outputs.to_vec()))
             .is_ok()
     }
 
     fn send_size_hint_to_last_peer(&self) -> bool {
-        self.commands.send(IpcCommand::SendSizeHint).is_ok()
+        self.commands.try_send(IpcCommand::SendSizeHint).is_ok()
     }
 }
 
@@ -1186,6 +1231,78 @@ pub(crate) fn launch_ui(
     Ok(())
 }
 
+/// Run the simulation and IPC service without starting eframe.
+///
+/// Simulator launchers use this path when the simulator owns the visible
+/// rendering surface.  `App::new` still owns the authoritative Runner,
+/// distributed input forwarding, and UDS service, so the headless path has
+/// the same neural and robot I/O behaviour as the normal Rust UI runtime.
+#[cfg(feature = "ui")]
+pub(crate) fn launch_headless_ipc(
+    net_cfg: crate::config::NetworkConfig,
+    brain_id: String,
+    ipc_enabled: bool,
+    #[cfg(all(feature = "robot_io", unix))] early_ipc_service: Option<IpcUdsService>,
+    distributed_node: Option<DistributedNode>,
+    remote_only: bool,
+    startup_snapshot_json: Option<String>,
+    remote_workspace_binding: Option<RemoteWorkspaceBinding>,
+    aer_cfg: Option<AerIoConfig>,
+    startup_remote_orchestrators: Vec<String>,
+    remote_bearer_token: Option<String>,
+    runtime_handle: tokio::runtime::Handle,
+) -> anyhow::Result<()> {
+    if !ipc_enabled {
+        return Err(anyhow::anyhow!(
+            "--headless-ipc requires --ipc so the simulator bridge has an endpoint"
+        ));
+    }
+
+    nm_log!(
+        "[headless-ipc] starting simulation runtime for brain '{}' without a Rust UI window",
+        brain_id
+    );
+    let app = App::new(
+        net_cfg,
+        brain_id,
+        ipc_enabled,
+        #[cfg(all(feature = "robot_io", unix))]
+        early_ipc_service,
+        distributed_node,
+        remote_only,
+        startup_snapshot_json,
+        remote_workspace_binding,
+        aer_cfg,
+        startup_remote_orchestrators,
+        remote_bearer_token,
+        runtime_handle.clone(),
+    );
+
+    // start_distributed installs its own shutdown fan-out for the workers,
+    // while this owner must also return so App::drop can stop its simulation
+    // and UDS threads. Handle both Ctrl-C and the SIGTERM used by launcher
+    // cleanup so no stale IPC socket or worker remains after shutdown.
+    runtime_handle.block_on(async {
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => result.map_err(anyhow::Error::from),
+                _ = sigterm.recv() => Ok(()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c().await.map_err(anyhow::Error::from)
+        }
+    })?;
+
+    drop(app);
+    nm_log!("[headless-ipc] simulation runtime stopped");
+    Ok(())
+}
+
 #[cfg(feature = "ui")]
 enum GAControl {
     Stop,
@@ -1391,6 +1508,11 @@ enum ClusterSnapshotMsg {
         snap: Box<crate::runner::Snapshot>,
         shard_count: usize,
         cluster_digest: String,
+        assignment_digest: u64,
+        /// A witness is a complete biological topology read from one stable
+        /// owner. It remains valid for presentation while compatibility
+        /// placement metadata is being repaired or rebalanced.
+        topology_witness: bool,
     },
     Err {
         network_id: String,
@@ -1404,7 +1526,7 @@ fn decode_cluster_snapshot_projection(
     response: ClusterNetworkSnapshotResponse,
     network_id: &str,
     preferred_node_id: Option<&str>,
-) -> Result<(Box<crate::runner::Snapshot>, usize, String), String> {
+) -> Result<(Box<crate::runner::Snapshot>, usize, String, u64), String> {
     if response.network_id != network_id {
         return Err(format!(
             "cluster snapshot returned network '{}' instead of requested network",
@@ -1433,7 +1555,8 @@ fn decode_cluster_snapshot_projection(
 
     let mut shards = response.shards;
     shards.sort_by(|left, right| left.node_id.cmp(&right.node_id));
-    let mut selected = None;
+    let mut parsed = Vec::with_capacity(shards.len());
+    let mut layer_owners = BTreeMap::<u32, String>::new();
     for shard in &shards {
         if shard.node_id.is_empty() {
             return Err("cluster snapshot contains a shard with no node id".to_owned());
@@ -1464,25 +1587,257 @@ fn decode_cluster_snapshot_projection(
                 shard.node_id
             ));
         }
-        if preferred_node_id == Some(shard.node_id.as_str()) {
-            selected = Some(snapshot);
+        if shard.layers.is_empty() {
+            return Err(format!(
+                "cluster snapshot shard '{}' has no active layer assignment",
+                shard.node_id
+            ));
         }
+        let mut layers = shard.layers.clone();
+        layers.sort_unstable();
+        if layers.windows(2).any(|layers| layers[0] == layers[1]) {
+            return Err(format!(
+                "cluster snapshot shard '{}' repeats an active layer",
+                shard.node_id
+            ));
+        }
+        layers.dedup();
+        for layer in layers {
+            if let Some(previous) = layer_owners.insert(layer, shard.node_id.clone()) {
+                return Err(format!(
+                    "cluster snapshot has multiple active owners for layer {} ({} and {})",
+                    layer, previous, shard.node_id
+                ));
+            }
+        }
+        parsed.push((shard.node_id.clone(), shard.layers.clone(), snapshot));
     }
-    if preferred_node_id.is_some() && selected.is_none() {
+    if preferred_node_id.is_some()
+        && !parsed
+            .iter()
+            .any(|(node_id, _, _)| Some(node_id.as_str()) == preferred_node_id)
+    {
         return Err(format!(
             "requested cluster shard '{}' is not present",
             preferred_node_id.unwrap_or_default()
         ));
     }
-    let snapshot = selected.or_else(|| {
-        shards.first().and_then(|shard| {
-            crate::runner::decode_snapshot_with_profile_backfill(&shard.snapshot_json).ok()
-        })
-    });
-    let Some(snapshot) = snapshot else {
+
+    let assignment_digest = cluster_snapshot_assignment_digest(
+        &parsed
+            .iter()
+            .map(|(node_id, layers, _)| (node_id.clone(), layers.clone()))
+            .collect::<Vec<_>>(),
+    );
+    validate_cluster_snapshot_assignment(
+        &layer_owners,
+        &parsed
+            .first()
+            .map(|(_, _, snapshot)| snapshot.net.clone())
+            .ok_or_else(|| "cluster snapshot has no usable shard projection".to_owned())?,
+    )?;
+    let snapshot = merge_cluster_snapshot_projection(&parsed, &layer_owners, preferred_node_id)?;
+    Ok((
+        Box::new(snapshot),
+        shards.len(),
+        response.cluster_digest,
+        assignment_digest,
+    ))
+}
+
+#[cfg(feature = "ui")]
+fn validate_cluster_snapshot_assignment(
+    layer_owners: &BTreeMap<u32, String>,
+    net: &crate::config::NetworkConfig,
+) -> Result<(), String> {
+    let execution_layers = net
+        .num_hidden_layers
+        .saturating_add(usize::from(net.io_channels_are_biological));
+    if execution_layers == 0
+        || layer_owners.len() != execution_layers
+        || (0..execution_layers).any(|layer| !layer_owners.contains_key(&(layer as u32)))
+    {
+        return Err(format!(
+            "cluster snapshot active assignment does not cover all {} execution layer(s)",
+            execution_layers
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "ui")]
+fn cluster_snapshot_assignment_digest(shards: &[(String, Vec<u32>)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut canonical = shards.to_vec();
+    canonical.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, layers) in &mut canonical {
+        layers.sort_unstable();
+        layers.dedup();
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(feature = "ui")]
+fn merge_cluster_snapshot_projection(
+    parsed: &[(String, Vec<u32>, crate::runner::Snapshot)],
+    layer_owners: &BTreeMap<u32, String>,
+    preferred_node_id: Option<&str>,
+) -> Result<crate::runner::Snapshot, String> {
+    let Some((_, _, canonical)) = parsed.first() else {
         return Err("cluster snapshot has no usable shard projection".to_owned());
     };
-    Ok((Box::new(snapshot), shards.len(), response.cluster_digest))
+    let preferred =
+        preferred_node_id.and_then(|node_id| parsed.iter().find(|(id, _, _)| id == node_id));
+    let canonical = preferred
+        .map(|(_, _, snapshot)| snapshot)
+        .unwrap_or(canonical);
+    let owner_snapshot = |layer: usize| {
+        layer_owners
+            .get(&(layer as u32))
+            .and_then(|owner| parsed.iter().find(|(id, _, _)| id == owner))
+            .map(|(_, _, snapshot)| snapshot)
+            .unwrap_or(canonical)
+    };
+
+    let mut merged = canonical.clone();
+    // Each matrix is selected from the active owner of its receiving layer.
+    // This keeps the visual projection aligned with the same one-owner-per-layer
+    // placement used by the cluster snapshot, while retaining the existing
+    // snapshot wire format and its full matrix representation.
+    let input_layer = canonical.net.sensory_target_layer.unwrap_or(0);
+    merged.w_in = owner_snapshot(input_layer).w_in.clone();
+    merged.p_in = owner_snapshot(input_layer).p_in.clone();
+    merged.w_hh_fwd = (0..canonical.net.num_hidden_layers.saturating_sub(1))
+        .map(|layer| owner_snapshot(layer + 1).w_hh_fwd.get(layer).cloned())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_else(|| canonical.w_hh_fwd.clone());
+    merged.p_fwd = (0..canonical.net.num_hidden_layers.saturating_sub(1))
+        .map(|layer| {
+            owner_snapshot(layer + 1)
+                .p_fwd
+                .as_ref()
+                .and_then(|presence| presence.get(layer).cloned())
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Some)
+        .unwrap_or_else(|| canonical.p_fwd.clone());
+    merged.w_hh_bwd = (0..canonical.net.num_hidden_layers.saturating_sub(1))
+        .map(|layer| owner_snapshot(layer).w_hh_bwd.get(layer).cloned())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_else(|| canonical.w_hh_bwd.clone());
+    merged.p_bwd = (0..canonical.net.num_hidden_layers.saturating_sub(1))
+        .map(|layer| {
+            owner_snapshot(layer)
+                .p_bwd
+                .as_ref()
+                .and_then(|presence| presence.get(layer).cloned())
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Some)
+        .unwrap_or_else(|| canonical.p_bwd.clone());
+    merged.w_hh_rec = (0..canonical.net.num_hidden_layers)
+        .map(|layer| owner_snapshot(layer).w_hh_rec.get(layer).cloned())
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_else(|| canonical.w_hh_rec.clone());
+    merged.p_rec = (0..canonical.net.num_hidden_layers)
+        .map(|layer| {
+            owner_snapshot(layer)
+                .p_rec
+                .as_ref()
+                .and_then(|presence| presence.get(layer).cloned())
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Some)
+        .unwrap_or_else(|| canonical.p_rec.clone());
+    let output_layer = if canonical.net.io_channels_are_biological {
+        canonical.net.num_hidden_layers
+    } else {
+        canonical
+            .net
+            .output_source_layer
+            .unwrap_or_else(|| canonical.net.num_hidden_layers.saturating_sub(1))
+    };
+    merged.w_out = owner_snapshot(output_layer).w_out.clone();
+    merged.p_out = owner_snapshot(output_layer).p_out.clone();
+    merged.layer_range = None;
+
+    #[cfg(feature = "growth3d")]
+    {
+        let topology_source = parsed
+            .iter()
+            .find(|(_, _, snapshot)| {
+                snapshot.topo.as_ref().is_some_and(|topo| {
+                    !topo.layers.is_empty()
+                        || !topo.sensory_nodes.is_empty()
+                        || !topo.output_nodes.is_empty()
+                        || !topo.early_cells.is_empty()
+                })
+            })
+            .map(|(_, _, snapshot)| snapshot)
+            .unwrap_or(canonical);
+        let mut topology = topology_source.topo.clone().unwrap_or_default();
+        topology.layers.clear();
+        topology
+            .layers
+            .resize(canonical.net.num_hidden_layers, Vec::new());
+        for layer in 0..canonical.net.num_hidden_layers {
+            let source = owner_snapshot(layer);
+            if let Some(source_topology) = source.topo.as_ref() {
+                if let Some(nodes) = source_topology.layers.get(layer) {
+                    topology.layers[layer] = nodes.clone();
+                }
+            }
+            // Compatibility snapshots can carry a full topology whose owner
+            // layer is empty during a placement handoff. Use the canonical
+            // biological layer only as a same-generation completeness fallback.
+            if topology.layers[layer].is_empty() {
+                if let Some(nodes) = canonical
+                    .topo
+                    .as_ref()
+                    .and_then(|topo| topo.layers.get(layer))
+                {
+                    topology.layers[layer] = nodes.clone();
+                }
+            }
+        }
+        if topology.layers.len() != canonical.net.num_hidden_layers
+            || topology.layers.iter().any(|layer| layer.is_empty())
+        {
+            return Err(
+                "cluster snapshot biological topology is incomplete for its active assignment"
+                    .to_owned(),
+            );
+        }
+        topology.sensory_nodes = topology_source
+            .topo
+            .as_ref()
+            .map(|topo| topo.sensory_nodes.clone())
+            .unwrap_or_default();
+        topology.output_nodes = topology_source
+            .topo
+            .as_ref()
+            .map(|topo| topo.output_nodes.clone())
+            .unwrap_or_default();
+        let mut early_by_id = BTreeMap::new();
+        for (node_id, _, snapshot) in parsed {
+            if let Some(topo) = snapshot.topo.as_ref() {
+                for cell in &topo.early_cells {
+                    let owned = layer_owners
+                        .get(&(cell.source_layer as u32))
+                        .is_some_and(|owner| node_id == owner);
+                    if owned || !early_by_id.contains_key(&cell.id) {
+                        early_by_id.insert(cell.id, cell.clone());
+                    }
+                }
+            }
+        }
+        topology.early_cells = early_by_id.into_values().collect();
+        merged.topo = Some(topology);
+    }
+    Ok(merged)
 }
 
 #[cfg(feature = "ui")]
@@ -1991,11 +2346,16 @@ struct App {
     cluster_snapshot_rx: std::sync::mpsc::Receiver<ClusterSnapshotMsg>,
     cluster_snapshot_inflight: bool,
     cluster_snapshot_last_fetch: Option<std::time::Instant>,
+    cluster_snapshot_next_retry: Option<std::time::Instant>,
+    cluster_snapshot_failure_count: u32,
     cluster_snapshot_network_id: Option<String>,
     cluster_snapshot_node_id: Option<String>,
+    cluster_snapshot_assignment_digest: Option<u64>,
     cluster_snapshot_cache: Option<Box<crate::runner::Snapshot>>,
     #[cfg(feature = "growth3d")]
     cluster_topo_cache: Option<crate::topology::Topology3D>,
+    #[cfg(feature = "growth3d")]
+    cluster_topology_is_witness: bool,
     // Distributed state cache to prevent UI flicker when locks are busy
     dist_is_orchestrator: bool,
     dist_node_id: String,
@@ -2363,6 +2723,64 @@ impl App {
         }
         if let Ok(mut snap) = self.ui_snapshot.try_write() {
             *snap = UiSnapshot::default();
+        }
+    }
+
+    fn cluster_assignment_digest_for_registry(&self, network_id: &str) -> Option<u64> {
+        let network = self.dist_network_registry.get(network_id)?;
+        let assignments = network
+            .distribution
+            .iter()
+            .filter(|(_, range)| !range.layers.is_empty())
+            .map(|(node_id, range)| (node_id.clone(), range.layers.clone()))
+            .collect::<Vec<_>>();
+        Some(cluster_snapshot_assignment_digest(&assignments))
+    }
+
+    fn invalidate_cluster_projection(&mut self) {
+        self.cluster_snapshot_cache = None;
+        self.cluster_snapshot_assignment_digest = None;
+        self.cluster_snapshot_last_fetch = None;
+        self.cluster_snapshot_next_retry = None;
+        self.cluster_snapshot_failure_count = 0;
+        self.cluster_snapshot_node_id = None;
+        self.cached_edges.clear();
+        self.cached_layer_sizes.clear();
+        self.cached_conn_counts.clear();
+        self.cached_output_conn_count = None;
+        #[cfg(feature = "growth3d")]
+        {
+            self.cluster_topo_cache = None;
+            self.cluster_topology_is_witness = false;
+            self.cached_edge_topo = None;
+            self.reset_topology_pid_states();
+        }
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        {
+            self.cached_skull_membrane = None;
+        }
+        self.last_rendered_panel_size = egui::Vec2::ZERO;
+    }
+
+    fn invalidate_stale_cluster_projection(&mut self) {
+        #[cfg(feature = "growth3d")]
+        if self.cluster_topology_is_witness {
+            // A complete biological witness is deliberately independent of
+            // the compatibility placement digest. Warm-copy churn can make a
+            // strict cluster cut temporarily invalid, but it must not make a
+            // valid biological topology disappear from the UI.
+            return;
+        }
+        let expected = match &self.view_source {
+            ViewSource::ClusterGlobal(network_id) => {
+                self.cluster_assignment_digest_for_registry(network_id)
+            }
+            _ => return,
+        };
+        if self.cluster_snapshot_cache.is_some()
+            && self.cluster_snapshot_assignment_digest != expected
+        {
+            self.invalidate_cluster_projection();
         }
     }
 
@@ -3060,6 +3478,8 @@ impl App {
                 let mut pending_ipc_dt: Option<f64> = None;
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut pending_ipc_reward: Option<f32> = None;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut pending_ipc_output: Option<Vec<f32>> = None;
                 let mut distributed_input_target: Option<String> = None;
                 let mut distributed_input_step: i64 = 0;
                 loop {
@@ -3155,6 +3575,23 @@ impl App {
                                 return;
                             }
                             _ => {}
+                        }
+                    }
+
+                    // Do not block the simulation thread on a full command
+                    // queue. A motor reply remains owned by its originating
+                    // IPC session and is retried before another reply can be
+                    // emitted, preserving lockstep ordering and bounded
+                    // backpressure.
+                    #[cfg(all(feature = "robot_io", unix))]
+                    if let Some(output) = pending_ipc_output.take() {
+                        let delivered = sim_ipc_service
+                            .as_ref()
+                            .is_some_and(|service| service.send_outputs(&output));
+                        if !delivered {
+                            pending_ipc_output = Some(output);
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            continue;
                         }
                     }
 
@@ -3918,7 +4355,10 @@ impl App {
                                             out_vals.len()
                                         );
                                     }
-                                    let _ = srv.send_outputs(&out_vals);
+                                    if !srv.send_outputs(&out_vals) {
+                                        pending_ipc_output = Some(out_vals.clone());
+                                        continue;
+                                    }
                                     if let Ok(mut stats) = sim_ipc_stats.try_write() {
                                         stats.last_steps = ipc_steps_taken;
                                     if let Some(frame_spikes) = ipc_output_spikes_frame.as_ref() {
@@ -4630,11 +5070,16 @@ impl App {
             cluster_snapshot_rx,
             cluster_snapshot_inflight: false,
             cluster_snapshot_last_fetch: None,
+            cluster_snapshot_next_retry: None,
+            cluster_snapshot_failure_count: 0,
             cluster_snapshot_network_id: None,
             cluster_snapshot_node_id: None,
+            cluster_snapshot_assignment_digest: None,
             cluster_snapshot_cache: None,
             #[cfg(feature = "growth3d")]
             cluster_topo_cache: None,
+            #[cfg(feature = "growth3d")]
+            cluster_topology_is_witness: false,
             dist_is_orchestrator: false,
             dist_node_id: String::new(),
             dist_nodes: HashMap::new(),
@@ -4780,20 +5225,35 @@ impl App {
                     if !keep_progress {
                         entry.stage = stage;
                         entry.stage_detail = detail;
+                        entry.connected = matches!(
+                            stage,
+                            RemoteConnectionStage::Accepted
+                                | RemoteConnectionStage::LoadingNetwork
+                                | RemoteConnectionStage::Ready
+                        );
+                    } else {
+                        entry.connected = true;
+                        entry.stage_detail = Some("Reconnecting remote status channel".into());
                     }
-                    entry.connected = matches!(
-                        stage,
-                        RemoteConnectionStage::Accepted
-                            | RemoteConnectionStage::LoadingNetwork
-                            | RemoteConnectionStage::Ready
-                    );
                     entry.last_update = std::time::Instant::now();
                 }
                 RemoteStatusMsg::Update {
                     addr,
-                    nodes,
-                    networks,
+                    mut nodes,
+                    mut networks,
                 } => {
+                    // Keep a usable last-good inventory across a successful but
+                    // temporarily incomplete status response. This occurs while
+                    // an orchestrator is rebuilding its placement view and must
+                    // not make the remote-only client abandon its selected brain.
+                    if let Some(previous) = self.remote_statuses.get(&addr) {
+                        if nodes.is_empty() && !previous.nodes.is_empty() {
+                            nodes = previous.nodes.clone();
+                        }
+                        if networks.is_empty() && !previous.networks.is_empty() {
+                            networks = previous.networks.clone();
+                        }
+                    }
                     let first_network = networks.keys().min().cloned();
                     let stage = self
                         .remote_statuses
@@ -4868,18 +5328,32 @@ impl App {
                             connected: false,
                             stage: RemoteConnectionStage::Error,
                         });
+                    let had_inventory = !entry.nodes.is_empty() || !entry.networks.is_empty();
                     entry.last_error = Some(error);
                     entry.stage_detail = None;
-                    entry.connected = false;
-                    entry.stage = if entry
+                    let rejected = entry
                         .last_error
                         .as_deref()
-                        .is_some_and(|error| error.starts_with("Connection rejected:"))
-                    {
-                        RemoteConnectionStage::Rejected
+                        .is_some_and(|error| error.starts_with("Connection rejected:"));
+                    if had_inventory && !rejected {
+                        // A status poll is a health sample, not the lifetime of the
+                        // authenticated connection. Keep the last good inventory as a
+                        // usable target while the worker reconnects in the background.
+                        entry.connected = true;
+                        entry.stage = RemoteConnectionStage::Ready;
+                        entry.stage_detail = Some("Temporary poll failure; reconnecting".into());
                     } else {
-                        RemoteConnectionStage::Error
-                    };
+                        entry.connected = false;
+                        entry.stage = if entry
+                            .last_error
+                            .as_deref()
+                            .is_some_and(|error| error.starts_with("Connection rejected:"))
+                        {
+                            RemoteConnectionStage::Rejected
+                        } else {
+                            RemoteConnectionStage::Error
+                        };
+                    }
                     entry.last_update = std::time::Instant::now();
                 }
             }
@@ -5233,133 +5707,165 @@ impl App {
                     }
                 };
                 runtime.block_on(async move {
+                    let mut client: Option<
+                        DistributedNeuromorphicClient<tonic::transport::Channel>,
+                    > = None;
+                    let mut retry_delay = Duration::from_secs(1);
                     loop {
                         if stop_clone.load(Ordering::SeqCst) {
                             break;
                         }
-                        let _ = tx.send(RemoteStatusMsg::Stage {
-                            addr: addr_clone.clone(),
-                            stage: RemoteConnectionStage::Connecting,
-                            detail: Some("Opening gRPC channel (5s deadline)".to_string()),
-                        });
-                        let connect_timeout = remote_orchestrator_timeout(
-                            "NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS",
-                            Duration::from_secs(5),
-                        );
-                        match tokio::time::timeout(
-                            connect_timeout,
-                            connect_cluster_client(addr_clone.clone()),
-                        )
-                        .await
-                        {
-                            Ok(Ok(mut client)) => {
-                                let _ = tx.send(RemoteStatusMsg::Stage {
-                                    addr: addr_clone.clone(),
-                                    stage: RemoteConnectionStage::Authenticating,
-                                    detail: Some(
-                                        "Requesting authorised remote inventory".to_string(),
-                                    ),
-                                });
-                                let request = authenticated_grpc_request(
-                                    StatusRequest {},
-                                    request_token.as_deref(),
-                                );
-                                match request {
-                                    Ok(request) => {
-                                        let rpc_timeout = remote_orchestrator_timeout(
-                                            "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
-                                            Duration::from_secs(8),
-                                        );
-                                        match tokio::time::timeout(
-                                            rpc_timeout,
-                                            client.get_system_status(request),
-                                        )
-                                        .await
-                                        {
-                                            Ok(Ok(resp)) => {
-                                                let status = resp.into_inner();
-                                                let nodes = status
-                                                    .nodes
-                                                    .into_iter()
-                                                    .map(|n| (n.node_id.clone(), n))
-                                                    .collect();
-                                                let networks = status
-                                                    .networks
-                                                    .into_iter()
-                                                    .map(|n| (n.network_id.clone(), n))
-                                                    .collect();
-                                                let _ = tx.send(RemoteStatusMsg::Update {
-                                                    addr: addr_clone.clone(),
-                                                    nodes,
-                                                    networks,
-                                                });
-                                                nm_log!(
-                                                    "[remote-ui] inventory accepted from {}",
-                                                    addr_clone
-                                                );
-                                            }
-                                            Ok(Err(e)) => {
-                                                nm_err!(
-                                                    "[remote-ui] inventory request rejected by {}: {}",
-                                                    addr_clone,
-                                                    e
-                                                );
-                                                let _ = tx.send(RemoteStatusMsg::Error {
-                                                    addr: addr_clone.clone(),
-                                                    error: format!("Connection rejected: status error: {}", e),
-                                                });
-                                            }
-                                            Err(_) => {
-                                                nm_err!(
-                                                    "[remote-ui] inventory request timed out for {} after {:?}",
-                                                    addr_clone,
-                                                    rpc_timeout
-                                                );
-                                                let _ = tx.send(RemoteStatusMsg::Error {
-                                                    addr: addr_clone.clone(),
-                                                    error: format!(
-                                                        "Connection rejected: status request timed out after {:?}",
-                                                        rpc_timeout
-                                                    ),
-                                                });
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        let _ = tx.send(RemoteStatusMsg::Error {
-                                            addr: addr_clone.clone(),
-                                            error: format!("Connection rejected: authentication metadata failed: {}", error),
-                                        });
-                                    }
+
+                        if client.is_none() {
+                            let _ = tx.send(RemoteStatusMsg::Stage {
+                                addr: addr_clone.clone(),
+                                stage: RemoteConnectionStage::Connecting,
+                                detail: Some("Opening gRPC channel (5s deadline)".to_string()),
+                            });
+                            let connect_timeout = remote_orchestrator_timeout(
+                                "NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS",
+                                Duration::from_secs(5),
+                            );
+                            match tokio::time::timeout(
+                                connect_timeout,
+                                connect_cluster_client(addr_clone.clone()),
+                            )
+                            .await
+                            {
+                                Ok(Ok(new_client)) => {
+                                    client = Some(new_client);
+                                    retry_delay = Duration::from_secs(1);
+                                    let _ = tx.send(RemoteStatusMsg::Stage {
+                                        addr: addr_clone.clone(),
+                                        stage: RemoteConnectionStage::Authenticating,
+                                        detail: Some(
+                                            "Requesting authorised remote inventory".to_string(),
+                                        ),
+                                    });
+                                }
+                                Ok(Err(error)) => {
+                                    nm_err!(
+                                        "[remote-ui] gRPC connect failed for {}: {}",
+                                        addr_clone,
+                                        error
+                                    );
+                                    let _ = tx.send(RemoteStatusMsg::Error {
+                                        addr: addr_clone.clone(),
+                                        error: format!("Connection rejected: connect error: {error}"),
+                                    });
+                                    tokio::time::sleep(retry_delay).await;
+                                    retry_delay = (retry_delay * 2).min(Duration::from_secs(10));
+                                    continue;
+                                }
+                                Err(_) => {
+                                    nm_err!(
+                                        "[remote-ui] gRPC connect timed out for {} after {:?}",
+                                        addr_clone,
+                                        connect_timeout
+                                    );
+                                    let _ = tx.send(RemoteStatusMsg::Error {
+                                        addr: addr_clone.clone(),
+                                        error: format!(
+                                            "Connection rejected: connect timed out after {connect_timeout:?}"
+                                        ),
+                                    });
+                                    tokio::time::sleep(retry_delay).await;
+                                    retry_delay = (retry_delay * 2).min(Duration::from_secs(10));
+                                    continue;
                                 }
                             }
-                            Ok(Err(e)) => {
-                                nm_err!(
-                                    "[remote-ui] gRPC connect failed for {}: {}",
-                                    addr_clone,
-                                    e
-                                );
-                                let _ = tx.send(RemoteStatusMsg::Error {
-                                    addr: addr_clone.clone(),
-                                    error: format!("Connection rejected: connect error: {}", e),
-                                });
-                            }
-                            Err(_) => {
-                                nm_err!(
-                                    "[remote-ui] gRPC connect timed out for {} after {:?}",
-                                    addr_clone,
-                                    connect_timeout
-                                );
+                        }
+
+                        let request = match authenticated_grpc_request(
+                            StatusRequest {},
+                            request_token.as_deref(),
+                        ) {
+                            Ok(request) => request,
+                            Err(error) => {
                                 let _ = tx.send(RemoteStatusMsg::Error {
                                     addr: addr_clone.clone(),
                                     error: format!(
-                                        "Connection rejected: connect timed out after {:?}",
-                                        connect_timeout
+                                        "Connection rejected: authentication metadata failed: {error}"
                                     ),
                                 });
+                                break;
+                            }
+                        };
+                        let rpc_timeout = remote_orchestrator_timeout(
+                            "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
+                            Duration::from_secs(8),
+                        );
+                        let status_result = {
+                            let active_client = client.as_mut().expect("remote client connected");
+                            tokio::time::timeout(
+                                rpc_timeout,
+                                active_client.get_system_status(request),
+                            )
+                            .await
+                        };
+                        match status_result {
+                            Ok(Ok(resp)) => {
+                                let status = resp.into_inner();
+                                let nodes = status
+                                    .nodes
+                                    .into_iter()
+                                    .map(|n| (n.node_id.clone(), n))
+                                    .collect();
+                                let networks = status
+                                    .networks
+                                    .into_iter()
+                                    .map(|n| (n.network_id.clone(), n))
+                                    .collect();
+                                let _ = tx.send(RemoteStatusMsg::Update {
+                                    addr: addr_clone.clone(),
+                                    nodes,
+                                    networks,
+                                });
+                                retry_delay = Duration::from_secs(1);
+                                nm_log!("[remote-ui] inventory accepted from {}", addr_clone);
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                            }
+                            Ok(Err(error)) => {
+                                nm_err!(
+                                    "[remote-ui] inventory request failed for {}: {}",
+                                    addr_clone,
+                                    error
+                                );
+                                client = None;
+                                let error_text = if matches!(
+                                    error.code(),
+                                    tonic::Code::Unauthenticated
+                                        | tonic::Code::PermissionDenied
+                                        | tonic::Code::InvalidArgument
+                                ) {
+                                    format!("Connection rejected: status error: {error}")
+                                } else {
+                                    format!("Temporary remote status failure: {error}")
+                                };
+                                let _ = tx.send(RemoteStatusMsg::Error {
+                                    addr: addr_clone.clone(),
+                                    error: error_text,
+                                });
+                                tokio::time::sleep(retry_delay).await;
+                                retry_delay = (retry_delay * 2).min(Duration::from_secs(10));
+                            }
+                            Err(_) => {
+                                nm_err!(
+                                    "[remote-ui] inventory request timed out for {} after {:?}",
+                                    addr_clone,
+                                    rpc_timeout
+                                );
+                                client = None;
+                                let _ = tx.send(RemoteStatusMsg::Error {
+                                    addr: addr_clone.clone(),
+                                    error: format!(
+                                        "Temporary remote status failure: request timed out after {rpc_timeout:?}"
+                                    ),
+                                });
+                                tokio::time::sleep(retry_delay).await;
+                                retry_delay = (retry_delay * 2).min(Duration::from_secs(10));
                             }
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                 });
             });
@@ -6468,6 +6974,24 @@ impl App {
             self.dist_initial_view_selected = true;
             self.view_node_filter = None;
             self.layout_auto = true;
+            // A biological projection belongs to one selected brain. Clear
+            // it on every view change so a witness from a previous cluster
+            // cannot be displayed for the newly selected network.
+            self.invalidate_cluster_projection();
+            // Edge/topology caches are scoped to the selected brain view. Do
+            // not let a previous synthetic or remote projection survive a
+            // source switch and get rendered beside the new biological one.
+            self.cached_edges.clear();
+            self.cached_layer_sizes.clear();
+            self.cached_conn_counts.clear();
+            self.cached_output_conn_count = None;
+            #[cfg(feature = "growth3d")]
+            {
+                self.cached_edge_topo = None;
+                if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+                    self.cluster_topo_cache = None;
+                }
+            }
             self.refresh_ui_buffers();
         }
     }
@@ -8413,6 +8937,60 @@ mod topology_presentation_tests {
     use super::*;
 
     #[test]
+    fn cluster_dashboard_layer_count_excludes_output_boundary() {
+        assert_eq!(cluster_hidden_layer_count(Some(6), 6, 7), 6);
+        assert_eq!(cluster_hidden_layer_count(None, 6, 7), 6);
+        assert_eq!(cluster_hidden_layer_count(None, 0, 7), 6);
+    }
+
+    #[test]
+    fn biological_topology_has_priority_over_cached_projection() {
+        assert_eq!(
+            select_biological_topology_source(true, true, true, true),
+            Some(BiologicalTopologySource::Cluster)
+        );
+        assert_eq!(
+            select_biological_topology_source(false, true, true, true),
+            Some(BiologicalTopologySource::ActiveRunner)
+        );
+        assert_eq!(
+            select_biological_topology_source(false, false, true, true),
+            Some(BiologicalTopologySource::Snapshot)
+        );
+        assert_eq!(
+            select_biological_topology_source(false, false, false, true),
+            Some(BiologicalTopologySource::Cached)
+        );
+    }
+
+    #[test]
+    fn incomplete_biological_projection_does_not_disable_fallback() {
+        let mut topo = crate::topology::Topology3D::new();
+        topo.layers = vec![vec![crate::topology::Node3D::default()]];
+        assert!(complete_biological_topology(&topo, 1, 0, 0));
+        assert!(!complete_biological_topology(&topo, 2, 0, 0));
+    }
+
+    #[test]
+    fn mismatched_cluster_cut_keeps_same_network_biological_witness() {
+        assert!(should_preserve_biological_witness(
+            true,
+            Some("hexapod_01"),
+            "hexapod_01"
+        ));
+        assert!(!should_preserve_biological_witness(
+            true,
+            Some("other_brain"),
+            "hexapod_01"
+        ));
+        assert!(!should_preserve_biological_witness(
+            false,
+            Some("hexapod_01"),
+            "hexapod_01"
+        ));
+    }
+
+    #[test]
     fn paused_topology_snap_does_not_interpolate_or_retain_stale_error() {
         let target = egui::pos2(120.0, 80.0);
         let mut states = vec![UiPid2State {
@@ -8429,6 +9007,87 @@ mod topology_presentation_tests {
         assert_eq!(states[0].prev_err, egui::Vec2::ZERO);
         assert_eq!(states[0].integral, egui::Vec2::ZERO);
         assert!(states[0].initialized);
+    }
+
+    #[test]
+    fn cluster_projection_selects_one_biological_layer_owner() {
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_hidden_layers = 2;
+        config.io_channels_are_biological = false;
+        config.num_hidden_per_layer_initial = 2;
+        config.num_sensory_neurons = 1;
+        config.num_output_neurons = 1;
+        config.growth_enabled = true;
+        let mut first = Runner::new(
+            Default::default(),
+            Default::default(),
+            config.clone(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        let base = first.export_network_json().expect("base snapshot");
+        let mut second = Runner::new(
+            Default::default(),
+            Default::default(),
+            config,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        second
+            .import_network_json(&base)
+            .expect("second worker snapshot import");
+        first.topo.layers[0][0].x = -10.0;
+        second.topo.layers[1][0].x = 20.0;
+        first.layer_range = Some(0..1);
+        second.layer_range = Some(1..2);
+
+        let parsed = vec![
+            ("worker-a".to_owned(), vec![0], first.snapshot()),
+            ("worker-b".to_owned(), vec![1], second.snapshot()),
+        ];
+        let owners = BTreeMap::from([(0, "worker-a".to_owned()), (1, "worker-b".to_owned())]);
+        let merged = merge_cluster_snapshot_projection(&parsed, &owners, None)
+            .expect("complete cluster projection");
+        let topo = merged.topo.expect("merged biological topology");
+
+        assert_eq!(topo.layers.len(), 2);
+        assert_eq!(topo.layers[0].len(), 2);
+        assert_eq!(topo.layers[1].len(), 2);
+        assert_eq!(topo.layers[0][0].x, -10.0);
+        assert_eq!(topo.layers[1][0].x, 20.0);
+        assert!(merged.layer_range.is_none());
+    }
+
+    #[test]
+    fn cluster_assignment_digest_is_order_independent_but_changes_on_placement_change() {
+        let first = cluster_snapshot_assignment_digest(&[
+            ("worker-a".to_owned(), vec![0, 2]),
+            ("worker-b".to_owned(), vec![1]),
+        ]);
+        let reordered = cluster_snapshot_assignment_digest(&[
+            ("worker-b".to_owned(), vec![1, 1]),
+            ("worker-a".to_owned(), vec![2, 0]),
+        ]);
+        let moved = cluster_snapshot_assignment_digest(&[
+            ("worker-a".to_owned(), vec![0, 1]),
+            ("worker-b".to_owned(), vec![2]),
+        ]);
+
+        assert_eq!(first, reordered);
+        assert_ne!(first, moved);
+    }
+
+    #[test]
+    fn cluster_assignment_rejects_missing_execution_layer_owner() {
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_hidden_layers = 2;
+        config.io_channels_are_biological = false;
+
+        let incomplete = BTreeMap::from([(0, "worker-a".to_owned())]);
+        assert!(validate_cluster_snapshot_assignment(&incomplete, &config).is_err());
+
+        let complete = BTreeMap::from([(0, "worker-a".to_owned()), (1, "worker-b".to_owned())]);
+        assert!(validate_cluster_snapshot_assignment(&complete, &config).is_ok());
     }
 }
 
@@ -9067,6 +9726,72 @@ enum LearningSel {
 enum NetworkLayout {
     Conventional,
     Aarnn,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BiologicalTopologySource {
+    Cluster,
+    ActiveRunner,
+    Snapshot,
+    Cached,
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn complete_biological_topology(
+    topo: &crate::topology::Topology3D,
+    expected_layers: usize,
+    expected_sensory: usize,
+    expected_output: usize,
+) -> bool {
+    topo.layers.len() == expected_layers
+        && topo.layers.iter().all(|layer| !layer.is_empty())
+        && (expected_sensory == 0 || topo.sensory_nodes.len() == expected_sensory)
+        && (expected_output == 0 || topo.output_nodes.len() == expected_output)
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn select_biological_topology_source(
+    cluster: bool,
+    active_runner: bool,
+    snapshot: bool,
+    cached: bool,
+) -> Option<BiologicalTopologySource> {
+    if cluster {
+        Some(BiologicalTopologySource::Cluster)
+    } else if active_runner {
+        Some(BiologicalTopologySource::ActiveRunner)
+    } else if snapshot {
+        Some(BiologicalTopologySource::Snapshot)
+    } else if cached {
+        Some(BiologicalTopologySource::Cached)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn should_preserve_biological_witness(
+    topology_is_witness: bool,
+    cached_network_id: Option<&str>,
+    requested_network_id: &str,
+) -> bool {
+    topology_is_witness && cached_network_id == Some(requested_network_id)
+}
+
+#[cfg(feature = "ui")]
+fn cluster_hidden_layer_count(
+    configured_hidden_layers: Option<usize>,
+    assigned_layer_count: usize,
+    dashboard_layer_count: u32,
+) -> usize {
+    configured_hidden_layers
+        .map(|layers| layers.max(1))
+        .unwrap_or_else(|| {
+            assigned_layer_count
+                .max((dashboard_layer_count as usize).saturating_sub(1))
+                .max(1)
+        })
 }
 
 #[cfg(feature = "ui")]
@@ -10231,6 +10956,19 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // eframe reveals the root viewport after its first painted frame even
+        // when the viewport was created with `visible(false)`.  Distributed
+        // IPC-owning workers still use this UI-backed runtime for the
+        // simulation and socket service, but `NM_UI_HIDDEN` means that they
+        // must never create an on-screen Rust UI window.
+        if std::env::var("NM_UI_HIDDEN").ok().is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        }) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         observe_time!("App::update");
         observe_hit!("ui_frame");
         self.render_video_preview(&ctx);
@@ -10483,6 +11221,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.invalidate_stale_cluster_projection();
         self.maybe_select_initial_distributed_view();
 
         while let Ok(msg) = self.cluster_snapshot_rx.try_recv() {
@@ -10493,13 +11232,38 @@ impl eframe::App for App {
                     snap,
                     shard_count,
                     cluster_digest,
+                    assignment_digest,
+                    topology_witness,
                 } => {
                     self.cluster_snapshot_inflight = false;
                     self.cluster_snapshot_last_fetch = Some(std::time::Instant::now());
+                    self.cluster_snapshot_next_retry = None;
+                    self.cluster_snapshot_failure_count = 0;
                     self.cluster_snapshot_network_id = Some(network_id.clone());
                     self.cluster_snapshot_node_id = Some(node_id);
+                    self.cluster_snapshot_assignment_digest = Some(assignment_digest);
                     #[cfg(feature = "growth3d")]
                     {
+                        // A successful merged cluster cut already contains one
+                        // biological topology assembled from the active shard
+                        // owners. Treat that topology as a stable witness too:
+                        // placement metadata may change while the biological
+                        // projection remains valid for presentation.
+                        let has_complete_biological_topology =
+                            snap.topo.as_ref().is_some_and(|topo| {
+                                topo.layers.len() == snap.net.num_hidden_layers
+                                    && topo.layers.iter().all(|layer| !layer.is_empty())
+                            });
+                        // Keep the last complete biological witness when a
+                        // compatible server temporarily returns a snapshot
+                        // without topology fields. A strict cluster cut is a
+                        // data-plane refresh; it must not demote an already
+                        // valid biological presentation to the synthetic
+                        // placement graph.
+                        self.cluster_topology_is_witness = topology_witness
+                            || has_complete_biological_topology
+                            || (self.cluster_topology_is_witness
+                                && self.cluster_topo_cache.is_some());
                         if let Some(topo) = snap.topo.as_ref().filter(|topo| {
                             !topo.layers.is_empty()
                                 || !topo.sensory_nodes.is_empty()
@@ -10568,15 +11332,61 @@ impl eframe::App for App {
                     error,
                 } => {
                     self.cluster_snapshot_inflight = false;
+                    let failure_count = self.cluster_snapshot_failure_count.min(4);
+                    let retry_seconds = 1u64 << failure_count;
+                    self.cluster_snapshot_failure_count =
+                        self.cluster_snapshot_failure_count.saturating_add(1);
+                    self.cluster_snapshot_next_retry = Some(
+                        std::time::Instant::now()
+                            + std::time::Duration::from_secs(retry_seconds.min(16)),
+                    );
+                    #[cfg(feature = "growth3d")]
+                    let preserve_witness = should_preserve_biological_witness(
+                        self.cluster_topology_is_witness,
+                        self.cluster_snapshot_network_id.as_deref(),
+                        &network_id,
+                    );
+                    #[cfg(not(feature = "growth3d"))]
+                    let preserve_witness = false;
+                    if !preserve_witness
+                        && self.cluster_snapshot_cache.is_none()
+                        && self.cluster_snapshot_network_id.as_deref() == Some(network_id.as_str())
+                    {
+                        self.invalidate_cluster_projection();
+                        self.cluster_snapshot_network_id = Some(network_id.clone());
+                    }
                     if self.remote_only {
+                        let preserve_witness = {
+                            #[cfg(feature = "growth3d")]
+                            {
+                                should_preserve_biological_witness(
+                                    self.cluster_topology_is_witness,
+                                    self.cluster_snapshot_network_id.as_deref(),
+                                    &network_id,
+                                )
+                            }
+                            #[cfg(not(feature = "growth3d"))]
+                            {
+                                false
+                            }
+                        };
                         if let Some(snapshot) = self
                             .remote_statuses
                             .values_mut()
                             .find(|snapshot| snapshot.networks.contains_key(&network_id))
                         {
-                            snapshot.stage = RemoteConnectionStage::Error;
-                            snapshot.last_error =
-                                Some(format!("Remote network load failed: {}", error));
+                            if preserve_witness {
+                                snapshot.stage = RemoteConnectionStage::Ready;
+                                snapshot.last_error = None;
+                                snapshot.stage_detail = Some(
+                                    "Showing last biological topology while the live cut resynchronises"
+                                        .to_owned(),
+                                );
+                            } else {
+                                snapshot.stage = RemoteConnectionStage::Error;
+                                snapshot.last_error =
+                                    Some(format!("Remote network load failed: {}", error));
+                            }
                             snapshot.last_update = std::time::Instant::now();
                         }
                     }
@@ -10622,6 +11432,55 @@ impl eframe::App for App {
                         .map(|node| (node_id, node.address.clone()))
                 })
             };
+            // A compatibility worker can continue evolving its local runner
+            // while another worker owns a different active layer.  If that
+            // makes a strict multi-shard cut temporarily unassemblable, use
+            // one complete biological topology witness for presentation. The
+            // witness is deliberately preferred from the stable IPC owner;
+            // warm-only copies and arbitrary placement order must not decide
+            // which biology the cluster UI renders.
+            #[cfg(feature = "growth3d")]
+            let topology_fallback_target =
+                self.dist_network_registry.get(net_id).and_then(|status| {
+                    let ipc_id = format!("{net_id}_ipc");
+                    let mut candidates = status
+                        .distribution
+                        .keys()
+                        .filter_map(|node_id| {
+                            let node = self.dist_nodes.get(node_id)?;
+                            if node.address.trim().is_empty() {
+                                return None;
+                            }
+                            let active_layers = status
+                                .distribution
+                                .get(node_id)
+                                .map(|range| range.layers.len())
+                                .unwrap_or_default();
+                            Some((
+                                node_id.clone(),
+                                node.address.clone(),
+                                node_id == &ipc_id,
+                                active_layers,
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    candidates.sort_by(|left, right| {
+                        right
+                            .2
+                            .cmp(&left.2)
+                            .then_with(|| right.3.cmp(&left.3))
+                            .then_with(|| left.0.cmp(&right.0))
+                    });
+                    candidates
+                        .into_iter()
+                        .next()
+                        .map(|(node_id, address, _, _)| (node_id, address))
+                });
+            #[cfg(not(feature = "growth3d"))]
+            let topology_fallback_target: Option<(String, String)> = None;
+            let topology_fallback_assignment_digest = self
+                .cluster_assignment_digest_for_registry(net_id)
+                .unwrap_or_default();
             let placement_ready = self
                 .dist_network_registry
                 .get(net_id)
@@ -10645,7 +11504,13 @@ impl eframe::App for App {
                             let needs_refresh = self.cluster_snapshot_network_id.as_deref()
                                 != Some(net_id)
                                 || self.cluster_snapshot_node_id.as_deref() != Some(&node_id);
-                            if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
+                            let retry_ready = self
+                                .cluster_snapshot_next_retry
+                                .is_none_or(|retry_at| now >= retry_at);
+                            if !self.cluster_snapshot_inflight
+                                && retry_ready
+                                && (stale || needs_refresh)
+                            {
                                 self.cluster_snapshot_inflight = true;
                                 self.cluster_snapshot_network_id = Some(net_id.clone());
                                 self.cluster_snapshot_node_id = Some(node_id.clone());
@@ -10669,91 +11534,131 @@ impl eframe::App for App {
                                 let net_id_clone = net_id.clone();
                                 let node_id_clone = node_id.clone();
                                 let bearer_token = self.remote_bearer_token_for(&addr);
+                                // Remote-only clients always know the
+                                // orchestrator address. Use it as a witness
+                                // source when placement metadata is still
+                                // incomplete, so a valid local snapshot on the
+                                // orchestrator can be shown immediately.
+                                let fallback_target =
+                                    topology_fallback_target.clone().or_else(|| {
+                                        self.remote_only
+                                            .then(|| ("orchestrator".to_owned(), addr.clone()))
+                                    });
+                                let fallback_assignment_digest =
+                                    topology_fallback_assignment_digest;
+                                let fallback_bearer_token = fallback_target
+                                    .as_ref()
+                                    .and_then(|(_, address)| self.remote_bearer_token_for(address));
                                 let rt = self.runtime_handle.clone();
                                 rt.spawn(async move {
-                                    match connect_cluster_client(addr.clone()).await {
-                                        Ok(mut client) => {
-                                            let request = authenticated_grpc_request(
-                                                ClusterNetworkSnapshotRequest {
-                                                    network_id: net_id_clone.clone(),
-                                                },
-                                                bearer_token.as_deref(),
-                                            );
-                                            match request {
-                                                Ok(request) => {
-                                                    let rpc_timeout = remote_orchestrator_timeout(
-                                                        "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
-                                                        Duration::from_secs(8),
+                                    let cluster_result = async {
+                                        let mut client = connect_cluster_client(addr.clone()).await?;
+                                        let request = authenticated_grpc_request(
+                                            ClusterNetworkSnapshotRequest {
+                                                network_id: net_id_clone.clone(),
+                                            },
+                                            bearer_token.as_deref(),
+                                        )?;
+                                        let rpc_timeout = remote_orchestrator_timeout(
+                                            "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
+                                            Duration::from_secs(8),
+                                        );
+                                        let response = tokio::time::timeout(
+                                            rpc_timeout,
+                                            client.get_cluster_network_snapshot(request),
+                                        )
+                                        .await
+                                        .map_err(|_| {
+                                            format!("snapshot request timed out after {rpc_timeout:?}")
+                                        })?
+                                        .map_err(|error| format!("snapshot request failed: {error}"))?
+                                        .into_inner();
+                                        decode_cluster_snapshot_projection(
+                                            response,
+                                            &net_id_clone,
+                                            None,
+                                        )
+                                    }
+                                    .await;
+
+                                    match cluster_result {
+                                        Ok((snap, shard_count, cluster_digest, assignment_digest)) => {
+                                            let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                                network_id: net_id_clone,
+                                                node_id: node_id_clone,
+                                                snap,
+                                                shard_count,
+                                                cluster_digest,
+                                                assignment_digest,
+                                                topology_witness: false,
+                                            });
+                                        }
+                                        Err(cluster_error) => {
+                                            #[cfg(feature = "growth3d")]
+                                            let fallback_result = if let Some((fallback_node_id, fallback_addr)) =
+                                                fallback_target
+                                            {
+                                                let fallback_addr = if fallback_addr.starts_with("http://")
+                                                    || fallback_addr.starts_with("https://")
+                                                {
+                                                    fallback_addr
+                                                } else {
+                                                    format!("http://{fallback_addr}")
+                                                };
+                                                fetch_biological_topology_witness(
+                                                    fallback_addr,
+                                                    net_id_clone.clone(),
+                                                    fallback_node_id.clone(),
+                                                    fallback_bearer_token,
+                                                )
+                                                .await
+                                                .map(|snap| (fallback_node_id, snap))
+                                            } else {
+                                                Err("no active node can provide a biological topology witness"
+                                                    .to_owned())
+                                            };
+                                            #[cfg(not(feature = "growth3d"))]
+                                            let fallback_result: Result<
+                                                (String, Box<crate::runner::Snapshot>),
+                                                String,
+                                            > = Err("growth3d topology is unavailable".to_owned());
+
+                                            match fallback_result {
+                                                Ok((fallback_node_id, snap)) => {
+                                                    nm_log!(
+                                                        "[remote-ui] cluster snapshot unavailable ({}); using biological topology witness from {}",
+                                                        cluster_error,
+                                                        fallback_node_id
                                                     );
-                                                    match tokio::time::timeout(
-                                                        rpc_timeout,
-                                                        client.get_cluster_network_snapshot(request),
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(Ok(resp)) => {
-                                                            match decode_cluster_snapshot_projection(
-                                                                resp.into_inner(),
-                                                                &net_id_clone,
-                                                                None,
-                                                            ) {
-                                                                Ok((snap, shard_count, cluster_digest)) => {
-                                                                    let _ = tx.send(ClusterSnapshotMsg::Ok {
-                                                                        network_id: net_id_clone,
-                                                                        node_id: node_id_clone,
-                                                                        snap,
-                                                                        shard_count,
-                                                                        cluster_digest,
-                                                                    });
-                                                                }
-                                                                Err(error) => {
-                                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                                        network_id: net_id_clone,
-                                                                        node_id: node_id_clone,
-                                                                        error,
-                                                                    });
-                                                                }
-                                                            }
-                                                        }
-                                                        Ok(Err(error)) => {
-                                                            let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                                network_id: net_id_clone,
-                                                                node_id: node_id_clone,
-                                                                error: format!(
-                                                                    "snapshot request failed: {}",
-                                                                    error
-                                                                ),
-                                                            });
-                                                        }
-                                                        Err(_) => {
-                                                            let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                                network_id: net_id_clone,
-                                                                node_id: node_id_clone,
-                                                                error: format!(
-                                                                    "snapshot request timed out after {:?}",
-                                                                    rpc_timeout
-                                                                ),
-                                                            });
-                                                        }
-                                                    }
+                                                    let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                                        network_id: net_id_clone,
+                                                        // Keep the requested
+                                                        // RPC target as the
+                                                        // refresh key. The
+                                                        // witness source is
+                                                        // presentation data and
+                                                        // must not make the UI
+                                                        // issue a new request on
+                                                        // every inventory poll.
+                                                        node_id: node_id_clone,
+                                                        snap,
+                                                        shard_count: 1,
+                                                        cluster_digest: "topology-witness".to_owned(),
+                                                        assignment_digest: fallback_assignment_digest,
+                                                        topology_witness: true,
+                                                    });
                                                 }
-                                                Err(error) => {
+                                                Err(fallback_error) => {
                                                     let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                        network_id: net_id_clone.clone(),
-                                                        node_id: node_id_clone.clone(),
+                                                        network_id: net_id_clone,
+                                                        node_id: node_id_clone,
                                                         error: format!(
-                                                            "snapshot request authentication failed: {error}"
+                                                            "{}; biological topology fallback failed: {}",
+                                                            cluster_error, fallback_error
                                                         ),
                                                     });
                                                 }
                                             }
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                network_id: net_id_clone,
-                                                node_id: node_id_clone,
-                                                error: format!("snapshot connect failed: {}", e),
-                                            });
                                         }
                                     }
                                 });
@@ -10777,7 +11682,13 @@ impl eframe::App for App {
                             != Some(net_id)
                             || self.cluster_snapshot_node_id.as_deref()
                                 != Some(local_node_id.as_str());
-                        if !self.cluster_snapshot_inflight && (stale || needs_refresh) {
+                        let retry_ready = self
+                            .cluster_snapshot_next_retry
+                            .is_none_or(|retry_at| now >= retry_at);
+                        if !self.cluster_snapshot_inflight
+                            && retry_ready
+                            && (stale || needs_refresh)
+                        {
                             self.cluster_snapshot_inflight = true;
                             self.cluster_snapshot_network_id = Some(net_id.clone());
                             self.cluster_snapshot_node_id = Some(local_node_id.clone());
@@ -10800,13 +11711,20 @@ impl eframe::App for App {
                                         &net_id_clone,
                                         Some(&node_id_clone),
                                     ) {
-                                        Ok((snap, shard_count, cluster_digest)) => {
+                                        Ok((
+                                            snap,
+                                            shard_count,
+                                            cluster_digest,
+                                            assignment_digest,
+                                        )) => {
                                             let _ = tx.send(ClusterSnapshotMsg::Ok {
                                                 network_id: net_id_clone,
                                                 node_id: node_id_clone,
                                                 snap,
                                                 shard_count,
                                                 cluster_digest,
+                                                assignment_digest,
+                                                topology_witness: false,
                                             });
                                         }
                                         Err(error) => {
@@ -16924,7 +17842,27 @@ impl eframe::App for App {
             if let ViewSource::ClusterGlobal(id) = &self.view_source {
                 if let Some(net_status) = network_registry.get(id) {
                     let cfg_opt = network_config_from_payload(&net_status.config_json);
-                    let mut layers = net_status.num_layers.max(1) as usize;
+                    // `NetworkStatus::num_layers` is the dashboard count and
+                    // includes the separate output boundary. `Topology3D.layers`
+                    // contains hidden biological layers only, so use the
+                    // validated network configuration (or the assigned layer
+                    // range) for this comparison. Treating num_layers as the
+                    // topology layer count makes every remote biological
+                    // snapshot look one layer short and forces the synthetic
+                    // ordered fallback.
+                    let assigned_layer_count = net_status
+                        .distribution
+                        .values()
+                        .flat_map(|range| range.layer_neuron_counts.keys())
+                        .copied()
+                        .max()
+                        .map(|layer| layer as usize + 1)
+                        .unwrap_or(0);
+                    let mut layers = cluster_hidden_layer_count(
+                        cfg_opt.as_ref().map(|cfg| cfg.num_hidden_layers),
+                        assigned_layer_count,
+                        net_status.num_layers,
+                    );
                     let mut layer_sizes = vec![0usize; layers];
                     for range in net_status.distribution.values() {
                         for (&layer_idx, &count) in &range.layer_neuron_counts {
@@ -16957,6 +17895,51 @@ impl eframe::App for App {
                             + cluster_layout_o.unwrap_or(0)
                     };
                     cluster_total_neurons = Some(total);
+
+                    // A cluster snapshot is the only authoritative biological
+                    // projection for this view. Once it has been assembled for
+                    // the current active assignment, use its merged topology
+                    // dimensions for the layout as well. Mixing these counts
+                    // with placement totals is what previously caused a real
+                    // shard topology to be padded with a second ordered graph.
+                    #[cfg(feature = "growth3d")]
+                    let cluster_projection_matches_assignment =
+                        self.cluster_topology_is_witness
+                            || self
+                                .cluster_snapshot_assignment_digest
+                                .zip(self.cluster_assignment_digest_for_registry(id))
+                                .is_some_and(|(snapshot, registry)| snapshot == registry);
+                    #[cfg(feature = "growth3d")]
+                    if cluster_projection_matches_assignment {
+                        if let Some(snapshot) = self.cluster_snapshot_cache.as_ref() {
+                            if let Some(topo) = snapshot.topo.as_ref() {
+                                let complete = if self.cluster_topology_is_witness {
+                                    !topo.layers.is_empty()
+                                        && topo.layers.iter().all(|layer| !layer.is_empty())
+                                } else {
+                                    topo.layers.len() == layers
+                                        && topo.layers.iter().all(|layer| !layer.is_empty())
+                                };
+                                if complete {
+                                    cluster_layer_sizes = Some(
+                                        topo.layers.iter().map(|layer| layer.len()).collect(),
+                                    );
+                                    cluster_layout_layers = Some(topo.layers.len());
+                                    if !topo.sensory_nodes.is_empty() {
+                                        cluster_layout_ns = Some(topo.sensory_nodes.len());
+                                    }
+                                    if !topo.output_nodes.is_empty() {
+                                        cluster_layout_o = Some(topo.output_nodes.len());
+                                    }
+                                    cluster_total_neurons = Some(
+                                        topo.sensory_nodes.len()
+                                            + topo.output_nodes.len()
+                                            + topo.layers.iter().map(Vec::len).sum::<usize>(),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
             let trusted_layout_ns =
@@ -17001,30 +17984,17 @@ impl eframe::App for App {
                 self.local_net.num_output_neurons = self.output_count;
                 self.local_net.num_hidden_layers = layout_layers.max(1);
             }
-            // In ClusterGlobal mode the snapshot comes from one node only, so
-            // cached_layer_sizes reflects a single node's neuron counts rather than the
-            // cluster aggregate.  Always bypass the cache path so cluster_layer_sizes
-            // (which sums all nodes) is used for layout instead.
+            // In ClusterGlobal mode the cache is a merged biological projection,
+            // but its dimensions are authoritative only when its assignment digest
+            // still matches the placement registry. Keep the placement-derived
+            // fallback out of the cache path so a stale projection cannot create a
+            // second set of ordered columns.
             let cache_layout_active = !matches!(self.view_source, ViewSource::ClusterGlobal(_))
                 && (self.show_static_overlays || self.force_show_connections)
                 && !self.cached_edges.is_empty()
                 && !self.cached_layer_sizes.is_empty();
             #[cfg(feature = "growth3d")]
-            let topology_has_content = |topo: &crate::topology::Topology3D| {
-                !topo.layers.is_empty()
-                    || !topo.sensory_nodes.is_empty()
-                    || !topo.output_nodes.is_empty()
-                    || !topo.early_cells.is_empty()
-            };
-            #[cfg(feature = "growth3d")]
             let use_aarnn_layout = matches!(self.network_layout, NetworkLayout::Aarnn);
-            #[cfg(feature = "growth3d")]
-            let cache_topology_active = use_aarnn_layout
-                && self
-                    .cached_edge_topo
-                    .as_ref()
-                    .map(|topo| topology_has_content(topo))
-                    .unwrap_or(false);
             #[cfg(feature = "growth3d")]
             let ui_snapshot_opt: Option<UiTopologySnapshot> = {
                 let snapshot_timer =
@@ -17051,11 +18021,59 @@ impl eframe::App for App {
                 })
                 .unwrap_or(false);
             #[cfg(feature = "growth3d")]
+            let cluster_topology_authoritative = matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && self.cluster_topo_cache.as_ref().is_some_and(|topo| {
+                    complete_biological_topology(topo, layout_layers, layout_ns, layout_o)
+                });
+            #[cfg(feature = "growth3d")]
+            let active_runner_topology_authoritative = active_runner_opt.is_some_and(|runner| {
+                complete_biological_topology(
+                    &runner.topo,
+                    layout_layers,
+                    layout_ns,
+                    layout_o,
+                )
+            });
+            #[cfg(feature = "growth3d")]
+            let snapshot_topology_authoritative = snapshot_topology_allowed
+                && use_aarnn_layout
+                && ui_snapshot_opt.as_ref().is_some_and(|snap| {
+                    snap.topo_hidden.len() == layout_layers
+                        && snap.topo_hidden.iter().all(|layer| !layer.is_empty())
+                        && (layout_ns == 0 || snap.topo_sensory.len() == layout_ns)
+                        && (layout_o == 0 || snap.topo_output.len() == layout_o)
+                });
+            #[cfg(feature = "growth3d")]
+            let cached_topology_authoritative = use_aarnn_layout
+                && !cluster_topology_authoritative
+                && !active_runner_topology_authoritative
+                && !snapshot_topology_authoritative
+                && self.cached_edge_topo.as_ref().is_some_and(|topo| {
+                    complete_biological_topology(topo, layout_layers, layout_ns, layout_o)
+                });
+            #[cfg(feature = "growth3d")]
+            let biological_topology_source = select_biological_topology_source(
+                cluster_topology_authoritative,
+                active_runner_topology_authoritative,
+                snapshot_topology_authoritative,
+                cached_topology_authoritative,
+            );
+            #[cfg(feature = "growth3d")]
+            let biological_topology_authoritative = biological_topology_source.is_some();
+            #[cfg(not(feature = "growth3d"))]
+            let biological_topology_authoritative = false;
+            #[cfg(feature = "growth3d")]
+            let cache_topology_active = use_aarnn_layout
+                && matches!(
+                    biological_topology_source,
+                    Some(BiologicalTopologySource::Cached)
+                );
+            #[cfg(feature = "growth3d")]
             let prefer_snapshot_topology = use_aarnn_layout
-                && snapshot_topology_allowed
-                && !cache_topology_active
-                && (self.playing || self.ga_running || runner_busy)
-                && snapshot_topology_available;
+                && matches!(
+                    biological_topology_source,
+                    Some(BiologicalTopologySource::Snapshot)
+                );
             let mut layer_sizes: Vec<usize> = if cache_layout_active {
                 self.cached_layer_sizes.clone()
             } else if let Some(active_runner) = active_runner_opt {
@@ -17240,23 +18258,7 @@ impl eframe::App for App {
                 #[cfg(not(feature = "growth3d"))]
                 let _cluster_topo_opt: Option<()> = None;
                 #[cfg(feature = "growth3d")]
-                let active_runner_topology_available = active_runner_opt
-                    .map(|runner| {
-                        !runner.topo.layers.is_empty()
-                            || !runner.topo.sensory_nodes.is_empty()
-                            || !runner.topo.output_nodes.is_empty()
-                            || !runner.topo.early_cells.is_empty()
-                    })
-                    .unwrap_or(false);
-                #[cfg(feature = "growth3d")]
-                let cluster_topology_available = cluster_topo_opt
-                    .map(|topo| topology_has_content(topo))
-                    .unwrap_or(false);
-                #[cfg(feature = "growth3d")]
-                let topo_enabled = cache_topology_active
-                    || snapshot_topology_available
-                    || active_runner_topology_available
-                    || cluster_topology_available;
+                let topo_enabled = biological_topology_authoritative;
                 // Topology interpolation is presentation state.  It must not
                 // advance while a standalone brain is stopped: otherwise the
                 // neurons appear to move before Start even though Runner::step
@@ -18929,7 +19931,10 @@ impl eframe::App for App {
             }
 
             // draw highlighted connections between active sender/receiver nodes
-            if show_highlights {
+            // Matrix-derived highlights describe the virtual execution graph.
+            // Once a complete biological projection is available, showing them
+            // would add a second synthetic topology over the biological one.
+            if show_highlights && !biological_topology_authoritative {
                 let use_smoothed_cached_highlights = (self.playing || self.ga_running || runner_busy) && allow_cached_edges;
                 if use_smoothed_cached_highlights {
                     let get_pos = |layer: i32, idx: usize| -> Option<egui::Pos2> {
@@ -19129,7 +20134,9 @@ impl eframe::App for App {
 
             // Static connection overlays (faint network skeleton) under nodes.
             // Prefer cached edges so rendering remains stable while simulation threads mutate weights.
-            if show_static_overlays {
+            // Cached/live weight overlays are also a synthetic layer graph. A
+            // biological topology view must have one visible topology source.
+            if show_static_overlays && !biological_topology_authoritative {
                 let alpha = overlay_opacity.clamp(0.05, 1.0);
                 let get_pos = |layer: i32, idx: usize, sensory: &Vec<egui::Pos2>, hidden: &Vec<Vec<egui::Pos2>>, output: &Vec<egui::Pos2>| -> Option<egui::Pos2> {
                     if layer == -1 {
@@ -19278,7 +20285,11 @@ impl eframe::App for App {
             }
 
             // Feedback map overlays: O -> S
-            if show_feedback_overlays && !output_positions.is_empty() && !sensory_positions.is_empty() {
+            if !biological_topology_authoritative
+                && show_feedback_overlays
+                && !output_positions.is_empty()
+                && !sensory_positions.is_empty()
+            {
                 if let Some(active_runner) = active_runner_opt {
                 let active_boost = if loop_feedback { 1.0 } else { 0.6 };
                 for (k, &p_out) in output_positions.iter().enumerate() {

@@ -119,6 +119,58 @@ compatibility sensor/transport discrepancies are recorded instead of claimed equ
   `/tmp/aarnn-unreal-water-final.png` records a native fish/water frame. Its bounded
   render process was terminated after capture, so this is not clean-exit acceptance.
   Minecraft evidence is indexed in `sim/minecraft/VALIDATION.md`.
+- [x] `2026-09-23 15:45Z` Added a cross-engine hexapod joint contract oracle to
+  `scripts/qa/test_simulator_content.py`. It derives the canonical 18 output
+  names (`lf/lm/lr/rf/rm/rr` × `coxa/femur/tibia`), verifies six Webots articulated
+  chains with motor limits, torque, speed and position sensors, checks the three
+  front/middle/rear attachment rows on each side, and verifies Unity, Unreal and
+  WebGL actuator-to-joint mappings and drive properties. The focused oracle passes.
+  A direct Webots R2025a probe also passes with 620 nodes, 602 habitat objects and
+  all six robot profiles. Unity Editor play-mode remains unavailable on this host.
+- [x] `2026-09-23 15:52Z` Promoted the existing single-hexapod editor scene in
+  `multi_neuroworld.wbt` into `scripts/regenerate_simulator_assets.py`. The
+  canonical mixed scene now regenerates the intended `HexapodRobot` instance;
+  `multi_neuroworld_test.wbt` remains the two C. elegans fixture. Asset freshness
+  passes without rewriting the user’s world/editor settings.
+- [x] `2026-09-23 15:53Z` Installed Playwright in the isolated QA environment at
+  `/tmp/aarnn-sim-browser` and reran the WebGL browser lane with system Chrome
+  139.0.7258.138. Six profiles rendered with zero page errors; mocked inference,
+  stale-response cancellation, timeout recovery and mobile layout checks passed.
+  Evidence: `target/qa/simulator-content/browser-yfuadwwg/`.
+- [x] `2026-09-23 15:59Z` Corrected the Webots hexapod PROTO orientation. The six
+  roots now form three longitudinal rows on each fixed lateral side, with outward
+  coxa rotations and front/rear splay; the previous radial arrangement placed the
+  mid legs on the body centerline and made the body appear 90 degrees out of phase
+  with the insect-style leg layout. The full simulator contract suite and Webots
+  R2025a probe pass after the correction.
+- [x] `2026-09-23 19:35Z` Fixed headless Webots cluster workers reopening their
+  native Rust UI after the first `eframe` frame. `NM_UI_HIDDEN=1` now reasserts
+  an invisible viewport every frame, preserving the UI-backed IPC/simulation
+  loop without exposing a worker window. The orchestrator remains launched
+  without `--ui`, while Webots rendering remains enabled for CLI cluster mode.
+- [x] `2026-09-23` Replaced the hidden eframe workaround for simulator IPC
+  owners with `--headless-ipc`. CLI/web Webots workers now construct the same
+  Runner and UDS bridge through `App::new` but never call `eframe::run_native`,
+  so only Webots owns a visible rendering surface. SIGINT/SIGTERM cleanup drops
+  the runtime and releases its IPC service.
+- [x] `2026-09-23 18:52Z` Built the Webots release profile with
+  `cargo build --locked --release --no-default-features --features
+  engine_runtime,ui,robot_io,cuda --bin aarnn_rust`; the direct bounded
+  `--headless-ipc --ipc` probe bound its UDS socket without opening a Rust
+  viewport and stopped cleanly on SIGTERM. The three-worker launcher probe
+  (`scripts/run_multi_robot_webots.sh --ui-mode cli --robots hexapod=1
+  --nodes 3 --no-webots --no-build --no-diag --runtime cluster`) registered
+  `hexapod_01_ipc`, `hexapod_01_worker_01`, and `hexapod_01_worker_02`; its IPC
+  owner log contains the headless marker and no AARNN process remained after
+  timeout cleanup.
+- [x] `2026-09-23 18:54Z` Ran the actual `scripts/run_multi_robot_webots.sh`
+  path with `--ui-mode cli --runtime cluster --nodes 3 --webots-mode fast` and
+  `--no-build`. Webots launched with `headless rendering: 0`, the controller
+  reported `Brain 'hexapod_01': Connected.`, the IPC owner reported the
+  headless marker, and timeout cleanup stopped the runtime without leaving
+  AARNN or Webots processes. The bounded run also exposed only existing burst
+  transport timeout warnings during teardown; they were not startup or UI
+  failures.
 
 ## Validation and acceptance
 
@@ -148,6 +200,33 @@ Recorded commands (all from the repository root):
 - `cargo check --locked --bin web_ui`: passes; `/tmp/aarnn-sim-web-ui-check.log`.
 - `cargo clippy --locked --bin web_ui -p aarnn_rust`: passes with existing warnings;
   `/tmp/aarnn-sim-clippy.log`. `cargo fmt --all --check` and `git diff --check` pass.
+- `cargo build --locked --release --no-default-features --features
+  engine_runtime,ui,robot_io,cuda --bin aarnn_rust`: passes; the release binary
+  is rebuilt with the dedicated headless IPC path. `cargo check` with the same
+  profile and `cargo test --locked --test run_examples_launcher` both pass.
+- `timeout 8s env NM_IPC_SOCKET_DIR=/tmp/aarnn-headless-probe-365020
+  target/release/aarnn_rust --headless-ipc --ipc --brain-id headless_probe
+  --config webots_world/configs/config_hexapod_webots.json`: reaches the
+  simulation thread and UDS service with no eframe startup; SIGTERM cleanup
+  leaves no process or socket. The bounded launcher probe evidence is under
+  `/tmp/aarnn-launch-probe-365212/`.
+- `timeout 35s env LOG_DIR=/tmp/aarnn-webots-headless-render-direct-368249
+  WEBOTS_CONNECT_TIMEOUT=20 scripts/run_multi_robot_webots.sh --ui-mode cli
+  --robots hexapod=1 --nodes 3 --no-build --no-diag --runtime cluster
+  --webots-mode fast`: Webots rendering remained enabled and its controller
+  handshake passed; evidence is under `/tmp/aarnn-webots-headless-render-direct-368249/`.
+- `python3 -m unittest scripts.qa.test_simulator_content.ContentParity.test_hexapod_joint_contract_is_mapped_in_all_engines`:
+  passes; `node --check web_ui/webgl-world.js` and Python compilation also pass.
+- `python3 scripts/regenerate_simulator_assets.py --check`: passes after promoting
+  the hexapod mixed-world fixture.
+- `NODE_PATH=/tmp/aarnn-sim-browser/node_modules NM_CHROMIUM=/usr/bin/google-chrome
+  cargo xtask qa run --suite simulator-content-browser`: passes with six profiles,
+  zero page errors and seven requests; evidence is in
+  `target/qa/simulator-content/browser-yfuadwwg/`.
+- `python3 scripts/qa/probe_simulator_webots.py`: passes with Webots R2025a,
+  six robot profiles, 620 nodes and 602 habitat objects.
+- `cargo xtask qa run --suite simulator-content`: passes all seven contract tests;
+  evidence is in `target/qa/simulator-content/contract-sa_o2zcg/`.
 - `python3 -m py_compile` on the changed Python sources, `node --check` on browser
   renderer/client/QA sources and Python YAML/TOML parsers pass.
 - `/home/pbisaacs/Developer/Engine/Build/BatchFiles/Linux/Build.sh
@@ -213,6 +292,17 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   markers alone did not represent an underwater habitat. The superseding explicit
   fluid volumes and native fish screenshots resolve that content defect; they do
   not establish calibrated hydrodynamics. Surface/depth values now share one source.
+- The hexapod adapters already had six physical/rendered leg chains, but their
+  parity was implicit: Webots used named motors, Unreal and Unity used ordered
+  arrays, and WebGL resolved suffixes at runtime. The new oracle makes the shared
+  order and all six front/middle/rear attachment rows a checked contract. The
+  multi-neuroworld remains a valid live hexapod scene and is now covered by the
+  world generator as the canonical single-hexapod mixed-world fixture.
+- Webots’ earlier six transforms were radially distributed around the body: the
+  left/right mid roots were on the front/rear centerline. This was structurally
+  different from the shared insect-style three-left/three-right contract even
+  though the motor names and counts were correct. The corrected PROTO keeps the
+  body’s +X front direction and uses fixed ±Y side rows.
 
 ## Decision Log
 
@@ -232,6 +322,16 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   preserve user-dirty network/config/editor work. The historical saved NAO world is
   replaced with a clean reference pose and a lower reachable table. Date-stamped
   world captures stay historical. The Webots-only fridge switch now fails explicitly.
+- `2026-09-23 SIM-005`: Treat the shared hexapod output catalogue as the adapter
+  contract and validate engine-specific physical/kinematic implementations against
+  it. Preserve native unit and physics differences; do not force identical gains or
+  trajectories without a separate calibration gate. Promote the existing
+  single-hexapod multi-neuroworld scene into the generated fixture and retain the
+  separate two-worm test world.
+- `2026-09-23 SIM-006`: Define Webots hexapod body orientation as +X forward, +Y
+  left, with three attachment roots at longitudinal X positions on each fixed
+  lateral side. Use outward coxa rotations with front/rear splay; retain the
+  canonical actuator ordering and all existing motor limits.
 
 ## Outcomes & Retrospective
 

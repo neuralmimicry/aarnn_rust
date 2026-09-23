@@ -9,6 +9,11 @@ const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 const profile = id => { const p=content.profiles.find(p=>p.id===id); if(!p)throw Error('Unknown robot profile');return p; };
 const centre = p => {const i=content.profiles.indexOf(p);return {x:(i%3)*48,y:BASE,z:Math.floor(i/3)*48};};
 const habitat = p => content.habitats.find(h=>h.id===p.habitat);
+const hexapodJoint = name => 'aarnn:joint_'+name.replace(/^.*_[0-9]{3}_/,'');
+const syncHexapodJoints = (p,e,actuators) => {
+  if(p.kind!=='hexapod')return;
+  p.output_names.forEach((name,i)=>e.setProperty(hexapodJoint(name),clamp(actuators[i]||0,0,1)));
+};
 let building = false;
 
 export function start(io) {
@@ -20,7 +25,7 @@ export function start(io) {
   };
   const clear = (p,reason) => {
     const state=sessions.get(p.id);if(state)state.session.stop(reason);sessions.delete(p.id);
-    try {const e=robot(p);e.nameTag=p.id+' · '+reason;for(let i=0;i<(p.kind==='worm'?24:p.kind==='fish'?12:0);i++)e.setProperty('aarnn:bend_'+i,0);}catch{/* Body unloaded or absent; no output remains armed. */}
+    try {const e=robot(p);e.nameTag=p.id+' · '+reason;for(let i=0;i<(p.kind==='worm'?24:p.kind==='fish'?12:0);i++)e.setProperty('aarnn:bend_'+i,0);syncHexapodJoints(p,e,[]);}catch{/* Body unloaded or absent; no output remains armed. */}
   };
   // The companion may have negotiated minutes before a player opens the world.
   // Wait for an actual neural response before admitting the first encounter.
@@ -169,6 +174,7 @@ export function start(io) {
             const bend=p.kind==='worm'?((a[indices[0]]||0)+(a[indices[1]]||0)-(a[indices[2]]||0)-(a[indices[3]]||0))*.025:((a[(i%8)*2]||0)-(a[(i%8)*2+1]||0))*.035;
             e.setProperty('aarnn:bend_'+i,bend);
           }
+          syncHexapodJoints(p,e,pose.actuators);
         }
         if(!session.active){clear(p,session.status);continue;}
         if(!session.pending) {

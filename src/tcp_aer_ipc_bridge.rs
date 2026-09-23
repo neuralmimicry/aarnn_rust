@@ -7,6 +7,7 @@
 //! biological time.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -15,11 +16,13 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixDatagram};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_DATAGRAM_BYTES: usize = 4 * 1024 * 1024;
 pub const AER_MAGIC: &[u8; 4] = b"AER1";
+const DEFAULT_MAX_CLIENTS: usize = 64;
+const DEFAULT_MAX_PENDING_REQUESTS: usize = 256;
 
 #[derive(Debug, Error)]
 pub enum BridgeError {
@@ -80,35 +83,100 @@ pub async fn run(
         config.ipc_path.display()
     );
 
+    // The Unix IPC endpoint has one reply owner (`last_peer`) and therefore
+    // cannot safely service multiple request/reply exchanges concurrently.
+    // Keep TCP sessions concurrent and put only the bounded biological
+    // exchanges through this FIFO arbiter. Waiting for queue admission is
+    // asynchronous; it never blocks the listener or another client task.
+    let queue_capacity = std::env::var("NM_TCP_AER_BRIDGE_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_PENDING_REQUESTS)
+        .clamp(1, 4096);
+    let max_clients = std::env::var("NM_TCP_AER_BRIDGE_MAX_CLIENTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_CLIENTS)
+        .clamp(1, 256);
+    println!(
+        "[tcp_aer_ipc_bridge] bounded client capacity={} pending IPC requests={}",
+        max_clients, queue_capacity
+    );
+    let (ipc_tx, ipc_rx) = mpsc::channel(queue_capacity);
+    let arbiter_shutdown = shutdown.clone();
+    let arbiter = tokio::spawn(run_ipc_arbiter(
+        ipc_rx,
+        config.ipc_path.clone(),
+        config.timeout,
+        arbiter_shutdown,
+    ));
+    let client_limit = Arc::new(Semaphore::new(max_clients));
+    let mut clients = tokio::task::JoinSet::new();
+
     loop {
         if *shutdown.borrow() {
-            return Ok(());
+            break;
         }
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
-                println!("[tcp_aer_ipc_bridge] client connected: {peer}");
-                if let Err(error) = handle_client(stream, &config, shutdown.clone()).await {
-                    if !matches!(error, BridgeError::Shutdown) {
-                        eprintln!("[tcp_aer_ipc_bridge] client stopped: {error}");
+                let permit = match client_limit.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        eprintln!("[tcp_aer_ipc_bridge] rejecting client {peer}: active client limit reached");
+                        continue;
                     }
+                };
+                println!("[tcp_aer_ipc_bridge] client connected: {peer}");
+                let client_config = config.clone();
+                let client_shutdown = shutdown.clone();
+                let client_ipc_tx = ipc_tx.clone();
+                clients.spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = handle_client(
+                        stream,
+                        &client_config,
+                        client_ipc_tx,
+                        client_shutdown,
+                    ).await {
+                        if !matches!(error, BridgeError::Shutdown) {
+                            eprintln!("[tcp_aer_ipc_bridge] client stopped: {error}");
+                        }
+                    }
+                });
+            }
+            Some(result) = clients.join_next() => {
+                if let Err(error) = result {
+                    eprintln!("[tcp_aer_ipc_bridge] client task failed: {error}");
                 }
             }
-            _ = wait_for_shutdown(&mut shutdown) => return Ok(()),
+            _ = wait_for_shutdown(&mut shutdown) => break,
         }
     }
+
+    clients.abort_all();
+    while clients.join_next().await.is_some() {}
+    drop(ipc_tx);
+    let _ = arbiter.await;
+    Ok(())
+}
+
+struct IpcRequest {
+    socket: Arc<UnixDatagram>,
+    payload: Vec<u8>,
+    reply: oneshot::Sender<Result<Vec<u8>, BridgeError>>,
 }
 
 async fn handle_client(
     mut stream: TcpStream,
     config: &BridgeConfig,
+    ipc_tx: mpsc::Sender<IpcRequest>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), BridgeError> {
     stream.set_nodelay(true)?;
     let (local_dir, local_path) = create_ipc_peer_path().await?;
     let ipc = UnixDatagram::bind(&local_path)?;
-    let result = handle_client_io(&mut stream, &ipc, config, &mut shutdown).await;
-    drop(ipc);
+    let result = handle_client_io(&mut stream, Arc::new(ipc), config, ipc_tx, &mut shutdown).await;
     let _ = fs::remove_file(&local_path).await;
     let _ = fs::remove_dir(&local_dir).await;
     result
@@ -116,8 +184,9 @@ async fn handle_client(
 
 async fn handle_client_io(
     stream: &mut TcpStream,
-    ipc: &UnixDatagram,
+    ipc: Arc<UnixDatagram>,
     config: &BridgeConfig,
+    ipc_tx: mpsc::Sender<IpcRequest>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<(), BridgeError> {
     let (initial_sensory, initial_output) = config.bounded_dimensions();
@@ -149,8 +218,7 @@ async fn handle_client_io(
             wait_until_armed(config.arm_file.as_deref(), shutdown).await?;
         }
 
-        let response =
-            exchange_ipc(ipc, &config.ipc_path, &payload, config.timeout, shutdown).await?;
+        let response = exchange_ipc(&ipc, &ipc_tx, &payload, config.timeout, shutdown).await?;
 
         if response.first() == Some(&b'{') {
             let (sensory, output) =
@@ -179,6 +247,34 @@ async fn handle_client_io(
             response
         };
         write_frame(stream, &response, config.timeout, shutdown).await?;
+    }
+}
+
+async fn run_ipc_arbiter(
+    mut requests: mpsc::Receiver<IpcRequest>,
+    destination: PathBuf,
+    timeout: Duration,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        let request = tokio::select! {
+            request = requests.recv() => match request {
+                Some(request) => request,
+                None => return,
+            },
+            _ = wait_for_shutdown(&mut shutdown) => return,
+        };
+        let IpcRequest {
+            socket,
+            payload,
+            reply,
+        } = request;
+        let result =
+            exchange_ipc_serialized(&socket, &destination, &payload, timeout, &mut shutdown).await;
+        let _ = reply.send(result);
+        if *shutdown.borrow() {
+            return;
+        }
     }
 }
 
@@ -237,6 +333,25 @@ async fn write_frame(
 }
 
 async fn exchange_ipc(
+    ipc: &Arc<UnixDatagram>,
+    queue: &mpsc::Sender<IpcRequest>,
+    payload: &[u8],
+    timeout: Duration,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<Vec<u8>, BridgeError> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let request = IpcRequest {
+        socket: Arc::clone(ipc),
+        payload: payload.to_vec(),
+        reply: reply_tx,
+    };
+    let enqueue = async { queue.send(request).await.map_err(|_| BridgeError::Shutdown) };
+    select_with_shutdown(enqueue, timeout, shutdown).await?;
+    let response = async { reply_rx.await.map_err(|_| BridgeError::Shutdown) };
+    select_with_shutdown(response, timeout, shutdown).await?
+}
+
+async fn exchange_ipc_serialized(
     ipc: &UnixDatagram,
     destination: &Path,
     payload: &[u8],
@@ -447,5 +562,73 @@ mod tests {
     fn raw_output_requires_exact_negotiated_dimension() {
         assert!(output_values(&[0; 7], 2).is_err());
         assert_eq!(output_values(&[0, 0, 0, 0], 1).unwrap(), vec![0.0]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_clients_are_queued_and_keep_their_ipc_reply_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-bridge-test-{}-{}",
+            std::process::id(),
+            SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).await.expect("create test directory");
+        let destination_path = root.join("server.sock");
+        let client_one_path = root.join("client-one.sock");
+        let client_two_path = root.join("client-two.sock");
+        let destination = UnixDatagram::bind(&destination_path).expect("bind destination");
+        let client_one = Arc::new(UnixDatagram::bind(&client_one_path).expect("bind client one"));
+        let client_two = Arc::new(UnixDatagram::bind(&client_two_path).expect("bind client two"));
+        let (queue, requests) = mpsc::channel(1);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let arbiter = tokio::spawn(run_ipc_arbiter(
+            requests,
+            destination_path.clone(),
+            Duration::from_secs(2),
+            shutdown_rx,
+        ));
+
+        let responder = tokio::spawn(async move {
+            for _ in 0..2 {
+                let mut buffer = [0u8; 32];
+                let (length, peer) = destination
+                    .recv_from(&mut buffer)
+                    .await
+                    .expect("receive request");
+                let peer_path = peer.as_pathname().expect("path based client");
+                let mut response = b"reply:".to_vec();
+                response.extend_from_slice(&buffer[..length]);
+                destination
+                    .send_to(&response, peer_path)
+                    .await
+                    .expect("send response");
+            }
+        });
+
+        let (_first_shutdown_tx, first_shutdown_rx) = watch::channel(false);
+        let (_second_shutdown_tx, second_shutdown_rx) = watch::channel(false);
+        let mut first_shutdown = first_shutdown_rx;
+        let mut second_shutdown = second_shutdown_rx;
+        let first = exchange_ipc(
+            &client_one,
+            &queue,
+            b"one",
+            Duration::from_secs(2),
+            &mut first_shutdown,
+        );
+        let second = exchange_ipc(
+            &client_two,
+            &queue,
+            b"two",
+            Duration::from_secs(2),
+            &mut second_shutdown,
+        );
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.expect("first response"), b"reply:one");
+        assert_eq!(second.expect("second response"), b"reply:two");
+
+        responder.await.expect("responder task");
+        shutdown_tx.send(true).expect("shutdown arbiter");
+        arbiter.await.expect("arbiter task");
+        let _ = fs::remove_dir_all(root).await;
     }
 }

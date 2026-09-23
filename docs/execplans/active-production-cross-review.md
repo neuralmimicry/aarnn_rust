@@ -3184,3 +3184,81 @@ no native engine content hash is presented as biological or physics equivalence.
   `continuum_tenant_aarnn_image_tag: latest` now selects a coherent latest
   HWE orchestrator, node and web UI set unless an explicit environment override
   is supplied.
+
+## Verification update — 2026-09-23 19:31Z: remote-only cluster UI resilience
+
+- [x] Correlated the local Webots cluster logs with the native remote-only UI
+  path. The UI was opening a fresh gRPC channel for every two-second inventory
+  poll, marking a previously healthy endpoint disconnected after any transient
+  status error, and immediately retrying the expensive multi-shard snapshot.
+  The resulting repeated `snapshot connect failed: transport error` messages
+  explained both the intermittent canvas and the loss of the stable biological
+  witness target.
+- [x] Kept one gRPC client channel per remote endpoint, reconnecting only after
+  a failed status RPC with a bounded 1/2/4/8/10-second backoff. A transient
+  failure now preserves the last accepted inventory and selected network while
+  showing reconnecting state; an endpoint with no accepted inventory still
+  fails closed as before. Incomplete empty inventory responses also retain the
+  last good node/network maps.
+- [x] Added equivalent bounded backoff to cluster snapshot refreshes and kept a
+  last valid snapshot during refresh failure. A complete biological topology
+  in any successful merged cluster projection is now retained as a topology
+  witness across placement digest churn, and therefore remains higher priority
+  than the synthetic layer/placement layout. View changes still invalidate the
+  witness so one brain cannot bleed into another.
+- [x] Validation passed with `cargo check --locked --no-default-features
+  --features engine_runtime,ui,growth3d,robot_io --bin aarnn_rust`, the focused
+  `topology_presentation_tests` suite (7 passed), `cargo fmt --all --check`,
+  and `git diff --check`. Existing compiler warnings remain non-fatal; no live
+  Webots process was stopped or reset.
+
+## Verification update — 2026-09-23 19:53Z: remote-only biological topology profile
+
+- [x] Confirmed the latest local UI log failure was a strict cluster-cut
+  frontier mismatch (`worker_02` ahead of the requested cut), followed by
+  `growth3d topology is unavailable`. The latter came from the documented
+  command using `--features ui` without the `growth3d` feature, so the client
+  could only render the synthetic ordered layer view.
+- [x] Made the desktop `ui` feature include `growth3d`, so the supported
+  `cargo run --bin aarnn_rust --features ui -- --ui-remote-only` profile can
+  decode and render the biological topology returned by a remote worker.
+- [x] Stabilised witness recovery in `src/ui.rs`: remote-only mode can use the
+  known orchestrator as a witness source while placement metadata is incomplete;
+  the request remains keyed to the orchestrator after a worker witness succeeds;
+  and a complete witness remains visible while a later strict cut resynchronises.
+  Remote status stays Ready with an explicit resynchronising detail instead of
+  flickering into an error state.
+- [x] Added a focused regression test proving that a mismatched cluster cut
+  preserves a witness only for the same selected network. Validation passed:
+  `cargo check --locked --no-default-features --features
+  engine_runtime,ui,robot_io --bin aarnn_rust`, `cargo check --locked
+  --features ui --bin aarnn_rust`, the focused topology suite (8 passed),
+  `cargo fmt --all --check`, and `git diff --check`. Compiler warnings remain
+  non-fatal and pre-existing.
+
+## Verification update — 2026-09-23: WebGL backend startup profile
+
+- [x] Correlated `logs/webgl_sim_496241/webots_orchestrator.log` with the
+  launcher failure. `launch_webgl` built `aarnn_rust` and `web_ui` with
+  `--all-features`; the resulting orchestrator enabled `management_v1` and
+  exited with `management endpoint requires NM_MANAGEMENT_BEARER_TOKEN in
+  static-reference mode`. Worker connection retries and discovery
+  `Address already in use` messages were secondary effects of that early
+  orchestrator exit.
+- [x] Changed `launch_webgl` to build the neural backend with
+  `NM_WEBGL_RUNTIME_FEATURES` through the shared `webots_cargo_profile_args`
+  helper, defaulting to the explicit local `engine_runtime,ui,robot_io,cuda`
+  profile. The headless `web_ui` gateway is built separately with its explicit
+  `engine_runtime` profile. The backend remains `--no-orchestrator-ui
+  --node-ui-hidden`; after gRPC readiness the launcher starts `web_ui` and
+  exposes the WebGL page.
+- [x] Added a launcher contract test covering the profile selection and
+  headless/backend ordering. `bash -n`, `git diff --check`, the focused Cargo
+  feature checks, and the launcher contract test passed. A bounded live probe
+  with three workers registered all nodes, verified `/api/config`, and printed
+  the WebGL URL. The probe logs show no management-token startup error; the
+  existing CUDA PTX warning is non-fatal and the process was stopped by the
+  bounded test cleanup.
+- [x] Kept the gateway transport profile consistent with the backend by
+  exporting `NM_WEBOTS_RUNTIME_FEATURES` for delegated startup and clearing
+  inherited local mTLS variables from `web_ui` when `management_v1` is absent.

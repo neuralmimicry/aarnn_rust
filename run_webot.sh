@@ -148,7 +148,8 @@ Usage: ./run_webot.sh [options]
 
 Options:
   --runtime <cluster|uds>  Runtime backend (default: cluster).
-                           cluster: orchestrator + per-brain nodes (--ui --ipc).
+                           cluster: orchestrator + per-brain IPC nodes (headless
+                           IPC owners in CLI mode; --ui --ipc in Rust UI mode).
                            uds:     per-brain nn_uds_server instances.
   --no-build               Skip cargo build.
   --all-features           Opt into Cargo's complete feature graph (default is
@@ -169,7 +170,7 @@ Options:
                            workers join the first brain without an IPC socket.
   --no-orchestrator-ui     In cluster runtime, start orchestrator without UI window.
   --no-node-ui             In cluster runtime, start nodes without UI (breaks IPC server bind).
-  --node-ui-hidden         Keep node UI processes hidden (IPC still binds; orchestrator UI visible).
+  --node-ui-hidden         Run IPC owners without a Rust UI window (IPC still binds).
   --single-orchestrator-ui In cluster runtime, run only one orchestrator process with --ui --ipc.
                            Requires exactly one brain (e.g., --brains default).
   --remote-compute         Run cluster compute on remote hosts over SSH, while Webots stays local.
@@ -2521,15 +2522,17 @@ start_cluster_runtime() {
         if [ -n "$brain_network" ]; then
             node_cmd+=(--network "$brain_network")
         fi
-        if [ "$NODE_UI" -eq 1 ]; then
+        # An IPC owner must keep the same simulation/UDS runtime as the Rust
+        # UI path, but CLI/web modes must not create a native Rust window.
+        # Use the dedicated headless runtime instead of relying on eframe's
+        # post-first-frame viewport visibility handling.
+        if [ "$NODE_UI_HIDDEN" -eq 1 ]; then
+            node_cmd+=(--headless-ipc)
+        elif [ "$NODE_UI" -eq 1 ]; then
             node_cmd+=(--ui)
         fi
 
-        if [ "$NODE_UI" -eq 1 ] && [ "$NODE_UI_HIDDEN" -eq 1 ]; then
-            NM_UI_HIDDEN=1 "${node_cmd[@]}" >"$log_file" 2>&1 &
-        else
-            "${node_cmd[@]}" >"$log_file" 2>&1 &
-        fi
+        "${node_cmd[@]}" >"$log_file" 2>&1 &
         local node_pid="$!"
         PIDS+=("$node_pid")
         register_supervised_pid "$node_pid" "node/$brain"

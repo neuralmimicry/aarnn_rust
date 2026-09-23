@@ -330,6 +330,37 @@ on retry. Only a proved startup bind race gets up to three fresh port attempts.
   The installed 26.2 smoke run passed with 14 live frames and both AER
   directions; 26.2 and 1.21.1 Gradle test/parity suites also pass.
 
+- [x] `2026-09-23 09:15Z` Cross-checked the local Minecraft failure logs and
+  confirmed that distributed simulator startup intentionally sets
+  `NM_DISTRIBUTED_AUTOSTART=0`, while the TCP bridge blocks binary AER frames
+  until `neural_runtime_armed` exists. The Minecraft companion health handshake
+  completed, but the launcher started the game without invoking the existing
+  cluster-control `start` operation, so the bridge reported no neural traffic.
+  Minecraft now calls `arm_distributed_networks` after `wait-bridge` and before
+  either Java or Bedrock launch. The same missing barrier existed in the Unity
+  editor path and was added there; Unreal already had the required ordering.
+  Webots and WebGL retain their separate autostart-enabled startup paths.
+  The shared readiness message is simulator-generic, and the launcher test now
+  checks handshake-to-arm ordering for all three gated frontends.
+
+- [x] `2026-09-23` Investigated the orchestrator screenshot and the newest
+  `sim_cluster_85414` logs. The registry contains one network, `hexapod_0`,
+  across the three expected node IDs; it does not contain two registered
+  networks. The UI received one early snapshot (`1 shard`) and then retained
+  that biological topology/edge cache while later cluster snapshot requests
+  failed 489 times with `shard 'hexapod_0_ipc' has a mismatched layer range`.
+  During the same interval the compatibility placement repeatedly changed
+  between active layer `[1]` and `[0, 1, 2, 3, 4, 5, 6]` with redundant copies.
+  Cluster layout counts are calculated from the placement distribution, while
+  the cached topology and edge projection come from only the selected shard;
+  missing or mismatched layer positions are filled with the ordered column
+  fallback. The screenshot therefore combines one stale biological shard
+  projection with synthetic placement/layout columns for the same network.
+  The workers also imported the same 4,025,579-byte snapshot independently and
+  reported divergent growth totals (worker 01: 628 -> 707; worker 02: 628 ->
+  697), which confirms that this compatibility path is maintaining separate
+  per-worker runner projections rather than a single merged biological graph.
+
 - [x] `2026-09-15 15:12Z` Social/participant refresh: Java native all-six NPC sensing,
   clean save and JAR/world build pass in `world-9qrr1mf7/`. Bedrock timer-offset,
   ordinary-player command, API/detection/port suite passes in `bedrock-ezsbn3o3/`.
@@ -348,13 +379,109 @@ on retry. Only a proved startup bind race gets up to three fresh port attempts.
   the preceding source certificate. Actual NPC/Rust inquiry passes in the NAO
   plan; final package refresh follows the new world install check.
 
+- [x] `2026-09-23 10:18Z` Cluster-global UI projection now assembles one biological
+  snapshot from all active shard owners. Hidden layers, connection matrices and
+  presence counters are selected from their receiving-layer owner; sensory/output
+  populations and early cells are deduplicated; redundant/empty placement copies
+  are not added to the biological aggregate. The aggregate clears `layer_range`
+  so it cannot be rendered as a partial shard.
+
+- [x] `2026-09-23 10:18Z` Cluster topology, edge caches and ordered layout counts
+  are bound to a deterministic active-assignment digest. Placement changes and
+  failed snapshot validation invalidate the biological cache, and the layout uses
+  complete merged topology dimensions only when that digest matches the current
+  registry. Focused owner-selection and assignment-generation regression tests
+  were added.
+
+- [x] `2026-09-23` Tightened cluster projection admission: every execution layer
+  must have exactly one active owner, repeated or empty shard assignments are
+  rejected, and biological output-stage ownership is selected from its assigned
+  execution layer. Added a missing-owner regression test.
+
+- [x] `2026-09-23 11:30Z` Rechecked `logs/sim_cluster_119969/` and the four
+  newest `nm-17901622*.log` files. The current failure is earlier than UI
+  projection: the orchestrator rejects every cluster cut because
+  `hexapod_0_worker_01` has a mismatched network shape. The workers imported
+  the same initial snapshot but continued local growth independently, so a
+  strict multi-shard cut cannot claim one common biological state. The cluster
+  UI now requests a complete topology witness from the preferred active IPC
+  owner when that cut is unavailable, retains the current active-assignment
+  digest, and refuses the witness when its biological layers are incomplete.
+
+- [x] `2026-09-23` Cross-checked the local hexapod motor route. Rust and the
+  companion preserve the authored 18-channel order (`lf/lm/lr/rf/rm/rr`, each
+  `coxa/femur/tibia`), with output AER addresses based at `16384`; Java
+  decoding returns zero-based indices without reordering. The visible-motion
+  defect was in the Java mesh renderer, which animated only `segment_*`
+  anchors and ignored the hexapod's `leg_*` hierarchy. Named Java/WebGL joint
+  transforms and a per-channel geometry regression now cover all 18 endpoints.
+- [x] `2026-09-23` Added Bedrock hexapod joint properties and hierarchical
+  bones. The generated server entity exposes one client-synchronised float
+  property per named motor endpoint, the resource animation rotates
+  coxa/femur/tibia joint bones, and runtime output state resets on disarm and
+  updates after each reply. The controlled Bedrock fixture verifies output
+  index 0 changes `lf_coxa` while `lm_coxa` remains neutral.
+
 ## Validation and acceptance
+
+- [x] `2026-09-23` `bash -n scripts/run_sim.sh`, `cargo fmt --all --check`,
+  `git diff --check`, and `cargo test --locked --test run_examples_launcher`
+  pass. The launcher suite reports 13 passed tests, including the new ordering
+  assertion for Minecraft, Unity and Unreal. The Cargo build emits existing
+  unused-code warnings only.
+
+- [x] `2026-09-23` A rerun reached the new arm barrier but failed before the
+  control RPC because `run_sim.sh` inherited local mTLS variables from
+  `local_management_env.py`, while the selected Webots runtime profile removed
+  them and served plaintext gRPC. The observed rustls error was
+  `received corrupt message of type InvalidContentType`. The arm client now
+  derives the shared Webots profile and clears TLS variables for plaintext
+  profiles; `timeout 75s bash -c './scripts/run_sim.sh --sim minecraft
+  --robots "hexapod=1" --nodes 3 --no-engine --no-build'` reached
+  `Sent start to network 'hexapod_0' via http://127.0.0.1:38211`, confirmed
+  Start on all three workers and created the arm marker. The no-engine process
+  was stopped after that transport verification and cleaned up successfully.
+
+- [x] `2026-09-23` `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew
+  --no-daemon test` passes all 14 Java 1.21.1 adapter tests, including the
+  18-channel hexapod geometry regression. The 26.2 profile also passes with
+  Java 25, Loom no-remap and its profile properties. Regenerated WebGL oracle
+  fixtures match both Java profiles.
+- [x] `2026-09-23` `python3 scripts/build_minecraft_bedrock.py`,
+  `npm exec -- tsc -p tsconfig.json --noEmit`, and
+  `node --experimental-vm-modules scripts/qa/test_minecraft_bedrock.cjs` pass.
+  The controlled Bedrock suite reports 78 hexapod bones, 18 joint properties,
+  and the expected endpoint response for output index 0.
 
 - [x] `2026-09-15 15:31Z` Final exported-world NPC/Rust inquiry and clean shutdown
   pass in `target/qa/nao-social/bedrock-c3ua3jl_/`, with the exact exported-world
   hash. Bundle refresh, all 21 checksums and nine local documentation links pass;
   `target/nao-social/package-verification.json` records the delivered manifest.
   The installed user server remains untouched; all validation used fresh labs.
+
+- [x] `2026-09-23 10:20Z` `cargo check --features 'ui,engine_runtime'` passes, and
+  `cargo test --locked --features 'ui,engine_runtime'
+  topology_presentation_tests --lib` passes all 3 focused tests. The narrower
+  `ui,growth3d` feature combination is incomplete in this repository because it
+  omits the `engine_runtime` feature's required OpenCL/morphology/parallel
+  dependencies; the documented engine profile is the valid growth build.
+
+- [x] `2026-09-23 11:01Z` Cluster snapshot and placement regressions pass with
+  `cargo check --locked --features 'ui,engine_runtime'`, the active-owner range
+  and assignment-stability tests, the cluster snapshot RPC test, and the
+  `cluster_snapshot` test group. The RPC regression now includes a warm backup
+  layer and confirms that only the active layer enters the biological runner
+  range.
+
+- [x] `2026-09-23 11:05Z` Final focused validation passes: all 52
+  `distributed::tests`, all 4 `topology_presentation_tests`, all 13
+  `run_examples_launcher` tests, `cargo fmt --all --check`, and `git diff --check`.
+  The build retains pre-existing warning output only.
+
+- [x] `2026-09-23 11:30Z` The topology-witness fallback compiles with
+  `cargo check --locked --features 'ui,engine_runtime'`; `cargo fmt --all`
+  and `git diff --check` pass. Runtime verification is pending a fresh
+  `scripts/run_sim.sh --sim minecraft --robots "hexapod=1" --nodes 3` run.
 
 All commands run at the repository root:
 
@@ -441,6 +568,41 @@ is independent of port availability and must never be bypassed.
   frontend service. Treating it as an ordinary removable source caused the
   observed connected-node count to fall from three to two after warm-copy
   handoff.
+- The distributed simulator launcher deliberately disables runtime autostart so
+  neural processing cannot begin before an environment has completed its
+  handshake. The bridge's ready marker records the companion handshake, while
+  the shared arm file gates binary AER traffic. Minecraft had stopped after the
+  first marker and therefore needed the same explicit cluster-control start
+  sequence already used by Unreal. Unity shared the defect; Webots and WebGL
+  use autostart-enabled launchers and do not share this barrier.
+- `local_management_env.py` provisions mTLS for the parent launcher, but the
+  default Webots runtime profile intentionally unsets those variables because
+  it excludes `management_v1`. The cluster-control client must apply the same
+  profile boundary or it negotiates TLS against the plaintext orchestrator.
+- The cluster UI previously accepted a successful one-shard biological snapshot
+  as its topology/edge cache even after the placement registry expanded or
+  changed. `decode_cluster_snapshot_projection` selected one shard for the UI,
+  while layout dimensions came from the aggregate distribution. When a global
+  snapshot then failed during placement churn, those two inputs remained visible
+  together and produced the apparent biological-plus-ordered duplicate network.
+  The decoder now assembles a single active-owner projection and suppresses it
+  until the placement generation matches.
+- The latest cluster logs show the deeper cause of the repeated snapshot failure:
+  the compatibility planner alternated `hexapod_0` between active `[1]` with
+  warm copies and active `[0..6]` on every telemetry cycle. The planner was
+  evaluated before the already-valid assignment was considered, so noisy
+  capacity/latency observations could enqueue competing `LoadNetwork` commands.
+  In addition, a newly loaded worker derived its runner range from the hosted
+  active-plus-backup union, while cluster validation expected only active
+  ownership. This produced `hexapod_0_ipc has a mismatched layer range` and
+  caused the UI to invalidate its biological cache and expose the ordered
+  placement fallback.
+- The newer `sim_cluster_119969` run confirms the same class of defect after
+  placement stabilization: independent worker growth produces a mismatched
+  network shape (`hexapod_0_worker_01`). Strict global cut assembly must remain
+  closed in this state; the read-only UI now uses a complete active-node
+  topology witness rather than presenting an ordered placement graph as
+  biological topology.
 
 ## Decision Log
 
@@ -477,6 +639,55 @@ is independent of port availability and must never be bypassed.
   causal ordering. A fixture score may be reported as improved only when the
   measured coupled score is positive; no production protocol or biological
   control claim is promoted from this sandbox.
+- `2026-09-23 MC-010`: Keep distributed simulator startup disarmed until each
+  frontend handshake completes, then invoke the existing orchestrator `start`
+  operation through `arm_distributed_networks`. Apply this barrier to every
+  frontend that runs with `NM_DISTRIBUTED_AUTOSTART=0`; leave autostart-enabled
+  Webots and WebGL launchers unchanged. This preserves the explicit simulator
+  admission boundary and avoids retimestamping or dropping pre-arm AER traffic.
+- `2026-09-23 MC-011`: Derive the arm client's gRPC transport from the same
+  `webots_runtime_profile` used by `run_webot.sh`. Clear local mTLS variables
+  for plaintext profiles and retain them for `management_v1`/`all-features`.
+  This keeps the simulator control path protocol-compatible without weakening
+  the production management TLS requirement.
+- `2026-09-23 MC-012`: Treat the screenshot as a projection-consistency defect,
+  not evidence of two logical networks. Cluster-global rendering must bind its
+  biological topology, edge cache and ordered placement dimensions to the same
+  placement/snapshot generation; a one-shard cache cannot silently remain the
+  biological view after the cluster distribution changes.
+- `2026-09-23 MC-013`: Preserve the existing cluster snapshot protocol and fail
+  closed on duplicate active layer owners or incomplete biological topology.
+  Build the UI aggregate at the presentation boundary from the authoritative
+  active assignment, keeping warm redundant copies out of the biological graph.
+  This changes only read-only rendering and cache lifetime; it does not alter
+  runner ownership, logical time or distributed execution semantics.
+- `2026-09-23 MC-014`: Treat a healthy published compatibility assignment as
+  authoritative during telemetry churn. Replan only after a worker disappears,
+  coverage becomes invalid or the eligible target set changes. Keep active layer
+  ownership separate from hosted warm-copy layers in `ManagedNetwork` and the
+  runner snapshot range so cluster cuts validate one biological topography.
+- `2026-09-23 MC-015`: Keep strict cluster snapshot assembly fail-closed when
+  independently evolved worker states cannot form one common cut. For the
+  read-only cluster UI, use a complete biological topology witness from the
+  stable IPC owner, bind it to the current assignment digest, and record the
+  source in diagnostics. This preserves snapshot consistency while preventing
+  the ordered placement fallback from masquerading as biological topology.
+- `2026-09-23 MC-016`: Biological growth is scoped to the active area/layer/
+  sub-shard owner. `BiologicalOwnershipMap` and its generation-fenced
+  `BiologicalTopologyTransaction` publish local growth or a cross-area neuron
+  migration as one commit, carrying state/synapse evidence and advancing both
+  topology and partition generations at microstep zero. The active map contains
+  one owner per stable neuron; warm copies remain durability metadata and cannot
+  appear as a second biological graph. Growth into unoccupied volume expands
+  the source area, while sustained pressure against the enclosing membrane
+  commits bounded membrane expansion; overlap with another area's occupied
+  volume is the condition that produces migration. The legacy runner path
+  remains a compatibility path until it consumes this transaction boundary.
+- `2026-09-23 MC-017`: Treat motor endpoint names as the cross-engine contract.
+  Resolve Java/WebGL geometry through the generated output catalogue and expose
+  the same names as Bedrock joint properties. Keep the 18-channel order and
+  zero-based decoded spike indices unchanged; the adapters may differ in their
+  rendering mechanism, but neither may invent a positional remap.
 
 ## Outcomes & Retrospective
 

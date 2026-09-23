@@ -82,6 +82,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 ROBOT_PROFILES_PY="$ROOT_DIR/scripts/robot_profiles.py"
+source "$ROOT_DIR/scripts/webots_runtime_profile.sh"
 
 LOCAL_MANAGEMENT_ROOT="${NM_LOCAL_MANAGEMENT_ROOT:-$ROOT_DIR/data/simulator-runtime}"
 
@@ -903,7 +904,7 @@ wait_for_environment_bridges_ready() {
   local ready_count=0
 
   echo ""
-  echo "run_sim.sh: waiting for Unreal environment readiness (all bridge handshakes, timeout ${TCP_READY_TIMEOUT}s) …"
+  echo "run_sim.sh: waiting for simulator environment readiness (all bridge handshakes, timeout ${TCP_READY_TIMEOUT}s) …"
   while [ "$SECONDS" -le "$deadline" ]; do
     ready_count=0
     local i
@@ -911,7 +912,7 @@ wait_for_environment_bridges_ready() {
       local pid="${BRIDGE_PIDS[$i]}"
       local brain_id="${BRAIN_IDS[$i]}"
       if ! kill -0 "$pid" 2>/dev/null; then
-        echo "run_sim.sh: bridge for ${brain_id} exited before the Unreal environment became ready." >&2
+        echo "run_sim.sh: bridge for ${brain_id} exited before the simulator environment became ready." >&2
         echo "  See: $CLUSTER_LOG_DIR/bridge_${brain_id}.log" >&2
         exit 1
       fi
@@ -920,12 +921,12 @@ wait_for_environment_bridges_ready() {
       fi
     done
     if [ "$ready_count" -eq "$total" ]; then
-      echo "run_sim.sh: Unreal environment ready; all ${total} brain handshake(s) accepted."
+      echo "run_sim.sh: simulator environment ready; all ${total} brain handshake(s) accepted."
       return 0
     fi
     sleep 1
   done
-  echo "run_sim.sh: timed out waiting for Unreal environment handshakes (${ready_count}/${total})." >&2
+  echo "run_sim.sh: timed out waiting for simulator environment handshakes (${ready_count}/${total})." >&2
   exit 1
 }
 
@@ -935,10 +936,26 @@ arm_distributed_networks() {
     echo "run_sim.sh: missing cluster-control binary: $control_bin" >&2
     exit 1
   fi
+  local runtime_features
+  runtime_features="$(webots_runtime_profile)"
+  local -a control_env=()
+  if ! webots_profile_has_feature "$runtime_features" management_v1; then
+    # run_webot.sh removes local-management TLS variables for the default
+    # plaintext Webots profile. Match that child runtime for this control
+    # client; otherwise rustls attempts TLS against the plaintext listener and
+    # reports InvalidContentType during the handshake.
+    control_env=(
+      env
+      -u NM_GRPC_TLS_CERT
+      -u NM_GRPC_TLS_KEY
+      -u NM_GRPC_TLS_CA
+      -u NM_GRPC_TLS_DOMAIN
+    )
+  fi
   local brain_id
   for brain_id in "${BRAIN_IDS[@]}"; do
     echo "run_sim.sh: arming distributed network '$brain_id' after environment readiness …"
-    "$control_bin" \
+    "${control_env[@]}" "$control_bin" \
       --orchestrator-addr "http://127.0.0.1:$CLUSTER_ORCHESTRATOR_PORT" \
       --cluster-control-network "$brain_id" \
       --cluster-control-action start
@@ -1064,6 +1081,9 @@ launch_webots() {
     echo "run_sim.sh: Webots launcher not found or not executable: $WEBOTS_SCRIPT" >&2
     exit 1
   fi
+  if [ "$NO_BUILD" -eq 1 ]; then
+    WEBOTS_PASSTHROUGH_ARGS+=(--no-build)
+  fi
   exec "$WEBOTS_SCRIPT" --robots "$ROBOT_SPEC" "${WEBOTS_PASSTHROUGH_ARGS[@]+"${WEBOTS_PASSTHROUGH_ARGS[@]}"}"
 }
 
@@ -1071,6 +1091,9 @@ launch_webots_background() {
   if [ ! -x "$WEBOTS_SCRIPT" ]; then
     echo "run_sim.sh: Webots launcher not found or not executable: $WEBOTS_SCRIPT" >&2
     exit 1
+  fi
+  if [ "$NO_BUILD" -eq 1 ]; then
+    WEBOTS_PASSTHROUGH_ARGS+=(--no-build)
   fi
   "$WEBOTS_SCRIPT" --robots "$ROBOT_SPEC" "${WEBOTS_PASSTHROUGH_ARGS[@]+"${WEBOTS_PASSTHROUGH_ARGS[@]}"}" &
   WEBOTS_PID=$!
@@ -1082,6 +1105,11 @@ launch_webots_background() {
 # ---------------------------------------------------------------------------
 launch_webgl() {
   resolve_brain_arrays
+  # Keep the delegated backend, cluster-control client, and WebGL gateway on
+  # one transport profile.  The parent launcher may have provisioned local
+  # management credentials for another simulator path, but the default WebGL
+  # profile is plaintext reference gRPC.
+  export NM_WEBOTS_RUNTIME_FEATURES="$WEBGL_RUNTIME_FEATURES"
   local total="${#BRAIN_IDS[@]}"
   if [ "$CLUSTER_NODE_COUNT" -lt "$total" ]; then
     echo "run_sim.sh: WebGL --node/--nodes=$CLUSTER_NODE_COUNT requires at least one worker per brain ($total)." >&2
@@ -1118,8 +1146,18 @@ launch_webgl() {
 
   if [ "$NO_BUILD" -eq 0 ]; then
     echo "run_sim.sh: building the AARNN cluster and browser gateway …"
-    cargo build --release --locked --all-features --bin aarnn_rust
-    cargo build --release --locked --all-features --bin web_ui
+    # Keep the WebGL backend on the same explicit local profile as the
+    # delegated Webots launcher.  --all-features enables management_v1, whose
+    # orchestrator deliberately fails closed unless production bearer/TLS
+    # credentials are configured; the local WebGL cluster uses the plaintext
+    # reference gRPC path instead.
+    local -a webgl_runtime_args=()
+    read -r -a webgl_runtime_args <<< "$(webots_cargo_profile_args "$WEBGL_RUNTIME_FEATURES")"
+    cargo build --release --locked "${webgl_runtime_args[@]}" --bin aarnn_rust
+    # web_ui is a headless HTTP gateway in this mode.  Keep its feature graph
+    # explicit too, so a stale default/all-feature build cannot reintroduce an
+    # authenticated management client/server mismatch.
+    cargo build --release --locked --no-default-features --features engine_runtime --bin web_ui
   fi
   if [ ! -x "$ROOT_DIR/target/release/aarnn_rust" ] || [ ! -x "$ROOT_DIR/target/release/web_ui" ]; then
     echo "run_sim.sh: WebGL requires target/release/aarnn_rust and target/release/web_ui." >&2
@@ -1127,7 +1165,7 @@ launch_webgl() {
   fi
   if ! command -v strings >/dev/null 2>&1 || ! strings "$ROOT_DIR/target/release/aarnn_rust" | grep -F "[IpcUdsServer] Bound to" >/dev/null; then
     echo "run_sim.sh: target/release/aarnn_rust was built without the robot_io IPC runtime." >&2
-    echo "  Re-run without --no-build, or build with --all-features." >&2
+    echo "  Re-run without --no-build, or include robot_io in NM_WEBGL_RUNTIME_FEATURES." >&2
     exit 1
   fi
 
@@ -1162,7 +1200,17 @@ launch_webgl() {
   fi
 
   echo "run_sim.sh: launching browser gateway on $WEBGL_HOST:$web_port …"
-  "$ROOT_DIR/target/release/web_ui" \
+  local -a web_ui_env=()
+  if ! webots_profile_has_feature "$WEBGL_RUNTIME_FEATURES" management_v1; then
+    web_ui_env=(
+      env
+      -u NM_GRPC_TLS_CERT
+      -u NM_GRPC_TLS_KEY
+      -u NM_GRPC_TLS_CA
+      -u NM_GRPC_TLS_DOMAIN
+    )
+  fi
+  "${web_ui_env[@]}" "$ROOT_DIR/target/release/web_ui" \
     --listen "$WEBGL_HOST:$web_port" \
     --orchestrator "http://127.0.0.1:$orch_port" \
     --default-network "${BRAIN_IDS[0]}" \
@@ -1229,6 +1277,10 @@ case "$SIM_BACKEND" in
     else
       start_tcp_servers
     fi
+    if [ "$DISTRIBUTED_MODE" -eq 1 ]; then
+      wait_for_environment_bridges_ready
+      arm_distributed_networks
+    fi
     serve_and_wait
     ;;
   webgl)
@@ -1260,6 +1312,9 @@ case "$SIM_BACKEND" in
     minecraft_bridge_pid="$!"
     TCP_PIDS+=("$minecraft_bridge_pid")
     python3 "$ROOT_DIR/scripts/minecraft.py" wait-bridge --pid "$minecraft_bridge_pid"
+    if [ "$DISTRIBUTED_MODE" -eq 1 ]; then
+      arm_distributed_networks
+    fi
     if [ "$minecraft_edition" = bedrock ]; then
       echo "Bedrock lab: /scriptevent aarnn:world build; /scriptevent aarnn:visit <profile>; /scriptevent aarnn:stop"
       if [ "$LAUNCH_ENGINE" -eq 1 ]; then

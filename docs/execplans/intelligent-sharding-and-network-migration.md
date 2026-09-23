@@ -2985,6 +2985,45 @@ area/layer/sub-shard decisions, while neuron-level execution cutover remains
 owned by the stable shard executor boundary and its one-writer state transfer
 gate.
 
+## Verification update — 2026-09-23: biological ownership and boundary migration
+
+- [x] Added `BiologicalOwnershipMap` and
+  `BiologicalTopologyTransaction` to the hierarchical placement boundary. The
+  map contains one active owner per stable neuron and records area, layer,
+  sub-shard and active node without treating warm copies as biological graph
+  members.
+- [x] Local growth is admitted only through the parent neuron's active area.
+  A cross-area growth admission requires an explicit origin, and an existing
+  neuron crossing an area/sub-shard boundary requires a source-owner match.
+  The commit validates every change before publishing a new map and advances
+  topology and partition generations together at microstep zero.
+- [x] The commit carries stable state and synapse evidence for the source and
+  destination transfer, allowing the authoritative shard runtime to bind the
+  actual state handoff and route/SCC recomputation to the same boundary.
+- [x] Added deterministic biological-space admission. Growth inside unoccupied
+  volume expands its source area's ellipsoid; overlap with another area's
+  occupied volume returns an explicit migration decision; pressure beyond the
+  enclosing membrane first waits for the configured pressure threshold and then
+  expands the membrane by a bounded per-transaction step. Area volumes remain
+  enclosed by the membrane, preserving a stable biological shape.
+- [x] `BiologicalTopologyTransaction` can carry the proposed growth-space
+  result and its base digest. `apply_transaction_with_space` validates that
+  digest and publishes the ownership and membrane result together at the same
+  logical boundary, preventing workers from independently growing geometry.
+- [x] `cargo test --locked --test hierarchical_sharding` passed all 14 tests,
+  including local growth, explicit cross-area migration, duplicate-owner
+  exclusion, rejected unannotated boundary growth, free-volume expansion and
+  bounded membrane expansion. `cargo check --locked
+  --features 'ui,engine_runtime'`, formatting and the existing dirty-worktree
+  checks also passed.
+
+The compatibility runner now consumes this transaction at its live growth
+commit boundary. Stable-shard activation, synapse-state binding and route/SCC
+recomputation remain separate gates; strict cluster snapshot assembly and the
+read-only topology witness remain fail-closed compatibility protections until
+those gates pass. The ordered placement view must not be promoted to a
+biological topology.
+
 ## Verification update — 2026-09-17: backup projection and final local gate
 
 - [x] Corrected backup selection to use the actual latency-selected executable
@@ -3038,3 +3077,158 @@ executor cutover and its writer-fencing evidence. A single-host deployment may
 retain a same-host warm copy, which provides recovery from process loss but
 cannot protect against host failure; multi-host protection is validated only
 when a distinct eligible host is available.
+
+## Verification update — 2026-09-23: live runner growth admission and nearest-area ownership
+
+- [x] Integrated the biological ownership transaction into all `growth3d`
+  runner spawn paths. Ownership and growth-space validation now completes
+  before dense neuron vectors, morphology or topology arrays are appended;
+  rejected membrane admission therefore leaves the runner unchanged.
+- [x] A loose growth point inside the enclosing membrane is projected into
+  the closest occupied biological area. The committed area label is copied to
+  the resulting `Node3D`, so the UI/topology projection and the one biological
+  ownership map describe the same area after admission.
+- [x] Persisted stable neuron IDs, the active ownership map, area/membrane
+  geometry and pressure samples through the runtime snapshot. Additive
+  defaults preserve snapshots written before these fields existed.
+- [x] Added runner-level tests for nearest-area projection and owner
+  publication, unbounded membrane rejection without dense mutation, and
+  ownership/geometry snapshot round trips. `cargo test --locked
+  --features growth3d --lib runner_growth` passed 3 tests; `cargo test
+  --locked --features growth3d --test hierarchical_sharding` passed 14 tests;
+  `cargo fmt --all -- --check` and `git diff --check` passed.
+- [x] Fixed the `growth3d` without `opencl` candidate-selection build path by
+  supplying an explicit empty accelerator mask. Existing warnings remain and
+  are unrelated to this admission boundary.
+- [x] Routed existing-neuron layer reassignment through a matching ownership
+  transfer before dense execution vectors move, preserving the same stable
+  neuron and area while advancing the topology/partition generations.
+
+The runner adapter still uses the compatibility `local` active-node label and
+does not yet bind live morphology synapse IDs or perform stable-shard route/SCC
+recompilation. Those remain required before the stable distributed executor can
+make this transaction authoritative across worker processes. The biological
+ownership map remains the sole topology view exposed by this slice; physical
+placement and warm copies must continue to be assembled separately.
+
+## Verification update — 2026-09-23: biological topology presentation precedence
+
+- [x] Made the UI choose one biological topology source in priority order:
+  merged cluster projection, active runner, current standalone snapshot, then
+  a source-scoped cache. A complete source is required to cover every hidden
+  layer and its declared sensory/output nodes.
+- [x] Disabled matrix-derived highlights, static weight overlays and feedback
+  edges while a complete biological projection is active. Those overlays are
+  virtual execution graphs and previously made the biological view appear to
+  contain a second synthetic topology.
+- [x] Cleared edge and topology caches when changing the selected brain view,
+  preventing a previous network's cached projection from being rendered beside
+  the selected biological projection.
+- [x] Added precedence and incomplete-projection regression tests. The locked
+  `cargo test --features 'engine_runtime,ui' --lib topology_presentation_tests`
+  passed all 6 tests; formatting and `git diff --check` also pass.
+
+## Verification update — 2026-09-23: remote topology rejected by layer-count mismatch
+
+- [x] Traced the orchestrator screenshot's synthetic fallback to the remote
+  layout dimension calculation. `NetworkStatus::num_layers` includes the
+  separate output boundary, while `Topology3D.layers` contains hidden
+  biological layers only. The orchestrator consequently expected one extra
+  biological layer and rejected the valid worker projection as incomplete.
+- [x] Cluster layout dimensions now use the validated hidden-layer count from
+  `NetworkConfig`, falling back to the assigned hidden layer range and only
+  then to the dashboard count minus its output boundary.
+- [x] Added a regression test proving a six-hidden-layer topology remains six
+  layers when dashboard metadata reports seven layers. The focused UI suite
+  now passes 7 tests; formatting and `git diff --check` pass.
+
+## Verification update — 2026-09-23: local witness invalidation during placement churn
+
+- [x] Cross-checked the latest laptop run in
+  `logs/sim_cluster_172171/webots_orchestrator.log`. The strict cluster
+  snapshot repeatedly failed with `hexapod_0_ipc has a mismatched layer
+  range` and later `hexapod_0_worker_01 has a mismatched network shape`,
+  while the same log repeatedly confirmed `using biological topology witness
+  from hexapod_0_ipc`. This is a local placement/snapshot-consistency race;
+  the k3s deployment is not involved in this reproduction.
+- [x] Found that the witness was stored with the assignment digest of the
+  current compatibility placement. Warm-copy and active-owner changes then
+  invalidated the witness, or left layout dimensions sourced from the
+  changing placement map, so the renderer returned to the synthetic ordered
+  graph even though biological coordinates were available.
+- [x] Marked witness responses separately from strict cluster projections.
+  A validated witness now remains authoritative across placement-digest
+  churn and transient snapshot errors, and its own biological layer sizes
+  provide the render dimensions. Switching to another selected brain clears
+  the witness cache so topology cannot leak between views.
+- [x] `cargo fmt --all` and
+  `cargo test --locked --features 'engine_runtime,ui' --lib
+  topology_presentation_tests` pass; the focused suite reports 7 tests.
+
+The strict cluster snapshot remains fail-closed for execution/state
+presentation. The witness path is presentation-only and cannot authorize
+placement, ownership or biological execution changes.
+
+## Decision Log
+
+- **D-ISM-011 — 2026-09-23:** A new neuron whose proposed position is inside
+  the enclosing membrane but outside every occupied area is admitted to the
+  nearest existing area and its physical position is projected into that
+  area's ellipsoid. Repeated pressure beyond the membrane may expand the
+  membrane only by a bounded step after the configured pressure threshold.
+  Ownership, geometry and generation changes publish atomically at microstep
+  zero. This preserves one evolving biological topography while allowing
+  area-local growth and explicit boundary migration.
+  Authority: user direction, Sections 13.2–13.4, `INV-009` and `INV-014`.
+
+## Verification update — 2026-09-23: concurrent robot bridge and worker data paths
+
+- [x] Confirmed from `logs/sim_cluster_201039/bridge_hexapod_0.log` and the
+  bridge implementation that TCP clients were serviced inline, so one stalled
+  robot connection prevented another from being accepted. The Unix endpoint
+  also has one `last_peer` reply owner; concurrent raw datagram exchanges
+  would therefore misroute motor replies.
+- [x] Added a bounded asynchronous TCP client set and a bounded FIFO IPC
+  arbiter in `src/tcp_aer_ipc_bridge.rs`. Robot-side TCP sessions now run in
+  parallel; each neural request/reply is queued and correlated to its client
+  Unix socket. Queue and client limits are configurable with
+  `NM_TCP_AER_BRIDGE_QUEUE_CAPACITY` and `NM_TCP_AER_BRIDGE_MAX_CLIENTS`.
+- [x] Added a deterministic concurrent-client regression test proving two
+  simultaneous bridge requests receive their own responses. The bridge binary
+  check and focused test pass.
+- [x] Changed distributed sensory/AER batch forwarding to run active worker
+  destinations concurrently while retaining each worker's existing bounded
+  stream, retry and drop accounting. A slow worker no longer serialises the
+  other active worker I/O paths.
+- [x] Changed local IPC motor reply admission to use non-blocking queue
+  insertion with a retained retry slot. A full command queue now applies
+  bounded backpressure before the next reply rather than blocking the
+  simulation thread or discarding the response.
+- [x] Removed peer-map clearing on partial heartbeat responses. Present worker
+  observations refresh liveness timestamps and missing peers expire only after
+  the existing stale grace period, preventing active-worker status flicker
+  during transient control-plane refresh gaps.
+- [x] Preserved the media/peripheral boundary: audio, video, file and USB
+  sessions continue to enter through the orchestrator (or the primary node in
+  a standalone deployment). The direct parallel path applies to robot AER
+  bridge traffic and the already-authorised worker data plane.
+- [x] `cargo fmt --all -- --check`, `git diff --check`,
+  `cargo check --bin tcp_aer_ipc_bridge --features 'ui,robot_io'`, and the
+  focused concurrent bridge test pass. Existing repository warnings remain.
+
+The compatibility distributed runner still has one biological IPC owner per
+brain. Multiple robot-side bridge sessions are safe because the bridge
+serialises the single-owner Unix exchange, while active worker forwarding is
+parallel and bounded. Assigning separate robot AER channels to separate
+workers requires an explicit peripheral binding and ownership generation; it
+must not be inferred from warm placement copies or broadcast as duplicate
+biological input.
+
+- **D-ISM-012 — 2026-09-23:** Keep the robot-side TCP bridge concurrent but
+  serialize exchanges at the single Unix biological endpoint with a bounded
+  FIFO arbiter. This preserves `last_peer` response ownership and event order
+  while allowing multiple robot/worker-facing sessions to remain active.
+  Parallel worker forwarding is performed only after the orchestrator's
+  governed admission and uses the existing per-worker bounded transports.
+  Authority: user direction, `INV-002`, `INV-007`, `INV-014`, `INV-017` and
+  Sections 10, 18 and 21 of the distributed emulator specification.

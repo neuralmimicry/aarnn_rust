@@ -109,6 +109,10 @@ ui = [
     "dep:rustfft",
     # serde and serde_json are always available
     "sysinfo",
+    # The native UI must be able to render the biological topology returned by
+    # remote workers. Without this dependency, --features ui silently builds
+    # the synthetic layer renderer only.
+    "growth3d",
 ]
 
 # Development-only native framebuffer capture for UI evidence. The eframe

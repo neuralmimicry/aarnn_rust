@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,116 @@ class ContentParity(unittest.TestCase):
         fafb=next(p for p in profiles if p['id']=='drosophila_fafb')
         self.assertEqual(banc['parts'],fafb['parts'])
         self.assertNotEqual(banc['output_names'],fafb['output_names'])
+
+    def test_hexapod_joint_contract_is_mapped_in_all_engines(self):
+        """Keep the six insect-style legs and their 18 named joints aligned."""
+        profile = next(p for p in self.catalogue['profiles'] if p['id'] == 'hexapod')
+        output_names = profile['output_names']
+        legs = ('lf', 'lm', 'lr', 'rf', 'rm', 'rr')
+        joints = ('coxa', 'femur', 'tibia')
+        expected = [
+            f'hex_o_{i:03}_{legs[i // 3]}_{joints[i % 3]}'
+            for i in range(len(legs) * len(joints))
+        ]
+        self.assertEqual(output_names, expected)
+        self.assertEqual(len(output_names), 18)
+
+        # The shared WebGL/visual representation contains three articulated
+        # segments and a foot for each of the three longitudinal rows on both
+        # sides.  This catches a six-leg count that is only cosmetic.
+        for side in (-1, 1):
+            for row in range(3):
+                anchor = f'leg_{side}_{row}'
+                parts = [part for part in profile['parts'] if part['anchor'] == anchor]
+                self.assertEqual(sum(part['id'].startswith('servo_') for part in parts), 3)
+                self.assertEqual(sum(part['id'].startswith('link_') for part in parts), 3)
+                self.assertEqual(sum(part['id'].startswith('foot_') for part in parts), 1)
+
+        webots = (ROOT / 'webots_world/protos/HexapodRobot.proto').read_text()
+        motors = re.findall(
+            r'RotationalMotor\s*\{\s*name\s+"([^"]+)"(?P<body>.*?)\n\s*\}',
+            webots, re.DOTALL)
+        self.assertEqual([name for name, _ in motors], output_names)
+        for name, body in motors:
+            self.assertRegex(body, r'\bminPosition\s+-?[0-9.]+')
+            self.assertRegex(body, r'\bmaxPosition\s+-?[0-9.]+')
+            self.assertRegex(body, r'\bmaxVelocity\s+[0-9.]+')
+            self.assertRegex(body, r'\bmaxTorque\s+[0-9.]+')
+            channel = int(name.split('_')[2])
+            sensor = name.replace(
+                f'hex_o_{channel:03d}', f'hex_s_{channel:02d}', 1)
+            self.assertRegex(
+                webots,
+                rf'PositionSensor\s*\{{\s*name\s+"{re.escape(sensor)}"',
+            )
+        attachments = re.findall(
+            r'# (Left|Right)-(front|mid|rear) leg\s+Transform\s*\{\s*translation\s+([^\n]+)\s+rotation 0 0 1 ([^\n]+)',
+            webots)
+        self.assertEqual([(side, row) for side, row, _, _ in attachments], [
+            ('Left', 'front'), ('Left', 'mid'), ('Left', 'rear'),
+            ('Right', 'front'), ('Right', 'mid'), ('Right', 'rear'),
+        ])
+        expected_attachment_positions = {
+            ('Left', 'front'): (0.105, 0.085, 1.1000),
+            ('Left', 'mid'): (0.000, 0.085, 1.5708),
+            ('Left', 'rear'): (-0.105, 0.085, 2.0416),
+            ('Right', 'front'): (0.105, -0.085, -1.1000),
+            ('Right', 'mid'): (0.000, -0.085, -1.5708),
+            ('Right', 'rear'): (-0.105, -0.085, -2.0416),
+        }
+        for side, row, values, angle in attachments:
+            x, y, z = map(float, values.split())
+            expected_x, expected_y, expected_angle = expected_attachment_positions[(side, row)]
+            self.assertAlmostEqual(x, expected_x, places=4)
+            self.assertAlmostEqual(y, expected_y, places=4)
+            self.assertAlmostEqual(z, -0.006, places=4)
+            self.assertAlmostEqual(float(angle), expected_angle, places=4)
+        self.assertTrue(all(y > 0 for s, _, values, _ in attachments[:3]
+                            for y in [float(values.split()[1])]))
+        self.assertTrue(all(y < 0 for s, _, values, _ in attachments[3:]
+                            for y in [float(values.split()[1])]))
+
+        # Both maintained Webots entry worlds currently instantiate the
+        # articulated HexapodRobot PROTO rather than a single-body placeholder.
+        # The mixed scene remains editor-configurable, so this check is separate
+        # from generated-asset freshness.
+        for world_name in ('hexapod_neuroworld.wbt', 'multi_neuroworld.wbt'):
+            world = (ROOT / 'webots_world/worlds' / world_name).read_text()
+            self.assertIn('HexapodRobot.proto', world)
+            self.assertRegex(world, r'(?m)^HexapodRobot\s*\{')
+
+        unity = (ROOT / 'sim/unity/Assets/NeuralMimicry/Runtime/Robots/NmHexapodRobot.cs').read_text()
+        for marker in (
+            'private const int NumLegs         = 6;',
+            'private const int JointsPerLeg    = 3;',
+            'public override string[] ActuatorNames => NmHabitat.Profile(this).output_names;',
+            'ArticulationJointType.RevoluteJoint',
+            'private float _coxaLimit', 'private float _femurLimit', 'private float _tibiaLimit',
+            'DriveArticulationNorm(_legJoints[l, j], outputs[idx], 0)',
+        ):
+            self.assertIn(marker, unity)
+
+        unreal = (ROOT / 'sim/unreal/Source/NmAerBridge/Private/Robots/NmHexapodActor.cpp').read_text()
+        for marker in (
+            'const FVector LegAttach[6]',
+            'const char* JointNames[] = {"coxa", "femur", "tibia"}',
+            'Joint->SetAngularDriveMode(EAngularDriveMode::TwistAndSwing)',
+            'Joint->SetAngularDriveParams(350.f, 35.f, 1200000.f)',
+            'LegJoints.Add(Joint)',
+        ):
+            self.assertIn(marker, unreal)
+        self.assertEqual(unreal.count('LegJoints.Add(Joint)'), 1)
+        shared = (ROOT / 'sim/unreal/Source/NmAerBridge/Private/NmSharedContent.cpp').read_text()
+        self.assertIn('bOutputs ? TEXT("output_names") : TEXT("sensor_names")', shared)
+
+        webgl = (ROOT / 'web_ui/webgl-world.js').read_text()
+        for marker in (
+            'function hexapodJointTransform',
+            "var legName=(side>0?'l':'r')+(leg===0?'f':leg===1?'m':'r')",
+            "legName+'_coxa'", "legName+'_femur'", "legName+'_tibia'",
+            'geometry(this.profile.parts,this.anatomy,robot.actuators,this.profile.kind',
+        ):
+            self.assertIn(marker, webgl)
 
     def test_spatial_sensor_behaviour_and_retina_history(self):
         subprocess.run(['node', str(ROOT/'scripts/qa/test_simulator_sensors.cjs')],cwd=ROOT,check=True)

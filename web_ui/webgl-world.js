@@ -29,7 +29,49 @@
     return triangles;
   }
   var SHAPES={box:unitTriangles('box'),sphere:unitTriangles('sphere'),cylinder:unitTriangles('cylinder')};
-  function geometry(objects, anatomy, actuators, kind, muscleChannels) {
+  function endpointIndex(outputNames, suffix) {
+    if(!outputNames) return -1;
+    var needle='_'+suffix;
+    for(var i=0;i<outputNames.length;i++) if(outputNames[i].slice(-needle.length)===needle) return i;
+    return -1;
+  }
+  function endpointValue(actuators, outputNames, suffix) {
+    var index=endpointIndex(outputNames,suffix);
+    return index<0?0:(actuators[index]||0);
+  }
+  function rotateZ(point,pivot,radians) {
+    var x=point[0]-pivot[0],y=point[1]-pivot[1],c=Math.cos(radians),s=Math.sin(radians);
+    return [pivot[0]+x*c-y*s,pivot[1]+x*s+y*c,point[2]];
+  }
+  function rotateX(point,pivot,radians) {
+    var y=point[1]-pivot[1],z=point[2]-pivot[2],c=Math.cos(radians),s=Math.sin(radians);
+    return [point[0],pivot[1]+y*c-z*s,pivot[2]+y*s+z*c];
+  }
+  function hexapodJointTransform(o, point, actuators, outputNames, kind) {
+    if(kind!=='hexapod'||o.anchor.indexOf('leg_')!==0) return point;
+    var anchor=o.anchor.split('_'),side=Number(anchor[1]),leg=Number(anchor[2]);
+    if(anchor.length!==3||(side!==1&&side!==-1)||leg<0||leg>2) return point;
+    var depth=-1;
+    if(o.id.indexOf('foot_')===0) depth=2;
+    else if(o.id.indexOf('servo_')===0||o.id.indexOf('link_')===0) depth=Number(o.id.slice(o.id.lastIndexOf('_')+1));
+    if(!Number.isInteger(depth)||depth<0||depth>2) return point;
+    var legName=(side>0?'l':'r')+(leg===0?'f':leg===1?'m':'r');
+    var bodyX=.27-.27*leg,bodyY=side*.23,coxaPivot=[bodyX,bodyY,.01];
+    var result=rotateZ(point,coxaPivot,endpointValue(actuators,outputNames,legName+'_coxa')*.70);
+    if(depth>=1) {
+      var femurPivot=rotateZ([bodyX,side*.44,-.07],coxaPivot,endpointValue(actuators,outputNames,legName+'_coxa')*.70);
+      result=rotateX(result,femurPivot,endpointValue(actuators,outputNames,legName+'_femur')*.90);
+    }
+    if(depth>=2) {
+      var coxa=endpointValue(actuators,outputNames,legName+'_coxa')*.70;
+      var femur=endpointValue(actuators,outputNames,legName+'_femur')*.90;
+      var femurPivot=rotateZ([bodyX,side*.44,-.07],coxaPivot,coxa);
+      var tibiaPivot=rotateX(rotateZ([bodyX,side*.57,-.17],coxaPivot,coxa),femurPivot,femur);
+      result=rotateX(result,tibiaPivot,endpointValue(actuators,outputNames,legName+'_tibia')*.90);
+    }
+    return result;
+  }
+  function geometry(objects, anatomy, actuators, kind, muscleChannels, outputNames) {
     var data=[];
     objects.forEach(function(o){
       if(o.internal&&!anatomy)return;
@@ -38,7 +80,7 @@
       if(actuators&&o.anchor.indexOf('segment_')===0){var s=Number(o.anchor.slice(8)); if(kind==='worm'){var ids=muscleChannels[s];bend=((actuators[ids[0]]||0)+(actuators[ids[1]]||0)-(actuators[ids[2]]||0)-(actuators[ids[3]]||0))*.025;} else bend=((actuators[(s%8)*2]||0)-(actuators[(s%8)*2+1]||0))*.035;}
       var c=Math.cos(o.yaw),sine=Math.sin(o.yaw),base=SHAPES[o.shape];
       for(var i=0;i<base.length;i+=3){var vertices=[];
-        for(var j=0;j<3;j++){var p=base[i+j],x=p[0]*o.size[0],y=p[1]*o.size[1];vertices.push([o.position[0]+x*c-y*sine,o.position[1]+x*sine+y*c+bend,o.position[2]+p[2]*o.size[2]]);}
+        for(var j=0;j<3;j++){var p=base[i+j],x=p[0]*o.size[0],y=p[1]*o.size[1];vertices.push(hexapodJointTransform(o,[o.position[0]+x*c-y*sine,o.position[1]+x*sine+y*c+bend,o.position[2]+p[2]*o.size[2]],actuators,outputNames,kind));}
         var normal=unit(cross(sub(vertices[1],vertices[0]),sub(vertices[2],vertices[0])));
         // Two-sided thin membranes and shared diffuse light keep small anatomy legible.
         var light=o.material==='emissive'?1: .44+.56*Math.abs(dot(normal,unit([-.35,-.5,1])));
@@ -171,7 +213,7 @@
     function draw(buffer,count,m){gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(self.pos);gl.vertexAttribPointer(self.pos,3,gl.FLOAT,false,24,0);gl.enableVertexAttribArray(self.col);gl.vertexAttribPointer(self.col,3,gl.FLOAT,false,24,12);gl.uniformMatrix4fv(self.matrix,false,m);gl.drawArrays(gl.TRIANGLES,0,count);}
     gl.uniform1f(this.opacity,1);draw(this.scene,this.sceneCount,vp);
     if(robot.participants && robot.participants.length){var actors=geometry(withParticipants({objects:[]},robot.participants).objects,false);gl.bindBuffer(gl.ARRAY_BUFFER,this.participants);gl.bufferData(gl.ARRAY_BUFFER,actors,gl.DYNAMIC_DRAW);draw(this.participants,actors.length/6,vp);}
-    if(this.bodyDirty){var data=geometry(this.profile.parts,this.anatomy,robot.actuators,this.profile.kind,this.profile.muscle_channels);gl.bindBuffer(gl.ARRAY_BUFFER,this.body);gl.bufferData(gl.ARRAY_BUFFER,data,gl.DYNAMIC_DRAW);this.bodyCount=data.length/6;this.bodyDirty=false;}
+    if(this.bodyDirty){var data=geometry(this.profile.parts,this.anatomy,robot.actuators,this.profile.kind,this.profile.muscle_channels,this.profile.output_names);gl.bindBuffer(gl.ARRAY_BUFFER,this.body);gl.bufferData(gl.ARRAY_BUFFER,data,gl.DYNAMIC_DRAW);this.bodyCount=data.length/6;this.bodyDirty=false;}
     draw(this.body,this.bodyCount,mul(vp,transform(robot.x,robot.z,this.profile.body_height,robot.heading,this.profile.body_length)));
     if(this.waterCount){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.uniform1f(this.opacity,.18);draw(this.water,this.waterCount,vp);gl.depthMask(true);gl.disable(gl.BLEND);}
   };

@@ -7,6 +7,7 @@ import java.util.Map;
 /** Catalogue-native triangles. Resolution and diffuse shading match the WebGL reference. */
 public final class Meshes {
     private Meshes() {}
+    private record Point(double x,double y,double z) {}
     private static final Map<String,List<double[]>> SHAPES=Map.of("box",shape("box"),"sphere",shape("sphere"),"cylinder",shape("cylinder"));
     private static void tri(List<double[]> out,double[] a,double[] b,double[] c) { out.add(a);out.add(b);out.add(c); }
     private static double[] point(double lat,double lon) { return new double[]{.5*Math.cos(lat)*Math.cos(lon),.5*Math.cos(lat)*Math.sin(lon),.5*Math.sin(lat)}; }
@@ -32,6 +33,74 @@ public final class Meshes {
         return out;
     }
     private static double at(double[] a,int i) { return i<0||i>=a.length?0:a[i]; }
+
+    /** Resolve a named endpoint from the generated hexapod output catalogue. */
+    static int hexapodActuatorIndex(Content.Profile profile,String endpointSuffix) {
+        String suffix="_"+endpointSuffix;
+        for(int i=0;i<profile.output_names().size();i++)
+            if(profile.output_names().get(i).endsWith(suffix)) return i;
+        return -1;
+    }
+
+    private static double angle(Content.Profile profile,double[] actuators,String endpointSuffix,double amplitude) {
+        int index=hexapodActuatorIndex(profile,endpointSuffix);
+        return index<0?0:at(actuators,index)*amplitude;
+    }
+
+    private static Point rotateZ(Point point,Point pivot,double radians) {
+        double x=point.x()-pivot.x(),y=point.y()-pivot.y();
+        double c=Math.cos(radians),s=Math.sin(radians);
+        return new Point(pivot.x()+x*c-y*s,pivot.y()+x*s+y*c,point.z());
+    }
+
+    private static Point rotateX(Point point,Point pivot,double radians) {
+        double y=point.y()-pivot.y(),z=point.z()-pivot.z();
+        double c=Math.cos(radians),s=Math.sin(radians);
+        return new Point(point.x(),pivot.y()+y*c-z*s,pivot.z()+y*s+z*c);
+    }
+
+    private static int legDepth(String id) {
+        if(id.startsWith("foot_")) return 2;
+        if(id.startsWith("servo_")||id.startsWith("link_")) {
+            int split=id.lastIndexOf('_');
+            try { return Integer.parseInt(id.substring(split+1)); }
+            catch(NumberFormatException ignored) { return -1; }
+        }
+        return -1;
+    }
+
+    /** Apply the authored hexapod coxa/femur/tibia hierarchy to one vertex. */
+    private static Point hexapodJointTransform(Content.Part object,Content.Profile profile,
+                                               double[] actuators,Point point) {
+        if(!profile.kind().equals("hexapod")||!object.anchor().startsWith("leg_")) return point;
+        String[] anchor=object.anchor().split("_");
+        if(anchor.length!=3) return point;
+        int side,leg;
+        try { side=Integer.parseInt(anchor[1]); leg=Integer.parseInt(anchor[2]); }
+        catch(NumberFormatException ignored) { return point; }
+        if((side!=1&&side!=-1)||leg<0||leg>2) return point;
+        int depth=legDepth(object.id());
+        if(depth<0) return point;
+
+        String legName=(side>0?"l":"r")+(leg==0?"f":leg==1?"m":"r");
+        double bodyX=.27-.27*leg;
+        double bodyY=side*.23;
+        Point coxaPivot=new Point(bodyX,bodyY,.01);
+        double coxa=angle(profile,actuators,legName+"_coxa",.70);
+        Point result=rotateZ(point,coxaPivot,coxa);
+        if(depth>=1) {
+            Point femurPivot=rotateZ(new Point(bodyX,side*.44,-.07),coxaPivot,coxa);
+            result=rotateX(result,femurPivot,angle(profile,actuators,legName+"_femur",.90));
+        }
+        if(depth>=2) {
+            Point femurPivot=rotateZ(new Point(bodyX,side*.44,-.07),coxaPivot,coxa);
+            Point tibiaPivot=rotateX(rotateZ(new Point(bodyX,side*.57,-.17),coxaPivot,coxa),
+                    femurPivot,angle(profile,actuators,legName+"_femur",.90));
+            result=rotateX(result,tibiaPivot,angle(profile,actuators,legName+"_tibia",.90));
+        }
+        return result;
+    }
+
     public static float[] build(List<Content.Part> objects,boolean anatomy,double[] actuators,Content.Profile profile) {
         var data=new ArrayList<Float>();
         for(var o:objects) {
@@ -52,7 +121,10 @@ public final class Meshes {
                 double[][] vertices=new double[3][3];
                 for(int j=0;j<3;j++) {
                     var p=base.get(i+j); double x=p[0]*o.size()[0],y=p[1]*o.size()[1];
-                    vertices[j]=new double[]{o.position()[0]+x*c-y*s,o.position()[1]+x*s+y*c+bend,o.position()[2]+p[2]*o.size()[2]};
+                    Point transformed=hexapodJointTransform(o,profile,actuators,
+                            new Point(o.position()[0]+x*c-y*s,o.position()[1]+x*s+y*c+bend,
+                                    o.position()[2]+p[2]*o.size()[2]));
+                    vertices[j]=new double[]{transformed.x(),transformed.y(),transformed.z()};
                 }
                 double[] a=new double[3],b=new double[3];
                 for(int j=0;j<3;j++) { a[j]=vertices[1][j]-vertices[0][j];b[j]=vertices[2][j]-vertices[0][j]; }
