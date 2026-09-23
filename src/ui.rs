@@ -1549,16 +1549,35 @@ struct PendingImport {
 }
 
 #[cfg(feature = "ui")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteConnectionStage {
+    Connecting,
+    Authenticating,
+    Accepted,
+    LoadingNetwork,
+    Ready,
+    Rejected,
+    Error,
+}
+
+#[cfg(feature = "ui")]
 struct RemoteStatusSnapshot {
     nodes: HashMap<String, NodeStatus>,
     networks: HashMap<String, NetworkStatus>,
     last_error: Option<String>,
+    stage_detail: Option<String>,
     last_update: std::time::Instant,
     connected: bool,
+    stage: RemoteConnectionStage,
 }
 
 #[cfg(feature = "ui")]
 enum RemoteStatusMsg {
+    Stage {
+        addr: String,
+        stage: RemoteConnectionStage,
+        detail: Option<String>,
+    },
     Update {
         addr: String,
         nodes: HashMap<String, NodeStatus>,
@@ -4665,6 +4684,10 @@ impl App {
         }
         let auto_remote_count = app.add_remote_orchestrators(startup_remote_orchestrators)
             + app.add_remote_orchestrators_from_env();
+        nm_log!(
+            "[remote-ui] configured {} remote orchestrator connection(s)",
+            auto_remote_count
+        );
         if auto_remote_count > 0 {
             app.status = format!(
                 "{} (auto-connected {} orchestrator{})",
@@ -4715,6 +4738,260 @@ impl App {
             normalized = format!("http://{}", normalized);
         }
         Some(normalized)
+    }
+
+    fn remote_orchestrator_addr_for_network(&self, network_id: &str) -> Option<String> {
+        self.remote_statuses
+            .iter()
+            .find(|(_, snapshot)| snapshot.connected && snapshot.networks.contains_key(network_id))
+            .map(|(addr, _)| addr.clone())
+    }
+
+    fn drain_remote_status_messages(&mut self) {
+        while let Ok(msg) = self.remote_status_rx.try_recv() {
+            match msg {
+                RemoteStatusMsg::Stage {
+                    addr,
+                    stage,
+                    detail,
+                } => {
+                    let entry = self
+                        .remote_statuses
+                        .entry(addr)
+                        .or_insert(RemoteStatusSnapshot {
+                            nodes: HashMap::new(),
+                            networks: HashMap::new(),
+                            last_error: None,
+                            stage_detail: None,
+                            last_update: std::time::Instant::now(),
+                            connected: false,
+                            stage,
+                        });
+                    let keep_progress = entry.connected
+                        && matches!(
+                            entry.stage,
+                            RemoteConnectionStage::LoadingNetwork | RemoteConnectionStage::Ready
+                        )
+                        && matches!(
+                            stage,
+                            RemoteConnectionStage::Connecting
+                                | RemoteConnectionStage::Authenticating
+                        );
+                    if !keep_progress {
+                        entry.stage = stage;
+                        entry.stage_detail = detail;
+                    }
+                    entry.connected = matches!(
+                        stage,
+                        RemoteConnectionStage::Accepted
+                            | RemoteConnectionStage::LoadingNetwork
+                            | RemoteConnectionStage::Ready
+                    );
+                    entry.last_update = std::time::Instant::now();
+                }
+                RemoteStatusMsg::Update {
+                    addr,
+                    nodes,
+                    networks,
+                } => {
+                    let first_network = networks.keys().min().cloned();
+                    let stage = self
+                        .remote_statuses
+                        .get(&addr)
+                        .map(|snapshot| snapshot.stage)
+                        .filter(|stage| {
+                            matches!(
+                                stage,
+                                RemoteConnectionStage::LoadingNetwork
+                                    | RemoteConnectionStage::Ready
+                            )
+                        })
+                        .unwrap_or(RemoteConnectionStage::Accepted);
+                    nm_log!(
+                        "[remote-ui] UI accepted inventory from {} ({} nodes, {} networks)",
+                        addr,
+                        nodes.len(),
+                        networks.len()
+                    );
+                    self.remote_statuses.insert(
+                        addr.clone(),
+                        RemoteStatusSnapshot {
+                            nodes,
+                            networks,
+                            last_error: None,
+                            stage_detail: None,
+                            last_update: std::time::Instant::now(),
+                            connected: true,
+                            stage,
+                        },
+                    );
+                    if let Some(snapshot) = self.remote_statuses.get_mut(&addr) {
+                        snapshot.last_error = None;
+                        snapshot.stage_detail = None;
+                    }
+                    if self.remote_only {
+                        if let Some(snapshot) = self.remote_statuses.get(&addr) {
+                            self.dist_nodes = snapshot.nodes.clone();
+                            self.dist_network_registry = snapshot.networks.clone();
+                            self.dist_is_orchestrator = true;
+                        }
+                        if matches!(self.view_source, ViewSource::Standalone) {
+                            if let Some(network_id) = first_network {
+                                self.view_source = ViewSource::ClusterGlobal(network_id);
+                                self.dist_initial_view_selected = true;
+                                self.cluster_snapshot_cache = None;
+                                self.cluster_snapshot_last_fetch = None;
+                                nm_log!("[remote-ui] selected remote network view from {}", addr);
+                                self.status = format!(
+                                    "Connection accepted; remote inventory received from {}",
+                                    addr
+                                );
+                            } else {
+                                self.status = format!(
+                                    "Connection accepted; remote inventory from {} contains no networks",
+                                    addr
+                                );
+                            }
+                        }
+                    }
+                }
+                RemoteStatusMsg::Error { addr, error } => {
+                    let entry = self
+                        .remote_statuses
+                        .entry(addr)
+                        .or_insert(RemoteStatusSnapshot {
+                            nodes: HashMap::new(),
+                            networks: HashMap::new(),
+                            last_error: None,
+                            stage_detail: None,
+                            last_update: std::time::Instant::now(),
+                            connected: false,
+                            stage: RemoteConnectionStage::Error,
+                        });
+                    entry.last_error = Some(error);
+                    entry.stage_detail = None;
+                    entry.connected = false;
+                    entry.stage = if entry
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|error| error.starts_with("Connection rejected:"))
+                    {
+                        RemoteConnectionStage::Rejected
+                    } else {
+                        RemoteConnectionStage::Error
+                    };
+                    entry.last_update = std::time::Instant::now();
+                }
+            }
+        }
+    }
+
+    fn render_remote_only_placeholder(&self, ui: &mut egui::Ui, panel_rect: egui::Rect) {
+        let painter = ui.painter_at(panel_rect);
+        painter.rect_filled(
+            panel_rect,
+            8.0,
+            egui::Color32::from_rgba_unmultiplied(20, 24, 32, 245),
+        );
+        let mut cursor = panel_rect.center() - egui::vec2(0.0, 92.0);
+        painter.text(
+            cursor,
+            egui::Align2::CENTER_CENTER,
+            "Remote-only client",
+            egui::FontId::proportional(26.0),
+            egui::Color32::WHITE,
+        );
+        cursor.y += 42.0;
+        painter.text(
+            cursor,
+            egui::Align2::CENTER_CENTER,
+            "Local simulation disabled; no remote network is loaded",
+            egui::FontId::proportional(17.0),
+            egui::Color32::LIGHT_GRAY,
+        );
+        cursor.y += 42.0;
+
+        let status = self.remote_connections.iter().find_map(|connection| {
+            self.remote_statuses
+                .get(&connection.addr)
+                .map(|snapshot| (connection.addr.as_str(), snapshot))
+        });
+        if let Some((addr, snapshot)) = status {
+            let stage = match snapshot.stage {
+                RemoteConnectionStage::Connecting => "Connecting to endpoint",
+                RemoteConnectionStage::Authenticating => {
+                    "Authenticating / requesting remote inventory"
+                }
+                RemoteConnectionStage::Accepted => "Connection accepted; remote inventory received",
+                RemoteConnectionStage::LoadingNetwork => "Loading remote neural network",
+                RemoteConnectionStage::Ready => "Remote neural network ready",
+                RemoteConnectionStage::Rejected => "Connection rejected",
+                RemoteConnectionStage::Error => "Connection error",
+            };
+            painter.text(
+                cursor,
+                egui::Align2::CENTER_CENTER,
+                stage,
+                egui::FontId::proportional(20.0),
+                if matches!(
+                    snapshot.stage,
+                    RemoteConnectionStage::Rejected | RemoteConnectionStage::Error
+                ) {
+                    egui::Color32::LIGHT_RED
+                } else {
+                    egui::Color32::LIGHT_BLUE
+                },
+            );
+            cursor.y += 30.0;
+            painter.text(
+                cursor,
+                egui::Align2::CENTER_CENTER,
+                addr,
+                egui::FontId::monospace(14.0),
+                egui::Color32::GRAY,
+            );
+            if let Some(error) = snapshot.last_error.as_deref() {
+                cursor.y += 28.0;
+                painter.text(
+                    cursor,
+                    egui::Align2::CENTER_CENTER,
+                    error,
+                    egui::FontId::proportional(14.0),
+                    egui::Color32::LIGHT_RED,
+                );
+            } else if let Some(detail) = snapshot.stage_detail.as_deref() {
+                cursor.y += 28.0;
+                painter.text(
+                    cursor,
+                    egui::Align2::CENTER_CENTER,
+                    detail,
+                    egui::FontId::proportional(14.0),
+                    egui::Color32::GRAY,
+                );
+            }
+            if snapshot.connected {
+                cursor.y += 28.0;
+                painter.text(
+                    cursor,
+                    egui::Align2::CENTER_CENTER,
+                    format!(
+                        "{} node(s), {} network(s)",
+                        snapshot.nodes.len(),
+                        snapshot.networks.len()
+                    ),
+                    egui::FontId::proportional(14.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+            }
+        } else {
+            painter.text(
+                cursor,
+                egui::Align2::CENTER_CENTER,
+                "Connecting to endpoint",
+                egui::FontId::proportional(20.0),
+                egui::Color32::LIGHT_BLUE,
+            );
+        }
     }
 
     fn remote_workspace_client(&self) -> Result<crate::runtime_api::BlockingRuntimeClient, String> {
@@ -4916,91 +5193,187 @@ impl App {
                     .filter(|value| !value.is_empty())
             });
         let request_token = bearer_token.clone();
-        let rt = self.runtime_handle.clone();
         self.remote_statuses.insert(
             addr.clone(),
             RemoteStatusSnapshot {
                 nodes: HashMap::new(),
                 networks: HashMap::new(),
                 last_error: None,
+                stage_detail: None,
                 last_update: std::time::Instant::now(),
                 connected: false,
+                stage: RemoteConnectionStage::Connecting,
             },
         );
-        rt.spawn(async move {
-            loop {
-                if stop_clone.load(Ordering::SeqCst) {
-                    break;
-                }
-                match connect_cluster_client(addr_clone.clone()).await {
-                    Ok(mut client) => {
-                        let request =
-                            authenticated_grpc_request(StatusRequest {}, request_token.as_deref());
-                        match request {
-                            Ok(request) => {
-                                let rpc_timeout = remote_orchestrator_timeout(
-                                    "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
-                                    Duration::from_secs(8),
+        // Keep remote polling off the shared UI runtime.  The UI runtime also
+        // carries simulation and management work; a stalled remote transport
+        // must not leave the UI looking as though it is connecting forever.
+        let worker_tx = tx.clone();
+        let worker_result = std::thread::Builder::new()
+            .name("aarnn-remote-status".to_string())
+            .spawn(move || {
+                let _ = tx.send(RemoteStatusMsg::Stage {
+                    addr: addr_clone.clone(),
+                    stage: RemoteConnectionStage::Connecting,
+                    detail: Some("Opening gRPC channel (5s deadline)".to_string()),
+                });
+                nm_log!("[remote-ui] status worker started for {}", addr_clone);
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        nm_err!("[remote-ui] status runtime failed for {}: {}", addr_clone, error);
+                        let _ = tx.send(RemoteStatusMsg::Error {
+                            addr: addr_clone.clone(),
+                            error: format!("Remote status runtime failed: {}", error),
+                        });
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    loop {
+                        if stop_clone.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let _ = tx.send(RemoteStatusMsg::Stage {
+                            addr: addr_clone.clone(),
+                            stage: RemoteConnectionStage::Connecting,
+                            detail: Some("Opening gRPC channel (5s deadline)".to_string()),
+                        });
+                        let connect_timeout = remote_orchestrator_timeout(
+                            "NM_ORCHESTRATOR_CONNECT_TIMEOUT_MS",
+                            Duration::from_secs(5),
+                        );
+                        match tokio::time::timeout(
+                            connect_timeout,
+                            connect_cluster_client(addr_clone.clone()),
+                        )
+                        .await
+                        {
+                            Ok(Ok(mut client)) => {
+                                let _ = tx.send(RemoteStatusMsg::Stage {
+                                    addr: addr_clone.clone(),
+                                    stage: RemoteConnectionStage::Authenticating,
+                                    detail: Some(
+                                        "Requesting authorised remote inventory".to_string(),
+                                    ),
+                                });
+                                let request = authenticated_grpc_request(
+                                    StatusRequest {},
+                                    request_token.as_deref(),
                                 );
-                                match tokio::time::timeout(
-                                    rpc_timeout,
-                                    client.get_system_status(request),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(resp)) => {
-                                        let status = resp.into_inner();
-                                        let nodes = status
-                                            .nodes
-                                            .into_iter()
-                                            .map(|n| (n.node_id.clone(), n))
-                                            .collect();
-                                        let networks = status
-                                            .networks
-                                            .into_iter()
-                                            .map(|n| (n.network_id.clone(), n))
-                                            .collect();
-                                        let _ = tx.send(RemoteStatusMsg::Update {
-                                            addr: addr_clone.clone(),
-                                            nodes,
-                                            networks,
-                                        });
+                                match request {
+                                    Ok(request) => {
+                                        let rpc_timeout = remote_orchestrator_timeout(
+                                            "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
+                                            Duration::from_secs(8),
+                                        );
+                                        match tokio::time::timeout(
+                                            rpc_timeout,
+                                            client.get_system_status(request),
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(resp)) => {
+                                                let status = resp.into_inner();
+                                                let nodes = status
+                                                    .nodes
+                                                    .into_iter()
+                                                    .map(|n| (n.node_id.clone(), n))
+                                                    .collect();
+                                                let networks = status
+                                                    .networks
+                                                    .into_iter()
+                                                    .map(|n| (n.network_id.clone(), n))
+                                                    .collect();
+                                                let _ = tx.send(RemoteStatusMsg::Update {
+                                                    addr: addr_clone.clone(),
+                                                    nodes,
+                                                    networks,
+                                                });
+                                                nm_log!(
+                                                    "[remote-ui] inventory accepted from {}",
+                                                    addr_clone
+                                                );
+                                            }
+                                            Ok(Err(e)) => {
+                                                nm_err!(
+                                                    "[remote-ui] inventory request rejected by {}: {}",
+                                                    addr_clone,
+                                                    e
+                                                );
+                                                let _ = tx.send(RemoteStatusMsg::Error {
+                                                    addr: addr_clone.clone(),
+                                                    error: format!("Connection rejected: status error: {}", e),
+                                                });
+                                            }
+                                            Err(_) => {
+                                                nm_err!(
+                                                    "[remote-ui] inventory request timed out for {} after {:?}",
+                                                    addr_clone,
+                                                    rpc_timeout
+                                                );
+                                                let _ = tx.send(RemoteStatusMsg::Error {
+                                                    addr: addr_clone.clone(),
+                                                    error: format!(
+                                                        "Connection rejected: status request timed out after {:?}",
+                                                        rpc_timeout
+                                                    ),
+                                                });
+                                            }
+                                        }
                                     }
-                                    Ok(Err(e)) => {
+                                    Err(error) => {
                                         let _ = tx.send(RemoteStatusMsg::Error {
                                             addr: addr_clone.clone(),
-                                            error: format!("Status error: {}", e),
-                                        });
-                                    }
-                                    Err(_) => {
-                                        let _ = tx.send(RemoteStatusMsg::Error {
-                                            addr: addr_clone.clone(),
-                                            error: format!(
-                                                "Status request timed out after {:?}",
-                                                rpc_timeout
-                                            ),
+                                            error: format!("Connection rejected: authentication metadata failed: {}", error),
                                         });
                                     }
                                 }
                             }
-                            Err(error) => {
+                            Ok(Err(e)) => {
+                                nm_err!(
+                                    "[remote-ui] gRPC connect failed for {}: {}",
+                                    addr_clone,
+                                    e
+                                );
                                 let _ = tx.send(RemoteStatusMsg::Error {
                                     addr: addr_clone.clone(),
-                                    error,
+                                    error: format!("Connection rejected: connect error: {}", e),
+                                });
+                            }
+                            Err(_) => {
+                                nm_err!(
+                                    "[remote-ui] gRPC connect timed out for {} after {:?}",
+                                    addr_clone,
+                                    connect_timeout
+                                );
+                                let _ = tx.send(RemoteStatusMsg::Error {
+                                    addr: addr_clone.clone(),
+                                    error: format!(
+                                        "Connection rejected: connect timed out after {:?}",
+                                        connect_timeout
+                                    ),
                                 });
                             }
                         }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
-                    Err(e) => {
-                        let _ = tx.send(RemoteStatusMsg::Error {
-                            addr: addr_clone.clone(),
-                            error: format!("Connect error: {}", e),
-                        });
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-        });
+                });
+            });
+        if let Err(error) = worker_result {
+            nm_err!(
+                "[remote-ui] status worker could not start for {}: {}",
+                addr,
+                error
+            );
+            let _ = worker_tx.send(RemoteStatusMsg::Error {
+                addr: addr.clone(),
+                error: format!("Connection worker could not start: {}", error),
+            });
+        }
         self.remote_connections.push(RemoteConnection {
             addr,
             bearer_token,
@@ -10123,7 +10496,7 @@ impl eframe::App for App {
                 } => {
                     self.cluster_snapshot_inflight = false;
                     self.cluster_snapshot_last_fetch = Some(std::time::Instant::now());
-                    self.cluster_snapshot_network_id = Some(network_id);
+                    self.cluster_snapshot_network_id = Some(network_id.clone());
                     self.cluster_snapshot_node_id = Some(node_id);
                     #[cfg(feature = "growth3d")]
                     {
@@ -10164,10 +10537,26 @@ impl eframe::App for App {
                     self.pending_edge_cache = false;
 
                     self.cluster_snapshot_cache = Some(snap);
+                    if self.remote_only {
+                        if let Some(snapshot) = self
+                            .remote_statuses
+                            .values_mut()
+                            .find(|snapshot| snapshot.networks.contains_key(&network_id))
+                        {
+                            snapshot.stage = RemoteConnectionStage::Ready;
+                            snapshot.last_error = None;
+                            snapshot.last_update = std::time::Instant::now();
+                        }
+                    }
                     self.status = format!(
                         "Cluster snapshot updated ({} shards, digest {})",
                         shard_count,
                         &cluster_digest[..cluster_digest.len().min(12)]
+                    );
+                    nm_log!(
+                        "[remote-ui] network snapshot '{}' ready ({} shards)",
+                        network_id,
+                        shard_count
                     );
 
                     // Trigger a soft layout recompute without clearing cached positions.
@@ -10179,6 +10568,18 @@ impl eframe::App for App {
                     error,
                 } => {
                     self.cluster_snapshot_inflight = false;
+                    if self.remote_only {
+                        if let Some(snapshot) = self
+                            .remote_statuses
+                            .values_mut()
+                            .find(|snapshot| snapshot.networks.contains_key(&network_id))
+                        {
+                            snapshot.stage = RemoteConnectionStage::Error;
+                            snapshot.last_error =
+                                Some(format!("Remote network load failed: {}", error));
+                            snapshot.last_update = std::time::Instant::now();
+                        }
+                    }
                     nm_err!(
                         "[warn] Cluster snapshot failed (net={}, node={}): {}",
                         network_id,
@@ -10188,6 +10589,8 @@ impl eframe::App for App {
                 }
             }
         }
+
+        self.drain_remote_status_messages();
 
         if let ViewSource::ClusterGlobal(net_id) = &self.view_source {
             let target_node = if let Some(filter) = self.view_node_filter.as_ref() {
@@ -10203,7 +10606,10 @@ impl eframe::App for App {
                     .map(|node| !node.address.trim().is_empty())
                     .unwrap_or(false)
             });
-            let request_target = if self.dist_is_orchestrator {
+            let request_target = if self.remote_only {
+                self.remote_orchestrator_addr_for_network(net_id)
+                    .map(|address| (String::from("orchestrator"), address))
+            } else if self.dist_is_orchestrator {
                 self.distributed_node
                     .as_ref()
                     .and_then(|node| node.state.try_read().ok())
@@ -10220,7 +10626,11 @@ impl eframe::App for App {
                 .dist_network_registry
                 .get(net_id)
                 .is_some_and(|status| !status.distribution.is_empty());
-            if placement_ready {
+            // Remote-only clients must request the authoritative snapshot even
+            // while placement metadata is still arriving.  Otherwise an
+            // accepted inventory with an empty distribution would remain in
+            // the loading screen forever.
+            if placement_ready || self.remote_only {
                 if let Some((node_id, addr_value)) = request_target {
                     let addr_opt = Some(addr_value);
                     if let Some(mut addr) = addr_opt {
@@ -10239,6 +10649,22 @@ impl eframe::App for App {
                                 self.cluster_snapshot_inflight = true;
                                 self.cluster_snapshot_network_id = Some(net_id.clone());
                                 self.cluster_snapshot_node_id = Some(node_id.clone());
+                                nm_log!(
+                                    "[remote-ui] loading network snapshot '{}' from {}",
+                                    net_id,
+                                    addr
+                                );
+                                if self.remote_only {
+                                    if let Some(snapshot) = self
+                                        .remote_statuses
+                                        .values_mut()
+                                        .find(|snapshot| snapshot.networks.contains_key(net_id))
+                                    {
+                                        snapshot.stage = RemoteConnectionStage::LoadingNetwork;
+                                        snapshot.last_error = None;
+                                        snapshot.last_update = std::time::Instant::now();
+                                    }
+                                }
                                 let tx = self.cluster_snapshot_tx.clone();
                                 let net_id_clone = net_id.clone();
                                 let node_id_clone = node_id.clone();
@@ -10254,52 +10680,70 @@ impl eframe::App for App {
                                                 bearer_token.as_deref(),
                                             );
                                             match request {
-                                                Ok(request) => match client
-                                                    .get_cluster_network_snapshot(request)
+                                                Ok(request) => {
+                                                    let rpc_timeout = remote_orchestrator_timeout(
+                                                        "NM_ORCHESTRATOR_RPC_TIMEOUT_MS",
+                                                        Duration::from_secs(8),
+                                                    );
+                                                    match tokio::time::timeout(
+                                                        rpc_timeout,
+                                                        client.get_cluster_network_snapshot(request),
+                                                    )
                                                     .await
-                                                {
-                                                Ok(resp) => {
-                                                    match decode_cluster_snapshot_projection(
-                                                        resp.into_inner(),
-                                                        &net_id_clone,
-                                                        None,
-                                                    ) {
-                                                        Ok((snap, shard_count, cluster_digest)) => {
-                                                            let _ =
-                                                                tx.send(ClusterSnapshotMsg::Ok {
-                                                                    network_id: net_id_clone,
-                                                                    node_id: node_id_clone,
-                                                                    snap,
-                                                                    shard_count,
-                                                                    cluster_digest,
-                                                                });
+                                                    {
+                                                        Ok(Ok(resp)) => {
+                                                            match decode_cluster_snapshot_projection(
+                                                                resp.into_inner(),
+                                                                &net_id_clone,
+                                                                None,
+                                                            ) {
+                                                                Ok((snap, shard_count, cluster_digest)) => {
+                                                                    let _ = tx.send(ClusterSnapshotMsg::Ok {
+                                                                        network_id: net_id_clone,
+                                                                        node_id: node_id_clone,
+                                                                        snap,
+                                                                        shard_count,
+                                                                        cluster_digest,
+                                                                    });
+                                                                }
+                                                                Err(error) => {
+                                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                                        network_id: net_id_clone,
+                                                                        node_id: node_id_clone,
+                                                                        error,
+                                                                    });
+                                                                }
+                                                            }
                                                         }
-                                                        Err(error) => {
-                                                            let _ =
-                                                                tx.send(ClusterSnapshotMsg::Err {
-                                                                    network_id: net_id_clone,
-                                                                    node_id: node_id_clone,
-                                                                    error,
-                                                                });
+                                                        Ok(Err(error)) => {
+                                                            let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                                network_id: net_id_clone,
+                                                                node_id: node_id_clone,
+                                                                error: format!(
+                                                                    "snapshot request failed: {}",
+                                                                    error
+                                                                ),
+                                                            });
+                                                        }
+                                                        Err(_) => {
+                                                            let _ = tx.send(ClusterSnapshotMsg::Err {
+                                                                network_id: net_id_clone,
+                                                                node_id: node_id_clone,
+                                                                error: format!(
+                                                                    "snapshot request timed out after {:?}",
+                                                                    rpc_timeout
+                                                                ),
+                                                            });
                                                         }
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    let _ = tx.send(ClusterSnapshotMsg::Err {
-                                                        network_id: net_id_clone,
-                                                        node_id: node_id_clone,
-                                                        error: format!(
-                                                            "snapshot request failed: {}",
-                                                            e
-                                                        ),
-                                                    });
-                                                }
-                                                },
                                                 Err(error) => {
                                                     let _ = tx.send(ClusterSnapshotMsg::Err {
                                                         network_id: net_id_clone.clone(),
                                                         node_id: node_id_clone.clone(),
-                                                        error: format!("snapshot request authentication failed: {error}"),
+                                                        error: format!(
+                                                            "snapshot request authentication failed: {error}"
+                                                        ),
                                                     });
                                                 }
                                             }
@@ -10386,42 +10830,6 @@ impl eframe::App for App {
                                 }
                             });
                         }
-                    }
-                }
-            }
-
-            while let Ok(msg) = self.remote_status_rx.try_recv() {
-                match msg {
-                    RemoteStatusMsg::Update {
-                        addr,
-                        nodes,
-                        networks,
-                    } => {
-                        self.remote_statuses.insert(
-                            addr,
-                            RemoteStatusSnapshot {
-                                nodes,
-                                networks,
-                                last_error: None,
-                                last_update: std::time::Instant::now(),
-                                connected: true,
-                            },
-                        );
-                    }
-                    RemoteStatusMsg::Error { addr, error } => {
-                        let entry =
-                            self.remote_statuses
-                                .entry(addr)
-                                .or_insert(RemoteStatusSnapshot {
-                                    nodes: HashMap::new(),
-                                    networks: HashMap::new(),
-                                    last_error: None,
-                                    last_update: std::time::Instant::now(),
-                                    connected: false,
-                                });
-                        entry.last_error = Some(error);
-                        entry.connected = false;
-                        entry.last_update = std::time::Instant::now();
                     }
                 }
             }
@@ -12364,18 +12772,33 @@ impl eframe::App for App {
                             }
                         });
                         if let Some(snapshot) = self.remote_statuses.get(&conn.addr) {
+                            let stage = match snapshot.stage {
+                                RemoteConnectionStage::Connecting => "Connecting",
+                                RemoteConnectionStage::Authenticating => {
+                                    "Authenticating / requesting inventory"
+                                }
+                                RemoteConnectionStage::Accepted => "Connection accepted",
+                                RemoteConnectionStage::LoadingNetwork => "Loading neural network",
+                                RemoteConnectionStage::Ready => "Ready",
+                                RemoteConnectionStage::Rejected => "Connection rejected",
+                                RemoteConnectionStage::Error => "Connection error",
+                            };
+                            ui.label(format!(
+                                "{} ({}s)",
+                                stage,
+                                snapshot.last_update.elapsed().as_secs()
+                            ));
+                            if let Some(detail) = &snapshot.stage_detail {
+                                ui.small(detail);
+                            }
                             if let Some(err) = &snapshot.last_error {
                                 ui.colored_label(egui::Color32::LIGHT_RED, err);
-                            } else if !snapshot.connected {
-                                ui.label(format!(
-                                    "Connecting... ({}s)",
-                                    snapshot.last_update.elapsed().as_secs()
-                                ));
-                            } else {
+                            }
+                            if snapshot.connected {
                                 ui.label(format!("Nodes: {}", snapshot.nodes.len()));
                                 ui.label(format!("Networks: {}", snapshot.networks.len()));
                                 let age = snapshot.last_update.elapsed().as_secs();
-                                ui.label(format!("Last update: {}s ago", age));
+                                ui.label(format!("Last inventory: {}s ago", age));
                             }
                         } else {
                             ui.label("Connecting...");
@@ -16286,6 +16709,17 @@ impl eframe::App for App {
 
             if self.placement_explorer {
                 self.render_placement_explorer(ui, panel_rect);
+                return;
+            }
+
+            // A remote-only client has no local graph to display.  Keep the
+            // canvas neutral until an authenticated remote inventory has been
+            // accepted and a remote snapshot has actually loaded.
+            let remote_snapshot_ready = self.remote_only
+                && matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && self.cluster_snapshot_cache.is_some();
+            if self.remote_only && !remote_snapshot_ready {
+                self.render_remote_only_placeholder(ui, panel_rect);
                 return;
             }
 

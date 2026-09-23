@@ -3127,3 +3127,27 @@ no native engine content hash is presented as biological or physics equivalence.
   no `aarnn_cuda_*` temporary files were left in `/tmp`, and root filesystem
   free space remained approximately 212 GB. The live endpoint was separately
   verified as Ready with active networks and eight connected nodes.
+
+## Verification update — 2026-09-22: remote-only connection stages and view isolation
+
+- [x] Moved remote status polling to a dedicated current-thread Tokio runtime
+  so UI/simulation runtime work cannot leave the endpoint stuck at an
+  uninformative `Connecting...` state. The worker now emits Connecting,
+  Authenticating/requesting inventory, accepted, rejected/error and bounded
+  retry outcomes.
+- [x] Added a remote-only canvas gate. Until a real remote cluster snapshot is
+  accepted, the canvas shows the connection stage and explicitly says that no
+  local neural network is loaded; the default local `Runner` graph is not
+  rendered or used as a remote fallback.
+- [x] Wired accepted remote inventory into the remote cluster view and added
+  the Loading neural network and Ready stages. Remote snapshot RPCs now use the
+  configured RPC deadline and report load failures instead of remaining
+  pending indefinitely.
+- [x] Fixed the remaining remote-only state-machine deadlock: the UI now drains
+  remote status messages before selecting the cluster view, allowing the first
+  accepted inventory to transition `Standalone` to `ClusterGlobal` and start
+  snapshot loading. Periodic inventory refreshes preserve `LoadingNetwork` and
+  `Ready` instead of regressing the displayed stage to `Accepted`.
+- [x] `cargo check --features ui`, `cargo fmt --check`, and `git diff --check`
+  pass; `cargo test --features ui --lib service_` passes all 9 focused tests.
+  Existing repository compiler warnings remain non-fatal.
