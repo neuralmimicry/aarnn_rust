@@ -3151,3 +3151,36 @@ no native engine content hash is presented as biological or physics equivalence.
 - [x] `cargo check --features ui`, `cargo fmt --check`, and `git diff --check`
   pass; `cargo test --features ui --lib service_` passes all 9 focused tests.
   Existing repository compiler warnings remain non-fatal.
+
+## Verification update — 2026-09-23: GHCR latest promotion boundary
+
+- [x] Cross-checked `.github/workflows/build-and-release.yml`,
+  `scripts/build_container.sh`, `scripts/container_workloads.sh` and the
+  Ansible AARNN image-resolution path. The workflow's immutable SHA manifests
+  are the source of truth; Ansible consumes the role aliases
+  `latest-orchestrator`, `latest-node` and `latest-web-ui` after probing the
+  complete set.
+- [x] Moved mutable GHCR alias publication out of the manifest matrix. The
+  new serialized `container-latest` job runs only after every manifest build
+  and pull verification succeeds, then promotes and verifies all role aliases
+  plus the compatibility `:latest` alias from the node/runtime manifest.
+  `container-promote` and automatic version tagging now wait for that final
+  promotion on the main push path.
+- [x] Validation passed with Ruby YAML parsing for every workflow, Bash syntax
+  checks for the supporting container scripts, static promotion dependency/order
+  assertions and `git diff --check`. Actionlint reports only the two existing
+  ShellCheck style warnings in untouched workflow blocks (`SC2129` and
+  `SC2016`); no new workflow expression or changed-step error was reported.
+  No GHCR publication or deployment was run locally.
+- [x] Cross-repository deployment alignment completed in
+  `swarmhpc/ansible/roles/continuum_tenant_aarnn`, `host_vars/spirit.yml` and
+  `scripts/deploy_mixed_cluster.sh`: default rollout tags now use `latest`,
+  legacy and current base-image inputs resolve to the workflow's
+  `latest-orchestrator`, `latest-node` and `latest-web-ui` aliases, and the
+  full `ansible-playbook --syntax-check -i inventory
+  continuum_tenant_aarnn_site.yml` passed.
+- [x] Replaced the spirit host's stale pinned orchestrator image with
+  `latest-orchestrator-arm64-64k-hwe`, so the documented Ansible command with
+  `continuum_tenant_aarnn_image_tag: latest` now selects a coherent latest
+  HWE orchestrator, node and web UI set unless an explicit environment override
+  is supplied.

@@ -1232,25 +1232,7 @@ jobs:
           podman manifest add "${branch_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
           podman manifest push --all "${branch_hwe_manifest}" "docker://${branch_hwe_manifest}"
 
-          # Keep the deployment-facing alias aligned with the newest fully
-          # successful push.  The manifest job runs only after every
-          # architecture image build has succeeded.
-          latest_manifest="${image}:latest-${{ matrix.workload }}"
-          podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
-          podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
-          podman manifest create "${latest_manifest}"
-          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
-          podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
-          podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
-
-          latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
-          podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-          podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-          podman manifest create "${latest_hwe_manifest}"
-          podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
-          podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
-
-      - name: Publish version and latest tags on release
+      - name: Publish version tags on release
         if: >-
           startsWith(github.ref, 'refs/tags/v') ||
           (
@@ -1280,23 +1262,6 @@ jobs:
           podman manifest add "${version_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
           podman manifest push --all "${version_hwe_manifest}" "docker://${version_hwe_manifest}"
 
-          # A branch push already publishes latest in the branch-alias step.
-          # Keep this fallback for an explicitly dispatched v* tag run.
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            latest_manifest="${image}:latest-${{ matrix.workload }}"
-            podman manifest rm "${latest_manifest}" >/dev/null 2>&1 || true
-            podman image rm -f "${latest_manifest}" >/dev/null 2>&1 || true
-            podman manifest create "${latest_manifest}"
-            podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-amd64"
-            podman manifest add "${latest_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-4k"
-            podman manifest push --all "${latest_manifest}" "docker://${latest_manifest}"
-            latest_hwe_manifest="${image}:latest-${{ matrix.workload }}-arm64-64k-hwe"
-            podman manifest rm "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-            podman image rm -f "${latest_hwe_manifest}" >/dev/null 2>&1 || true
-            podman manifest create "${latest_hwe_manifest}"
-            podman manifest add "${latest_hwe_manifest}" "docker://${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe"
-            podman manifest push --all "${latest_hwe_manifest}" "docker://${latest_hwe_manifest}"
-          fi
           echo "Published ${image}:${version_tag}"
 
       - name: Verify published manifests include amd64 and arm64
@@ -1323,10 +1288,7 @@ jobs:
             branch_tag="$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
             verify_ref "${image}:${branch_tag}-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:${branch_tag}-${{ matrix.workload }}" "linux/arm64"
-            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
-            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
             verify_ref "${image}:${branch_tag}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
-            verify_ref "${image}:latest-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
             if [[ "${RELEASE_TAG}" == v* ]]; then
               verify_ref "${image}:${RELEASE_TAG}-${{ matrix.workload }}" "linux/amd64"
               verify_ref "${image}:${RELEASE_TAG}-${{ matrix.workload }}" "linux/arm64"
@@ -1335,23 +1297,138 @@ jobs:
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/amd64"
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}" "linux/arm64"
-            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/amd64"
-            verify_ref "${image}:latest-${{ matrix.workload }}" "linux/arm64"
             verify_ref "${image}:${GITHUB_REF_NAME}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
-            verify_ref "${image}:latest-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
           fi
 
           verify_ref "${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
 
-  container-promote:
-    name: Container Promote
+  container-latest:
+    name: Promote Latest Container Aliases
     needs: container-manifest
     if: >-
       always() &&
       (
         (github.event_name == 'push' &&
-         github.ref == 'refs/heads/main' &&
          needs.container-manifest.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' &&
+         inputs.publish_only &&
+         needs.container-manifest.result == 'success')
+      )
+    runs-on: ubuntu-24.04
+    # Mutable tags are updated by one serialized promotion boundary. This
+    # prevents concurrent manifest matrix jobs or recovery dispatches from
+    # racing on :latest and the role aliases.
+    concurrency:
+      group: aarnn-container-latest
+      cancel-in-progress: false
+    env:
+      BUILD_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.build_id || github.sha }}
+    permissions:
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Verify Podman is available
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          if ! command -v runc >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y runc
+          fi
+          command -v podman >/dev/null 2>&1 || {
+            echo "podman is required on the promotion runner."
+            exit 1
+          }
+          command -v runc >/dev/null 2>&1 || {
+            echo "runc is required on the promotion runner."
+            exit 1
+          }
+          podman --version
+          runc --version
+
+      - name: Configure rootless podman runtime environment
+        shell: bash
+        run: bash .github/scripts/configure-rootless-podman.sh
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
+        run: |
+          printf '%s' "${GH_TOKEN}" | podman login \
+            "${{ env.REGISTRY }}" \
+            --username "${GHCR_USERNAME}" \
+            --password-stdin
+
+      - name: Promote and verify latest aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          build="${BUILD_ID}"
+
+          promote_manifest() {
+            local target="$1"
+            local source="$2"
+            podman manifest rm "${target}" >/dev/null 2>&1 || true
+            podman image rm -f "${target}" >/dev/null 2>&1 || true
+            podman manifest create "${target}"
+            podman manifest add --all "${target}" "docker://${source}"
+            podman manifest push --all "${target}" "docker://${target}"
+          }
+
+          promote_hwe_alias() {
+            local target="$1"
+            local source="$2"
+            podman manifest rm "${target}" >/dev/null 2>&1 || true
+            podman image rm -f "${target}" >/dev/null 2>&1 || true
+            podman manifest create "${target}"
+            podman manifest add "${target}" "docker://${source}"
+            podman manifest push --all "${target}" "docker://${target}"
+          }
+
+          verify_ref() {
+            local ref="$1"
+            local platform="$2"
+            echo "Verifying ${ref} for ${platform}"
+            podman pull --quiet --platform "${platform}" "docker://${ref}" >/dev/null
+          }
+
+          for workload in orchestrator node web-ui; do
+            source="${image}:${build}-${workload}"
+            promote_manifest "${image}:latest-${workload}" "${source}"
+            promote_hwe_alias \
+              "${image}:latest-${workload}-arm64-64k-hwe" \
+              "${image}:${build}-${workload}-arm64-64k-hwe"
+            verify_ref "${image}:latest-${workload}" "linux/amd64"
+            verify_ref "${image}:latest-${workload}" "linux/arm64"
+            verify_ref "${image}:latest-${workload}-arm64-64k-hwe" "linux/arm64/v8"
+          done
+
+          # :latest is the compatibility/default runtime alias. The node
+          # image is the shared engine image used by the Ansible deployment;
+          # role-specific consumers use the aliases promoted above.
+          promote_manifest "${image}:latest" "${image}:${build}-node"
+          verify_ref "${image}:latest" "linux/amd64"
+          verify_ref "${image}:latest" "linux/arm64"
+          echo "Promoted GHCR latest aliases from build ${build}"
+
+  container-promote:
+    name: Container Promote
+    needs:
+      - container-manifest
+      - container-latest
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' &&
+         github.ref == 'refs/heads/main' &&
+         needs.container-manifest.result == 'success' &&
+         needs.container-latest.result == 'success') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment != '')
       )
     runs-on: [self-hosted, Linux, X64]
