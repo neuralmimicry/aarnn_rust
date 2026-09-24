@@ -101,6 +101,13 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   workflow remains valid YAML, and verified the equivalent local command passed
   74 tests. The complete X64 library/web gate passed 431 library tests and 16
   web UI tests.
+- [x] `2026-09-24 07:20Z` Audited the morphology brief against canonical paths:
+  legacy procedural morphology is `src/morphology.rs`, growth and route caches
+  are in `src/runner.rs`, stable distributed generations/routes are in
+  `src/topology_model.rs`, persistence is in `src/runtime.rs`, and the Rust/web
+  views are `src/ui.rs` and `web_ui/app.js`. Existing Phase 0, morphology, UI
+  topology and phase 2–8 safety tests passed before the additive morphology
+  contract work.
 
 ## Validation and acceptance
 

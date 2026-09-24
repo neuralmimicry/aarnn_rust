@@ -19,6 +19,9 @@
 //! The `App` struct maintains the UI state and orchestrates the interaction
 //! between the `Runner` (simulation) and the user. It uses an immediate-mode
 //! rendering paradigm for high responsiveness.
+#[cfg(feature = "growth3d")]
+mod anatomy;
+
 #[cfg(feature = "ui")]
 use eframe::{egui, egui::vec2};
 
@@ -2078,9 +2081,6 @@ struct App {
     sensory_activity: Vec<f32>,
     hidden_activity: Vec<Vec<f32>>, // per layer
     output_activity: Vec<f32>,
-    // Per-output decoded drive history (0..1), used to detect transient
-    // activations when explicit output spikes are not available.
-    output_drive_history: Vec<f32>,
     // Raster inset (recent output spikes)
     raster_cols: usize,
     raster_outputs: std::collections::VecDeque<Vec<i8>>, // time-major columns, each length = num_output_neurons
@@ -2339,6 +2339,8 @@ struct App {
     cached_edge_topo: Option<crate::topology::Topology3D>,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     cached_skull_membrane: Option<crate::morphology::SkullMembrane>,
+    #[cfg(feature = "growth3d")]
+    cached_ui_topology: Option<UiTopologySnapshot>,
     conn_stats_refresh_ms: u64,
     last_conn_stats_refresh: std::time::Instant,
     last_layout_recompute: std::time::Instant,
@@ -2706,6 +2708,11 @@ impl App {
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
             self.cached_skull_membrane = None;
+            self.cached_ui_topology = None;
+        }
+        #[cfg(all(feature = "ui", feature = "growth3d", not(feature = "morpho")))]
+        {
+            self.cached_ui_topology = None;
         }
         self.edge_shapes.clear();
         self.edge_shapes.shrink_to_fit();
@@ -2714,7 +2721,6 @@ impl App {
         self.sensory_activity.clear();
         self.hidden_activity.clear();
         self.output_activity.clear();
-        self.output_drive_history.clear();
         self.previous_hidden_spikes.clear();
         self.last_sensory_spikes.clear();
         if let Ok(mut bands) = self.spectral_bands.try_write() {
@@ -4237,6 +4243,7 @@ impl App {
                                     }
                                     ipc_reply_values = Some(out);
                                 }
+                                let mut display_updates = extract_display_contracts(&r);
                                 if let Ok(mut snap) = sim_ui_snapshot.try_write() {
                                     snap.sensory_spikes.clear();
                                     snap.sensory_spikes.extend_from_slice(&spikes);
@@ -4317,6 +4324,7 @@ impl App {
                                             snap.topo_early = r.topo.early_cells.clone();
                                         }
                                     }
+                                    swap_display_contracts(&mut snap, &mut display_updates);
                                 }
                                 // Publish t_ms atomically so the UI can always
                                 // display the latest NN time without the runner lock.
@@ -4385,6 +4393,7 @@ impl App {
                         } else {
                             let mut last_bands: Option<Vec<f32>> = None;
                             let update_ui_snapshot = |r: &Runner| {
+                                let mut display_updates = extract_display_contracts(r);
                                 if let Ok(mut snap) = sim_ui_snapshot.try_write() {
                                     snap.sensory_spikes.clear();
                                     if let Some(front) =
@@ -4471,6 +4480,7 @@ impl App {
                                             snap.topo_early = r.topo.early_cells.clone();
                                         }
                                     }
+                                    swap_display_contracts(&mut snap, &mut display_updates);
                                 }
                             };
                             for _ in 0..batch_steps {
@@ -4817,7 +4827,6 @@ impl App {
             sensory_activity: vec![0.0; n_s],
             hidden_activity: act_h,
             output_activity: vec![0.0; o],
-            output_drive_history: vec![0.5; o],
             raster_cols: 240,
             raster_outputs: std::collections::VecDeque::new(),
             last_activity_rendered_step: None,
@@ -5061,6 +5070,8 @@ impl App {
             cached_edge_topo: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             cached_skull_membrane: None,
+            #[cfg(feature = "growth3d")]
+            cached_ui_topology: None,
             conn_stats_refresh_ms,
             last_conn_stats_refresh: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_millis(conn_stats_refresh_ms))
@@ -6719,7 +6730,6 @@ impl App {
         self.sensory_activity = vec![0.0; n_s];
         self.hidden_activity = (0..n_l).map(|_| Vec::new()).collect(); // will be resized in update_activity
         self.output_activity = vec![0.0; n_o];
-        self.output_drive_history = vec![0.5; n_o];
         self.previous_hidden_spikes = (0..n_l).map(|_| Vec::new()).collect();
         self.last_sensory_spikes = vec![0; n_s];
         self.raster_outputs.clear();
@@ -6978,6 +6988,10 @@ impl App {
             // it on every view change so a witness from a previous cluster
             // cannot be displayed for the newly selected network.
             self.invalidate_cluster_projection();
+            #[cfg(feature = "growth3d")]
+            {
+                self.cached_ui_topology = None;
+            }
             // Edge/topology caches are scoped to the selected brain view. Do
             // not let a previous synthetic or remote projection survive a
             // source switch and get rendered beside the new biological one.
@@ -7802,57 +7816,6 @@ impl App {
         }
     }
 
-    fn ensure_output_drive_history_len(&mut self, len: usize) {
-        if self.output_drive_history.len() != len {
-            self.output_drive_history = vec![0.5; len];
-        }
-    }
-
-    fn mark_output_transients_from_drive(
-        &mut self,
-        drive_raw: &[f32],
-        raster_col: &mut [i8],
-        mut output_spikes: Option<&mut [i8]>,
-    ) -> bool {
-        const FALLBACK_GAIN: f32 = 0.92;
-        const FALLBACK_LEVEL_EPS: f32 = 0.02;
-        const FALLBACK_DELTA_EPS: f32 = 0.02;
-
-        let count = raster_col.len().min(drive_raw.len());
-        self.ensure_output_drive_history_len(raster_col.len());
-        let mut any = false;
-        for k in 0..count {
-            let raw = drive_raw[k];
-            if !raw.is_finite() {
-                self.output_drive_history[k] = 0.5;
-                continue;
-            }
-            let unit = (0.5 + 0.5 * (FALLBACK_GAIN * raw).tanh()).clamp(0.0, 1.0);
-            let prev = self.output_drive_history[k];
-            let dev = (unit - 0.5).abs();
-            let delta = (unit - prev).abs();
-            let crossed_midline = (prev <= 0.5 && unit >= 0.5 + FALLBACK_LEVEL_EPS)
-                || (prev >= 0.5 && unit <= 0.5 - FALLBACK_LEVEL_EPS);
-            let transient =
-                (dev >= FALLBACK_LEVEL_EPS && delta >= FALLBACK_DELTA_EPS) || crossed_midline;
-            if transient {
-                self.output_activity[k] = 1.0;
-                raster_col[k] = 1;
-                if let Some(spikes) = output_spikes.as_deref_mut() {
-                    if k < spikes.len() {
-                        spikes[k] = 1;
-                    }
-                }
-                any = true;
-            }
-            self.output_drive_history[k] = unit;
-        }
-        for k in count..self.output_drive_history.len() {
-            self.output_drive_history[k] = 0.5;
-        }
-        any
-    }
-
     fn push_output_raster_column(&mut self, frame: &[i8]) {
         if self.output_activity.len() != frame.len() {
             self.output_activity.resize(frame.len(), 0.0);
@@ -8038,31 +8001,12 @@ impl App {
         if output_spikes.len() != net_o {
             output_spikes.resize(net_o, 0);
         }
-        let mut any_output = false;
         for (k, &sv) in output_spikes.iter().enumerate() {
             if sv != 0 {
                 self.output_activity[k] = 1.0;
-                any_output = true;
             }
         }
-        let appended_frames = self.append_output_raster_step_frames(output_history_frames);
-        if appended_frames == 0
-            && self.last_activity_rendered_step.is_none()
-            && !any_output
-            && !v_o.is_empty()
-        {
-            let mut raster_col = vec![0i8; net_o];
-            self.mark_output_transients_from_drive(
-                &v_o,
-                &mut raster_col,
-                Some(output_spikes.as_mut_slice()),
-            );
-            self.raster_outputs.push_back(raster_col);
-            if self.raster_outputs.len() > self.raster_cols {
-                self.raster_outputs.pop_front();
-            }
-        }
-
+        self.append_output_raster_step_frames(output_history_frames);
         let mut probe_snapshot = UiSnapshot::default();
         probe_snapshot.sensory_spikes = sensory_spikes;
         probe_snapshot.hidden_spikes = hidden_spikes;
@@ -8184,21 +8128,7 @@ impl App {
         if stepped_frames.is_empty() {
             stepped_frames.push((current_step, runner.last_spk_o.to_vec()));
         }
-        let appended_frames = self.append_output_raster_step_frames(stepped_frames);
-        if appended_frames == 0
-            && self.last_activity_rendered_step.is_none()
-            && !runner.last_spk_o.iter().any(|&v| v != 0)
-            && !runner.v_o.is_empty()
-        {
-            let mut col = vec![0i8; runner.net.num_output_neurons];
-            let drive: Vec<f32> = runner.v_o.iter().map(|&v| v as f32).collect();
-            self.mark_output_transients_from_drive(&drive, &mut col, None);
-            self.raster_outputs.push_back(col);
-            if self.raster_outputs.len() > self.raster_cols {
-                self.raster_outputs.pop_front();
-            }
-        }
-
+        self.append_output_raster_step_frames(stepped_frames);
         // Use the lock-free atomic t_ms which is always up to date,
         // even when the runner write-lock is held by the sim thread.
         let display_t = {
@@ -8300,20 +8230,7 @@ impl App {
         if stepped_frames.is_empty() {
             stepped_frames.push((current_step, runner.last_spk_o.to_vec()));
         }
-        let appended_frames = self.append_output_raster_step_frames(stepped_frames);
-        if appended_frames == 0
-            && self.last_activity_rendered_step.is_none()
-            && !runner.last_spk_o.iter().any(|&v| v != 0)
-            && !runner.v_o.is_empty()
-        {
-            let mut col = vec![0i8; num_output];
-            let drive: Vec<f32> = runner.v_o.iter().map(|&v| v as f32).collect();
-            self.mark_output_transients_from_drive(&drive, &mut col, None);
-            self.raster_outputs.push_back(col);
-            if self.raster_outputs.len() > self.raster_cols {
-                self.raster_outputs.pop_front();
-            }
-        }
+        self.append_output_raster_step_frames(stepped_frames);
         let display_t = {
             let atomic_t = self.sim_t_ms();
             if atomic_t > 0.0 {
@@ -8964,6 +8881,15 @@ mod topology_presentation_tests {
     }
 
     #[test]
+    fn anatomical_contract_suppresses_every_legacy_overlay_request() {
+        assert!(!legacy_overlay_allowed(true, true, true));
+        assert!(!legacy_overlay_allowed(true, true, false));
+        assert!(!legacy_overlay_allowed(false, true, true));
+        assert!(!legacy_overlay_allowed(false, false, false));
+        assert!(legacy_overlay_allowed(false, false, true));
+    }
+
+    #[test]
     fn incomplete_biological_projection_does_not_disable_fallback() {
         let mut topo = crate::topology::Topology3D::new();
         topo.layers = vec![vec![crate::topology::Node3D::default()]];
@@ -9217,14 +9143,17 @@ struct UiSnapshot {
     topo_output: Vec<crate::topology::Node3D>,
     #[cfg(feature = "growth3d")]
     topo_early: Vec<crate::topology::EarlyCell3D>,
+    display_contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone)]
 struct UiTopologySnapshot {
     topo_sensory: Vec<crate::topology::Node3D>,
     topo_hidden: Vec<Vec<crate::topology::Node3D>>,
     topo_output: Vec<crate::topology::Node3D>,
     topo_early: Vec<crate::topology::EarlyCell3D>,
+    display_contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
@@ -9235,8 +9164,64 @@ impl From<&UiSnapshot> for UiTopologySnapshot {
             topo_hidden: snapshot.topo_hidden.clone(),
             topo_output: snapshot.topo_output.clone(),
             topo_early: snapshot.topo_early.clone(),
+            display_contracts: snapshot.display_contracts.clone(),
         }
     }
+}
+
+#[cfg(feature = "ui")]
+fn swap_display_contracts(
+    snapshot: &mut UiSnapshot,
+    updates: &mut BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
+) {
+    // Return retired handles to the caller's local map: potentially large
+    // final buffer destruction then happens after the publication lock drops.
+    for (mode, update) in updates {
+        let current = snapshot
+            .display_contracts
+            .entry(mode.clone())
+            .or_insert_with(|| Arc::clone(update));
+        std::mem::swap(current, update);
+    }
+}
+
+#[cfg(feature = "ui")]
+fn extract_display_contracts(
+    runner: &Runner,
+) -> BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>> {
+    let mut updates = BTreeMap::new();
+    if runner.t > 1 && runner.t % 100 != 0 {
+        return updates;
+    }
+
+    // Build away from the snapshot publication lock. Readers clone Arc handles
+    // rather than copying every path on every frame. Extraction remains on the
+    // owning runner at this cadence; it is not a stimulus latency guarantee.
+    {
+        if let Ok(anatomical) = crate::engine::RunnerEngine::display_snapshot_for_runner(
+            runner,
+            crate::morphology_contract::DisplayMode::Anatomical,
+            runner.t as u64 + 1,
+            512,
+            4096,
+            true,
+        ) {
+            updates.insert("anatomical".to_owned(), Arc::new(anatomical));
+        }
+    }
+    {
+        if let Ok(synthetic) = crate::engine::RunnerEngine::display_snapshot_for_runner(
+            runner,
+            crate::morphology_contract::DisplayMode::SyntheticColumns,
+            runner.t as u64 + 1,
+            512,
+            4096,
+            false,
+        ) {
+            updates.insert("synthetic_columns".to_owned(), Arc::new(synthetic));
+        }
+    }
+    updates
 }
 
 #[cfg(feature = "ui")]
@@ -9768,6 +9753,35 @@ fn select_biological_topology_source(
     } else {
         None
     }
+}
+
+#[cfg(feature = "ui")]
+fn legacy_overlay_allowed(
+    anatomical_contract_geometry: bool,
+    anatomical_layout_selected: bool,
+    overlay_requested: bool,
+) -> bool {
+    overlay_requested && !anatomical_contract_geometry && !anatomical_layout_selected
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn display_slot_colour(slot: u32, hue_offset: f32) -> egui::Color32 {
+    // Match CSS/Compose HSL(72%, 55%) and the Swift adapter in sRGB.
+    // ecolor::Hsva interprets brightness in linear space and looked much
+    // paler than the other clients despite using the same hue slot.
+    let hue = ((slot as f64 * 137.508 + hue_offset as f64 * 360.0).rem_euclid(360.0)) / 60.0;
+    let chroma = 0.648;
+    let secondary = chroma * (1.0 - ((hue % 2.0) - 1.0).abs());
+    let rgb = match hue as u32 {
+        0 => [chroma, secondary, 0.0],
+        1 => [secondary, chroma, 0.0],
+        2 => [0.0, chroma, secondary],
+        3 => [0.0, secondary, chroma],
+        4 => [secondary, 0.0, chroma],
+        _ => [chroma, 0.0, secondary],
+    }
+    .map(|v| ((v + 0.226) * 255.0).round() as u8);
+    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
@@ -12986,33 +13000,7 @@ impl eframe::App for App {
                     .enumerate()
                     .map(|(idx, frame)| (first_step.saturating_add(idx as u64), frame))
                     .collect::<Vec<_>>();
-                let appended_frames = self.append_output_raster_step_frames(stepped_frames);
-                if appended_frames == 0
-                    && self.last_activity_rendered_step.is_none()
-                    && !explicit_frames
-                    && !snap.v_o.is_empty()
-                {
-                    let mut col = vec![0i8; num_out];
-                    const FALLBACK_GAIN: f32 = 0.92;
-                    const FALLBACK_EPS: f32 = 0.015;
-                    let count = num_out.min(snap.v_o.len());
-                    for k in 0..count {
-                        let raw = snap.v_o[k];
-                        if !raw.is_finite() {
-                            continue;
-                        }
-                        let unit = (0.5 + 0.5 * (FALLBACK_GAIN * raw).tanh()).clamp(0.0, 1.0);
-                        if (unit - 0.5).abs() >= FALLBACK_EPS {
-                            self.output_activity[k] = 1.0;
-                            col[k] = 1;
-                        }
-                    }
-                    self.raster_outputs.push_back(col);
-                    if self.raster_outputs.len() > self.raster_cols {
-                        self.raster_outputs.pop_front();
-                    }
-                }
-
+                self.append_output_raster_step_frames(stepped_frames);
                 // Connection statistics (refreshed every 100 steps in sim thread).
                 if snap.total_conn > 0 || snap.longterm_conn > 0 {
                     self.longterm_conn = snap.longterm_conn;
@@ -16770,8 +16758,8 @@ impl eframe::App for App {
                         let mut layout = self.network_layout;
                         ui.horizontal(|ui| {
                             ui.label("Layout");
-                            ui.selectable_value(&mut layout, NetworkLayout::Conventional, "Conventional");
-                            ui.selectable_value(&mut layout, NetworkLayout::Aarnn, "AARNN");
+                            ui.selectable_value(&mut layout, NetworkLayout::Conventional, "Synthetic columns");
+                            ui.selectable_value(&mut layout, NetworkLayout::Aarnn, "Anatomical").on_hover_text("Use stored 3D topology and morphology where available; procedural geometry is labelled by its source.");
                             let auto_changed = ui.checkbox(&mut self.layout_auto, "Auto").changed();
                             if auto_changed && self.layout_auto {
                                 let desired = self.preferred_layout_for_view(&model_cloned, &network_registry);
@@ -17990,6 +17978,7 @@ impl eframe::App for App {
             // fallback out of the cache path so a stale projection cannot create a
             // second set of ordered columns.
             let cache_layout_active = !matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && !matches!(self.network_layout, NetworkLayout::Aarnn)
                 && (self.show_static_overlays || self.force_show_connections)
                 && !self.cached_edges.is_empty()
                 && !self.cached_layer_sizes.is_empty();
@@ -17999,10 +17988,14 @@ impl eframe::App for App {
             let ui_snapshot_opt: Option<UiTopologySnapshot> = {
                 let snapshot_timer =
                     crate::obs::DebugTimer::new("App::update/render/snapshot_topology_copy");
-                let snapshot = self.ui_snapshot.try_read().ok();
-                let topology = snapshot
-                    .as_ref()
-                    .map(|snapshot| UiTopologySnapshot::from(&**snapshot));
+                // Keep the last complete presentation snapshot when the
+                // simulation is publishing a new one. Waiting on the writer
+                // here stalls a frame, while treating a busy read as missing
+                // geometry causes the anatomical paths to blink out.
+                if let Ok(snapshot) = self.ui_snapshot.try_read() {
+                    self.cached_ui_topology = Some(UiTopologySnapshot::from(&*snapshot));
+                }
+                let topology = self.cached_ui_topology.clone();
                 drop(snapshot_timer);
                 topology
             };
@@ -18014,19 +18007,38 @@ impl eframe::App for App {
                 .map(|snap| {
                     snapshot_topology_allowed
                         && use_aarnn_layout
+                        && snap.display_contracts.contains_key("anatomical")
                         && (!snap.topo_hidden.is_empty()
                             || !snap.topo_sensory.is_empty()
                             || !snap.topo_output.is_empty()
                             || !snap.topo_early.is_empty())
                 })
                 .unwrap_or(false);
+            // A complete anatomical contract and its topology must be read as
+            // one presentation snapshot.  Pairing a live runner topology
+            // with an older contract changes the projection basis while a
+            // frame is being rendered, which makes stored paths jump or
+            // briefly disappear.  Keep the contract witness separate from
+            // the legacy topology fallback so the two modes cannot mix.
+            #[cfg(feature = "growth3d")]
+            let anatomical_contract_snapshot_available = snapshot_topology_allowed && use_aarnn_layout
+                && ui_snapshot_opt.as_ref().is_some_and(|snap| {
+                    snap.display_contracts
+                        .get("anatomical")
+                        .is_some_and(|contract| {
+                            matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
+                                && contract.coverage.unavailable_reason.is_none()
+                                && !contract.nodes.is_empty()
+                        })
+                });
             #[cfg(feature = "growth3d")]
             let cluster_topology_authoritative = matches!(self.view_source, ViewSource::ClusterGlobal(_))
                 && self.cluster_topo_cache.as_ref().is_some_and(|topo| {
                     complete_biological_topology(topo, layout_layers, layout_ns, layout_o)
                 });
             #[cfg(feature = "growth3d")]
-            let active_runner_topology_authoritative = active_runner_opt.is_some_and(|runner| {
+            let active_runner_topology_authoritative = !anatomical_contract_snapshot_available
+                && active_runner_opt.is_some_and(|runner| {
                 complete_biological_topology(
                     &runner.topo,
                     layout_layers,
@@ -18038,10 +18050,12 @@ impl eframe::App for App {
             let snapshot_topology_authoritative = snapshot_topology_allowed
                 && use_aarnn_layout
                 && ui_snapshot_opt.as_ref().is_some_and(|snap| {
-                    snap.topo_hidden.len() == layout_layers
-                        && snap.topo_hidden.iter().all(|layer| !layer.is_empty())
-                        && (layout_ns == 0 || snap.topo_sensory.len() == layout_ns)
-                        && (layout_o == 0 || snap.topo_output.len() == layout_o)
+                    (anatomical_contract_snapshot_available
+                        && snap.display_contracts.contains_key("anatomical"))
+                        || (snap.topo_hidden.len() == layout_layers
+                            && snap.topo_hidden.iter().all(|layer| !layer.is_empty())
+                            && (layout_ns == 0 || snap.topo_sensory.len() == layout_ns)
+                            && (layout_o == 0 || snap.topo_output.len() == layout_o))
                 });
             #[cfg(feature = "growth3d")]
             let cached_topology_authoritative = use_aarnn_layout
@@ -18210,7 +18224,7 @@ impl eframe::App for App {
                     }
                 }
             }
-            if need_recompute {
+            if need_recompute && !anatomical_contract_snapshot_available {
                 self.last_rendered_panel_size = quantize_layout_size(panel_rect.size());
                 self.last_layout_recompute = std::time::Instant::now();
                 let ns = layout_ns.max(1);
@@ -18967,11 +18981,42 @@ impl eframe::App for App {
             let layout_total_neurons = cluster_total_neurons.unwrap_or(total_neurons_cloned);
             let large_model = layout_layers > 64 || layout_total_neurons > 5000;
             let allow_cached_edges = !self.cached_edges.is_empty();
-            let allow_edges = !large_model || self.force_show_connections || allow_cached_edges;
+            #[cfg(feature = "growth3d")]
+            let contract_anatomical_geometry = snapshot_topology_allowed && use_aarnn_layout
+                && ui_snapshot_opt.as_ref().is_some_and(|snapshot| {
+                    snapshot
+                        .display_contracts
+                        .get("anatomical")
+                        .is_some_and(|contract| {
+                            matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
+                                && contract.coverage.unavailable_reason.is_none()
+                                && !contract.nodes.is_empty()
+                        })
+                });
+            #[cfg(not(feature = "growth3d"))]
+            let contract_anatomical_geometry = false;
+            #[cfg(feature = "growth3d")]
+            let anatomical_layout_selected = use_aarnn_layout;
+            #[cfg(not(feature = "growth3d"))]
+            let anatomical_layout_selected = false;
+            // Once physical paths are available, matrix overlays would draw
+            // misleading soma-to-soma lines over them. The contract renderer
+            // below owns anatomical geometry; synthetic mode keeps the normal
+            // matrix edge path.
+            let allow_edges = (!large_model || self.force_show_connections || allow_cached_edges)
+                && !contract_anatomical_geometry
+                && !anatomical_layout_selected;
             let show_highlights: bool = self.show_highlights && allow_edges && !camera_interacting;
             let show_backward_highlights: bool = self.show_backward_highlights && allow_edges && !camera_interacting;
             let show_static_overlays: bool = self.show_static_overlays && allow_edges;
-            let live_edge_overlays = show_static_overlays || self.force_show_connections;
+            // `force_show_connections` is a synthetic-view control. It must
+            // never override the anatomical contract gate, otherwise a stale
+            // matrix cache is composited over physical paths.
+            let live_edge_overlays = legacy_overlay_allowed(
+                contract_anatomical_geometry,
+                anatomical_layout_selected,
+                show_static_overlays || self.force_show_connections,
+            );
             let since_last_edge_refresh_ms = self.last_edge_cache_refresh.elapsed().as_millis() as u64;
             if live_edge_overlays
                 && self.overlay_density > 0
@@ -19023,6 +19068,37 @@ impl eframe::App for App {
             let scale_x = panel_rect.width() * 0.3 * self.camera_zoom;
             #[cfg(feature = "growth3d")]
             let scale_y = ((panel_rect.bottom() - 150.0).max(100.0) - (panel_rect.top() + 30.0)) * 0.45 * self.camera_zoom;
+
+            #[cfg(feature = "growth3d")]
+            let anatomical_contract = if snapshot_topology_allowed && use_aarnn_layout {
+                ui_snapshot_opt.as_ref().and_then(|s| s.display_contracts.get("anatomical"))
+                    .filter(|c| c.provenance != crate::morphology_contract::DisplayProvenance::Unavailable
+                        && c.coverage.unavailable_reason.is_none() && !c.nodes.is_empty())
+            } else { None };
+            #[cfg(feature = "growth3d")]
+            let anatomical_frame = anatomical_contract.map(|contract| anatomy::Frame::new(
+                contract, egui::pos2(x_ref, y_ref) + self.cam_pan,
+                egui::vec2(scale_x, scale_y), yaw, pitch,
+            ));
+            #[cfg(feature = "growth3d")]
+            if let (Some(contract), Some(frame)) = (anatomical_contract, anatomical_frame.as_ref()) {
+                self.sensory_positions.clear();
+                self.hidden_positions.clear();
+                self.output_positions.clear();
+                self.early_positions.clear();
+                for node in &contract.nodes {
+                    let position = frame.project(node.position_mm);
+                    match node.role {
+                        crate::morphology_contract::DisplayRole::Sensory => self.sensory_positions.push(position),
+                        crate::morphology_contract::DisplayRole::Output => self.output_positions.push(position),
+                        crate::morphology_contract::DisplayRole::Hidden | crate::morphology_contract::DisplayRole::Unassigned => {
+                            let layer = node.layer.unwrap_or(0);
+                            self.hidden_positions.resize_with(self.hidden_positions.len().max(layer + 1), Vec::new);
+                            self.hidden_positions[layer].push(position);
+                        }
+                    }
+                }
+            }
 
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             let (show_morpho_overlays, morpho_opacity, show_transmissions, transmissions_opacity) = (
@@ -19133,19 +19209,53 @@ impl eframe::App for App {
                     egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 25.0),
                     egui::Align2::LEFT_TOP,
                     format!(
-                        "Output path: {connected_outputs}/{} connected, {output_spikes} active",
+                        "Matrix output path: {connected_outputs}/{} connected, {output_spikes} active",
                         active_runner.w_out.nrows()
                     ),
                     egui::FontId::proportional(11.0),
                     diagnostic_colour,
                 );
+                #[cfg(all(feature = "morpho", feature = "growth3d"))]
+                if active_runner.net.use_morphology {
+                    let committed_route_outputs = (0..active_runner.w_out.nrows())
+                        .filter(|&output| {
+                            active_runner
+                                .recv_out
+                                .get(output)
+                                .map(|routes| {
+                                    routes.iter().any(|&(hidden, _synapse)| {
+                                        active_runner
+                                            .w_out
+                                            .get((output, hidden))
+                                            .is_some_and(|weight| weight.abs() > 1.0e-8)
+                                    })
+                                })
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    let pending_routes = connected_outputs.saturating_sub(committed_route_outputs);
+                    painter.text(
+                        egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 40.0),
+                        egui::Align2::LEFT_TOP,
+                        format!(
+                            "Committed anatomy: {committed_route_outputs}/{}; pending: {pending_routes}",
+                            active_runner.w_out.nrows()
+                        ),
+                        egui::FontId::proportional(10.0),
+                        if pending_routes == 0 {
+                            egui::Color32::from_rgb(160, 240, 120)
+                        } else {
+                            egui::Color32::YELLOW
+                        },
+                    );
+                }
             }
 
             // Draw skull membrane (semi-transparent bounding environment)
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             let _hidden_layers_len = hidden_positions.len();
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
-            if growth_enabled {
+            if growth_enabled && !use_aarnn_layout {
             let skull_opt = if let Some(active_runner) = active_runner_opt {
                 if active_runner.net.use_morphology {
                     active_runner.morph.skull_membrane
@@ -19304,8 +19414,15 @@ impl eframe::App for App {
                                 }
                                 let convex_smooth = smooth_polygon(convex_inflated, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 18); // transparent fill
-                                let membrane_stroke_bg = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(180, 195, 255, 64));
-                                painter.add(egui::Shape::convex_polygon(convex_smooth, membrane_fill, membrane_stroke_bg));
+                                // Keep the calculated bounding membrane and
+                                // its cloudy fill, but do not draw a separate
+                                // outer contour: the contour reads as a
+                                // misleading white boundary at a glance.
+                                painter.add(egui::Shape::convex_polygon(
+                                    convex_smooth,
+                                    membrane_fill,
+                                    egui::Stroke::NONE,
+                                ));
                             }
 
                             // Concave outline on top for shape fidelity; fall back to convex outline if needed
@@ -19334,8 +19451,10 @@ impl eframe::App for App {
                                     }
                                 }
                                 let outline_smooth = smooth_polygon(outline, 3);
-                                let membrane_stroke = egui::Stroke::new(1.6_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 140));
-                                painter.add(egui::Shape::closed_line(outline_smooth, membrane_stroke));
+                                // The concave hull remains cached and
+                                // smoothed for the membrane calculation. Its
+                                // outline is intentionally not painted.
+                                let _ = outline_smooth;
                             }
                         }
                     } else if let Some((rx, ry, rz)) = skull.radii {
@@ -19380,8 +19499,11 @@ impl eframe::App for App {
                             if hull.len() >= 3 {
                                 let hull_smooth = smooth_polygon(hull, 3);
                                 let membrane_fill = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
-                                let membrane_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40));
-                                painter.add(egui::Shape::convex_polygon(hull_smooth, membrane_fill, membrane_stroke));
+                                painter.add(egui::Shape::convex_polygon(
+                                    hull_smooth,
+                                    membrane_fill,
+                                    egui::Stroke::NONE,
+                                ));
                             }
                         }
                     } else {
@@ -19393,17 +19515,125 @@ impl eframe::App for App {
                         let radius_proj = skull.radius * scale_x.max(scale_y);
                         let membrane_col = egui::Color32::from_rgba_unmultiplied(220, 230, 255, 20);
                         painter.circle_filled(center_proj, radius_proj, membrane_col);
-                        painter.circle_stroke(center_proj, radius_proj, egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(200, 210, 255, 40)));
                     }
                 }
             }
+
+            #[cfg(feature = "growth3d")]
+            if let (Some(contract), Some(frame)) = (anatomical_contract, anatomical_frame.as_ref()) {
+                frame.cloud(&painter);
+                // Index once per snapshot frame, rather than scanning all
+                // neurons for every segment. Sampling affects brightness only.
+                let mut owners = BTreeMap::new();
+                let mut sensory = 0;
+                let mut output = 0;
+                let mut hidden = BTreeMap::<usize, usize>::new();
+                for node in &contract.nodes {
+                    let activity = match node.role {
+                        crate::morphology_contract::DisplayRole::Sensory => {
+                            let value = sensory_activity.get(sensory).copied().unwrap_or(0.0); sensory += 1; value
+                        }
+                        crate::morphology_contract::DisplayRole::Output => {
+                            let value = output_activity.get(output).copied().unwrap_or(0.0); output += 1; value
+                        }
+                        crate::morphology_contract::DisplayRole::Hidden => {
+                            let layer = node.layer.unwrap_or(0);
+                            let index = hidden.entry(layer).or_default();
+                            let value = hidden_activity.get(layer).and_then(|v| v.get(*index)).copied().unwrap_or(0.0);
+                            *index += 1; value
+                        }
+                        _ => 0.0,
+                    };
+                    owners.insert(node.id, (node.colour_slot, activity.clamp(0.0, 1.0)));
+                }
+                for path in &contract.paths {
+                    let Some(&(slot, activity)) = owners.get(&path.owner) else { continue; };
+                    let variant = match path.kind {
+                        crate::morphology_contract::AnatomicalKind::Axon | crate::morphology_contract::AnatomicalKind::AxonHillock => 0.055,
+                        crate::morphology_contract::AnatomicalKind::Dendrite => -0.055,
+                        _ => 0.0,
+                    };
+                    let base = display_slot_colour(slot, variant);
+                    let lighten = |v: u8| (v as f32 + (255 - v) as f32 * activity * 0.38) as u8;
+                    let colour = egui::Color32::from_rgb(lighten(base.r()), lighten(base.g()), lighten(base.b()));
+                    painter.add(egui::Shape::mesh(frame.tube(&path.points_mm, path.radius_mm, colour)));
+                }
+                let mut contacts = egui::epaint::Mesh::default();
+                for marker in &contract.markers {
+                    let (colour, radius) = match marker.kind {
+                        crate::morphology_contract::AnatomicalKind::Bouton => (egui::Color32::from_rgb(255, 184, 74), 3.0),
+                        crate::morphology_contract::AnatomicalKind::PostsynapticSite => (egui::Color32::from_rgb(143, 216, 255), 2.5),
+                        crate::morphology_contract::AnatomicalKind::Synapse => (egui::Color32::from_rgb(255, 240, 168), 3.5),
+                        _ => continue,
+                    };
+                    frame.disc(&mut contacts, frame.project(marker.position_mm), radius, colour);
+                }
+                painter.add(egui::Shape::mesh(contacts));
+                if contract.coverage.truncated {
+                    painter.text(egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 43.0), egui::Align2::LEFT_TOP,
+                        "Bounded anatomical snapshot", egui::FontId::proportional(11.0), egui::Color32::GRAY);
+                }
+            }
+
+            // Keep soma colours tied to the same stable identities used by the
+            // stored paths. This makes neighbouring neurons distinguishable
+            // without allowing simulation order or frame timing to recolour
+            // an existing neuron.
+            #[cfg(feature = "growth3d")]
+            let (contract_sensory_colours, contract_hidden_colours, contract_output_colours) =
+                if contract_anatomical_geometry {
+                    let mut sensory = Vec::new();
+                    let mut hidden: Vec<Vec<egui::Color32>> = Vec::new();
+                    let mut output = Vec::new();
+                    if let Some(contract) = ui_snapshot_opt
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.display_contracts.get("anatomical"))
+                    {
+                        for node in &contract.nodes {
+                            let colour = display_slot_colour(node.colour_slot, 0.0);
+                            match node.role {
+                                crate::morphology_contract::DisplayRole::Sensory => {
+                                    sensory.push(colour)
+                                }
+                                crate::morphology_contract::DisplayRole::Hidden => {
+                                    let layer = node.layer.unwrap_or(0);
+                                    if hidden.len() <= layer {
+                                        hidden.resize_with(layer + 1, Vec::new);
+                                    }
+                                    hidden[layer].push(colour);
+                                }
+                                crate::morphology_contract::DisplayRole::Output => {
+                                    output.push(colour)
+                                }
+                                crate::morphology_contract::DisplayRole::Unassigned => {}
+                            }
+                        }
+                    }
+                    (sensory, hidden, output)
+                } else {
+                    (Vec::new(), Vec::new(), Vec::new())
+                };
+            #[cfg(not(feature = "growth3d"))]
+            let (contract_sensory_colours, contract_hidden_colours, contract_output_colours) =
+                (Vec::new(), Vec::new(), Vec::new());
 
             // draw sensory (use cached screen-space positions directly; NO extra camera transform here)
             let (col_s_base, vis_s) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, -1, egui::Color32::from_rgb(60, 140, 255), &network_registry);
             if vis_s || view_node_filter.is_none() {
                 for (i, &p0) in sensory_positions.iter().enumerate() {
                     let a = sensory_activity.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-                    let col = col_s_base.gamma_multiply(0.35 + 0.65 * a);
+                    let soma_base = contract_sensory_colours
+                        .get(i)
+                        .copied()
+                        .unwrap_or(col_s_base);
+                    let col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.35 + 0.65 * a });
+                    #[cfg(feature = "growth3d")]
+                    if let Some(frame) = anatomical_frame.as_ref() {
+                        let mut soma_mesh = egui::epaint::Mesh::default();
+                        frame.disc(&mut soma_mesh, p0, radius_s, col);
+                        painter.add(egui::Shape::mesh(soma_mesh));
+                    } else { painter.circle_filled(p0, radius_s, col); }
+                    #[cfg(not(feature = "growth3d"))]
                     painter.circle_filled(p0, radius_s, col);
                     if self.placement_selected_layers.contains(&0) {
                         painter.circle_stroke(
@@ -19485,11 +19715,16 @@ impl eframe::App for App {
                     let activity_default = if matches!(view_source, ViewSource::ClusterGlobal(_)) { 0.5 } else { 0.0 };
                     let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(activity_default).clamp(0.0, 1.0);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
-                    let mut col = col_h_base.gamma_multiply(0.30 + 0.70 * a);
+                    let soma_base = contract_hidden_colours
+                        .get(li)
+                        .and_then(|colours| colours.get(j))
+                        .copied()
+                        .unwrap_or(col_h_base);
+                    let mut col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.30 + 0.70 * a });
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
                     let mut r_h = radius_h;
                     #[cfg(feature = "growth3d")]
-                    if growth_enabled && use_aarnn_layout {
+                    if growth_enabled && use_aarnn_layout && !contract_anatomical_geometry {
                         let depth_node_opt: Option<&crate::topology::Node3D> = if cache_topology_active {
                             self.cached_edge_topo
                                 .as_ref()
@@ -19515,6 +19750,13 @@ impl eframe::App for App {
                             col = col.gamma_multiply(0.85 + 0.30 * (1.0 - depth));
                         }
                     }
+                    #[cfg(feature = "growth3d")]
+                    if let Some(frame) = anatomical_frame.as_ref() {
+                        let mut soma_mesh = egui::epaint::Mesh::default();
+                        frame.disc(&mut soma_mesh, p, r_h, col);
+                        painter.add(egui::Shape::mesh(soma_mesh));
+                    } else { painter.circle_filled(p, r_h, col); }
+                    #[cfg(not(feature = "growth3d"))]
                     painter.circle_filled(p, r_h, col);
                     if self.placement_selected_layers.contains(&(li as u32 + 1)) {
                         painter.circle_stroke(
@@ -19837,7 +20079,7 @@ impl eframe::App for App {
 
             // Optional: transmission flashes (released synapses this frame)
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
-            if show_transmissions {
+            if show_transmissions && !contract_anatomical_geometry {
                 if let Some(active_runner) = active_runner_opt {
                     if active_runner.net.use_morphology {
                 use crate::morphology::ReleasedKind;
@@ -19909,7 +20151,18 @@ impl eframe::App for App {
             if vis_o || view_node_filter.is_none() {
                 for (k, &p) in output_positions.iter().enumerate() {
                     let a = output_activity.get(k).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-                    let col = col_o_base.gamma_multiply(0.30 + 0.70 * a);
+                    let soma_base = contract_output_colours
+                        .get(k)
+                        .copied()
+                        .unwrap_or(col_o_base);
+                    let col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.30 + 0.70 * a });
+                    #[cfg(feature = "growth3d")]
+                    if let Some(frame) = anatomical_frame.as_ref() {
+                        let mut soma_mesh = egui::epaint::Mesh::default();
+                        frame.disc(&mut soma_mesh, p, radius_o, col);
+                        painter.add(egui::Shape::mesh(soma_mesh));
+                    } else { painter.circle_filled(p, radius_o, col); }
+                    #[cfg(not(feature = "growth3d"))]
                     painter.circle_filled(p, radius_o, col);
                     if self.placement_selected_layers.contains(&(hidden_positions.len() as u32 + 1)) {
                         painter.circle_stroke(

@@ -19,6 +19,9 @@ object GeneratedManagementClient {
     fun workspaceTopologyPath(workspaceId: String, ownerId: String): String =
         "/api/runtime/workspaces/${encode(workspaceId)}/topology?owner=${encode(ownerId)}&max_nodes=512&max_edges=4096"
 
+    fun workspaceSnapshotPath(workspaceId: String, ownerId: String): String =
+        "/api/runtime/workspaces/${encode(workspaceId)}/snapshot?owner=${encode(ownerId)}"
+
     fun workspaceControlPath(workspaceId: String): String =
         "/api/runtime/workspaces/${encode(workspaceId)}/control"
 

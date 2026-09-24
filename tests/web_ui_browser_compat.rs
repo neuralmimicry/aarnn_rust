@@ -257,6 +257,81 @@ fn activity_polling_coalesces_and_rejects_stale_sources() {
 }
 
 #[test]
+fn anatomical_and_synthetic_views_use_shared_bounded_contract_geometry() {
+    let native = read_asset("src/ui.rs");
+    let app = read_asset("web_ui/app.js");
+    assert!(native.contains("contract_anatomical_geometry"));
+    assert!(native.contains("contract.paths") && native.contains("convex_polygon"));
+    assert!(native.contains("contract.markers") && native.contains("PostsynapticSite"));
+    assert!(native.contains("colour_slot") && native.contains("display_slot_colour"));
+    assert!(native.contains("cached_ui_topology") && native.contains("try_read()"));
+    assert!(native.contains("extract_display_contracts"));
+    assert!(native.contains("Arc<crate::morphology_contract::DisplaySnapshot>"));
+    assert!(
+        app.contains("view.paths")
+            && app.contains("view.markers")
+            && app.contains("edge.points_mm")
+            && app.contains("drawTubePolygon")
+            && app.contains("colourSlot")
+    );
+    assert!(app.contains("candidateSequence < currentSequence"));
+    assert!(app.contains("Retain the last committed graph"));
+}
+
+#[test]
+fn connectome_display_contract_is_exposed_across_supported_ui_sources() {
+    let native = read_asset("src/ui.rs");
+    let web = read_asset("web_ui/app.js");
+    let android_client =
+        read_asset("apps/android/app/src/main/java/com/neuralmimicry/aarnn/RemoteAarnnClient.kt");
+    let android_ui =
+        read_asset("apps/android/app/src/main/java/com/neuralmimicry/aarnn/MainActivity.kt");
+    let ios_session = read_asset("apps/ios/AarnnRemoteSession.swift");
+    let ios_view = read_asset("apps/ios/AarnnConnectomeView.swift");
+
+    for source in [
+        &native,
+        &web,
+        &android_client,
+        &android_ui,
+        &ios_session,
+        &ios_view,
+    ] {
+        assert!(
+            source.contains("anatomical") || source.contains("Anatomical"),
+            "anatomical display mode is missing from one UI source"
+        );
+        assert!(
+            source.contains("synthetic_columns")
+                || source.contains("SyntheticColumns")
+                || source.contains("Synthetic columns"),
+            "synthetic display mode is missing from one UI source"
+        );
+    }
+    assert!(android_client.contains("workspaceSnapshotPath"));
+    assert!(
+        android_client.contains("points_mm")
+            && android_client.contains("RemoteDisplayLine")
+            && android_client.contains("RemoteDisplayMarker")
+            && android_client.contains("radius_mm")
+    );
+    assert!(
+        android_ui.contains("displayNodePositions")
+            && android_ui.contains("displayLineColour")
+            && android_ui.contains("display.markers")
+    );
+    assert!(
+        ios_session.contains("workspaceDisplayViews") && ios_session.contains("display_snapshots")
+    );
+    assert!(
+        ios_view.contains("AarnnConnectomeView")
+            && ios_view.contains("pointsMM")
+            && ios_view.contains("snapshot.markers")
+            && ios_view.contains("radiusMM")
+    );
+}
+
+#[test]
 fn native_remote_workspace_actions_are_backgrounded() {
     let native = read_asset("src/ui.rs");
     assert!(native.contains("queue_remote_workspace_push"));

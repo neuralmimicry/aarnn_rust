@@ -59,6 +59,7 @@ mod migration_transfer;
 mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
+mod morphology_contract;
 mod network;
 mod neuron_kernels;
 mod node_auth;
@@ -4128,14 +4129,6 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         runner.net.output_source_layer
                     );
                 }
-                let repaired_outputs = runner.ensure_output_connectivity();
-                if repaired_outputs > 0 {
-                    nm_log!(
-                        "[topology-repair] restored {} output-neuron hidden-layer connections during node startup",
-                        repaired_outputs
-                    );
-                }
-
                 #[cfg(feature = "stable_executor_live")]
                 let mut stable_runtime = if let Some(path) = args.stable_runtime_manifest.as_ref() {
                     Some(open_stable_runtime_manifest(path.clone(), args.brain_id.clone()).await?)

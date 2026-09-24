@@ -94,6 +94,8 @@ pub mod migration_transfer;
 pub mod mobile_ffi;
 /// Platform-neutral mobile lifecycle, checkpoint and capability contracts.
 pub mod mobile_runtime;
+/// Portable stable morphology, constrained-growth, route-timing and display contracts.
+pub mod morphology_contract;
 /// Independent-brain fair scheduler and resource placement reference types.
 pub mod multi_brain;
 /// Core neural network data structures including layers, neurons, and synapses.

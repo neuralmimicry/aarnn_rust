@@ -249,6 +249,29 @@ fn scenario_manifest_is_complete(root: &Path, id: &str) -> bool {
 
 fn qa_suite(root: &Path, suite: &str) -> bool {
     match suite {
+        "morphology-growth-cone" => {
+            scenario_manifest_is_complete(root, "MORPH-GROW-001")
+                && run(root, "python3", &["scripts/qa/run_growth_cone.py"])
+        }
+        "anatomical-render" | "anatomical-render-browser" => {
+            let mut args = vec!["scripts/qa/run_anatomical_render.py"];
+            if suite == "anatomical-render-browser" {
+                args.push("--browser");
+            }
+            scenario_manifest_is_complete(root, "MORPH-VIS-001") && run(root, "python3", &args)
+        }
+        "anatomical-growth" => {
+            scenario_manifest_is_complete(root, "MORPH-VIS-002")
+                && run(
+                    root,
+                    "python3",
+                    &[
+                        "scripts/qa/run_anatomical_render.py",
+                        "--sustained",
+                        "--browser",
+                    ],
+                )
+        }
         "simulator-nao-bedrock" => {
             scenario_manifest_is_complete(root, "SIM-NAO-INTERACTION-001")
                 && run(root, "python3", &["scripts/qa/probe_nao_bedrock.py"])

@@ -3442,6 +3442,12 @@ function updateLayoutButtons() {
 function updateNetworkViewLayout() {
   if (!networkView) return;
   networkView.classList.toggle("conventional", state.render.layout === "conventional");
+  networkView.dataset.displayMode = state.render.layout === "conventional" ? "synthetic_columns" : "anatomical";
+  const viewKey = state.render.layout === "conventional" ? "synthetic_columns" : "anatomical";
+  const contract = state.snapshot && state.snapshot.display_snapshots ? state.snapshot.display_snapshots[viewKey] : null;
+  networkView.dataset.displayProvenance = contract && contract.provenance ? String(contract.provenance) : "legacy_fallback";
+  networkView.dataset.displayCompleteness = contract && contract.coverage ? String(Boolean(contract.coverage.complete)) : "false";
+  networkView.title = contract && contract.coverage && contract.coverage.unavailable_reason ? `Anatomical data unavailable: ${contract.coverage.unavailable_reason}` : contract && contract.provenance ? `Display provenance: ${contract.provenance}` : "Legacy display fallback";
 }
 async function pollTarget(addr) {
   try {
@@ -3571,8 +3577,18 @@ async function fetchSnapshotForActive() {
         clearGraph = true;
       } else {
         const snapshot = JSON.parse(data.snapshot_json);
+        if (data.display_snapshots && typeof data.display_snapshots === "object") {
+          snapshot.display_snapshots = data.display_snapshots;
+        }
         const currentKey = sourceRequestKey(activeSource());
         if (requestKey === currentKey) {
+          const candidateSequence = displaySnapshotSequence(snapshot);
+          const currentSequence = displaySnapshotSequence(state.snapshot);
+          // A delayed response may arrive after a newer poll. Do not replace
+          // stable geometry with an older partial view.
+          if (candidateSequence < currentSequence) {
+            return;
+          }
           state.snapshotFailures = 0;
           state.snapshot = snapshot;
           state.snapshotMeta = {
@@ -3606,15 +3622,9 @@ async function fetchSnapshotForActive() {
       if (currentKey === requestKey) {
         state.snapshotFailures = (state.snapshotFailures || 0) + 1;
         // Keep the last rendered graph through brief transport hiccups.
-        if (state.snapshotFailures >= 3) {
-          state.graph = null;
-          state.snapshot = null;
-          state.snapshotMeta = {
-            sourceKey: "",
-            savedAtMs: 0
-          };
-          drawNetwork();
-        }
+        // Retain the last committed graph through transport/runtime hiccups.
+        // A source change or a valid replacement will explicitly rebuild it;
+        // transient failures must not make anatomy blink out of existence.
       }
     }
     snapshotFetchInFlight = false;
@@ -3629,6 +3639,15 @@ async function fetchSnapshotForActive() {
 function snapshotPollIntervalMs() {
   return getActivePlaying() ? SNAPSHOT_POLL_PLAYING_MS : SNAPSHOT_POLL_IDLE_MS;
 }
+
+function displaySnapshotSequence(snapshot) {
+  const views = snapshot && snapshot.display_snapshots;
+  if (views && typeof views === "object") {
+    return Object.values(views).reduce((highest, view) => Math.max(highest, Number(view && view.sequence || 0) || 0), 0);
+  }
+  return Number(snapshot && snapshot.t || 0) || 0;
+}
+
 function pollSnapshot() {
   if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
   if (state.authMode !== "none" && !state.user) return;
@@ -3689,6 +3708,8 @@ async function pollActivity() {
   }
 }
 function buildGraph(snapshot, layout) {
+  const contractGraph = buildContractGraph(snapshot, layout);
+  if (contractGraph) return contractGraph;
   const net = snapshot.net || {};
   const meta = getActiveNetworkMeta();
   const wIn = snapshot.w_in || {
@@ -3754,6 +3775,131 @@ function buildGraph(snapshot, layout) {
   return {
     nodes,
     edges
+  };
+}
+function displayIdKey(id) {
+  if (!id || typeof id !== "object") return "";
+  // Schema 2 encodes u64 identities as decimal strings. Accept safe legacy
+  // numbers only: a rounded identity must never select another neuron's tree.
+  const value = typeof id.value === "string" ? id.value : Number.isSafeInteger(id.value) ? String(id.value) : "";
+  const generation = Number(id.generation);
+  if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(generation) || generation <= 0) return "";
+  return `${value}:${generation}`;
+}
+function stableNeuronColour(id, variant = 0, colourSlot = null) {
+  if (Number.isFinite(Number(colourSlot))) {
+    const hue = ((Number(colourSlot) * 137.508) % 360 + variant * 360 + 360) % 360;
+    return `hsl(${hue.toFixed(1)} 72% 55%)`;
+  }
+  const key = typeof id === "string" ? id : displayIdKey(id);
+  let hash = 2166136261;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = (((hash >>> 0) % 3600) / 10 + variant * 360 + 360) % 360;
+  return `hsl(${hue.toFixed(1)} 72% 55%)`;
+}
+function buildContractGraph(snapshot, layout) {
+  const views = snapshot && snapshot.display_snapshots;
+  const key = layout === "conventional" ? "synthetic_columns" : "anatomical";
+  const view = views && typeof views === "object" ? views[key] : null;
+  if (!view || !Array.isArray(view.nodes) || view.nodes.length === 0) return null;
+  if (key === "anatomical" && String(view.provenance || "").toLowerCase() === "unavailable") return null;
+  const grouped = {
+    sensory: [],
+    hidden: [],
+    output: [],
+    early: []
+  };
+  const byId = new Map();
+  const counters = new Map();
+  const roleName = value => String(value || "").toLowerCase();
+  const region = view.coverage && view.coverage.region;
+  // One immutable local frame for somas, paths, contacts and the membrane.
+  // Never clamp individual samples: doing so creates artificial boundary pipes.
+  const pivot = key === "anatomical" && region ? (view.coverage.membrane ? view.coverage.membrane.centre_mm : {
+    x: (Number(region.min.x) + Number(region.max.x)) / 2,
+    y: (Number(region.min.y) + Number(region.max.y)) / 2,
+    z: (Number(region.min.z) + Number(region.max.z)) / 2
+  }) : { x: 0, y: 0, z: 0 };
+  const boundedPoint = point => ({
+    x: Number(point.x) - pivot.x,
+    y: (key === "anatomical" ? -1 : 1) * (Number(point.y) - pivot.y),
+    z: Number(point.z) - pivot.z
+  });
+  view.nodes.forEach(node => {
+    if (!displayIdKey(node.id)) return;
+    const role = roleName(node.role);
+    const bucket = role === "sensory" ? "sensory" : role === "output" ? "output" : role === "hidden" || role === "unassigned" ? "hidden" : null;
+    if (!bucket) return;
+    const layer = node.layer === null || node.layer === undefined ? 0 : Number(node.layer) || 0;
+    const counterKey = `${bucket}:${layer}`;
+    const index = counters.get(counterKey) || 0;
+    counters.set(counterKey, index + 1);
+    const position = boundedPoint(node.position_mm);
+    const mapped = {
+      x: Number(position.x || 0),
+      y: Number(position.y || 0),
+      z: Number(position.z || 0),
+      kind: bucket,
+      layer: bucket === "hidden" ? layer : undefined,
+      index,
+      id: displayIdKey(node.id),
+      colourSlot: Number.isFinite(Number(node.colour_slot)) ? Number(node.colour_slot) : null
+    };
+    if (bucket === "hidden") {
+      while (grouped.hidden.length <= layer) grouped.hidden.push([]);
+      grouped.hidden[layer].push(mapped);
+    } else {
+      grouped[bucket].push(mapped);
+    }
+    byId.set(displayIdKey(node.id), mapped);
+  });
+  if (!grouped.sensory.length && !grouped.output.length && !grouped.hidden.length) return null;
+  const edges = [];
+  (Array.isArray(view.edges) ? view.edges : []).forEach(edge => {
+    const from = byId.get(displayIdKey(edge.source));
+    const to = byId.get(displayIdKey(edge.target));
+    if (!from || !to) return;
+    edges.push({
+      from,
+      to,
+      weight: Number(edge.multiplicity || 1),
+      kind: edge.kind || "connection",
+      points: Array.isArray(edge.points_mm) ? edge.points_mm.map(boundedPoint) : []
+    });
+  });
+  // Branch paths are first class display geometry. They are emitted as
+  // owner-local visual edges so the same contract renders unsynapsed axons
+  // and dendrites as well as complete synaptic routes.
+  (Array.isArray(view.paths) ? view.paths : []).forEach(path => {
+    const owner = byId.get(displayIdKey(path.owner));
+    if (!owner || !Array.isArray(path.points_mm) || path.points_mm.length < 2) return;
+    edges.push({
+      from: owner,
+      to: owner,
+      weight: 1,
+      kind: String(path.kind || "anatomical_path").toLowerCase(),
+      radius: Number(path.radius_mm || 0),
+      points: path.points_mm.map(boundedPoint)
+    });
+  });
+  const markers = (Array.isArray(view.markers) ? view.markers : []).map(marker => ({
+    id: displayIdKey(marker.id),
+    kind: String(marker.kind || "synapse").toLowerCase(),
+    position: boundedPoint(marker.position_mm)
+  }));
+  return {
+    nodes: grouped,
+    edges,
+    markers,
+    displayContract: view,
+    membrane: key === "anatomical" && view.coverage && view.coverage.membrane ? {
+      centre: boundedPoint(view.coverage.membrane.centre_mm),
+      radii: view.coverage.membrane.radii_mm
+    } : null,
+    coverageRegion: key === "anatomical" && region ? { min: boundedPoint(region.min), max: boundedPoint(region.max) } : null
   };
 }
 function topologyHasNodes(topo) {
@@ -3989,7 +4135,8 @@ function drawNetwork() {
   }
   const {
     nodes,
-    edges
+    edges,
+    markers = []
   } = state.graph;
   const centerX = rect.width / 2;
   const centerY = rect.height / 2;
@@ -3997,49 +4144,86 @@ function drawNetwork() {
   const cosR = Math.cos(state.view.rotation);
   const sinR = Math.sin(state.view.rotation);
   const screenNodes = [];
-
-  // Draw skull membrane (concave hull of hidden nodes) first
-  try {
-    const allHidden = [];
-    nodes.hidden.forEach(layer => {
-      layer.forEach(n => {
-        const r = rotate(n.x, n.y, cosR, sinR);
-        const x = centerX + state.view.offsetX + r.x * radius;
-        const y = centerY + state.view.offsetY + r.y * radius;
-        allHidden.push({
-          x,
-          y
-        });
-      });
-    });
-    if (allHidden.length >= 3) {
-      const k = Math.max(3, Math.min(25, Math.floor(Math.sqrt(allHidden.length))));
-      const rawHull = concaveHull(allHidden, k);
-      if (rawHull && rawHull.length >= 3) {
-        const hull = smoothHull(rawHull, 3);
-        ctx.beginPath();
-        ctx.moveTo(hull[0].x, hull[0].y);
-        for (let i = 1; i < hull.length; i += 1) ctx.lineTo(hull[i].x, hull[i].y);
-        ctx.closePath();
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = "rgba(200,210,255,0.47)";
-        ctx.stroke();
-      }
+  const activityForNode = node => {
+    const activity = state.activity || {};
+    if (!node) return 0;
+    if (node.kind === "sensory") {
+      return ((activity.sensory && activity.sensory.indices) || []).includes(node.index) ? 1 : 0;
     }
-  } catch (e) {/* ignore drawing errors */}
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(25, 224, 115, 0.35)";
-  edges.forEach(edge => {
-    const f = rotate(edge.from.x, edge.from.y, cosR, sinR);
-    const t = rotate(edge.to.x, edge.to.y, cosR, sinR);
-    const fx = centerX + state.view.offsetX + f.x * radius;
-    const fy = centerY + state.view.offsetY + f.y * radius;
-    const tx = centerX + state.view.offsetX + t.x * radius;
-    const ty = centerY + state.view.offsetY + t.y * radius;
+    if (node.kind === "output") {
+      return ((activity.output && activity.output.indices) || []).includes(node.index) ? 1 : 0;
+    }
+    const layer = Number(node.layer || 0);
+    return ((activity.hidden && activity.hidden[layer] && activity.hidden[layer].indices) || []).includes(node.index) ? 1 : 0;
+  };
+
+  // Fill and clip against the same published membrane, never a moving
+  // hull of the currently loaded subset of somas.
+  const project = point => {
+    const r = rotate(point.x, point.y, cosR, sinR);
+    return { x: centerX + state.view.offsetX + r.x * radius, y: centerY + state.view.offsetY + r.y * radius };
+  };
+  const membraneHull = anatomicalMembraneHull(state.graph, project);
+  if (membraneHull) {
     ctx.beginPath();
-    ctx.moveTo(fx, fy);
-    ctx.lineTo(tx, ty);
+    ctx.moveTo(membraneHull[0].x, membraneHull[0].y);
+    membraneHull.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(120,145,190,0.10)";
+    ctx.fill();
+  }
+  if (membraneHull) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(membraneHull[0].x, membraneHull[0].y);
+    for (let i = 1; i < membraneHull.length; i += 1) ctx.lineTo(membraneHull[i].x, membraneHull[i].y);
+    ctx.closePath();
+    ctx.clip();
+  }
+  edges.forEach(edge => {
+    const kind = String(edge.kind || "").toLowerCase();
+    const anatomicalPath = kind.includes("axon") || kind.includes("dendrite");
+    if (state.render.layout === "aarnn" && !anatomicalPath) return;
+    const route = Array.isArray(edge.points) && edge.points.length >= 2 ? edge.points : [edge.from, edge.to];
+    const screen = route.map(point => {
+      const rotated = rotate(point.x, point.y, cosR, sinR);
+      return {
+        x: centerX + state.view.offsetX + rotated.x * radius,
+        y: centerY + state.view.offsetY + rotated.y * radius
+      };
+    });
+    const colour = anatomicalPath
+      ? stableNeuronColour(edge.from && edge.from.id, kind.includes("axon") ? 0.055 : -0.055, edge.from && edge.from.colourSlot)
+      : "rgba(25, 224, 115, 0.35)";
+    if (state.render.layout === "aarnn" && anatomicalPath && edge.radius > 0) {
+      const halfWidth = Math.max(1.8, Math.min(9, edge.radius * radius * 1.8));
+      drawTubePolygon(screen, halfWidth, colour, 0.94);
+      const activity = activityForNode(edge.from);
+      if (activity > 0) drawTubePolygon(screen, halfWidth, "rgba(255,255,255,0.38)", activity);
+      return;
+    }
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = colour;
+    if (kind.includes("route")) ctx.globalAlpha = 0.58;
+    ctx.beginPath();
+    ctx.moveTo(screen[0].x, screen[0].y);
+    for (let index = 1; index < screen.length; index += 1) {
+      ctx.lineTo(screen[index].x, screen[index].y);
+    }
     ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
+  markers.forEach(marker => {
+    const rotated = rotate(marker.position.x, marker.position.y, cosR, sinR);
+    const x = centerX + state.view.offsetX + rotated.x * radius;
+    const y = centerY + state.view.offsetY + rotated.y * radius;
+    const kind = marker.kind;
+    const colour = kind.includes("bouton") ? "#ffb84a" : kind.includes("postsynaptic") ? "#8fd8ff" : "#fff0a8";
+    const markerRadius = kind.includes("synapse") && !kind.includes("post") ? 3.6 : 2.8;
+    ctx.beginPath();
+    ctx.arc(x, y, markerRadius, 0, Math.PI * 2);
+    ctx.fillStyle = colour;
+    ctx.fill();
   });
   const active = state.activity || {};
   const hiddenActive = active.hidden || [];
@@ -4052,6 +4236,7 @@ function drawNetwork() {
   drawEarlyNodes(nodes.early || [], centerX, centerY, radius, cosR, sinR, screenNodes);
   drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes);
 
+  if (membraneHull) ctx.restore();
   // Draw region labels if enabled
   if (state.render.showRegionLabels && state.snapshot && state.snapshot.net && state.snapshot.net.brain_regions) {
     ctx.font = "12px sans-serif";
@@ -4106,6 +4291,45 @@ function drawNetwork() {
   state.instrumentation.screenNodes = screenNodes;
   renderInstrumentation();
 }
+function anatomicalMembraneHull(graph, project) {
+  if (graph.membrane) {
+    const { centre, radii } = graph.membrane;
+    if (![centre.x, centre.y, radii.x, radii.y].every(Number.isFinite) || radii.x <= 0 || radii.y <= 0) return null;
+    return Array.from({ length: 96 }, (_, index) => {
+      const t = index * Math.PI * 2 / 96;
+      return project({ x: centre.x + radii.x * Math.cos(t), y: centre.y + radii.y * Math.sin(t) });
+    });
+  }
+  const r = graph.coverageRegion;
+  return r ? [project(r.min), project({ x: r.max.x, y: r.min.y }), project(r.max), project({ x: r.min.x, y: r.max.y })] : null;
+}
+function drawTubePolygon(points, halfWidth, colour, alpha = 1) {
+  if (!Array.isArray(points) || points.length < 2 || !Number.isFinite(halfWidth) || halfWidth <= 0) return;
+  // Local faces and round joins remain valid at bends and reversals. A
+  // single outline of an entire arbor can self-intersect and fill its bends.
+  ctx.beginPath();
+  for (let index = 1; index < points.length; index += 1) {
+    const a = points[index - 1], b = points[index];
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 0.0001) continue;
+    const nx = -dy / length * halfWidth, ny = dx / length * halfWidth;
+    ctx.moveTo(a.x + nx, a.y + ny);
+    ctx.lineTo(a.x - nx, a.y - ny);
+    ctx.lineTo(b.x - nx, b.y - ny);
+    ctx.lineTo(b.x + nx, b.y + ny);
+    ctx.closePath();
+    ctx.moveTo(a.x + halfWidth, a.y);
+    ctx.arc(a.x, a.y, halfWidth, 0, Math.PI * 2);
+    ctx.moveTo(b.x + halfWidth, b.y);
+    ctx.arc(b.x, b.y, halfWidth, 0, Math.PI * 2);
+  }
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = colour;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
 function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true) {
   const activeSet = new Set(activeIndices);
   nodes.forEach((node, idx) => {
@@ -4115,9 +4339,11 @@ function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, 
     const active = activeSet.has(idx);
     const selectedLayer = node.kind === "sensory" ? 0 : node.kind === "hidden" ? Number(node.layer || 0) + 1 : state.graph && state.graph.nodes && state.graph.nodes.hidden ? state.graph.nodes.hidden.length + 1 : -1;
     const selected = state.placement.selectedLayers.has(selectedLayer);
-    ctx.fillStyle = active ? "#ffffff" : baseColor;
+    const anatomicalColour = state.render.layout === "aarnn" && node.id ? stableNeuronColour(node.id, 0, node.colourSlot) : baseColor;
+    ctx.fillStyle = active ? "#ffffff" : anatomicalColour;
     ctx.beginPath();
-    ctx.arc(x, y, active ? 3.4 : 2.2, 0, Math.PI * 2);
+    const somaRadius = state.render.layout === "aarnn" ? 6 : active ? 3.4 : 2.2;
+    ctx.arc(x, y, somaRadius, 0, Math.PI * 2);
     ctx.fill();
     if (selected) {
       ctx.beginPath();
@@ -5007,6 +5233,21 @@ function setPlaceholder() {
 }
 function rebuildGraph() {
   if (!state.snapshot) {
+    state.graph = null;
+    drawNetwork();
+    return;
+  }
+  // An anatomical contract is authoritative for anatomical presentation. If
+  // its next snapshot is incomplete, retain the last complete graph instead
+  // of falling back to live matrix chords from a different projection.
+  const anatomicalContract = state.snapshot.display_snapshots && state.snapshot.display_snapshots.anatomical;
+  const anatomicalContractIncomplete = state.render.layout === "aarnn" && state.snapshot.display_snapshots &&
+    (!anatomicalContract ||
+     !Array.isArray(anatomicalContract.nodes) ||
+     anatomicalContract.nodes.length === 0 ||
+     String(anatomicalContract.provenance || "").toLowerCase() === "unavailable");
+  if (anatomicalContractIncomplete) {
+    if (state.graph && state.graph.displayContract && String(state.graph.displayContract.mode).toLowerCase() === "anatomical") return;
     state.graph = null;
     drawNetwork();
     return;

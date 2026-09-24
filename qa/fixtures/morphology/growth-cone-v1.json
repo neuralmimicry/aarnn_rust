@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "kind": "Axon",
+  "max_step_mm": 0.25,
+  "max_turn_radians": 0.6,
+  "candidates": 64,
+  "sensing_distance_mm": 1.0,
+  "weights": [1.0, 1.0, 1.0, 0.1, 0.2],
+  "noise": 1.0,
+  "resource_per_mm": 1.0,
+  "provenance": "Procedural QA fixture, seed 42. Engineering assumptions; no biological calibration."
+}

@@ -34,6 +34,10 @@
       return this.request(`/api/runtime/workspaces/${encodeURIComponent(workspaceId || "")}/topology?owner=${encodeURIComponent(ownerId || "")}&max_nodes=${encodeURIComponent(maxNodes || 512)}&max_edges=${encodeURIComponent(maxEdges || 4096)}`, { method: "GET" });
     }
 
+    workspaceSnapshot(workspaceId, ownerId) {
+      return this.request(`/api/runtime/workspaces/${encodeURIComponent(workspaceId || "")}/snapshot?owner=${encodeURIComponent(ownerId || "")}`, { method: "GET" });
+    }
+
     controlWorkspace(workspaceId, ownerId, action) {
       return this.request(`/api/runtime/workspaces/${encodeURIComponent(workspaceId || "")}/control`, {
         method: "POST",

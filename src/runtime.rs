@@ -2,6 +2,7 @@ use crate::distributed::proto::{
     StatusRequest, distributed_neuromorphic_client::DistributedNeuromorphicClient,
 };
 use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
+use crate::morphology_contract::DisplayMode;
 use crate::runtime_api::{
     AutoscalerReport, RuntimeStatusResponse, WorkspaceActivityResponse, WorkspaceControlAction,
     WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
@@ -11,7 +12,7 @@ use crate::shared_fs::{FileLease, acquire_lease_with_timeout, try_acquire_lease}
 use anyhow::{Context, anyhow};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -87,6 +88,30 @@ fn sanitize_segment(raw: &str, fallback: &str) -> String {
     } else {
         normalized
     }
+}
+
+fn display_snapshots_for_engine(
+    engine: &RunnerEngine,
+) -> anyhow::Result<BTreeMap<String, crate::morphology_contract::DisplaySnapshot>> {
+    let step = engine.status().step.saturating_add(1);
+    let mut snapshots = BTreeMap::new();
+    snapshots.insert(
+        "synthetic_columns".to_owned(),
+        engine.display_snapshot(DisplayMode::SyntheticColumns, step, 512, 4096)?,
+    );
+    snapshots.insert(
+        "anatomical".to_owned(),
+        engine.display_snapshot(DisplayMode::Anatomical, step, 512, 4096)?,
+    );
+    Ok(snapshots)
+}
+
+fn display_snapshots_for_json(
+    snapshot_json: &str,
+) -> anyhow::Result<BTreeMap<String, crate::morphology_contract::DisplaySnapshot>> {
+    let mut engine = RunnerEngine::new(EngineSpec::default())?;
+    engine.import_snapshot_json(snapshot_json)?;
+    display_snapshots_for_engine(&engine)
 }
 
 fn normalize_grpc_addr(raw: &str) -> String {
@@ -1418,12 +1443,15 @@ impl RuntimeManager {
             manifest.last_saved_at_ms.or(Some(manifest.updated_at_ms))
         };
         let handle_for_export = handle.clone();
-        let snapshot_json = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let (snapshot_json, display_snapshots) = tokio::task::spawn_blocking(move || {
             let engine = handle_for_export
                 .engine
                 .lock()
                 .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-            engine.export_snapshot_json()
+            Ok::<_, anyhow::Error>((
+                engine.export_snapshot_json()?,
+                display_snapshots_for_engine(&engine).unwrap_or_default(),
+            ))
         })
         .await
         .context("workspace snapshot task failed")??;
@@ -1432,6 +1460,7 @@ impl RuntimeManager {
             workspace_id,
             saved_at_ms,
             snapshot_json,
+            display_snapshots,
         })
     }
 
@@ -1461,10 +1490,12 @@ impl RuntimeManager {
             .context("workspace saved snapshot task failed")??;
 
         if let Some(snapshot_json) = snapshot_json {
+            let display_snapshots = display_snapshots_for_json(&snapshot_json).unwrap_or_default();
             return Ok(Some(WorkspaceSnapshotResponse {
                 workspace_id,
                 saved_at_ms,
                 snapshot_json,
+                display_snapshots,
             }));
         }
 

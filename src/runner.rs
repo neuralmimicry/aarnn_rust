@@ -422,6 +422,12 @@ pub struct Snapshot {
     pub rng_seed: Option<u64>,
     #[cfg(feature = "growth3d")]
     pub topo: Option<crate::topology::Topology3D>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub procedural_reconstruction: Option<crate::morphology_contract::PointOnlyReconstruction>,
+    #[cfg(feature = "growth3d")]
+    #[serde(default)]
+    pub procedural_reconstruction_error: Option<String>,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     pub skull_membrane: Option<crate::morphology::SkullMembrane>,
     pub w_in: Matrix2,
@@ -449,6 +455,10 @@ impl Default for Snapshot {
             rng_seed: None,
             #[cfg(feature = "growth3d")]
             topo: None,
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction: None,
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction_error: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             skull_membrane: None,
             w_in: Matrix2 {
@@ -1323,6 +1333,13 @@ pub struct Runner {
     decay_post: f64,
     #[cfg(feature = "growth3d")]
     pub topo: Topology3D,
+    /// Procedural anatomy generated for an imported point-only connectome.
+    /// This contract is kept separate from the legacy morphology cache so
+    /// importing geometry cannot alter neural weights or authoritative timing.
+    #[cfg(feature = "growth3d")]
+    pub procedural_reconstruction: Option<crate::morphology_contract::PointOnlyReconstruction>,
+    #[cfg(feature = "growth3d")]
+    pub procedural_reconstruction_error: Option<String>,
     // (removed duplicate `morph` field here; it's declared earlier)
     #[cfg(feature = "growth3d")]
     // Exponential moving-average firing rates per hidden neuron (for saturation detection)
@@ -2157,6 +2174,56 @@ impl Runner {
             syn_idx,
             self.t as u64,
         )
+    }
+
+    /// Accumulate only electrically committed morphology routes for one output
+    /// neuron. A non-zero matrix weight is not a physical route: while a
+    /// branch or synapse is still proposed, pending, rejected or absent it
+    /// must not drive the output neuron.
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn accumulate_committed_output_drive(
+        &self,
+        output: usize,
+        out_layer: usize,
+        use_stp: bool,
+        stp_release_h: &[Vec<f64>],
+    ) -> (f64, Vec<ReleasedEvent>) {
+        let mut acc = 0.0;
+        let mut events = Vec::new();
+        for &(hidden, syn_idx) in self
+            .recv_out
+            .get(output)
+            .map(|routes| routes.as_slice())
+            .unwrap_or(&[])
+        {
+            let weight = self.w_out.get((output, hidden)).copied().unwrap_or(0.0);
+            if weight.abs() <= 1.0e-12 {
+                continue;
+            }
+            let (steps, attenuation) = self.syn_delay_and_atten(syn_idx);
+            if self.hist_h_at(out_layer, steps, hidden) == 0 || !self.should_release(syn_idx) {
+                continue;
+            }
+            let stp_scale = if use_stp {
+                stp_release_h
+                    .get(out_layer)
+                    .and_then(|release| release.get(hidden))
+                    .copied()
+                    .unwrap_or(0.0)
+            } else {
+                1.0
+            };
+            acc += weight * attenuation * stp_scale;
+            events.push(ReleasedEvent {
+                kind: ReleasedKind::Out,
+                pre_layer: out_layer as isize,
+                post_layer: out_layer as isize + 1,
+                pre_id: hidden,
+                post_id: output,
+                syn_idx: Some(syn_idx),
+            });
+        }
+        (acc, events)
     }
 
     /// Precompute the release mask for the current logical step.  GPU output
@@ -5062,6 +5129,10 @@ impl Runner {
             layer_range: None,
             #[cfg(feature = "growth3d")]
             topo,
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction: None,
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction_error: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             morph: Morphology::default(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -5278,6 +5349,15 @@ impl Runner {
             gpu_sparse_recurrent_count: 0,
         };
 
+        #[cfg(feature = "growth3d")]
+        {
+            // Populate the authoritative soma topology before any policy or
+            // morphology is derived from it.  Building morphology first
+            // leaves the initial anatomical view empty while matrix-backed
+            // synthetic views already contain the connectome.
+            this.rebuild_default_topology();
+        }
+
         // AARNN-specific initial wiring policy (UI Runner):
         // When growth bootstraps a 1x1 hidden layer, start with exactly one
         // S→H0 connection to avoid overloading the initial neuron. Choose the
@@ -5364,7 +5444,8 @@ impl Runner {
             let morpho_synapse_upper_bound = this.w_in.len()
                 + this.w_out.len()
                 + this.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
-                + this.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+                + this.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>()
+                + this.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
             if rt_policy.disable_morpho || rt_force_morpho_off {
@@ -5381,7 +5462,6 @@ impl Runner {
 
         #[cfg(feature = "growth3d")]
         {
-            this.rebuild_default_topology();
             // Default topology assigns cell-type labels.  Resolve those labels
             // before any AARNN step or accelerator eligibility check so a fresh
             // runner and its restored snapshot use the same per-neuron biology.
@@ -5558,6 +5638,10 @@ impl Runner {
             rng_seed: Some(self.rng.get_seed()),
             #[cfg(feature = "growth3d")]
             topo: Some(self.topo.clone()),
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction: self.procedural_reconstruction.clone(),
+            #[cfg(feature = "growth3d")]
+            procedural_reconstruction_error: self.procedural_reconstruction_error.clone(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             skull_membrane: if self.net.use_morphology {
                 self.morph.skull_membrane
@@ -6156,6 +6240,10 @@ impl Runner {
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;
         let snapshot_runtime_state = snap.runtime_state.take();
+        #[cfg(feature = "growth3d")]
+        let snapshot_procedural_reconstruction = snap.procedural_reconstruction.take();
+        #[cfg(feature = "growth3d")]
+        let snapshot_procedural_reconstruction_error = snap.procedural_reconstruction_error.take();
         let snapshot_presence_in = snap.p_in.take();
         let snapshot_presence_fwd = snap.p_fwd.take();
         let snapshot_presence_bwd = snap.p_bwd.take();
@@ -6170,17 +6258,6 @@ impl Runner {
         self.w_hh_bwd = snap.w_hh_bwd.iter().map(nd_from_mat).collect();
         self.w_hh_rec = snap.w_hh_rec.iter().map(nd_from_mat).collect();
         self.w_out = nd_from_mat(&snap.w_out);
-        // A persisted developmental snapshot can legitimately contain an
-        // output layer whose rows were all pruned during early morphology.
-        // Keep the I/O contract usable: repair only zero-in-degree outputs,
-        // preserve every existing edge, and make the operation idempotent.
-        let repaired_outputs = self.ensure_output_connectivity();
-        if repaired_outputs > 0 {
-            nm_log!(
-                "[topology-repair] restored {} output-neuron hidden-layer connections after snapshot import",
-                repaired_outputs
-            );
-        }
         // Sync top-level sizes from matrix shapes
         self.net.num_sensory_neurons = self.w_in.ncols();
         self.net.num_output_neurons = self.w_out.nrows();
@@ -6290,6 +6367,32 @@ impl Runner {
             } else {
                 self.rebuild_default_topology();
             }
+            self.procedural_reconstruction = snapshot_procedural_reconstruction;
+            self.procedural_reconstruction_error = snapshot_procedural_reconstruction_error;
+            if self.procedural_reconstruction.is_none() {
+                match self.reconstruct_point_only_import(
+                    snapshot_rng_seed
+                        .unwrap_or_else(|| self.rng.get_seed())
+                        .max(1),
+                ) {
+                    Ok(reconstruction) => {
+                        self.procedural_reconstruction = Some(reconstruction);
+                        self.procedural_reconstruction_error = None;
+                    }
+                    Err(error) => {
+                        // Keep the imported connectome executable while
+                        // exposing an explicit geometric failure. Decorative
+                        // display lines must not masquerade as anatomy.
+                        let message = error.to_string();
+                        nm_log!(
+                            "[import-morphology] point-only reconstruction unavailable: {}",
+                            message
+                        );
+                        self.procedural_reconstruction = None;
+                        self.procedural_reconstruction_error = Some(message);
+                    }
+                }
+            }
             if snapshot_runtime_state.is_none() {
                 self.biological_neuron_ids.clear();
                 self.biological_ownership = None;
@@ -6339,7 +6442,8 @@ impl Runner {
             let morpho_synapse_upper_bound = self.w_in.len()
                 + self.w_out.len()
                 + self.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
-                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>()
+                + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
             if rt_policy.disable_morpho || rt_force_morpho_off {
@@ -6631,7 +6735,8 @@ impl Runner {
             let morpho_synapse_upper_bound = self.w_in.len()
                 + self.w_out.len()
                 + self.w_hh_fwd.iter().map(|m| m.len()).sum::<usize>()
-                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>();
+                + self.w_hh_bwd.iter().map(|m| m.len()).sum::<usize>()
+                + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
             if rt_policy.disable_morpho || rt_force_morpho_off {
@@ -7125,6 +7230,244 @@ impl Runner {
         true
     }
 
+    /// Reconstruct procedural anatomy when an imported connectome contains
+    /// soma positions but no committed physical routes. The adapter translates
+    /// dense matrix indices into stable neuron identities and delegates all
+    /// geometry, ordering and swept-volume admission to the portable contract.
+    #[cfg(feature = "growth3d")]
+    fn reconstruct_point_only_import(
+        &self,
+        seed: u64,
+    ) -> Result<
+        crate::morphology_contract::PointOnlyReconstruction,
+        crate::morphology_contract::MorphologyError,
+    > {
+        use crate::morphology_contract::{
+            AxisAlignedBox, ConnectomeRole, GrowthEnvironment, PointOnlyConnection,
+            PointOnlyConnectome, PointOnlyNeuron, ReconstructionConfig, Vec3,
+        };
+
+        let mut neurons = Vec::new();
+        let mut ids_by_sensory: Vec<crate::deterministic::NeuronId> = Vec::new();
+        let mut ids_by_hidden: Vec<Vec<crate::deterministic::NeuronId>> = Vec::new();
+        let mut ids_by_output: Vec<crate::deterministic::NeuronId> = Vec::new();
+        let mut next_neuron_id = 1u64;
+        let mut push_neuron = |position: (f32, f32, f32),
+                               role: ConnectomeRole,
+                               layer: Option<usize>,
+                               cell_type: Option<&str>| {
+            let id = crate::deterministic::NeuronId::new(next_neuron_id)
+                .map_err(crate::morphology_contract::MorphologyError::Primitive)?;
+            next_neuron_id = next_neuron_id
+                .checked_add(1)
+                .ok_or(crate::morphology_contract::MorphologyError::InvalidIdentity)?;
+            let neuron = PointOnlyNeuron {
+                id,
+                position_mm: Vec3 {
+                    x: position.0 as f64,
+                    y: position.1 as f64,
+                    z: position.2 as f64,
+                },
+                role,
+                layer,
+                cell_type: cell_type.unwrap_or("unknown").to_owned(),
+                formation_order: neurons.len() as u64,
+            };
+            if !neuron.position_mm.is_finite() {
+                return Err(crate::morphology_contract::MorphologyError::NonFiniteGeometry);
+            }
+            neurons.push(neuron);
+            Ok(id)
+        };
+
+        for (index, node) in self.topo.sensory_nodes.iter().enumerate() {
+            let id = push_neuron(
+                (node.x, node.y, node.z),
+                ConnectomeRole::Sensory,
+                None,
+                node.type_name.as_deref(),
+            )?;
+            debug_assert_eq!(index, ids_by_sensory.len());
+            ids_by_sensory.push(id);
+        }
+        for (layer, nodes) in self.topo.layers.iter().enumerate() {
+            let mut ids = Vec::new();
+            for node in nodes {
+                ids.push(push_neuron(
+                    (node.x, node.y, node.z),
+                    ConnectomeRole::Hidden,
+                    Some(layer),
+                    node.type_name.as_deref(),
+                )?);
+            }
+            ids_by_hidden.push(ids);
+        }
+        for node in &self.topo.output_nodes {
+            ids_by_output.push(push_neuron(
+                (node.x, node.y, node.z),
+                ConnectomeRole::Output,
+                None,
+                node.type_name.as_deref(),
+            )?);
+        }
+
+        let mut edges = Vec::<(
+            crate::deterministic::NeuronId,
+            crate::deterministic::NeuronId,
+            String,
+        )>::new();
+        let mut add_edge = |pre, post, kind: &str| {
+            edges.push((pre, post, kind.to_owned()));
+        };
+        for ((target, source), weight) in self.w_in.indexed_iter() {
+            if *weight != 0.0 {
+                if !weight.is_finite() {
+                    return Err(crate::morphology_contract::MorphologyError::InvalidConnectome);
+                }
+                if let (Some(&pre), Some(&post)) = (
+                    ids_by_sensory.get(source),
+                    ids_by_hidden.first().and_then(|layer| layer.get(target)),
+                ) {
+                    add_edge(pre, post, "input");
+                }
+            }
+        }
+        for (layer, matrix) in self.w_hh_fwd.iter().enumerate() {
+            for ((target, source), weight) in matrix.indexed_iter() {
+                if *weight != 0.0 {
+                    if !weight.is_finite() {
+                        return Err(crate::morphology_contract::MorphologyError::InvalidConnectome);
+                    }
+                    if let (Some(&pre), Some(&post)) = (
+                        ids_by_hidden.get(layer).and_then(|items| items.get(source)),
+                        ids_by_hidden
+                            .get(layer + 1)
+                            .and_then(|items| items.get(target)),
+                    ) {
+                        add_edge(pre, post, "forward");
+                    }
+                }
+            }
+        }
+        for (layer, matrix) in self.w_hh_bwd.iter().enumerate() {
+            for ((source, target), weight) in matrix.indexed_iter() {
+                if *weight != 0.0 {
+                    if !weight.is_finite() {
+                        return Err(crate::morphology_contract::MorphologyError::InvalidConnectome);
+                    }
+                    if let (Some(&pre), Some(&post)) = (
+                        ids_by_hidden
+                            .get(layer + 1)
+                            .and_then(|items| items.get(target)),
+                        ids_by_hidden.get(layer).and_then(|items| items.get(source)),
+                    ) {
+                        add_edge(pre, post, "backward");
+                    }
+                }
+            }
+        }
+        for (layer, matrix) in self.w_hh_rec.iter().enumerate() {
+            for ((target, source), weight) in matrix.indexed_iter() {
+                if *weight != 0.0 {
+                    if !weight.is_finite() {
+                        return Err(crate::morphology_contract::MorphologyError::InvalidConnectome);
+                    }
+                    if let (Some(&pre), Some(&post)) = (
+                        ids_by_hidden.get(layer).and_then(|items| items.get(source)),
+                        ids_by_hidden.get(layer).and_then(|items| items.get(target)),
+                    ) {
+                        add_edge(pre, post, "recurrent");
+                    }
+                }
+            }
+        }
+        if let Some(last_hidden) = ids_by_hidden.last() {
+            for ((target, source), weight) in self.w_out.indexed_iter() {
+                if *weight != 0.0 {
+                    if !weight.is_finite() {
+                        return Err(crate::morphology_contract::MorphologyError::InvalidConnectome);
+                    }
+                    if let (Some(&pre), Some(&post)) =
+                        (last_hidden.get(source), ids_by_output.get(target))
+                    {
+                        add_edge(pre, post, "output");
+                    }
+                }
+            }
+        }
+        edges.sort_by_key(|(pre, post, kind)| (*pre, *post, kind.clone()));
+        let connections = edges
+            .into_iter()
+            .enumerate()
+            .map(|(index, (pre, post, kind))| PointOnlyConnection {
+                id: index as u64 + 1,
+                pre,
+                post,
+                kind,
+            })
+            .collect::<Vec<_>>();
+        let connectome = PointOnlyConnectome {
+            neurons,
+            connections,
+        };
+        let (min, max) = connectome.neurons.iter().fold(
+            (
+                Vec3 {
+                    x: f64::INFINITY,
+                    y: f64::INFINITY,
+                    z: f64::INFINITY,
+                },
+                Vec3 {
+                    x: f64::NEG_INFINITY,
+                    y: f64::NEG_INFINITY,
+                    z: f64::NEG_INFINITY,
+                },
+            ),
+            |(min, max), neuron| {
+                let p = neuron.position_mm;
+                (
+                    Vec3 {
+                        x: min.x.min(p.x),
+                        y: min.y.min(p.y),
+                        z: min.z.min(p.z),
+                    },
+                    Vec3 {
+                        x: max.x.max(p.x),
+                        y: max.y.max(p.y),
+                        z: max.z.max(p.z),
+                    },
+                )
+            },
+        );
+        let margin = 0.25;
+        let environment = GrowthEnvironment {
+            revision: 1,
+            frame: Default::default(),
+            volume: AxisAlignedBox {
+                min: Vec3 {
+                    x: min.x - margin,
+                    y: min.y - margin,
+                    z: min.z - margin,
+                },
+                max: Vec3 {
+                    x: max.x + margin,
+                    y: max.y + margin,
+                    z: max.z + margin,
+                },
+            },
+            forbidden: Vec::new(),
+            clearance_mm: 0.002,
+        };
+        let mut config = ReconstructionConfig::default();
+        config.seed = seed.max(1);
+        config.conduction_velocity_m_per_s = self.net.aarnn_velocity.max(1.0e-6) as f64;
+        crate::morphology_contract::reconstruct_point_only_connectome(
+            connectome,
+            environment,
+            config,
+        )
+    }
+
     #[cfg(feature = "growth3d")]
     pub fn rebuild_default_topology(&mut self) {
         use crate::topology::{Node3D, Topology3D};
@@ -7389,8 +7732,8 @@ impl Runner {
             } else {
                 self.topo.sensory_nodes.first().map(|n| n.x).unwrap_or(-0.7)
             };
-            self.topo.sensory_nodes.clear();
-            for i in 0..s_count {
+            self.topo.sensory_nodes.truncate(s_count);
+            for i in self.topo.sensory_nodes.len()..s_count {
                 let (y, z) = if is_aarnn {
                     self.aarnn_column_coords_for_index(i, s_count)
                 } else if s_count > 1 {
@@ -7409,11 +7752,11 @@ impl Runner {
                 });
             }
         }
-        // If morphology is active, rebuild snapshot and routing maps to reflect new synapses
+        // Peripheral formation must not reconstruct already grown arbors.
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
             if self.net.use_morphology {
-                self.rebuild_morphology();
+                self.resize_io_morphology();
             }
         }
         // Sensory count changed → delay cache is stale.
@@ -7549,8 +7892,8 @@ impl Runner {
             } else {
                 self.topo.output_nodes.first().map(|n| n.x).unwrap_or(0.1)
             };
-            self.topo.output_nodes.clear();
-            for k in 0..o_count {
+            self.topo.output_nodes.truncate(o_count);
+            for k in self.topo.output_nodes.len()..o_count {
                 let (y, z) = if is_aarnn {
                     self.aarnn_column_coords_for_index(k, o_count)
                 } else if o_count > 1 {
@@ -7572,7 +7915,7 @@ impl Runner {
         #[cfg(all(feature = "morpho", feature = "growth3d"))]
         {
             if self.net.use_morphology {
-                self.rebuild_morphology();
+                self.resize_io_morphology();
             }
         }
     }
@@ -13847,56 +14190,16 @@ impl Runner {
                                 let mut acc = 0.0f64;
                                 let mut events = Vec::new();
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
-                                if use_aarnn && self.net.use_morphology && has_sparse_recv_out {
-                                    let mut has_sparse_output_route = false;
-                                    for &(j, syn_idx) in
-                                        self.recv_out.get(k).map(|v| v.as_slice()).unwrap_or(&[])
-                                    {
-                                        let w_val = self.w_out.get((k, j)).copied().unwrap_or(0.0);
-                                        if w_val.abs() <= 1.0e-12 {
-                                            continue;
-                                        }
-                                        has_sparse_output_route = true;
-                                        let (steps, atten) = self.syn_delay_and_atten(syn_idx);
-                                        let s = self.hist_h_at(out_conn_layer, steps, j);
-                                        if s != 0 {
-                                            let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(out_conn_layer)
-                                                    .and_then(|v| v.get(j))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
-                                            } else {
-                                                1.0
-                                            };
-                                            if self.should_release(syn_idx) {
-                                                acc += w_val * atten * stp_scale;
-                                                events.push(ReleasedEvent {
-                                                    kind: ReleasedKind::Out,
-                                                    pre_layer: out_conn_layer as isize,
-                                                    post_layer: out_conn_layer as isize + 1,
-                                                    pre_id: j,
-                                                    post_id: k,
-                                                    syn_idx: Some(syn_idx),
-                                                });
-                                            }
-                                        }
-                                    }
-                                    if !has_sparse_output_route {
-                                        for &j in &active_h_indices[out_conn_layer] {
-                                            let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(out_conn_layer)
-                                                    .and_then(|v| v.get(j))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
-                                            } else {
-                                                1.0
-                                            };
-                                            acc += self.w_out.get((k, j)).copied().unwrap_or(0.0)
-                                                * stp_scale;
-                                        }
-                                    }
+                                if use_aarnn && self.net.use_morphology {
+                                    let (route_acc, route_events) = self
+                                        .accumulate_committed_output_drive(
+                                            k,
+                                            out_conn_layer,
+                                            use_stp,
+                                            &stp_release_h,
+                                        );
+                                    acc = route_acc;
+                                    events = route_events;
                                 } else if use_aarnn {
                                     // Legacy distance-based AARNN path
                                     let vel = self.net.aarnn_velocity.max(0.0);
@@ -14094,55 +14397,15 @@ impl Runner {
                         if use_aarnn {
                             #[cfg(all(feature = "morpho", feature = "growth3d"))]
                             if self.net.use_morphology {
-                                let mut has_sparse_output_route = false;
-                                for &(j, syn_idx) in
-                                    self.recv_out.get(k).map(|v| v.as_slice()).unwrap_or(&[])
-                                {
-                                    let w_val = self.w_out.get((k, j)).copied().unwrap_or(0.0);
-                                    if w_val.abs() <= 1.0e-12 {
-                                        continue;
-                                    }
-                                    has_sparse_output_route = true;
-                                    let (steps, atten) = self.syn_delay_and_atten(syn_idx);
-                                    let s = self.hist_h_at(out_conn_layer, steps, j);
-                                    if s != 0 {
-                                        if self.should_release(syn_idx) {
-                                            let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(out_conn_layer)
-                                                    .and_then(|v| v.get(j))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
-                                            } else {
-                                                1.0
-                                            };
-                                            acc += w_val * atten * stp_scale;
-                                            self.released_events.push(ReleasedEvent {
-                                                kind: ReleasedKind::Out,
-                                                pre_layer: out_conn_layer as isize,
-                                                post_layer: out_conn_layer as isize + 1,
-                                                pre_id: j,
-                                                post_id: k,
-                                                syn_idx: Some(syn_idx),
-                                            });
-                                        }
-                                    }
-                                }
-                                if !has_sparse_output_route {
-                                    for &j in &active_h_indices[out_conn_layer] {
-                                        let stp_scale = if use_stp {
-                                            stp_release_h
-                                                .get(out_conn_layer)
-                                                .and_then(|v| v.get(j))
-                                                .copied()
-                                                .unwrap_or(0.0)
-                                        } else {
-                                            1.0
-                                        };
-                                        acc += self.w_out.get((k, j)).copied().unwrap_or(0.0)
-                                            * stp_scale;
-                                    }
-                                }
+                                let (route_acc, route_events) = self
+                                    .accumulate_committed_output_drive(
+                                        k,
+                                        out_conn_layer,
+                                        use_stp,
+                                        &stp_release_h,
+                                    );
+                                acc = route_acc;
+                                self.released_events.extend(route_events);
                             } else {
                                 let vel = self.net.aarnn_velocity.max(0.0);
                                 for j in 0..num_last_layer_neurons {
@@ -16808,6 +17071,36 @@ impl Runner {
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn resize_io_morphology(&mut self) {
+        // A worker may have cloned the old peripheral population. Its result
+        // must be reaped but never replace the newly admitted geometry.
+        self.morpho_async_seq = self.morpho_async_seq.wrapping_add(1);
+        let compatible = self.morph.somas.len() == self.topo.layers.len()
+            && self.morph.axons.len() == self.topo.layers.len()
+            && self.morph.dendrites.len() == self.topo.layers.len()
+            && self.topo.layers.iter().enumerate().all(|(l, nodes)| {
+                self.morph.somas[l].len() == nodes.len()
+                    && self.morph.axons[l].len() == nodes.len()
+                    && self.morph.dendrites[l].len() == nodes.len()
+            });
+        if !compatible {
+            // Initialisation / explicit incompatible legacy import only.
+            self.rebuild_morphology();
+            return;
+        }
+        self.morph.resize_io(
+            &self.topo.layers,
+            &self.topo.sensory_nodes,
+            &self.topo.output_nodes,
+            &self.w_in,
+            &self.w_out,
+            &self.net,
+            matches!(self.neuron_model, NeuronModel::Aarnn),
+        );
+        self.rebuild_syn_maps_from_morph();
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
     /// Rebuild the morphology snapshot and routing caches from current weights
     /// and topology. Also recalculates history length bounds for delays.
     fn rebuild_morphology(&mut self) {
@@ -16818,6 +17111,7 @@ impl Runner {
             &self.w_in,
             &self.w_hh_fwd,
             &self.w_hh_bwd,
+            &self.w_hh_rec,
             &self.w_out,
             &self.net,
             matches!(self.neuron_model, NeuronModel::Aarnn),
@@ -17244,8 +17538,11 @@ impl Runner {
         for si in 0..self.morph.synapses.len() {
             let ax_len = self.syn_ax_len[si];
             let den_len = self.syn_den_len[si];
-            let ax_steps = (ax_len / (ax_v * dt_ms)).round() as usize;
-            let den_steps = (den_len / (den_v * dt_ms)).round() as usize;
+            // Conservative quantisation is part of the route contract: a
+            // scheduled delivery may be late by one simulation quantum, but
+            // it must never arrive before the stored physical path permits.
+            let ax_steps = (ax_len / (ax_v * dt_ms)).ceil() as usize;
+            let den_steps = (den_len / (den_v * dt_ms)).ceil() as usize;
             self.syn_ax_steps[si] = ax_steps;
             self.syn_den_steps[si] = den_steps;
         }
@@ -17435,9 +17732,10 @@ impl Runner {
         let Some(rx) = self.morpho_async_rx.as_ref().cloned() else {
             return;
         };
-        let recv_res = match rx.lock() {
+        let recv_res = match rx.try_lock() {
             Ok(guard) => guard.try_recv(),
-            Err(_) => {
+            Err(std::sync::TryLockError::WouldBlock) => return,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
                 nm_log!("[warn] morphology async receiver lock poisoned");
                 self.morpho_async_rx = None;
                 return;
@@ -17478,7 +17776,7 @@ impl Runner {
         let cl = self.cl.clone();
         let seq = self.morpho_async_seq.wrapping_add(1);
         self.morpho_async_seq = seq;
-        let (tx, rx) = mpsc::channel::<MorphoAsyncResult>();
+        let (tx, rx) = mpsc::sync_channel::<MorphoAsyncResult>(1);
         self.morpho_async_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
 
         std::thread::spawn(move || {
@@ -22333,6 +22631,290 @@ mod tests {
         Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn)
     }
 
+    #[test]
+    #[cfg(feature = "morpho")]
+    fn fresh_runner_derives_morphology_from_default_topology() {
+        let runner = mk_aarnn_growth_runner();
+        assert_eq!(runner.topo.layers.len(), runner.morph.somas.len());
+        assert!(
+            runner.morph.somas.iter().any(|layer| !layer.is_empty()),
+            "the initial anatomical snapshot must contain the default neurons"
+        );
+        assert_eq!(runner.morph.somas.len(), runner.morph.axons.len());
+        assert_eq!(runner.morph.somas.len(), runner.morph.dendrites.len());
+        let expected_synapses = runner.w_in.iter().filter(|weight| **weight != 0.0).count()
+            + runner
+                .w_hh_fwd
+                .iter()
+                .flat_map(|matrix| matrix.iter())
+                .filter(|weight| **weight != 0.0)
+                .count()
+            + runner
+                .w_hh_bwd
+                .iter()
+                .flat_map(|matrix| matrix.iter())
+                .filter(|weight| **weight != 0.0)
+                .count()
+            + runner
+                .w_hh_rec
+                .iter()
+                .flat_map(|matrix| matrix.iter())
+                .filter(|weight| **weight != 0.0)
+                .count()
+            + runner.w_out.iter().filter(|weight| **weight != 0.0).count();
+        assert_eq!(
+            runner.morph.synapses.len(),
+            expected_synapses,
+            "every initial synthetic edge must have an anatomical synapse"
+        );
+        assert!(
+            runner
+                .morph
+                .synapses
+                .iter()
+                .all(|synapse| synapse.axon_seg_idx.is_some() && synapse.dend_seg_idx.is_some())
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn morphology_output_drive_requires_a_committed_route() {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions.clear();
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 1;
+        net.num_sensory_neurons = 0;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.use_morphology = true;
+
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        runner.w_out.fill(0.0);
+        // This is a deliberately present synthetic matrix edge without a
+        // committed anatomical synapse. It must remain electrically inert.
+        runner.w_out[(1, 0)] = 1.0;
+        runner.recv_out = vec![Vec::new(); 2];
+
+        let (drive, released) = runner.accumulate_committed_output_drive(1, 0, false, &[]);
+
+        assert_eq!(drive, 0.0);
+        assert!(released.is_empty());
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn assert_anatomy_contacts(morph: &Morphology) {
+        for (si, syn) in morph.synapses.iter().enumerate() {
+            let axon = if syn.pre_layer < 0 {
+                &morph.sensory_axons[syn.pre_id]
+            } else {
+                &morph.axons[syn.pre_layer as usize][syn.pre_id]
+            };
+            let dendrite = if syn.kind == crate::morphology::SynKind::Out {
+                &morph.output_dendrites[syn.post_id]
+            } else {
+                &morph.dendrites[syn.post_layer as usize][syn.post_id]
+            };
+            assert_eq!(axon.segments[syn.axon_seg_idx.unwrap()].syn_index, Some(si));
+            assert_eq!(
+                dendrite.tree.branches[syn.dend_seg_idx.unwrap()].syn_index,
+                Some(si)
+            );
+        }
+        for axon in morph
+            .axons
+            .iter()
+            .flatten()
+            .chain(&morph.sensory_axons)
+            .chain(&morph.output_axons)
+        {
+            for (i, segment) in axon.segments.iter().enumerate() {
+                assert!(segment.parent_idx.is_none_or(|parent| parent < i));
+                assert!(segment.syn_index.is_none_or(|si| si < morph.synapses.len()));
+            }
+        }
+        for dendrite in morph
+            .dendrites
+            .iter()
+            .flatten()
+            .chain(&morph.sensory_dendrites)
+            .chain(&morph.output_dendrites)
+        {
+            for (i, segment) in dendrite.tree.branches.iter().enumerate() {
+                assert!(segment.parent_idx.is_none_or(|parent| parent < i));
+                assert!(segment.syn_index.is_none_or(|si| si < morph.synapses.len()));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn anatomy_io_resize_preserves_grown_arbors_and_contact_indices() {
+        for model in [NeuronModel::Aarnn, NeuronModel::Lif] {
+            fastrand::seed(42);
+            let mut net = NetworkConfig::default();
+            net.clumping_design = crate::config::ClumpingDesign::None;
+            net.brain_regions.clear();
+            net.num_hidden_layers = 2;
+            net.num_hidden_per_layer_initial = 3;
+            net.num_sensory_neurons = 1;
+            net.num_output_neurons = 1;
+            net.use_morphology = true;
+            let mut runner = Runner::new(
+                LIFParams::default(),
+                STDPParams::default(),
+                net,
+                model,
+                Learning::Stdp,
+            );
+            // A grown branch cannot be recovered from a connectivity matrix.
+            let soma = runner.morph.somas[0][0].pos;
+            runner.morph.axons[0][0]
+                .segments
+                .push(crate::morphology::AxonSeg {
+                    from: soma,
+                    to: crate::morphology::Point3 {
+                        x: soma.x + 0.031,
+                        y: soma.y + 0.012,
+                        z: soma.z,
+                    },
+                    length: 0.033,
+                    stimuli: 0.42,
+                    ..Default::default()
+                });
+            for (sensory, output) in [(2, 2), (4, 3)] {
+                let before = runner.morph.clone();
+                let old_topology = (
+                    runner.topo.sensory_nodes.clone(),
+                    runner.topo.output_nodes.clone(),
+                );
+                runner.resize_sensory(sensory);
+                runner.resize_output(output);
+                assert_eq!(
+                    serde_json::to_value(&before.somas).unwrap(),
+                    serde_json::to_value(&runner.morph.somas).unwrap()
+                );
+                assert_eq!(
+                    serde_json::to_value(&before.skull_membrane).unwrap(),
+                    serde_json::to_value(&runner.morph.skull_membrane).unwrap()
+                );
+                for (old, new) in before
+                    .axons
+                    .iter()
+                    .flatten()
+                    .zip(runner.morph.axons.iter().flatten())
+                {
+                    assert_eq!(
+                        serde_json::to_value(&old.segments).unwrap(),
+                        serde_json::to_value(&new.segments[..old.segments.len()]).unwrap()
+                    );
+                }
+                for (old, new) in before
+                    .dendrites
+                    .iter()
+                    .flatten()
+                    .zip(runner.morph.dendrites.iter().flatten())
+                {
+                    assert_eq!(
+                        serde_json::to_value(&old.tree.branches).unwrap(),
+                        serde_json::to_value(&new.tree.branches[..old.tree.branches.len()])
+                            .unwrap()
+                    );
+                }
+                assert_eq!(
+                    serde_json::to_value(&before.synapses).unwrap(),
+                    serde_json::to_value(&runner.morph.synapses[..before.synapses.len()]).unwrap()
+                );
+                assert_eq!(
+                    serde_json::to_value(&old_topology.0).unwrap(),
+                    serde_json::to_value(&runner.topo.sensory_nodes[..old_topology.0.len()])
+                        .unwrap()
+                );
+                assert_eq!(
+                    serde_json::to_value(&old_topology.1).unwrap(),
+                    serde_json::to_value(&runner.topo.output_nodes[..old_topology.1.len()])
+                        .unwrap()
+                );
+                assert_anatomy_contacts(&runner.morph);
+            }
+            runner.resize_sensory(1);
+            runner.resize_output(1);
+            assert!(runner.morph.synapses.iter().all(|s| match s.kind {
+                crate::morphology::SynKind::In => s.pre_id == 0,
+                crate::morphology::SynKind::Out => s.post_id == 0,
+                _ => true,
+            }));
+            assert_anatomy_contacts(&runner.morph);
+            runner.resize_sensory(3);
+            runner.resize_output(2);
+            assert_anatomy_contacts(&runner.morph);
+            assert_eq!(
+                runner
+                    .morph
+                    .synapses
+                    .iter()
+                    .filter(|s| s.kind == crate::morphology::SynKind::In)
+                    .count(),
+                runner.w_in.iter().filter(|w| **w != 0.0).count()
+            );
+            assert_eq!(
+                runner
+                    .morph
+                    .synapses
+                    .iter()
+                    .filter(|s| s.kind == crate::morphology::SynKind::Out)
+                    .count(),
+                runner.w_out.iter().filter(|w| **w != 0.0).count()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn anatomy_io_resize_fences_in_flight_geometry() {
+        let mut runner = mk_aarnn_growth_runner();
+        let (tx, rx) = mpsc::sync_channel(1);
+        runner.morpho_async_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
+        let stale = MorphoAsyncResult {
+            seq: runner.morpho_async_seq,
+            morph: runner.morph.clone(),
+            res: EvolutionResult::default(),
+        };
+        runner.resize_sensory(runner.net.num_sensory_neurons + 1);
+        let expected = serde_json::to_value(&runner.morph).unwrap();
+        tx.send(stale).unwrap();
+        runner.apply_ready_morpho_async_result();
+        assert!(runner.morpho_async_rx.is_none());
+        assert_eq!(expected, serde_json::to_value(&runner.morph).unwrap());
+    }
+
+    #[test]
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn anatomy_worker_poll_yields_when_receiver_is_busy() {
+        let mut runner = mk_aarnn_growth_runner();
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        runner.morpho_async_rx = Some(rx.clone());
+        let guard = rx.lock().unwrap();
+        let (completed, completion) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            runner.apply_ready_morpho_async_result();
+            completed.send(runner.morpho_async_rx.is_some()).unwrap();
+        });
+        // Bounded watchdog, not a timing benchmark: release the lock even if
+        // polling regresses to a blocking acquisition, so QA cannot deadlock.
+        let result = completion.recv_timeout(std::time::Duration::from_secs(2));
+        drop(guard);
+        worker.join().unwrap();
+        assert_eq!(result, Ok(true));
+    }
+
     fn mk_runner_with_two_biological_areas() -> Runner {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
@@ -23719,6 +24301,11 @@ mod tests {
                 && (node.y + 0.123).abs() < 1.0e-6
                 && (node.z - 0.456).abs() < 1.0e-6,
             "imported topology was overwritten during reset"
+        );
+        assert!(
+            r.procedural_reconstruction.is_some(),
+            "point-only imported topology should receive procedural route reconstruction: {:?}",
+            r.procedural_reconstruction_error
         );
     }
 
