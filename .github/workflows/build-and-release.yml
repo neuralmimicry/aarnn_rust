@@ -277,6 +277,14 @@ jobs:
         if: matrix.runner_arch != 'ARM64'
         run: cargo test --locked --all-features --lib --bin web_ui
 
+      - name: Run growth and runner unit tests
+        env:
+          NM_DISABLE_OPENCL: "1"
+        # ARM verification must exercise the growth/ownership unit suite too;
+        # the hosted X64 job additionally carries the complete library suite.
+        if: matrix.runner_arch == 'ARM64'
+        run: 'cargo test --locked --all-features --lib runner::tests::'
+
       - name: Run integration tests
         env:
           NM_DISABLE_OPENCL: "1"

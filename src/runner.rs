@@ -20096,7 +20096,14 @@ impl Runner {
             cell.z = next.2;
             cell.phase = phase;
 
-            if progress >= 1.0 {
+            // `age_ms` and `maturation_ms` are f32 values. A sequence of
+            // phase-sized increments can land one representable value below
+            // the exact boundary even though the requested elapsed time is
+            // complete; treat that boundary as mature without weakening the
+            // monotonic age clamp above.
+            let matured_at_boundary = progress >= 1.0
+                || (maturation - cell.age_ms).abs() <= 1.0e-5_f32.max(maturation * 1.0e-6);
+            if matured_at_boundary {
                 cell.phase = EarlyCellPhase::Differentiation;
                 cell.x = target.0;
                 cell.y = target.1;
@@ -21177,13 +21184,8 @@ impl Runner {
         if target >= self.effective_max_layers() {
             return false;
         }
-        self.ensure_layer_exists(target);
-        let (in_l, out_l) = self.get_io_layers();
-
         let num_sensory_neurons = self.net.num_sensory_neurons;
         let num_previous_layer_neurons = self.layer_size(l); // sends into new neuron
-        let num_old_next_layer_neurons = self.layer_size(target);
-        let num_new_next_layer_neurons = num_old_next_layer_neurons + 1;
         // Topology: place near parent in next column with minimum separation
         let (px, py, pz) = if let Some(layer) = self.topo.layers.get(l) {
             if parent_j < layer.len() {
@@ -21221,6 +21223,14 @@ impl Runner {
             return false;
         };
         (nx, ny, nz) = (admitted_point[0], admitted_point[1], admitted_point[2]);
+        // Biological admission is the transaction boundary. Do not leave an
+        // empty execution layer behind when the growth decision is rejected.
+        self.ensure_layer_exists(target);
+        self.biological_neuron_ids
+            .resize_with(self.topo.layers.len(), Vec::new);
+        let (in_l, out_l) = self.get_io_layers();
+        let num_old_next_layer_neurons = self.layer_size(target);
+        let num_new_next_layer_neurons = num_old_next_layer_neurons + 1;
         let region_name = Some(admitted_area_label);
         self.topo.add_neuron(
             target,
@@ -23970,9 +23980,12 @@ mod tests {
             cell.x = 0.0;
             cell.y = 0.0;
             cell.z = 0.0;
-            cell.target_x = 1.0;
-            cell.target_y = -0.5;
-            cell.target_z = 0.25;
+            // Keep the manually controlled trajectory inside the admitted
+            // compact biological area so differentiation exercises the real
+            // ownership transaction as well as the phase progression.
+            cell.target_x = 0.04;
+            cell.target_y = -0.03;
+            cell.target_z = 0.02;
             cell.maturation_ms = 100.0;
             cell.age_ms = 0.0;
             cell.phase = EarlyCellPhase::Specification;
@@ -24038,9 +24051,9 @@ mod tests {
         let new_node = r.topo.layers[0]
             .last()
             .expect("new differentiated neuron should exist");
-        assert!((new_node.x - 1.0).abs() < 1.0e-4);
-        assert!((new_node.y + 0.5).abs() < 1.0e-4);
-        assert!((new_node.z - 0.25).abs() < 1.0e-4);
+        assert!((new_node.x - 0.04).abs() < 1.0e-4);
+        assert!((new_node.y + 0.03).abs() < 1.0e-4);
+        assert!((new_node.z - 0.02).abs() < 1.0e-4);
     }
 
     #[test]
@@ -24305,8 +24318,25 @@ mod tests {
         net.max_output_connections = 3;
         let mut r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
 
-        for l in 0..4 {
-            r.spawn_neuron_into_next_layer(l, 0);
+        // Keep the compact fixture inside the initially admitted biological
+        // area.  The production placement path may expand/migrate through
+        // membrane pressure, while this test is concerned with preserving
+        // the I/O floor across successful layer growth.
+        let growth_points = [
+            (0.0, 0.0, 0.0),
+            (0.0, 0.03, 0.0),
+            (0.0, -0.03, 0.0),
+            (0.0, 0.0, 0.03),
+        ];
+        for (l, &(x, y, z)) in growth_points.iter().enumerate() {
+            r.spawn_override = Some(SpawnPlacementOverride {
+                x,
+                y,
+                z,
+                region_name: None,
+                type_name: None,
+            });
+            assert!(r.spawn_neuron_into_next_layer(l, 0));
         }
         assert_eq!(r.net.num_hidden_layers, 5);
         r.resize_sensory(3);
@@ -24434,8 +24464,25 @@ mod tests {
         net.max_output_connections = 3;
         let mut r = Runner::new(lif, stdp, net, NeuronModel::Aarnn, Learning::Aarnn);
 
-        for l in 0..4 {
-            r.spawn_neuron_into_next_layer(l, 0);
+        // Keep the compact fixture inside the initially admitted biological
+        // area.  The production placement path may expand/migrate through
+        // membrane pressure, while this test is concerned with preserving
+        // the I/O floor across successful layer growth.
+        let growth_points = [
+            (0.0, 0.0, 0.0),
+            (0.0, 0.03, 0.0),
+            (0.0, -0.03, 0.0),
+            (0.0, 0.0, 0.03),
+        ];
+        for (l, &(x, y, z)) in growth_points.iter().enumerate() {
+            r.spawn_override = Some(SpawnPlacementOverride {
+                x,
+                y,
+                z,
+                region_name: None,
+                type_name: None,
+            });
+            assert!(r.spawn_neuron_into_next_layer(l, 0));
         }
         assert_eq!(r.net.num_hidden_layers, 5);
         r.resize_sensory(2);
@@ -24910,28 +24957,63 @@ mod tests {
 
         // 4. Manually grow it to trigger the logic
         // Grow to 2 layers (so sensory can start forming)
-        r.spawn_neuron_into_next_layer(0, 0);
+        r.spawn_override = Some(SpawnPlacementOverride {
+            x: 0.0,
+            y: 0.03,
+            z: 0.0,
+            region_name: None,
+            type_name: None,
+        });
+        assert!(r.spawn_neuron_into_next_layer(0, 0));
         assert_eq!(r.net.num_hidden_layers, 2);
 
         // Grow Layer 1 (this was where the panic happened in resize_sensory)
-        r.spawn_neuron_in_layer(1, 0);
+        r.spawn_override = Some(SpawnPlacementOverride {
+            x: 0.0,
+            y: -0.03,
+            z: 0.0,
+            region_name: None,
+            type_name: None,
+        });
+        assert!(r.spawn_neuron_in_layer(1, 0));
 
         // Now trigger resize_sensory
         r.resize_sensory(1); // Should not panic now!
         r.resize_sensory(2);
 
         // Grow Layer 1 further
-        for _ in 0..10 {
-            r.spawn_neuron_in_layer(1, 0);
+        let same_layer_points = [
+            (0.0, 0.0, 0.03),
+            (0.0, 0.0, -0.03),
+            (0.03, 0.0, 0.0),
+            (-0.03, 0.0, 0.0),
+        ];
+        for index in 0..10 {
+            let (x, y, z) = same_layer_points[index % same_layer_points.len()];
+            r.spawn_override = Some(SpawnPlacementOverride {
+                x,
+                y,
+                z,
+                region_name: None,
+                type_name: None,
+            });
+            assert!(r.spawn_neuron_in_layer(1, 0));
         }
 
         // Resize sensory again
         r.resize_sensory(5);
 
         // Grow to 5 layers (so output can start forming)
-        r.spawn_neuron_into_next_layer(1, 0); // L=3
-        r.spawn_neuron_into_next_layer(2, 0); // L=4
-        r.spawn_neuron_into_next_layer(3, 0); // L=5
+        for l in 1..4 {
+            r.spawn_override = Some(SpawnPlacementOverride {
+                x: 0.0,
+                y: 0.02 * l as f32,
+                z: 0.0,
+                region_name: None,
+                type_name: None,
+            });
+            assert!(r.spawn_neuron_into_next_layer(l, 0));
+        }
 
         assert_eq!(r.net.num_hidden_layers, 5);
 
@@ -24939,7 +25021,14 @@ mod tests {
         r.resize_output(1); // Should not panic!
 
         // Grow Layer 4
-        r.spawn_neuron_in_layer(4, 0);
+        r.spawn_override = Some(SpawnPlacementOverride {
+            x: 0.0,
+            y: -0.02,
+            z: 0.02,
+            region_name: None,
+            type_name: None,
+        });
+        assert!(r.spawn_neuron_in_layer(4, 0));
 
         // Resize output again
         r.resize_output(3);

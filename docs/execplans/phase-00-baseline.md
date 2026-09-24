@@ -85,6 +85,22 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   documentation CI tiers plus the five ADRs are not present in this workspace.
   The Phase 0 gate is therefore not complete; these require repository CI and
   review ownership.
+- [x] `2026-09-24 06:25Z` Assessed `.github/workflows/build-and-release.yml`
+  and reproduced the linked X64 failure with
+  `NM_DISABLE_OPENCL=1 cargo test --locked --all-features --lib --bin web_ui`:
+  428 tests passed and the three growth/runner failures were isolated to
+  biological admission being added after empty execution layers were created.
+- [x] `2026-09-24 06:25Z` Repaired growth publication ordering in `src/runner.rs`:
+  biological admission now completes before a new execution layer or dense
+  state is materialised, and biological ID vectors are resized only after the
+  admission boundary. The AARNN early-cell maturation boundary uses a bounded
+  `f32` tolerance. Growth fixtures now use admitted coordinates and assert
+  successful ownership publication.
+- [x] `2026-09-24 06:25Z` Added the ARM-only
+  `runner::tests::` unit-suite step to the workflow, quoted the selector so the
+  workflow remains valid YAML, and verified the equivalent local command passed
+  74 tests. The complete X64 library/web gate passed 431 library tests and 16
+  web UI tests.
 
 ## Validation and acceptance
 
@@ -113,10 +129,26 @@ the generated protobuf Rust module is build-time output rather than a checked-in
 file. Native mobile projects, browser automation and multi-process acceptance
 infrastructure are absent and are carried forward as explicit blockers.
 
+The linked CI regression was caused by a growth transaction crossing the
+biological ownership boundary after `ensure_layer_exists` had already created
+an empty layer. Moving admission before dense topology mutation exposed compact
+fixtures that requested out-of-membrane positions; those fixtures now provide
+valid in-area positions. YAML parsing also exposed that the ARM test selector
+must be quoted because its trailing `:` is syntax-sensitive.
+
 ## Decision Log
 
 - Initial decision: Phase 0 is observational and must not repair known distributed defects. Authority: Section 20.1.
 - Initial decision: unstable current outputs are evidence, not normative golden biology. Authority: Sections 1 and 21.1.
+- `2026-09-24` Growth admission remains the transaction boundary. Empty layers
+  are never materialised after a rejected biological decision; tests that need
+  compact multilayer growth use explicit admitted coordinates. Authority:
+  `INV-014` and the biological ownership transaction introduced in the current
+  implementation.
+- `2026-09-24` ARM verification must run the growth/runner unit suite even
+  though it omits the heavier duplicate X64 library, integration, doctest and
+  release-smoke gates. The workflow uses the quoted Cargo test selector and
+  disables OpenCL for deterministic CPU validation.
 
 ## Outcomes & Retrospective
 
