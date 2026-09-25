@@ -300,7 +300,7 @@ jobs:
         if: matrix.runner_arch != 'ARM64'
         run: |
           cargo test --locked --all-features --doc
-          cargo test --locked --test phase0_baseline
+          cargo test --locked --all-features --test phase0_baseline
 
       - name: Build release binaries
         # Hosted x64 provides the full release-link gate.  ARM packaging

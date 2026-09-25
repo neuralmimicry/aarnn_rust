@@ -108,6 +108,14 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   views are `src/ui.rs` and `web_ui/app.js`. Existing Phase 0, morphology, UI
   topology and phase 2–8 safety tests passed before the additive morphology
   contract work.
+- [x] `2026-09-25 14:40Z` Inspected the GitHub Actions X64 job from run
+  `36147657145` (job `108112738377`). The all-features integration command
+  already ran `tests/phase0_baseline.rs` successfully; the later dedicated
+  fixture command omitted `--all-features` and failed compiling seven calls to
+  the OpenCL-gated `Runner::log_gpu_cpu_fallback`. `NM_DISABLE_OPENCL=1` only
+  disables runtime device use. Aligned the dedicated fixture command with the
+  all-features profile. Ruby YAML parsing and `git diff --check` passed; the
+  changed workflow command is `.github/workflows/build-and-release.yml:303`.
 
 ## Validation and acceptance
 
@@ -142,6 +150,12 @@ an empty layer. Moving admission before dense topology mutation exposed compact
 fixtures that requested out-of-membrane positions; those fixtures now provide
 valid in-area positions. YAML parsing also exposed that the ARM test selector
 must be quoted because its trailing `:` is syntax-sensitive.
+
+The 2026-09-25 X64 workflow failure is a command-profile mismatch: the
+all-features integration suite completed `phase0_baseline`, but the subsequent
+dedicated invocation omitted `--all-features`. This disabled the compile-time
+OpenCL helper required by current `Runner` call sites; the OpenCL environment
+switch controls runtime device selection only.
 
 ## Decision Log
 
