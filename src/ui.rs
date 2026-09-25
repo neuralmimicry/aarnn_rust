@@ -58,7 +58,9 @@ use crate::providers::{
     list_microphone_devices, new_video_preview_store,
 };
 #[cfg(feature = "webcam_input")]
-use crate::providers::{WebcamDeviceInfo, list_webcam_devices};
+use crate::providers::{
+    WebcamCaptureMonitor, WebcamCapturePhase, WebcamDeviceInfo, list_webcam_devices,
+};
 #[cfg(feature = "ui")]
 use crate::runner::Runner;
 #[cfg(feature = "ui")]
@@ -1206,12 +1208,53 @@ pub(crate) fn launch_ui(
     if let Ok(renderer_name) = std::env::var("NM_UI_RENDERER") {
         if let Ok(renderer) = renderer_name.parse::<eframe::Renderer>() {
             native_options.renderer = renderer;
+        } else {
+            nm_err!(
+                "[ui.graphics] renderer_request=invalid value={renderer_name:?}; retaining {:?}",
+                native_options.renderer
+            );
         }
     }
+
+    let shutdown_runtime = runtime_handle.clone();
+    shutdown_runtime.spawn(async move {
+        match crate::obs::wait_for_shutdown_signal().await {
+            Ok(signal) => crate::obs::note_shutdown_signal(signal),
+            Err(error) => nm_err!("[shutdown] signal_listener=failed error={error}"),
+        }
+    });
+
+    if !crate::obs::is_silent() {
+        let surface_error_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let surface_error_count_callback = surface_error_count.clone();
+        native_options.wgpu_options.on_surface_status = std::sync::Arc::new(move |status| {
+            use eframe::egui_wgpu::{SurfaceErrorAction, wgpu::CurrentSurfaceTexture};
+            if !matches!(status, CurrentSurfaceTexture::Occluded) {
+                let count = surface_error_count_callback
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                if count <= 8 || count.is_power_of_two() {
+                    nm_err!(
+                        "[ui.graphics] renderer=Wgpu surface_error_count={count} status={status:?}"
+                    );
+                }
+            }
+            match status {
+                CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+                    SurfaceErrorAction::RecreateSurface
+                }
+                _ => SurfaceErrorAction::SkipFrame,
+            }
+        });
+    }
+
     if let Err(e) = eframe::run_native(
         &format!("Neuromorphic Network - {}", brain_id),
         native_options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            if !crate::obs::is_silent() {
+                log_actual_ui_renderer(cc);
+            }
             Ok(Box::new(App::new(
                 net_cfg,
                 brain_id,
@@ -1229,9 +1272,69 @@ pub(crate) fn launch_ui(
             )))
         }),
     ) {
+        crate::obs::flush_log();
         return Err(anyhow::anyhow!(e.to_string()));
     }
+    crate::obs::flush_log();
     Ok(())
+}
+
+#[cfg(feature = "ui")]
+fn log_actual_ui_renderer(cc: &eframe::CreationContext<'_>) {
+    if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+        let info = render_state.adapter.get_info();
+        nm_log!(
+            "[ui.graphics] renderer=Wgpu adapter={} vendor_id=0x{:04x} device_id=0x{:04x} device_type={:?} backend={:?} driver={} driver_info={} wgpu_api={}",
+            info.name,
+            info.vendor,
+            info.device,
+            info.device_type,
+            info.backend,
+            info.driver,
+            info.driver_info,
+            env!("AARNN_WGPU_API_VERSION")
+        );
+        let device_error_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let device_lost_error_count = device_error_count.clone();
+        render_state
+            .device
+            .set_device_lost_callback(move |reason, message| {
+                let count = device_lost_error_count
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                if count <= 8 || count.is_power_of_two() {
+                    nm_err!(
+                        "[ui.graphics] renderer=Wgpu device_lost=1 error_count={count} reason={reason:?} message={message}"
+                    );
+                    crate::obs::flush_log();
+                }
+            });
+        let uncaptured_error_count = device_error_count;
+        render_state.device.on_uncaptured_error(std::sync::Arc::new(
+            move |error| {
+                let count = uncaptured_error_count
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                if count <= 8 || count.is_power_of_two() {
+                    nm_err!(
+                        "[ui.graphics] renderer=Wgpu uncaptured_device_error_count={count} error={error}"
+                    );
+                    crate::obs::flush_log();
+                }
+            }));
+    } else if let Some(gl) = cc.gl.as_ref() {
+        use eframe::glow::HasContext;
+        unsafe {
+            nm_log!(
+                "[ui.graphics] renderer=Glow vendor={} renderer_name={} gl_version={}",
+                gl.get_parameter_string(eframe::glow::VENDOR),
+                gl.get_parameter_string(eframe::glow::RENDERER),
+                gl.get_parameter_string(eframe::glow::VERSION)
+            );
+        }
+    } else {
+        nm_err!("[ui.graphics] renderer=unknown adapter_state=unavailable");
+    }
 }
 
 /// Run the simulation and IPC service without starting eframe.
@@ -1285,21 +1388,8 @@ pub(crate) fn launch_headless_ipc(
     // while this owner must also return so App::drop can stop its simulation
     // and UDS threads. Handle both Ctrl-C and the SIGTERM used by launcher
     // cleanup so no stale IPC socket or worker remains after shutdown.
-    runtime_handle.block_on(async {
-        #[cfg(unix)]
-        {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-            tokio::select! {
-                result = tokio::signal::ctrl_c() => result.map_err(anyhow::Error::from),
-                _ = sigterm.recv() => Ok(()),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            tokio::signal::ctrl_c().await.map_err(anyhow::Error::from)
-        }
-    })?;
+    let signal = runtime_handle.block_on(crate::obs::wait_for_shutdown_signal())?;
+    crate::obs::note_shutdown_signal(signal);
 
     drop(app);
     nm_log!("[headless-ipc] simulation runtime stopped");
@@ -2043,6 +2133,11 @@ struct App {
     webcam_device_id: Option<String>,
     #[cfg(feature = "webcam_input")]
     webcam_devices_error: Option<String>,
+    #[cfg(feature = "webcam_input")]
+    webcam_devices_refresh_rx:
+        Option<std::sync::mpsc::Receiver<Result<Vec<WebcamDeviceInfo>, String>>>,
+    #[cfg(feature = "webcam_input")]
+    webcam_capture_monitor: Option<WebcamCaptureMonitor>,
     // GA Search
     ga_search: Option<GASearch>,
     ga_running: bool,
@@ -2983,6 +3078,8 @@ impl App {
             .ok()
             .filter(|id| !id.trim().is_empty())
             .or_else(|| webcam_devices.first().map(|device| device.id.clone()));
+        #[cfg(feature = "webcam_input")]
+        let mut startup_webcam_monitor = None;
         #[cfg(feature = "video_input")]
         if let Ok(raw_path) = std::env::var("AARNN_VIDEO_FILE") {
             let raw_path = raw_path.trim();
@@ -3047,7 +3144,8 @@ impl App {
                     )
                 }) {
                 Ok(provider) => {
-                    startup_video_status = Some("Camera input started".to_string());
+                    startup_webcam_monitor = Some(provider.monitor());
+                    startup_video_status = Some("Camera input starting".to_string());
                     startup_camera_loaded = true;
                     startup_video_provider = Some(Box::new(provider));
                 }
@@ -4381,7 +4479,7 @@ impl App {
                                         // Periodic time-sync diagnostics
                                         if stats.frame_count % 100 == 0 {
                                             if let Ok(r) = sim_runner.try_read() {
-                                                eprintln!(
+                                                nm_log!(
                                                     "[IPC time-sync] nn_t_ms={:.1} ipc_frames={} substeps_this_frame={}",
                                                     r.t_ms, stats.frame_count, ipc_steps_taken
                                                 );
@@ -4794,6 +4892,10 @@ impl App {
             webcam_device_id: startup_camera_id,
             #[cfg(feature = "webcam_input")]
             webcam_devices_error,
+            #[cfg(feature = "webcam_input")]
+            webcam_devices_refresh_rx: None,
+            #[cfg(feature = "webcam_input")]
+            webcam_capture_monitor: startup_webcam_monitor,
             ga_search: None,
             ga_running: false,
             ga_panel_visible: false,
@@ -4813,7 +4915,7 @@ impl App {
             ga_pacing_ack: false,
             ga_abort_cleanup_done: false,
             #[cfg(feature = "webcam_input")]
-            cam_running: false,
+            cam_running: startup_camera_loaded,
             smoothed_equalizer_values: Vec::new(),
             output_count: o,
             last_rendered_panel_size: egui::vec2(0.0, 0.0),
@@ -7306,7 +7408,45 @@ impl App {
 
     #[cfg(feature = "webcam_input")]
     fn refresh_webcam_devices(&mut self) {
-        match list_webcam_devices() {
+        if self.webcam_devices_refresh_rx.is_some() {
+            return;
+        }
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("webcam-device-enumeration".to_string())
+            .spawn(move || {
+                let result = list_webcam_devices().map_err(|error| error.to_string());
+                let _ = result_tx.send(result);
+            }) {
+            Ok(worker) => {
+                drop(worker);
+                self.webcam_devices_refresh_rx = Some(result_rx);
+                self.webcam_devices_error = None;
+            }
+            Err(error) => {
+                self.webcam_devices_error =
+                    Some(format!("failed to start camera enumeration: {error}"))
+            }
+        }
+    }
+
+    #[cfg(feature = "webcam_input")]
+    fn poll_webcam_device_refresh(&mut self) {
+        let result = match self.webcam_devices_refresh_rx.as_ref() {
+            Some(receiver) => match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "camera enumeration worker stopped before returning a result".to_string(),
+                )),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            },
+            None => None,
+        };
+        let Some(result) = result else {
+            return;
+        };
+        self.webcam_devices_refresh_rx = None;
+        match result {
             Ok(devices) => {
                 if let Some(selected_id) = self.webcam_device_id.as_ref()
                     && !devices.iter().any(|device| &device.id == selected_id)
@@ -7323,6 +7463,7 @@ impl App {
                         )));
                         self.cam_running = false;
                         self.video_audio_active = false;
+                        self.webcam_capture_monitor = None;
                         self.video_preview_open = false;
                         self.clear_video_preview();
                         self.status =
@@ -7334,26 +7475,8 @@ impl App {
                 self.webcam_devices_error = None;
             }
             Err(error) => {
-                self.webcam_devices_error = Some(error.to_string());
+                self.webcam_devices_error = Some(error);
                 self.webcam_devices.clear();
-                if self.cam_running {
-                    let n = self
-                        .runner
-                        .try_read()
-                        .map(|runner| runner.net.num_sensory_neurons)
-                        .unwrap_or(self.sensory_count);
-                    let _ =
-                        self.sim_tx
-                            .send(SimControl::SetProvider(Box::new(RandomProvider::new(
-                                n,
-                                self.random_spike_probability,
-                            ))));
-                    self.cam_running = false;
-                    self.video_audio_active = false;
-                    self.video_preview_open = false;
-                    self.clear_video_preview();
-                    self.status = "Webcam enumeration failed; capture stopped".to_string();
-                }
             }
         }
     }
@@ -10918,7 +11041,107 @@ impl App {
         self.video_preview_sequence = 0;
     }
 
+    #[cfg(feature = "webcam_input")]
+    fn refresh_webcam_capture_health(&mut self) {
+        if !self.cam_running {
+            return;
+        }
+        let Some(monitor) = self.webcam_capture_monitor.as_ref().cloned() else {
+            return;
+        };
+        let snapshot = monitor.snapshot();
+        if snapshot.phase == WebcamCapturePhase::Failed {
+            let n = self
+                .runner
+                .try_read()
+                .map(|runner| runner.net.num_sensory_neurons)
+                .unwrap_or(self.sensory_count);
+            let _ = self
+                .sim_tx
+                .send(SimControl::SetProvider(Box::new(RandomProvider::new(
+                    n,
+                    self.random_spike_probability,
+                ))));
+            self.cam_running = false;
+            self.video_audio_active = false;
+            self.webcam_capture_monitor = None;
+            self.video_preview_open = false;
+            self.clear_video_preview();
+            self.status = format!(
+                "Camera capture failed: {}. Neural execution continues with Random input.",
+                snapshot
+                    .last_error
+                    .as_deref()
+                    .unwrap_or("capture worker stopped")
+            );
+        } else if monitor.is_stale() && self.video_preview_texture.is_some() {
+            // A retained texture is useful during brief UI redraw gaps, but it
+            // must not look live after the capture worker stops producing data.
+            self.clear_video_preview();
+        }
+    }
+
+    #[cfg(feature = "webcam_input")]
+    fn webcam_capture_status(&self) -> Option<(String, egui::Color32)> {
+        if !self.cam_running {
+            return None;
+        }
+        let snapshot = self.webcam_capture_monitor.as_ref()?.snapshot();
+        let stale = snapshot
+            .last_frame_age
+            .map(|age| age > Duration::from_secs(2))
+            .unwrap_or(snapshot.elapsed > Duration::from_secs(10));
+        Some(match snapshot.phase {
+            WebcamCapturePhase::Starting if stale => (
+                format!(
+                    "Camera has produced no frame for {:.0}s; retrying in background. Neural execution is unaffected.",
+                    snapshot.elapsed.as_secs_f32()
+                ),
+                egui::Color32::YELLOW,
+            ),
+            WebcamCapturePhase::Starting => (
+                "Camera starting… neural execution is unaffected".to_string(),
+                egui::Color32::LIGHT_BLUE,
+            ),
+            WebcamCapturePhase::Streaming if stale => (
+                "Camera frame is stale; visual input is neutral and neural execution continues"
+                    .to_string(),
+                egui::Color32::YELLOW,
+            ),
+            WebcamCapturePhase::Streaming => (
+                format!("Camera active • {} frames", snapshot.frames_received),
+                egui::Color32::LIGHT_GREEN,
+            ),
+            WebcamCapturePhase::Reconnecting => (
+                format!(
+                    "Camera reconnecting: {}",
+                    snapshot
+                        .last_error
+                        .as_deref()
+                        .unwrap_or("waiting for device")
+                ),
+                egui::Color32::YELLOW,
+            ),
+            WebcamCapturePhase::Failed => (
+                format!(
+                    "Camera failed: {}",
+                    snapshot
+                        .last_error
+                        .as_deref()
+                        .unwrap_or("capture worker stopped")
+                ),
+                egui::Color32::LIGHT_RED,
+            ),
+            WebcamCapturePhase::Stopped => ("Camera stopped".to_string(), egui::Color32::GRAY),
+        })
+    }
+
     fn render_video_preview(&mut self, ctx: &egui::Context) {
+        #[cfg(feature = "webcam_input")]
+        self.poll_webcam_device_refresh();
+        #[cfg(feature = "webcam_input")]
+        self.refresh_webcam_capture_health();
+
         if let Some(frame) = self
             .video_preview
             .lock()
@@ -10970,6 +11193,10 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if crate::obs::take_ui_shutdown_close_request() {
+            nm_log!("[shutdown] ui_close_requested=1");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // eframe reveals the root viewport after its first painted frame even
         // when the viewport was created with `visible(false)`.  Distributed
         // IPC-owning workers still use this UI-backed runtime for the
@@ -15861,6 +16088,9 @@ impl eframe::App for App {
                                 self.refresh_webcam_devices();
                             }
                         });
+                        if self.webcam_devices_refresh_rx.is_some() {
+                            ui.label(egui::RichText::new("Searching for cameras…").weak());
+                        }
                         if let Some(error) = self.webcam_devices_error.as_deref() {
                             ui.colored_label(egui::Color32::LIGHT_RED, format!("Camera enumeration failed: {error}"));
                         } else if self.webcam_devices.is_empty() {
@@ -15907,6 +16137,7 @@ impl eframe::App for App {
                                 let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(net_cloned.num_sensory_neurons, self.random_spike_probability))));
                                 self.cam_running = false;
                                 self.video_audio_active = false;
+                                self.webcam_capture_monitor = None;
                                 self.video_preview_open = false;
                                 self.clear_video_preview();
                                 self.status = "Camera stopped".to_string();
@@ -15918,6 +16149,7 @@ impl eframe::App for App {
                                 };
                                 match WebcamCaptureProvider::new_with_device_id(&device_id, net_cloned.num_sensory_neurons, Some(self.video_preview.clone())) {
                                     Ok(p) => {
+                                        self.webcam_capture_monitor = Some(p.monitor());
                                         let mut provider: Box<dyn SensoryProvider + Send> = Box::new(p);
                                         let mut audio_active = false;
                                         let mut audio_error = None;
@@ -15941,11 +16173,11 @@ impl eframe::App for App {
                                         self.show_equalizer = audio_active;
                                         self.video_preview_open = true;
                                         self.status = if audio_active {
-                                            "Camera started with microphone audio • Graphic EQ enabled".to_string()
+                                            "Camera starting with microphone audio • Graphic EQ enabled".to_string()
                                         } else if let Some(error) = audio_error {
-                                            format!("Camera started without audio: {error}")
+                                            format!("Camera starting without audio: {error}")
                                         } else {
-                                            "Camera started".to_string()
+                                            "Camera starting".to_string()
                                         };
                                         self.smoothed_equalizer_values.clear();
                                     }
@@ -15963,6 +16195,10 @@ impl eframe::App for App {
                         });
                         if self.video_audio_active {
                             ui.colored_label(egui::Color32::LIGHT_GREEN, "Microphone audio active • Graphic EQ enabled");
+                        }
+                        #[cfg(feature = "webcam_input")]
+                        if let Some((message, color)) = self.webcam_capture_status() {
+                            ui.colored_label(color, message);
                         }
                     }
                     InputSource::Microphone => {

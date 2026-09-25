@@ -1790,6 +1790,17 @@ fn lerp_usize(cold: usize, hot: usize, ratio: f32) -> usize {
 }
 
 impl Runner {
+    #[cfg(feature = "opencl")]
+    fn log_gpu_cpu_fallback(&self, stage: &'static str) {
+        if !crate::obs::is_silent()
+            && self.cl.as_ref().is_some_and(|manager| {
+                manager.execution_target() == crate::cl_compute::OpenCLExecutionTarget::Gpu
+            })
+        {
+            crate::cl_compute::log_compute_cpu_fallback(stage, "GPU_path_unavailable_or_failed");
+        }
+    }
+
     fn normalize_i8_history(history: &mut VecDeque<Array1<i8>>, frame_len: usize, hist_len: usize) {
         let hist_len = hist_len.max(1);
         if history.is_empty() {
@@ -9645,6 +9656,7 @@ impl Runner {
             }
             #[cfg(feature = "opencl")]
             if stp_gpu_failed {
+                self.log_gpu_cpu_fallback("short_term_plasticity");
                 // Do not publish a partial device batch.  The CPU STP state is
                 // still at the pre-transition boundary, so replay the whole
                 // release phase there after disabling the failed accelerator
@@ -10689,6 +10701,7 @@ impl Runner {
             }
 
             if !gpu_success {
+                self.log_gpu_cpu_fallback("hidden_input_accumulation");
                 observe_time!("Runner::step/i_h0/accum");
                 if can_parallel_light(num_hidden_0_neurons) {
                     // Parallel over postsynaptic neurons j. Accumulate directly into i_h0[j].
@@ -11296,6 +11309,7 @@ impl Runner {
                         None
                     }
                 } else {
+                    self.log_gpu_cpu_fallback("hidden_neuron_step_layer_0");
                     None
                 };
                 if let Some(spikes) = gpu_spikes {
@@ -13464,6 +13478,7 @@ impl Runner {
                             None
                         }
                     } else {
+                        self.log_gpu_cpu_fallback("hidden_neuron_step");
                         None
                     };
                     if let Some(spikes) = gpu_spikes {
@@ -14180,6 +14195,7 @@ impl Runner {
             }
 
             if !gpu_success {
+                self.log_gpu_cpu_fallback("output_input_accumulation");
                 if can_parallel_light(num_output_neurons) {
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
@@ -14778,6 +14794,7 @@ impl Runner {
                     None
                 }
             } else {
+                self.log_gpu_cpu_fallback("output_neuron_step");
                 None
             };
             if let Some(spikes) = gpu_spikes {
@@ -15146,6 +15163,7 @@ impl Runner {
                         }
 
                         if !gpu_success {
+                            self.log_gpu_cpu_fallback("input_weight_plasticity");
                             if in_l == 0 {
                                 if can_parallel_matrix(
                                     num_hidden_0_neurons,
@@ -15738,6 +15756,7 @@ impl Runner {
                         }
 
                         if !gpu_success {
+                            self.log_gpu_cpu_fallback("output_weight_plasticity");
                             if can_parallel_matrix(num_output_neurons, num_last_layer_neurons) {
                                 let w_min = self.stdp.w_min;
                                 let w_max = self.stdp.w_max;

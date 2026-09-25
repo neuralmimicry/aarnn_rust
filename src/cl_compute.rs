@@ -27,6 +27,7 @@ use crate::gpu_api::{
 use crate::neuron_kernels::{izh_transition, lif_transition};
 use opencl3::platform::get_platforms;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 #[cfg(feature = "cuda")]
@@ -35,6 +36,21 @@ use std::{fs, process::Command};
 static GLOBAL_CL_MANAGER: OnceLock<Option<Arc<OpenCLManager>>> = OnceLock::new();
 #[cfg(feature = "cuda")]
 static CUDA_GPU_COUNT: OnceLock<usize> = OnceLock::new();
+static CPU_REFERENCE_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+pub fn log_compute_cpu_fallback(stage: &'static str, reason: &'static str) {
+    if crate::obs::is_silent() {
+        return;
+    }
+    let count = CPU_REFERENCE_FALLBACK_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if count <= 8 || count.is_power_of_two() {
+        nm_err!(
+            "[warn][compute.backend] transition=CPU_reference_fallback stage={stage} reason={reason} transition_count={count}"
+        );
+    }
+}
 
 pub use crate::gpu_api::{
     Buffer, CL_INVALID_VALUE, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_TRUE, ClError, ExecuteKernel,
@@ -66,8 +82,7 @@ pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
                     "test default"
                 };
                 nm_log!(
-                    "[info] Accelerated compute backend disabled ({}); using CPU-only execution.",
-                    source
+                    "[compute.backend] transition=CPU_reference reason=accelerated_compute_disabled source={source}"
                 );
                 return None;
             }
@@ -88,27 +103,26 @@ pub fn get_global_cl_manager() -> Option<Arc<OpenCLManager>> {
                         .device
                         .vendor()
                         .unwrap_or_else(|_| "<unknown vendor>".to_string());
-                    let backend = if manager.is_cuda_backend() {
-                        "CUDA"
+                    let namespace = if manager.is_cuda_backend() {
+                        "compute.cuda"
                     } else {
-                        "OpenCL"
+                        "compute.opencl"
                     };
                     nm_log!(
-                        "[info] Compute backend initialized: {} {} device: {} ({})",
-                        backend,
+                        "[{namespace}] backend_initialized=1 execution_target={} device={device_name:?} vendor={device_vendor:?}",
                         manager.execution_target().label(),
-                        device_name,
-                        device_vendor
                     );
                     Some(Arc::new(manager))
                 }
                 Ok(Err(e)) => {
-                    nm_err!("[warn] OpenCL unavailable: {}", e);
+                    nm_err!(
+                        "[compute.backend] transition=CPU_reference reason=accelerator_initialization_failed detail={e}"
+                    );
                     None
                 }
                 Err(payload) => {
                     nm_err!(
-                        "[warn] OpenCL/CUDA initialization panicked: {}. Falling back to CPU-only execution.",
+                        "[compute.backend] transition=CPU_reference reason=accelerator_initialization_panicked detail={}",
                         panic_payload_to_string(payload)
                     );
                     None
@@ -227,7 +241,13 @@ fn probe_nvidia_cuda_gpu_count() -> usize {
 
 #[cfg(feature = "cuda")]
 fn nvidia_cuda_gpu_count() -> usize {
-    *CUDA_GPU_COUNT.get_or_init(probe_nvidia_cuda_gpu_count)
+    *CUDA_GPU_COUNT.get_or_init(|| {
+        let count = probe_nvidia_cuda_gpu_count();
+        nm_log!(
+            "[compute.cuda] gpu_count_probe=completed gpu_count={count} cache=process_lifetime_once"
+        );
+        count
+    })
 }
 
 fn select_device_id(
@@ -1690,10 +1710,10 @@ impl OpenCLManager {
         } else {
             let probed = nvidia_cuda_gpu_count();
             if probed > 0 {
-                nm_log!("[info] NVIDIA CUDA probe detected {} GPU(s).", probed);
+                nm_log!("[compute.cuda] detected_gpu_count={probed} source=process_lifetime_cache");
             } else {
                 nm_log!(
-                    "[info] NVIDIA CUDA probe detected no GPUs; attempting CUDA runtime initialization anyway."
+                    "[compute.cuda] detected_gpu_count=0 source=process_lifetime_cache action=attempt_driver_initialization"
                 );
             }
             match Self::new_with_cuda_device_index(index) {
@@ -1778,14 +1798,18 @@ impl OpenCLManager {
                         cpu_error
                     )
                 })?;
-                Self::new_with_device_id(device_id).map_err(|cpu_error| {
+                let cpu_manager = Self::new_with_device_id(device_id).map_err(|cpu_error| {
                     anyhow::anyhow!(
                         "{}. {}. OpenCL CPU initialization failed: {}",
                         opencl_message,
                         cuda_message,
                         cpu_error
                     )
-                })
+                })?;
+                nm_log!(
+                    "[compute.backend] transition=OpenCL_GPU_or_CUDA_to_OpenCL_CPU selected_device=cpu reason=both_gpu_backends_unavailable"
+                );
+                Ok(cpu_manager)
             }
         }
     }

@@ -3262,3 +3262,203 @@ no native engine content hash is presented as biological or physics equivalence.
 - [x] Kept the gateway transport profile consistent with the backend by
   exporting `NM_WEBOTS_RUNTIME_FEATURES` for delegated startup and clearing
   inherited local mTLS variables from `web_ui` when `management_v1` is absent.
+
+## Progress update — 2026-09-25 07:32Z: runtime crash diagnostics and log safeguards
+
+- [x] Implement bounded runtime diagnostics for the native AARNN UI and
+  compute backend, panic and signal shutdown reporting, a true `--no-log`
+  switch, and bounded log retention with disk-pressure action.
+- Repository root: `/home/pbisaacs/Developer/neuralmimicry/aarnn_rust`;
+  `git status --short --branch` reports a clean
+  `fix/anatomical-render-stability` worktree. `cargo metadata
+  --format-version 1 --no-deps` confirms the `aarnn_rust` root package, the
+  `aarnn_biox6_exporter` path dependency, and `tools/xtask` workspace member.
+- Canonical paths: `src/obs.rs` owns `nm_log!`, `nm_err!`, the file sink and
+  existing 20 MiB / five-backup per-path rotation; `src/main.rs` parses CLI
+  options and creates timestamped `logs/nm-<epoch>.log` paths; `src/ui.rs`
+  selects `NM_UI_RENDERER` and calls eframe; `src/cl_compute.rs` caches the
+  NVIDIA GPU count in a process-lifetime `OnceLock` and selects the neural
+  compute backend; `src/gpu_api.rs` creates CUDA contexts, launches kernels
+  and synchronizes streams. The configured desktop renderer is WGPU by
+  default (Glow is not currently enabled in the eframe dependency features).
+- Existing diagnostics distinguish neither actual UI adapter details nor
+  WGPU/GL errors. CUDA initialization errors are logged, while CUDA context
+  UUID/version details and explicit successful CPU-fallback transitions are
+  absent. `--quiet` suppresses the central macros, but there is no `--no-log`
+  spelling and some runtime diagnostics bypass those macros. No panic hook or
+  SIGHUP handling exists. SIGTERM/Ctrl-C are already handled in distributed
+  startup and headless UI paths. Per-file rotation does not bound the growing
+  set of timestamp-named session files. There is no log-filesystem free-space
+  check.
+- Pinned API evidence: `Cargo.lock` resolves eframe 0.34.3,
+  egui-wgpu 0.34.3, WGPU 29.0.4 and cudarc 0.19.9. eframe exposes the actual
+  selected WGPU adapter/device and a bounded surface-status callback; the
+  Glow context exposes `VENDOR`, `RENDERER` and `VERSION`. cudarc exposes
+  device UUID and, with its dynamically loaded runtime feature, CUDA driver
+  and runtime version queries. Existing `fs2` provides available-space
+  queries, avoiding a new filesystem dependency.
+- Specification traceability: Sections 18.1, 18.4 and 18.5 (structured
+  diagnostics, operational alerts and safeguards) and Section 21.12 (native
+  UI responsiveness). This change is operational only and does not alter
+  neural state, event ordering, logical time, permissions or persisted state;
+  `INV-001`–`INV-017` remain untouched.
+- Decision `OBS-CRASH-001`: preserve timestamped run logs but prune only files
+  matching AARNN's generated `nm-<epoch>.log[.N]` pattern under the configured
+  retention bounds; never prune a custom `NM_LOG_PATH`. Bound individual
+  rotated files and aggregate generated-session history, and stop the file
+  sink at a configurable low-free-space reserve while emitting a single
+  machine-readable stderr alert. Keep UI rendering diagnostics under
+  `[ui.graphics]` and neural compute diagnostics under `[compute.*]`.
+- Planned vertical slices: (1) make `--no-log` suppress AARNN diagnostics and
+  metric collection before logger setup; (2) report actual renderer/adapter
+  and bounded WGPU surface/device errors or Glow strings; (3) record CUDA
+  versions, UUID, context/kernel/synchronization errors and CPU fallback
+  transitions, including the cached count probe; (4) add panic backtraces,
+  SIGHUP/SIGTERM graceful close/final flush, bounded session retention and
+  disk-space alerts/action; (5) document option/environment controls and run
+  formatting, focused feature compilation and diff checks.
+- Rollback boundary: revert this diagnostic-only change as a unit. No schema,
+  checkpoint or protocol migration is involved. Retention cleanup is limited
+  to AARNN-generated timestamp log files and configured caps; explicit custom
+  log paths remain managed per-file and are not included in global pruning.
+
+## Implementation update — 2026-09-25
+
+- [x] `src/ui.rs` now logs the renderer and actual WGPU adapter (vendor/device
+  IDs, device type, backend, driver, driver info and locked WGPU API version),
+  Glow vendor/renderer/GL version, rate-limited WGPU surface and uncaptured
+  errors, and device-loss callbacks. UI diagnostics use `[ui.graphics]`;
+  they do not share compute status.
+- [x] `src/gpu_api.rs` records CUDA runtime/driver API versions before context
+  creation, context success/failure and device UUID/capability when available,
+  and rate-limited driver, kernel, transfer and synchronization errors.
+  `src/cl_compute.rs` states that the NVIDIA count probe is cached once per
+  process, records startup CPU-reference transitions, and
+  `src/runner.rs` reports rate-limited GPU-to-CPU-reference paths by stage.
+- [x] `src/obs.rs` adds forced panic backtraces, SIGHUP/SIGTERM/SIGINT
+  reporting, UI close requests and final stdout/stderr/file flushes. `src/main.rs`
+  adds global `--no-log` (`-q` / `--quiet`) before startup, disabling AARNN
+  diagnostic output and metrics. Management runtime diagnostics now use the
+  suppressible AARNN logger.
+- [x] File logs are capped at 20 MiB and five backups by default, generated
+  session history at 10 sessions/512 MiB, and each message at 32 KiB. The
+  logger prunes old AARNN timestamp sessions, checks free space during writes,
+  warns at 2 GiB, and flushes/disables its file sink at a 512 MiB reserve.
+  Structured stderr alerts include pressure level and action for external
+  automation. Custom paths keep bounded per-path rotation and are not globally
+  pruned. Operator controls and thresholds are documented in
+  `docs/operations.md`.
+- [x] Enabling Glow and cudarc's dynamically loaded runtime API updated
+  `Cargo.toml` and the corresponding `Cargo.lock` dependency graph. `build.rs`
+  supplies the locked WGPU API version to renderer diagnostics.
+- [x] Validation: `cargo fmt --all --check`, `git diff --check`, and
+  `cargo check --all-features --locked --offline --quiet --bin aarnn_rust`
+  passed. The all-feature compile reports existing non-fatal warnings. No test
+  suites or hardware/runtime crash reproduction were run; CUDA and native UI
+  callbacks are compile-verified but still need a live run to collect device
+  evidence.
+
+## Progress update — 2026-09-25 10:20Z: webcam frame-format mismatch
+
+- [x] Cross-checked and corrected the corrupted native webcam preview from the supplied
+  screenshot. Canonical path is `src/providers.rs` (`WebcamCaptureProvider`)
+  to `VideoPreviewStore` and `src/ui.rs::render_video_preview`; the screenshot
+  is the native egui preview. `Cargo.toml` pins Nokhwa 0.10 and its resolved
+  core API exposes each frame's `source_frame_format()` plus
+  `decode_image::<RgbFormat>()`.
+- `RequestedFormat::new::<RgbFormat>` constrains the camera's negotiated source
+  formats to ones its RGB decoder supports; it does not convert
+  `frame.buffer()` into RGB. The current provider guesses from buffer length
+  (including treating exactly two bytes per pixel as YUYV and otherwise
+  assuming interleaved RGB/BGR), so valid MJPEG/NV12 and other source formats
+  can become black or corrupted preview pixels. This matches the screenshot;
+  screenshot pixels alone do not identify which source format that camera
+  negotiated.
+- Discovery evidence: `cargo metadata --no-deps --format-version 1` identifies
+  the root `aarnn_rust` workspace package and `src/providers.rs` is the only
+  native webcam capture provider found by symbol search. The Rust UI preview
+  uploads `VideoPreviewFrame.rgb` directly as RGB. Nokhwa's installed source
+  confirms RGB decoding supports MJPEG, YUYV, NV12, GRAY, RAWRGB and RAWBGR.
+  No capture device was opened during inspection, avoiding interruption of a
+  potentially active camera session.
+- Existing unrelated user edits in the worktree include runtime diagnostics,
+  operations documentation and `active-production-cross-review.md`; those
+  edits are preserved. `src/providers.rs` has no pre-existing user diff.
+- `src/providers.rs` now decodes each frame once through its declared source
+  format using `decode_image::<RgbFormat>()`, then uses the resulting RGB bytes
+  for both the bounded preview and grayscale sensory mapping. The hardware-free
+  regression case covers NV12 and BGR data. No schema or logical-time behavior
+  changes; preview remains display-only.
+- Validation passed: `rustfmt --edition 2024 --check src/providers.rs`,
+  `git diff --check`, `cargo check --bin aarnn_rust --features 'webcam_input
+  engine_runtime' --locked`, and
+  `cargo test --bin aarnn_rust --features 'webcam_input engine_runtime'
+  providers::tests::webcam_rgb_decode_uses_the_declared_source_format --
+  --exact` (1 passed). Initial attempts with incomplete feature sets failed
+  because `--no-default-features` omitted the existing parallel requirement,
+  and `webcam_input opencl` omitted the morphology/growth features required by
+  the current GPU test code; the repository's `engine_runtime` profile passed.
+  The camera was not opened during validation, so physical-device preview
+  confirmation remains outstanding.
+
+## Progress update — 2026-09-25 10:39Z: MJPEG decoding feature omitted
+
+- The follow-up screenshot shows the preview still waiting for its first frame
+  while camera capture is enabled. Dependency-source inspection found a second
+  cause: this project disables Nokhwa defaults and enables only `input-native`,
+  while Nokhwa 0.10.11 gates its MJPEG decoder behind its separate `decoding`
+  feature (`nokhwa-core/mjpeg`). Without it, `RgbFormat` returns
+  `NotImplementedError` for an MJPEG frame; `next_spikes` currently swallows
+  capture/decode errors and leaves the preview store empty.
+- Nokhwa 0.10.11's manifest and `nokhwa-core` implementation confirm the
+  feature gate and error path. The selected HP camera advertises Video4Linux;
+  actual negotiated format is still unknown because no live device was opened.
+  The previous synthetic coverage exercised NV12 and BGR, but not MJPEG.
+- Planned correction: enable Nokhwa's `decoding` feature and add a tiny MJPEG
+  fixture regression so the negotiated high-frame-rate MJPEG path is tested.
+  Keep explicit source-format conversion and display-only preview semantics.
+
+## Progress update — 2026-09-25 10:47Z: enable negotiated MJPEG decoding
+
+- Nokhwa 0.10.11's manifest confirms `decoding = ["nokhwa-core/mjpeg"]` and
+  defaults to that feature, but this workspace disables Nokhwa defaults. The
+  camera is requested with `AbsoluteHighestFrameRate`; the current screenshot
+  proves capture was enabled but does not identify the selected source FourCC.
+  MJPEG is therefore a supported negotiated path that the application had
+  accidentally left without its decoder.
+- Enabled Nokhwa's existing `decoding` feature in `Cargo.toml`. Cargo locked
+  `mozjpeg 0.10.13`, `mozjpeg-sys 2.2.3` and `nasm-rs 0.3.2` for the decoder.
+  Added a 225-byte 2x2 MJPEG fixture and expanded the canonical
+  `decode_webcam_rgb_frame` regression test; MJPEG, NV12 and BGR all decode to
+  RGB with expected dimensions and channel order.
+- Decision `WEBCAM-MJPEG-001`: enable Nokhwa decoding while retaining the
+  camera's negotiated source mode, rather than assuming an RGB request converts
+  the captured buffer or restricting capture to one raw format. The locked
+  test profile now builds the decoder. Preview remains display-only and no
+  biological timing/admission behavior changes.
+- Validation passed: `cargo test --bin aarnn_rust --features 'webcam_input
+  engine_runtime' providers::tests::webcam_rgb_decode_uses_the_declared_source_format
+  -- --exact --nocapture` (1 passed); `cargo check --bin aarnn_rust --features
+  'webcam_input engine_runtime' --locked`; `cargo fmt --all --check`; and
+  `git diff --check`. Existing non-fatal compiler warnings remain.
+- No live camera stream was opened. The actual device FourCC and end-to-end
+  preview remain unverified.
+
+## Progress update — 2026-09-25 10:52Z: surface webcam frame failures
+
+- Changed `decode_webcam_rgb_frame` to retain the source FourCC and decoder
+  error as a typed result instead of collapsing every failure to `None`.
+  `WebcamCaptureProvider` now logs its first frame-read or conversion failure
+  once per provider; conversion diagnostics include the source FourCC. This
+  keeps the simulation log bounded while distinguishing capture failure from
+  unsupported/malformed frame data.
+- Validation passed on the final provider code:
+  `cargo test --locked --bin aarnn_rust --features 'webcam_input engine_runtime'
+  providers::tests::webcam_rgb_decode_uses_the_declared_source_format --
+  --exact --nocapture` (1 passed), `cargo check --locked --quiet --bin
+  aarnn_rust --features 'webcam_input engine_runtime'`, `cargo fmt --all
+  --check` and `git diff --check`. The compiler reports existing non-fatal
+  warnings.
+- The physical camera remains unopened, so hardware preview is still
+  unverified. If it remains blank, inspect the `[webcam]` startup error for
+  the specific device/format failure.

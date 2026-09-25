@@ -36,7 +36,7 @@ sha2 = "0.10"
 jsonwebtoken = { version = "10.1", default-features = false, features = ["rust_crypto", "use_pem"] }
 time = "0.3"
 opencl3 = { version = ">=0.12.3", optional = true }
-cudarc = { version = ">=0.19.3", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "fallback-dynamic-loading", "cuda-12000"] }
+cudarc = { version = ">=0.19.3", optional = true, default-features = false, features = ["std", "driver", "runtime", "nvrtc", "fallback-dynamic-loading", "cuda-12000"] }
 num_cpus = { version = "1.17", optional = true }
 tonic = { version = "0.14", features = ["tls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
@@ -54,7 +54,8 @@ sysinfo = { version = "0.38", optional = true }
 core_affinity = { version = "0.8", optional = true }
 tracing = { version = "0.1", optional = true }
 image = { version = "0.25", optional = true }
-nokhwa = { version = "0.10", optional = true, default-features = false, features = ["input-native"] }
+# Native cameras may negotiate MJPEG; keep Nokhwa's frame decoder available.
+nokhwa = { version = "0.10", optional = true, default-features = false, features = ["input-native", "decoding"] }
 ibverbs = { version = "0.9", optional = true }
 mpi = { version = ">=0.8.1", optional = true }
 
@@ -66,7 +67,7 @@ tonic-prost-build = "0.14"
 version = "0.34"
 optional = true
 default-features = true
-features = ["default", "wgpu"]
+features = ["default", "wgpu", "glow"]
 
 [dependencies.egui]
 version = "0.34"

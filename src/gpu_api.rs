@@ -2,10 +2,14 @@
 
 use opencl3 as ocl;
 use std::ffi::c_void;
+#[cfg(feature = "cuda")]
+use std::process::Command;
 use std::ptr;
 use std::sync::Arc;
 #[cfg(feature = "cuda")]
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "cuda")]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "cuda")]
 use cudarc::driver::{
@@ -26,6 +30,52 @@ pub const CL_MEM_READ_ONLY: ocl::types::cl_mem_flags = ocl::memory::CL_MEM_READ_
 pub const CL_MEM_READ_WRITE: ocl::types::cl_mem_flags = ocl::memory::CL_MEM_READ_WRITE;
 pub const CL_TRUE: ocl::types::cl_bool = ocl::types::CL_TRUE;
 pub const CL_INVALID_VALUE: i32 = ocl::error_codes::CL_INVALID_VALUE;
+
+#[cfg(feature = "cuda")]
+static CUDA_DRIVER_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "cuda")]
+static CUDA_KERNEL_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "cuda")]
+fn format_cuda_api_version(version: i32) -> String {
+    format!(
+        "{}.{} (raw={version})",
+        version / 1000,
+        (version % 1000) / 10
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_driver_version() -> &'static str {
+    static DRIVER_VERSION: OnceLock<String> = OnceLock::new();
+    DRIVER_VERSION
+        .get_or_init(|| {
+            if let Ok(version) = cudarc::runtime::result::version::get_driver_version() {
+                return format_cuda_api_version(version);
+            }
+            let fallback = Command::new("nvidia-smi")
+                .args(["--query-gpu=driver_version", "--format=csv,noheader"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                .filter(|version| !version.is_empty());
+            fallback.unwrap_or_else(|| "unavailable".to_string())
+        })
+        .as_str()
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_runtime_version() -> &'static str {
+    static RUNTIME_VERSION: OnceLock<String> = OnceLock::new();
+    RUNTIME_VERSION
+        .get_or_init(|| {
+            cudarc::runtime::result::version::get()
+                .map(format_cuda_api_version)
+                .unwrap_or_else(|error| format!("unavailable ({error:?})"))
+        })
+        .as_str()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClError(pub i32);
@@ -59,7 +109,14 @@ impl From<String> for ClError {
 #[cfg(feature = "cuda")]
 impl From<cudarc::driver::DriverError> for ClError {
     fn from(value: cudarc::driver::DriverError) -> Self {
-        crate::nm_log!("[warn] CUDA driver operation failed: {value:?}");
+        let count = CUDA_DRIVER_ERROR_COUNT
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if count <= 8 || count.is_power_of_two() {
+            crate::nm_err!(
+                "[warn][compute.cuda] driver_operation_error_count={count} error={value:?}"
+            );
+        }
         Self(-1)
     }
 }
@@ -174,8 +231,43 @@ impl Context {
             }
             #[cfg(feature = "cuda")]
             DeviceBackend::Cuda { ordinal } => {
-                let ctx = CudaContext::new(*ordinal).map_err(ClError::from)?;
+                let versions = (!crate::obs::is_silent())
+                    .then(|| (cuda_driver_version(), cuda_runtime_version()));
+                if let Some((driver_version, runtime_version)) = versions {
+                    crate::nm_log!(
+                        "[compute.cuda] context_creation=started ordinal={ordinal} context=primary driver_version={driver_version} runtime_version={runtime_version}"
+                    );
+                }
+                let ctx = CudaContext::new(*ordinal).map_err(|error| {
+                    if let Some((driver_version, runtime_version)) = versions {
+                        crate::nm_err!(
+                            "[warn][compute.cuda] context_creation=failed ordinal={ordinal} driver_version={driver_version} runtime_version={runtime_version} error={error:?}"
+                        );
+                    }
+                    ClError::from(error)
+                })?;
                 let stream = ctx.default_stream();
+                if let Some((driver_version, runtime_version)) = versions {
+                    let name = ctx
+                        .name()
+                        .unwrap_or_else(|error| format!("unavailable ({error:?})"));
+                    let uuid = ctx
+                        .uuid()
+                        .map(|uuid| {
+                            uuid.bytes
+                                .iter()
+                                .map(|byte| format!("{:02x}", *byte as u8))
+                                .collect::<String>()
+                        })
+                        .unwrap_or_else(|error| format!("unavailable ({error:?})"));
+                    let capability = ctx
+                        .compute_capability()
+                        .map(|(major, minor)| format!("{major}.{minor}"))
+                        .unwrap_or_else(|error| format!("unavailable ({error:?})"));
+                    crate::nm_log!(
+                        "[compute.cuda] context_created=1 execution_api=CUDA_Driver_API ordinal={ordinal} device={name:?} uuid={uuid} compute_capability={capability} driver_version={driver_version} runtime_version={runtime_version}"
+                    );
+                }
                 Ok(Self {
                     backend: ContextBackend::Cuda { ctx, stream },
                 })
@@ -263,7 +355,10 @@ impl CommandQueue {
         match &self.backend {
             CommandQueueBackend::OpenCl(q) => q.finish().map_err(Into::into),
             #[cfg(feature = "cuda")]
-            CommandQueueBackend::Cuda(stream) => stream.synchronize().map_err(Into::into),
+            CommandQueueBackend::Cuda(stream) => stream.synchronize().map_err(|error| {
+                crate::nm_err!("[warn][compute.cuda] synchronization=failed operation=queue_finish error={error:?}");
+                ClError::from(error)
+            }),
         }
     }
 
@@ -292,7 +387,10 @@ impl CommandQueue {
                 stream
                     .memcpy_htod(data, &mut *guard)
                     .map_err(ClError::from)?;
-                stream.synchronize().map_err(ClError::from)?;
+                stream.synchronize().map_err(|error| {
+                    crate::nm_err!("[warn][compute.cuda] synchronization=failed operation=buffer_write error={error:?}");
+                    ClError::from(error)
+                })?;
                 Ok(())
             }
             _ => Err(ClError(CL_INVALID_VALUE)),
@@ -322,7 +420,10 @@ impl CommandQueue {
                 }
                 let guard = buf.data.lock().expect("cuda buffer lock poisoned");
                 stream.memcpy_dtoh(&*guard, data).map_err(ClError::from)?;
-                stream.synchronize().map_err(ClError::from)?;
+                stream.synchronize().map_err(|error| {
+                    crate::nm_err!("[warn][compute.cuda] synchronization=failed operation=buffer_read error={error:?}");
+                    ClError::from(error)
+                })?;
                 Ok(())
             }
             _ => Err(ClError(CL_INVALID_VALUE)),
@@ -783,6 +884,23 @@ impl<'a> ExecuteKernel<'a> {
 
     #[cfg(feature = "cuda")]
     unsafe fn enqueue_cuda(self, queue: &CommandQueue) -> Result<()> {
+        let kernel_name = self.kernel.name.clone();
+        let result = unsafe { self.enqueue_cuda_inner(queue) };
+        if let Err(error) = &result {
+            let count = CUDA_KERNEL_ERROR_COUNT
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            if count <= 8 || count.is_power_of_two() {
+                crate::nm_err!(
+                    "[warn][compute.cuda] kernel_execution=failed kernel={kernel_name} error={error:?} error_count={count}"
+                );
+            }
+        }
+        result
+    }
+
+    #[cfg(feature = "cuda")]
+    unsafe fn enqueue_cuda_inner(self, queue: &CommandQueue) -> Result<()> {
         use KernelArg::*;
 
         let stream = queue.cuda_stream().ok_or(ClError(CL_INVALID_VALUE))?;
@@ -1558,7 +1676,10 @@ impl<'a> ExecuteKernel<'a> {
             _ => return Err(ClError(CL_INVALID_VALUE)),
         }
 
-        stream.synchronize().map_err(ClError::from)?;
+        stream.synchronize().map_err(|error| {
+            crate::nm_err!("[warn][compute.cuda] synchronization=failed operation=kernel_completion kernel={} error={error:?}", self.kernel.name);
+            ClError::from(error)
+        })?;
         Ok(())
     }
 }
