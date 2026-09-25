@@ -18,6 +18,7 @@ use aarnn_rust::distributed::proto::{
     SpikeIndices, StatusRequest, control_update,
     distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
 };
+use aarnn_rust::engine::{EngineSpec, RunnerEngine};
 use aarnn_rust::management::{
     Capability as ManagementCapability, ManagementError, MutationContext, Operation, OperationKind,
     OperationState, PersistedAuthorityError, PersistedManagementOrchestrator, Policy, Principal,
@@ -26,6 +27,7 @@ use aarnn_rust::migration_operation::{
     MIGRATION_OPERATION_SCHEMA_VERSION, MigrationJournal, MigrationOperation, MigrationRequest,
     MigrationTransition, PersistedMigrationJournal,
 };
+use aarnn_rust::morphology_contract::DisplayMode;
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
     NmChainLoginObservedRequest, NmChainTokenMutationRequest,
@@ -2638,7 +2640,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "properties": {
               "network_id": { "type": "string" },
               "snapshot_json": { "type": "string", "description": "Serialized network snapshot JSON." },
-              "source": { "type": "string", "description": "Resolved node address used for this request." }
+              "source": { "type": "string", "description": "Resolved node address used for this request." },
+              "display_snapshots": { "type": "object", "description": "Bounded versioned display views keyed by synthetic_columns and anatomical.", "additionalProperties": true }
             },
             "required": ["network_id", "snapshot_json", "source"]
           },
@@ -5502,12 +5505,14 @@ async fn snapshot(
         {
             Ok(resp) => {
                 let resp = resp.into_inner();
+                let display_snapshots = display_snapshots_for_snapshot_json(&resp.snapshot_json);
                 return (
                     StatusCode::OK,
                     Json(json!({
                         "network_id": resp.network_id,
                         "snapshot_json": resp.snapshot_json,
                         "source": target_addr,
+                        "display_snapshots": display_snapshots,
                     })),
                 )
                     .into_response();
@@ -5523,6 +5528,26 @@ async fn snapshot(
         Json(json!({ "error": last_error })),
     )
         .into_response()
+}
+
+fn display_snapshots_for_snapshot_json(snapshot_json: &str) -> Value {
+    let mut engine = match RunnerEngine::new(EngineSpec::default()) {
+        Ok(engine) => engine,
+        Err(_) => return json!({}),
+    };
+    if engine.import_snapshot_json(snapshot_json).is_err() {
+        return json!({});
+    }
+    let sequence = engine.status().step.saturating_add(1);
+    let synthetic = engine.display_snapshot(DisplayMode::SyntheticColumns, sequence, 512, 4096);
+    let anatomical = engine.display_snapshot(DisplayMode::Anatomical, sequence, 512, 4096);
+    match (synthetic, anatomical) {
+        (Ok(synthetic), Ok(anatomical)) => json!({
+            "synthetic_columns": synthetic,
+            "anatomical": anatomical,
+        }),
+        _ => json!({}),
+    }
 }
 
 async fn cluster_snapshot(

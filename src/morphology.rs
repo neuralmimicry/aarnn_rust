@@ -108,6 +108,62 @@ impl Point3 {
     }
 }
 
+// Preserve attachment fractions when a parent grows. Connecting every child
+// to segment zero destroys existing bends and turns an arbor into a fan.
+fn moved_attachment(
+    point: Point3,
+    old_from: Point3,
+    old_to: Point3,
+    new_from: Point3,
+    new_to: Point3,
+) -> Point3 {
+    let direction = old_to.sub(old_from);
+    let denominator = direction.dot(direction);
+    let fraction = if denominator > 1e-12 {
+        (point.sub(old_from).dot(direction) / denominator).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let offset = point.sub(old_from.lerp(old_to, fraction));
+    new_from.lerp(new_to, fraction).add(offset)
+}
+
+fn retain_axon_attachments(old: &[AxonSeg], grown: &mut [AxonSeg]) {
+    for index in 0..grown.len() {
+        if let Some(parent) = grown[index]
+            .parent_idx
+            .filter(|p| *p < index && *p < old.len())
+        {
+            grown[index].from = moved_attachment(
+                old[index].from,
+                old[parent].from,
+                old[parent].to,
+                grown[parent].from,
+                grown[parent].to,
+            );
+        }
+        grown[index].length = grown[index].from.dist(grown[index].to);
+    }
+}
+
+fn retain_dendrite_attachments(old: &[DendSeg], grown: &mut [DendSeg]) {
+    for index in 0..grown.len() {
+        if let Some(parent) = grown[index]
+            .parent_idx
+            .filter(|p| *p < index && *p < old.len())
+        {
+            grown[index].to = moved_attachment(
+                old[index].to,
+                old[parent].from,
+                old[parent].to,
+                grown[parent].from,
+                grown[parent].to,
+            );
+        }
+        grown[index].length = grown[index].from.dist(grown[index].to);
+    }
+}
+
 #[inline(always)]
 pub fn dist2_point_to_segment(p: Point3, a: Point3, b: Point3) -> (f32, Point3) {
     let dx = b.x - a.x;
@@ -1561,11 +1617,183 @@ impl Morphology {
         });
     }
 
+    /// Extend peripheral anatomy without reconstructing existing arbors.
+    /// Only newly admitted I/O matrix entries are reconstructed. Old paths,
+    /// contact state, soma positions and membrane state remain authoritative.
+    pub fn resize_io(
+        &mut self,
+        topo_layers: &Vec<Vec<crate::topology::Node3D>>,
+        sensory_nodes: &Vec<crate::topology::Node3D>,
+        output_nodes: &Vec<crate::topology::Node3D>,
+        w_in: &ndarray::Array2<f64>,
+        w_out: &ndarray::Array2<f64>,
+        config: &crate::config::NetworkConfig,
+        is_aarnn: bool,
+    ) {
+        let old_sensory = self.sensory_somas.len();
+        let old_output = self.output_somas.len();
+        let sensory = config.num_sensory_neurons;
+        let output = config.num_output_neurons;
+        if sensory < old_sensory || output < old_output {
+            // Remove only contacts owned by deleted peripheral cells. Keep
+            // the surviving physical branches; losing a contact is not an
+            // instruction to regenerate its neurite or another neuron's tree.
+            let mut remap = vec![None; self.synapses.len()];
+            let mut old = 0;
+            let mut next = 0;
+            self.synapses.retain(|s| {
+                let keep = match s.kind {
+                    SynKind::In => s.pre_id < sensory,
+                    SynKind::Out => s.post_id < output,
+                    _ => true,
+                };
+                if keep {
+                    remap[old] = Some(next);
+                    next += 1;
+                }
+                old += 1;
+                keep
+            });
+            for axon in self
+                .axons
+                .iter_mut()
+                .flatten()
+                .chain(self.sensory_axons.iter_mut())
+                .chain(self.output_axons.iter_mut())
+            {
+                for segment in &mut axon.segments {
+                    segment.syn_index = segment
+                        .syn_index
+                        .and_then(|i| remap.get(i).copied().flatten());
+                }
+            }
+            for dendrite in self
+                .dendrites
+                .iter_mut()
+                .flatten()
+                .chain(self.sensory_dendrites.iter_mut())
+                .chain(self.output_dendrites.iter_mut())
+            {
+                for segment in &mut dendrite.tree.branches {
+                    segment.syn_index = segment
+                        .syn_index
+                        .and_then(|i| remap.get(i).copied().flatten());
+                }
+            }
+        }
+        self.sensory_somas.truncate(sensory);
+        self.sensory_axons.truncate(sensory);
+        self.sensory_dendrites.truncate(sensory);
+        self.output_somas.truncate(output);
+        self.output_axons.truncate(output);
+        self.output_dendrites.truncate(output);
+        if sensory <= old_sensory && output <= old_output {
+            return;
+        }
+
+        // Existing matrix weights are not a substitute for the grown anatomy.
+        // Excluding them avoids both the destructive star reconstruction and
+        // its whole-connectome pairwise relaxation cost on an I/O resize.
+        let mut new_in = ndarray::Array2::zeros(w_in.raw_dim());
+        let mut new_out = ndarray::Array2::zeros(w_out.raw_dim());
+        for ((post, pre), weight) in w_in.indexed_iter() {
+            if pre >= old_sensory {
+                new_in[(post, pre)] = *weight;
+            }
+        }
+        for ((post, pre), weight) in w_out.indexed_iter() {
+            if post >= old_output {
+                new_out[(post, pre)] = *weight;
+            }
+        }
+        let mut fresh = Self::from_weights(
+            topo_layers,
+            sensory_nodes,
+            output_nodes,
+            &new_in,
+            &Vec::new(),
+            &Vec::new(),
+            &Vec::new(),
+            &new_out,
+            config,
+            is_aarnn,
+        );
+        let synapse_base = self.synapses.len();
+        for (layer, axons) in fresh.axons.iter_mut().enumerate() {
+            for (neuron, axon) in axons.iter_mut().enumerate() {
+                if !axon.segments.iter().any(|s| s.syn_index.is_some()) {
+                    continue;
+                }
+                let target = &mut self.axons[layer][neuron].segments;
+                let base = target.len();
+                for mut segment in axon.segments.drain(..) {
+                    segment.parent_idx = segment.parent_idx.map(|i| i + base);
+                    if let Some(si) = segment.syn_index {
+                        fresh.synapses[si].axon_seg_idx =
+                            fresh.synapses[si].axon_seg_idx.map(|i| i + base);
+                        segment.syn_index = Some(si + synapse_base);
+                    }
+                    target.push(segment);
+                }
+            }
+        }
+        for (layer, dendrites) in fresh.dendrites.iter_mut().enumerate() {
+            for (neuron, dendrite) in dendrites.iter_mut().enumerate() {
+                if !dendrite.tree.branches.iter().any(|s| s.syn_index.is_some()) {
+                    continue;
+                }
+                let target = &mut self.dendrites[layer][neuron].tree.branches;
+                let base = target.len();
+                for mut segment in dendrite.tree.branches.drain(..) {
+                    segment.parent_idx = segment.parent_idx.map(|i| i + base);
+                    if let Some(si) = segment.syn_index {
+                        fresh.synapses[si].dend_seg_idx =
+                            fresh.synapses[si].dend_seg_idx.map(|i| i + base);
+                        segment.syn_index = Some(si + synapse_base);
+                    }
+                    target.push(segment);
+                }
+            }
+        }
+        for axon in fresh
+            .sensory_axons
+            .iter_mut()
+            .chain(fresh.output_axons.iter_mut())
+        {
+            for segment in &mut axon.segments {
+                segment.syn_index = segment.syn_index.map(|i| i + synapse_base);
+            }
+        }
+        for dendrite in fresh
+            .sensory_dendrites
+            .iter_mut()
+            .chain(fresh.output_dendrites.iter_mut())
+        {
+            for segment in &mut dendrite.tree.branches {
+                segment.syn_index = segment.syn_index.map(|i| i + synapse_base);
+            }
+        }
+        self.sensory_somas
+            .extend(fresh.sensory_somas.into_iter().skip(old_sensory));
+        self.sensory_axons
+            .extend(fresh.sensory_axons.into_iter().skip(old_sensory));
+        self.sensory_dendrites
+            .extend(fresh.sensory_dendrites.into_iter().skip(old_sensory));
+        self.output_somas
+            .extend(fresh.output_somas.into_iter().skip(old_output));
+        self.output_axons
+            .extend(fresh.output_axons.into_iter().skip(old_output));
+        self.output_dendrites
+            .extend(fresh.output_dendrites.into_iter().skip(old_output));
+        self.synapses.extend(fresh.synapses);
+    }
+
     /// Build a morphology snapshot from topology and weight matrices.
     /// - `topo_layers`: hidden layer node positions.
     /// - `num_sensory_neurons`: sensory count; `num_output_neurons`: output count.
     /// - `w_in`: (H0 x S)
     /// - `w_hh_fwd[l]`: (H(l+1) x H(l)) ; `w_hh_bwd[l]`: (H(l) x H(l+1))
+    /// - `w_hh_rec[l]`: (H(l) x H(l)) recurrent connections
     /// - `w_out`: (O x H_last)
     pub fn from_weights(
         topo_layers: &Vec<Vec<crate::topology::Node3D>>,
@@ -1574,6 +1802,7 @@ impl Morphology {
         w_in: &ndarray::Array2<f64>,
         w_hh_fwd: &Vec<ndarray::Array2<f64>>,
         w_hh_bwd: &Vec<ndarray::Array2<f64>>,
+        w_hh_rec: &Vec<ndarray::Array2<f64>>,
         w_out: &ndarray::Array2<f64>,
         config: &crate::config::NetworkConfig,
         is_aarnn: bool,
@@ -1714,7 +1943,10 @@ impl Morphology {
             .collect();
         m.update_skull_membrane(config, 1.0);
         // Axons/dendrites with minimal non-zero distinct endpoints from soma to avoid coincident geometry.
-        // For AARNN, start hidden neurons with empty morphology so connections form over time.
+        // AARNN neurons may begin with empty arbors, but any connection already
+        // present in the authoritative matrices is seeded below.  This keeps
+        // procedural growth available for new edges without allowing an
+        // existing synthetic edge to disappear from anatomical mode.
         if is_aarnn {
             m.axons = topo_layers
                 .iter()
@@ -2295,23 +2527,10 @@ impl Morphology {
             .collect();
 
         let num_layers = topo_layers.len();
-        let in_l = if is_aarnn {
-            if num_layers > 1 { 1 } else { 0 }
-        } else {
-            0
-        };
-        let out_l = if is_aarnn {
-            if num_layers > 4 {
-                4
-            } else {
-                num_layers.saturating_sub(1)
-            }
-        } else {
-            num_layers.saturating_sub(1)
-        };
+        let (in_l, out_l) = morphology_io_layers(config, is_aarnn, num_layers);
 
         // Synapses: In (S -> target_in_layer)
-        if !is_aarnn {
+        {
             if let Some(layer_in) = topo_layers.get(in_l) {
                 let h_in_count = layer_in.len();
                 for j in 0..h_in_count {
@@ -2371,7 +2590,7 @@ impl Morphology {
 
         // Synapses: Hidden forward/backward
         let l_count_topo = topo_layers.len();
-        if !is_aarnn {
+        {
             for l in 0..l_count_topo.saturating_sub(1) {
                 let rows = w_hh_fwd.get(l).map(|a| a.nrows()).unwrap_or(0);
                 let cols = w_hh_fwd.get(l).map(|a| a.ncols()).unwrap_or(0);
@@ -2501,8 +2720,82 @@ impl Morphology {
             }
         }
 
+        // Synapses: recurrent hidden routes are represented separately from
+        // forward/backward routes so the route cache can preserve their
+        // identity and delay independently.
+        {
+            for l in 0..l_count_topo {
+                let matrix = w_hh_rec.get(l);
+                let rows = matrix.map(|a| a.nrows()).unwrap_or(0);
+                let cols = matrix.map(|a| a.ncols()).unwrap_or(0);
+                for j in 0..rows {
+                    for i in 0..cols {
+                        let w = matrix.map(|a| a[(j, i)]).unwrap_or(0.0);
+                        if w == 0.0 {
+                            continue;
+                        }
+                        let Some(node) = topo_layers.get(l).and_then(|layer| layer.get(j)) else {
+                            continue;
+                        };
+                        let Some(pre_node) = topo_layers.get(l).and_then(|layer| layer.get(i))
+                        else {
+                            continue;
+                        };
+                        let pre_soma = Point3 {
+                            x: pre_node.x,
+                            y: pre_node.y,
+                            z: pre_node.z,
+                        };
+                        let post_soma = Point3 {
+                            x: node.x,
+                            y: node.y,
+                            z: node.z,
+                        };
+                        let dx = pre_soma.x - post_soma.x;
+                        let dy = pre_soma.y - post_soma.y;
+                        let dz = pre_soma.z - post_soma.z;
+                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                        let mut pre = Point3 {
+                            x: pre_soma.x - dx * 0.5,
+                            y: pre_soma.y - dy * 0.5,
+                            z: pre_soma.z - dz * 0.5,
+                        };
+                        let mut post = Point3 {
+                            x: post_soma.x + dx * 0.5,
+                            y: post_soma.y + dy * 0.5,
+                            z: post_soma.z + dz * 0.5,
+                        };
+                        pre = ensure_unique_point(
+                            pre,
+                            ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x51,
+                        );
+                        post = ensure_unique_point(
+                            post,
+                            ((l as u64) << 40) ^ ((i as u64) << 20) ^ (j as u64) ^ 0x52,
+                        );
+                        m.synapses.push(Synapse {
+                            kind: SynKind::HiddenRec,
+                            pre_layer: l as isize,
+                            pre_id: i,
+                            post_layer: l as isize,
+                            post_id: j,
+                            pre_site: pre,
+                            post_site: post,
+                            axon_seg_idx: None,
+                            dend_seg_idx: None,
+                            bend: None,
+                            weight: w,
+                            p_release: 1.0,
+                            delay_ms: to_delay(dist),
+                            stimuli: 1.0,
+                        });
+                    }
+                }
+            }
+        }
+
         // Synapses: Out (target_out_layer -> O)
-        if !is_aarnn {
+        {
             if let Some(source_nodes) = topo_layers.get(out_l) {
                 let h_out_count = source_nodes.len();
                 for k in 0..num_output_neurons.min(w_out.nrows()) {
@@ -2666,12 +2959,16 @@ impl Morphology {
                             is_trunk: true,
                         });
                     }
+                    // An empty AARNN arbor may have no separate hillock
+                    // segment. In that case outgoing roots attach to the
+                    // soma, never to themselves (or to the first sibling).
+                    let trunk_idx = (!ax_segments.is_empty()).then_some(0);
                     for (k, &(p, si)) in outgoing[l][j].iter().enumerate() {
                         // connect hillock to each pre_site
-                        let mut endp = p;
-                        let seed =
-                            ((l as u64) << 40) ^ ((j as u64) << 20) ^ (k as u64) ^ 0xA55A5AA5;
-                        endp = ensure_unique_point(endp, seed);
+                        // `p` is already a reserved synaptic attachment site.
+                        // Reusing it exactly keeps the committed route and
+                        // the display attachment position identical.
+                        let endp = p;
                         let dx = endp.x - hillock.x;
                         let dy = endp.y - hillock.y;
                         let dz = endp.z - hillock.z;
@@ -2682,7 +2979,7 @@ impl Morphology {
                             to: endp,
                             length: len,
                             stimuli: 1.0,
-                            parent_idx: Some(0),
+                            parent_idx: trunk_idx,
                             syn_index: Some(si),
                             is_trunk: false,
                         });
@@ -2760,13 +3057,9 @@ impl Morphology {
                                 });
 
                                 for (k, &&(p, si)) in group.iter().enumerate() {
-                                    let mut start = p;
-                                    let seed = ((l as u64) << 40)
-                                        ^ ((j as u64) << 20)
-                                        ^ (k as u64)
-                                        ^ 0xB55B5BB5
-                                        ^ (trunk_i as u64);
-                                    start = ensure_unique_point(start, seed);
+                                    // `p` is an existing reserved attachment
+                                    // site; do not jitter it a second time.
+                                    let start = p;
                                     let dx = hub.x - start.x;
                                     let dy = hub.y - start.y;
                                     let dz = hub.z - start.z;
@@ -2804,6 +3097,69 @@ impl Morphology {
                     }
                 }
             }
+
+            // Peripheral arbors are constructed separately from hidden-layer
+            // trees. Extend them to every committed input/output attachment so
+            // those routes have the same segment-index contract as hidden
+            // routes and cannot disappear from anatomical display.
+            for (si, synapse) in m.synapses.iter_mut().enumerate() {
+                match synapse.kind {
+                    SynKind::In => {
+                        let Some(soma) = m.sensory_somas.get(synapse.pre_id).map(|s| s.pos) else {
+                            continue;
+                        };
+                        let Some(axon) = m.sensory_axons.get_mut(synapse.pre_id) else {
+                            continue;
+                        };
+                        let from = axon
+                            .segments
+                            .last()
+                            .map(|segment| segment.to)
+                            .unwrap_or(soma);
+                        let to = synapse.pre_site;
+                        let dx = to.x - from.x;
+                        let dy = to.y - from.y;
+                        let dz = to.z - from.z;
+                        let index = axon.segments.len();
+                        axon.segments.push(AxonSeg {
+                            from,
+                            to,
+                            length: (dx * dx + dy * dy + dz * dz).sqrt(),
+                            stimuli: 1.0,
+                            parent_idx: index.checked_sub(1),
+                            syn_index: Some(si),
+                            is_trunk: false,
+                        });
+                        synapse.axon_seg_idx = Some(index);
+                    }
+                    SynKind::Out => {
+                        let Some(soma) = m.output_somas.get(synapse.post_id).map(|s| s.pos) else {
+                            continue;
+                        };
+                        let Some(dendrite) = m.output_dendrites.get_mut(synapse.post_id) else {
+                            continue;
+                        };
+                        let from = synapse.post_site;
+                        let dx = from.x - soma.x;
+                        let dy = from.y - soma.y;
+                        let dz = from.z - soma.z;
+                        let index = dendrite.tree.branches.len();
+                        dendrite.tree.branches.push(DendSeg {
+                            from,
+                            to: soma,
+                            length: (dx * dx + dy * dy + dz * dz).sqrt(),
+                            dendrite_type: DendriteType::Generic,
+                            trunk_len_from_soma: (dx * dx + dy * dy + dz * dz).sqrt(),
+                            stimuli: 1.0,
+                            parent_idx: None,
+                            syn_index: Some(si),
+                            is_trunk: false,
+                        });
+                        synapse.dend_seg_idx = Some(index);
+                    }
+                    SynKind::HiddenFwd | SynKind::HiddenBwd | SynKind::HiddenRec => {}
+                }
+            }
         }
 
         if enforce_uniqueness {
@@ -2818,16 +3174,13 @@ impl Morphology {
             // if we only mutate synapse i.
             #[cfg(feature = "parallel")]
             if n_syn > 128 {
-                let syn_ptr = m.synapses.as_ptr() as usize;
+                // Each worker reads an immutable base. Reading the vector via
+                // a raw pointer while par_iter_mut updates it was a data race.
+                let other_syns = m.synapses.clone();
                 m.synapses
                     .par_iter_mut()
                     .enumerate()
                     .for_each(|(i, syn_i)| {
-                        // Safety: We access other synapses as read-only.
-                        // This is safe because Rayon ensures syn_i is unique.
-                        let other_syns =
-                            unsafe { std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn) };
-
                         let a0 = syn_i.pre_site;
                         let a1 = syn_i.post_site;
 
@@ -2952,7 +3305,7 @@ impl Morphology {
                 for _ in 0..relax_iters {
                     #[cfg(feature = "parallel")]
                     if n_syn > 128 {
-                        let syn_ptr = m.synapses.as_ptr() as usize;
+                        let other_syns = &m.synapses;
                         let displacements: Vec<(Point3, Point3)> = m
                             .synapses
                             .par_iter()
@@ -2960,10 +3313,6 @@ impl Morphology {
                             .map(|(a, syn_a)| {
                                 let mut disp_pre = Point3::default();
                                 let mut disp_post = Point3::default();
-                                let other_syns = unsafe {
-                                    std::slice::from_raw_parts(syn_ptr as *const Synapse, n_syn)
-                                };
-
                                 for b in 0..n_syn {
                                     if a == b {
                                         continue;
@@ -3295,6 +3644,44 @@ impl Morphology {
         total
     }
 
+    /// Admit one bounded local movement in the procedural compatibility model.
+    /// The cap applies after all activity/directional terms. Rejected membrane
+    /// proposals stall; they are never projected onto a different physical path.
+    fn bounded_growth_candidate(&self, old: Point3, proposed: Point3, max_step: f32) -> Point3 {
+        if ![proposed.x, proposed.y, proposed.z, max_step]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return old;
+        }
+        let delta = proposed.sub(old);
+        let length = delta.mag();
+        let step = max_step.max(0.0).min(0.02);
+        let candidate = if length > step && length > 0.0 {
+            old.add(delta.mul(step / length))
+        } else {
+            proposed
+        };
+        if let Some(skull) = self.skull_membrane {
+            let (rx, ry, rz) = skull
+                .radii
+                .unwrap_or((skull.radius, skull.radius, skull.radius));
+            let minimum = rx.min(ry).min(rz);
+            // A conservative erosion contains a radius-0.01 neurite volume,
+            // including the segment between samples in this convex membrane.
+            let margin = 0.01;
+            if minimum <= margin || !minimum.is_finite() {
+                return old;
+            }
+            let d = candidate.sub(skull.center);
+            let q = ((d.x / rx).powi(2) + (d.y / ry).powi(2) + (d.z / rz).powi(2)).sqrt();
+            if !q.is_finite() || q > 1.0 - margin / minimum {
+                return old;
+            }
+        }
+        candidate
+    }
+
     fn seek_energy_biased(
         &self,
         p: Point3,
@@ -3319,15 +3706,42 @@ impl Morphology {
         }
 
         // Sample around the current endpoint with mild directional preference.
+        // This is part of the authoritative growth calculation, so a process
+        // global RNG is not admissible: async workers and thread scheduling
+        // would choose different routes for the same biological state. Keep
+        // the candidate step short as well; growth extends a committed tip
+        // over successive ticks instead of teleporting it to a new energy
+        // maximum and making the rendered pipe jump sideways.
+        let sample_dist = max_dist.abs().min(0.02);
+        let mut seed = u64::from(p.x.to_bits())
+            ^ u64::from(p.y.to_bits()).rotate_left(17)
+            ^ u64::from(p.z.to_bits()).rotate_left(31)
+            ^ u64::from(radius.to_bits()).rotate_left(7)
+            ^ u64::from(k.to_bits()).rotate_left(43)
+            ^ u64::from(max_dist.to_bits()).rotate_left(53);
+        let mut next_unit = || {
+            seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut value = seed;
+            value ^= value >> 30;
+            value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            value ^= value >> 27;
+            value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+            value ^= value >> 31;
+            ((value >> 40) as f32) / 16_777_216.0
+        };
         for _ in 0..14 {
-            let dx = (fastrand::f32() - 0.5) * max_dist * 2.0;
-            let dy = (fastrand::f32() - 0.5) * max_dist * 2.0;
-            let dz = (fastrand::f32() - 0.5) * max_dist * 2.0;
-            let cand = Point3 {
-                x: (p.x + dx).clamp(-1.0, 1.0),
-                y: (p.y + dy).clamp(-1.0, 1.0),
-                z: (p.z + dz).clamp(-1.0, 1.0),
-            };
+            let dx = (next_unit() - 0.5) * sample_dist * 2.0;
+            let dy = (next_unit() - 0.5) * sample_dist * 2.0;
+            let dz = (next_unit() - 0.5) * sample_dist * 2.0;
+            let cand = self.bounded_growth_candidate(
+                p,
+                Point3 {
+                    x: p.x + dx,
+                    y: p.y + dy,
+                    z: p.z + dz,
+                },
+                sample_dist,
+            );
             let mut score = self.energy_at(cand, radius, k);
 
             if use_pref {
@@ -4071,10 +4485,10 @@ impl Morphology {
         current.alpha_radius = Some((0.15f32 + 0.05).max(target_radius_scalar * 0.25)); // Heuristic alpha
         self.skull_radius_prev_err = err_r;
 
-        // Fluctuations
+        // This is a growth-energy term, not a visual boundary animation.
+        // The procedural compatibility model uses deterministic ambient energy.
         let ambient = config.aarnn_ambient_energy_level;
-        let fluctuation = (fastrand::f32() * 0.02) - 0.01;
-        current.energy_fluctuation = ambient + fluctuation;
+        current.energy_fluctuation = ambient;
     }
 
     /// Evolve morphology: grow towards energy, detect axon contact, and shrink inactive components.
@@ -4085,11 +4499,8 @@ impl Morphology {
         dt: f32,
         #[cfg(feature = "opencl")] _cl: Option<&Arc<OpenCLManager>>,
     ) -> EvolutionResult {
-        static mut CALL_COUNT: u64 = 0;
-        unsafe {
-            CALL_COUNT += 1;
-        }
-        let should_log = unsafe { CALL_COUNT % 100 == 0 };
+        static CALL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let should_log = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 100 == 99;
         let is_trace = std::env::var("NM_TRACE").is_ok();
         let mut stats = MorphoStats::default();
         let mut phase_start = std::time::Instant::now();
@@ -5114,7 +5525,7 @@ impl Morphology {
                             local_branch_rate *= factor;
                         }
                     }
-                    let trunk_rate = local_trunk_rate * dt;
+                    let trunk_rate = (local_trunk_rate * dt).clamp(0.0, 1.0);
                     let branch_rate = local_branch_rate * dt;
 
                     let soma_pos = soma.pos;
@@ -5149,7 +5560,11 @@ impl Morphology {
                                 let hub_diff = hub_pos.sub(best_p);
                                 let delta_l =
                                     (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                                let new_p = best_p.add(hub_diff.normalize().mul(-delta_l));
+                                let new_p = self.bounded_growth_candidate(
+                                    old_p,
+                                    best_p.add(hub_diff.normalize().mul(-delta_l)),
+                                    0.02,
+                                );
 
                                 branch_updates.push((seg_idx, new_p, syn_idx));
                                 moved = true;
@@ -5178,9 +5593,6 @@ impl Morphology {
                             d_branches[0].from = hub_pos;
                             d_branches[0].to = soma_pos;
                             for seg in &mut d_branches {
-                                if seg.parent_idx.is_some() {
-                                    seg.to = hub_pos;
-                                }
                                 seg.length = seg.from.dist(seg.to);
                                 if seg.length > config.max_segment_length {
                                     let dir = seg.from.sub(seg.to).normalize();
@@ -5219,7 +5631,11 @@ impl Morphology {
                                 let h_diff = best_p.sub(hillock_pos);
                                 let delta_l =
                                     (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                                let new_p = best_p.add(h_diff.normalize().mul(delta_l));
+                                let new_p = self.bounded_growth_candidate(
+                                    old_p,
+                                    best_p.add(h_diff.normalize().mul(delta_l)),
+                                    0.02,
+                                );
 
                                 terminal_updates.push((seg_idx, new_p, syn_idx));
                                 moved = true;
@@ -5247,9 +5663,6 @@ impl Morphology {
 
                             a_segments[0].to = hillock_pos;
                             for seg in &mut a_segments {
-                                if seg.parent_idx.is_some() {
-                                    seg.from = hillock_pos;
-                                }
                                 seg.length = seg.from.dist(seg.to);
                                 if seg.length > config.max_segment_length {
                                     let dir = seg.to.sub(seg.from).normalize();
@@ -5262,6 +5675,8 @@ impl Morphology {
                             }
                         }
                     }
+                    retain_dendrite_attachments(&dendrite.tree.branches, &mut d_branches);
+                    retain_axon_attachments(&axon.segments, &mut a_segments);
                     (j, d_branches, a_segments, updates)
                 })
                 .collect();
@@ -5275,6 +5690,8 @@ impl Morphology {
 
             #[cfg(not(feature = "parallel"))]
             for j in 0..self.dendrites[l].len() {
+                let original_dendrites = self.dendrites[l][j].tree.branches.clone();
+                let original_axons = self.axons[l][j].segments.clone();
                 let soma = &self.somas[l][j];
                 let mut local_trunk_rate = config.trunk_growth_rate;
                 let mut local_branch_rate = config.branch_growth_rate;
@@ -5285,7 +5702,7 @@ impl Morphology {
                         local_branch_rate *= factor;
                     }
                 }
-                let trunk_rate = local_trunk_rate * dt;
+                let trunk_rate = (local_trunk_rate * dt).clamp(0.0, 1.0);
                 let branch_rate = local_branch_rate * dt;
 
                 let soma_pos = soma.pos;
@@ -5317,7 +5734,11 @@ impl Morphology {
                             let hub_diff = hub_pos.sub(best_p);
                             let delta_l =
                                 (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                            let new_p = best_p.add(hub_diff.normalize().mul(-delta_l));
+                            let new_p = self.bounded_growth_candidate(
+                                old_p,
+                                best_p.add(hub_diff.normalize().mul(-delta_l)),
+                                0.02,
+                            );
                             branch_updates.push((seg_idx, new_p, syn_idx));
                             moved = true;
                         }
@@ -5343,9 +5764,6 @@ impl Morphology {
                         dend.tree.branches[0].from = hub_pos;
                         dend.tree.branches[0].to = soma_pos;
                         for seg in &mut dend.tree.branches {
-                            if seg.parent_idx.is_some() {
-                                seg.to = hub_pos;
-                            }
                             seg.length = seg.from.dist(seg.to);
                             if seg.length > config.max_segment_length {
                                 let dir = seg.from.sub(seg.to).normalize();
@@ -5381,7 +5799,11 @@ impl Morphology {
                             let h_diff = best_p.sub(hillock_pos);
                             let delta_l =
                                 (stimuli - config.synaptic_growth_threshold) * branch_rate;
-                            let new_p = best_p.add(h_diff.normalize().mul(delta_l));
+                            let new_p = self.bounded_growth_candidate(
+                                old_p,
+                                best_p.add(h_diff.normalize().mul(delta_l)),
+                                0.02,
+                            );
                             terminal_updates.push((seg_idx, new_p, syn_idx));
                             moved = true;
                         }
@@ -5406,9 +5828,6 @@ impl Morphology {
                         hillock_pos = hillock_pos.lerp(target_hillock, trunk_rate);
                         ax.segments[0].to = hillock_pos;
                         for seg in &mut ax.segments {
-                            if seg.parent_idx.is_some() {
-                                seg.from = hillock_pos;
-                            }
                             seg.length = seg.from.dist(seg.to);
                             if seg.length > config.max_segment_length {
                                 let dir = seg.to.sub(seg.from).normalize();
@@ -5421,6 +5840,11 @@ impl Morphology {
                         }
                     }
                 }
+                retain_dendrite_attachments(
+                    &original_dendrites,
+                    &mut self.dendrites[l][j].tree.branches,
+                );
+                retain_axon_attachments(&original_axons, &mut self.axons[l][j].segments);
             }
         }
 
@@ -7706,7 +8130,7 @@ impl Morphology {
             };
             nm_log!(
                 "[morpho] evolve {} - Axons: {} (sprouted {}/{}), Dendrites: {} (sprouted {}/{}, too_near {}, low_e {}), Synapses: {} (checks {}, candidates {}, incompatible {}, too_far {}, successes {}, rejected_cap {}, rejected_close {}, self_skips {}, exist_skips {}, post_cap_skips {}, probe_checks {}, skipped_low_e {}, cap_hits {}, tip_e avg {:.3} min {:.3} max {:.3}, tune_ema {:.3} tune_dev {:.3} cap_scale {:.2} skip_bias {:.2}, pair_cap {})",
-                unsafe { CALL_COUNT },
+                CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed),
                 total_axons,
                 stats.axon_sprout_successes,
                 stats.axon_sprout_attempts,
@@ -8115,6 +8539,66 @@ pub struct MigrationInfo {
 #[cfg(all(test, feature = "growth3d", feature = "morpho"))]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn anatomy_parallel_reconstruction_is_independent_of_worker_count() {
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_hidden_layers = 2;
+        config.num_hidden_per_layer_initial = 12;
+        config.num_sensory_neurons = 0;
+        config.num_output_neurons = 0;
+        config.enforce_unique_geometry = true;
+        let topo = (0..2)
+            .map(|layer| {
+                (0..12)
+                    .map(|index| crate::topology::Node3D {
+                        x: layer as f32 * 0.2,
+                        y: index as f32 * 0.001,
+                        z: 0.0,
+                        layer,
+                        ..Default::default()
+                    })
+                    .collect()
+            })
+            .collect();
+        let build = || {
+            Morphology::from_weights(
+                &topo,
+                &Vec::new(),
+                &Vec::new(),
+                &ndarray::Array2::zeros((12, 0)),
+                &vec![ndarray::Array2::ones((12, 12))],
+                &Vec::new(),
+                &Vec::new(),
+                &ndarray::Array2::zeros((0, 12)),
+                &config,
+                true,
+            )
+        };
+        let serial_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let parallel_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let expected = serial_pool.install(build);
+        assert_eq!(
+            expected.synapses.len(),
+            144,
+            "exercise the parallel relaxation threshold"
+        );
+        let expected = serde_json::to_value(expected).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                expected,
+                serde_json::to_value(parallel_pool.install(build)).unwrap()
+            );
+        }
+    }
+
     #[test]
     fn test_point3_ops() {
         let p1 = Point3 {
@@ -8213,7 +8697,16 @@ mod tests {
         let w_hh_bwd = Vec::new();
         let w_out = Array2::from_elem((1, 1), 0.5);
         let mut morphology = Morphology::from_weights(
-            &hidden, &sensory, &output, &w_in, &w_hh_fwd, &w_hh_bwd, &w_out, &config, true,
+            &hidden,
+            &sensory,
+            &output,
+            &w_in,
+            &w_hh_fwd,
+            &w_hh_bwd,
+            &Vec::new(),
+            &w_out,
+            &config,
+            true,
         );
         morphology.skull_membrane = Some(SkullMembrane {
             center: Point3::default(),
@@ -8323,6 +8816,193 @@ mod tests {
     }
 
     #[test]
+    fn anatomy_growth_intervals_do_not_throw_existing_arbors_outwards() {
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 1;
+        config.num_sensory_neurons = 0;
+        config.num_output_neurons = 0;
+        config.dendrite_sprout_prob = 0.0;
+        config.component_decay_rate = 1.0;
+        config.component_pruning_threshold = 0.0;
+        config.enforce_unique_geometry = false;
+        let topo = vec![vec![crate::topology::Node3D::default()]];
+        let empty = ndarray::Array2::<f64>::zeros((0, 0));
+        let mut m = Morphology::from_weights(
+            &topo,
+            &Vec::new(),
+            &Vec::new(),
+            &empty,
+            &Vec::new(),
+            &Vec::new(),
+            &Vec::new(),
+            &empty,
+            &config,
+            false,
+        );
+        let p = |x| Point3 { x, y: 0.0, z: 0.0 };
+        m.axons[0][0].segments = vec![
+            AxonSeg {
+                from: p(0.0),
+                to: p(0.05),
+                length: 0.05,
+                stimuli: 1.0,
+                ..Default::default()
+            },
+            AxonSeg {
+                from: p(0.05),
+                to: p(0.15),
+                length: 0.1,
+                stimuli: 1.0,
+                parent_idx: Some(0),
+                is_trunk: false,
+                ..Default::default()
+            },
+        ];
+        m.dendrites[0][0].tree.branches = vec![
+            DendSeg {
+                from: p(-0.05),
+                to: p(0.0),
+                length: 0.05,
+                stimuli: 1.0,
+                ..Default::default()
+            },
+            DendSeg {
+                from: p(-0.15),
+                to: p(-0.05),
+                length: 0.1,
+                stimuli: 1.0,
+                parent_idx: Some(0),
+                is_trunk: false,
+                ..Default::default()
+            },
+        ];
+        m.axons[0][0].segments.push(AxonSeg {
+            from: p(0.10),
+            to: Point3 {
+                x: 0.15,
+                y: 0.05,
+                z: 0.0,
+            },
+            length: 0.071,
+            stimuli: 1.0,
+            parent_idx: Some(1),
+            is_trunk: false,
+            ..Default::default()
+        });
+        for _ in 0..8 {
+            let old_axon = m.axons[0][0].segments[1].to;
+            let old_dendrite = m.dendrites[0][0].tree.branches[1].from;
+            m.evolve(
+                &config,
+                false,
+                1000.0,
+                #[cfg(feature = "opencl")]
+                None,
+            );
+            let parent = &m.axons[0][0].segments[1];
+            let branch = &m.axons[0][0].segments[2];
+            assert!(
+                branch.from.dist(parent.from.lerp(parent.to, 0.5)) < 1e-5,
+                "intermediate attachment changed to the root hub"
+            );
+            assert!(old_axon.dist(m.axons[0][0].segments[1].to) <= 0.020_01);
+            assert!(old_dendrite.dist(m.dendrites[0][0].tree.branches[1].from) <= 0.020_01);
+            for (a, b) in m.axons[0][0].segments.iter().map(|s| (s.from, s.to)).chain(
+                m.dendrites[0][0]
+                    .tree
+                    .branches
+                    .iter()
+                    .map(|s| (s.from, s.to)),
+            ) {
+                assert!(
+                    a.mag() < 0.4 && b.mag() < 0.4,
+                    "unbounded arbor {a:?} -> {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn anatomy_growth_candidate_stalls_at_membrane_and_limits_vector_length() {
+        let mut m = Morphology::new();
+        m.skull_membrane = Some(SkullMembrane {
+            center: Point3::default(),
+            radius: 1.0,
+            radii: Some((1.0, 0.5, 0.25)),
+            alpha_radius: None,
+            energy_fluctuation: 0.0,
+        });
+        let old = Point3 {
+            x: 0.959,
+            y: 0.0,
+            z: 0.0,
+        };
+        let blocked = m.bounded_growth_candidate(old, Point3 { x: 5.0, ..old }, 0.02);
+        assert!(old.dist(blocked) <= f32::EPSILON);
+        for i in 1..100 {
+            let candidate = Point3 {
+                x: i as f32,
+                y: -(i as f32),
+                z: i as f32 * 0.5,
+            };
+            assert!(
+                m.bounded_growth_candidate(Point3::default(), candidate, 2.0)
+                    .mag()
+                    <= 0.020_001
+            );
+        }
+    }
+
+    #[test]
+    fn energy_biased_growth_search_is_repeatable_and_step_bounded() {
+        let mut morphology = Morphology::new();
+        morphology.skull_membrane = Some(SkullMembrane {
+            center: Point3::default(),
+            radius: 1.0,
+            radii: Some((1.0, 1.0, 1.0)),
+            alpha_radius: None,
+            energy_fluctuation: 0.2,
+        });
+        morphology.populate_grid(0.5);
+        let start = Point3 {
+            x: 0.1,
+            y: -0.2,
+            z: 0.15,
+        };
+        let first = morphology.seek_energy_biased(
+            start,
+            0.5,
+            0.7,
+            0.8,
+            Point3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.5,
+            None,
+            0.0,
+        );
+        let second = morphology.seek_energy_biased(
+            start,
+            0.5,
+            0.7,
+            0.8,
+            Point3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.5,
+            None,
+            0.0,
+        );
+        assert!(first.dist(second) <= f32::EPSILON);
+        assert!(start.dist(first) <= 0.020_001);
+    }
+
+    #[test]
     fn unique_points_and_min_dist() {
         // Build tiny topology with 2 layers, 2 neurons each
         use crate::topology::Node3D;
@@ -8383,6 +9063,7 @@ mod tests {
             &w_in,
             &w_hh_fwd,
             &w_hh_bwd,
+            &Vec::new(),
             &w_out,
             &config,
             false,
@@ -8428,6 +9109,150 @@ mod tests {
     }
 
     #[test]
+    fn matrix_connectome_edges_seed_complete_aarnn_routes_deterministically() {
+        use crate::topology::Node3D;
+
+        let topo = vec![
+            vec![Node3D {
+                x: -0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 0,
+                ..Default::default()
+            }],
+            vec![Node3D {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+                layer: 1,
+                ..Default::default()
+            }],
+        ];
+        let sensory = vec![Node3D {
+            x: -0.45,
+            y: 0.0,
+            z: 0.0,
+            layer: 0,
+            ..Default::default()
+        }];
+        let output = vec![Node3D {
+            x: 0.45,
+            y: 0.0,
+            z: 0.0,
+            layer: 2,
+            ..Default::default()
+        }];
+        let w_in = ndarray::Array2::from_elem((1, 1), 0.5);
+        let w_hh_fwd = vec![ndarray::Array2::from_elem((1, 1), 0.5)];
+        let w_hh_bwd = vec![ndarray::Array2::from_elem((1, 1), 0.5)];
+        let w_hh_rec = vec![
+            ndarray::Array2::from_elem((1, 1), 0.5),
+            ndarray::Array2::from_elem((1, 1), 0.5),
+        ];
+        let w_out = ndarray::Array2::from_elem((1, 1), 0.5);
+        let mut config = crate::config::NetworkConfig::default();
+        config.num_sensory_neurons = 1;
+        config.num_output_neurons = 1;
+        config.num_hidden_layers = 2;
+        config.synapse_offset = 0.04;
+        config.enforce_unique_geometry = false;
+
+        let build = || {
+            Morphology::from_weights(
+                &topo, &sensory, &output, &w_in, &w_hh_fwd, &w_hh_bwd, &w_hh_rec, &w_out, &config,
+                true,
+            )
+        };
+        let first = build();
+        let second = build();
+
+        assert_eq!(first.synapses.len(), 6);
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .filter(|synapse| synapse.kind == SynKind::In)
+                .count(),
+            1
+        );
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .filter(|synapse| synapse.kind == SynKind::HiddenFwd)
+                .count(),
+            1
+        );
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .filter(|synapse| synapse.kind == SynKind::HiddenBwd)
+                .count(),
+            1
+        );
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .filter(|synapse| synapse.kind == SynKind::HiddenRec)
+                .count(),
+            2
+        );
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .filter(|synapse| synapse.kind == SynKind::Out)
+                .count(),
+            1
+        );
+
+        for synapse in &first.synapses {
+            let axon_segments = if synapse.pre_layer < 0 {
+                &first.sensory_axons[synapse.pre_id].segments
+            } else {
+                &first.axons[synapse.pre_layer as usize][synapse.pre_id].segments
+            };
+            let dendrite_branches = if synapse.post_layer == topo.len() as isize {
+                &first.output_dendrites[synapse.post_id].tree.branches
+            } else {
+                &first.dendrites[synapse.post_layer as usize][synapse.post_id]
+                    .tree
+                    .branches
+            };
+            assert!(
+                synapse
+                    .axon_seg_idx
+                    .is_some_and(|index| index < axon_segments.len()),
+                "matrix edge {:?} has no committed axon route",
+                synapse.kind
+            );
+            assert!(
+                synapse
+                    .dend_seg_idx
+                    .is_some_and(|index| index < dendrite_branches.len()),
+                "matrix edge {:?} has no committed dendrite route",
+                synapse.kind
+            );
+        }
+
+        assert_eq!(
+            first
+                .synapses
+                .iter()
+                .map(|synapse| format!("{synapse:?}"))
+                .collect::<Vec<_>>(),
+            second
+                .synapses
+                .iter()
+                .map(|synapse| format!("{synapse:?}"))
+                .collect::<Vec<_>>(),
+            "rebuilding the same connectome must not change route order or geometry"
+        );
+    }
+
+    #[test]
     fn dendrite_compartments_reflect_cell_structure_types() {
         use crate::topology::Node3D;
 
@@ -8468,6 +9293,7 @@ mod tests {
             &w_in,
             &w_hh_fwd,
             &w_hh_bwd,
+            &Vec::new(),
             &w_out,
             &config,
             false,
@@ -8542,6 +9368,7 @@ mod tests {
             &w_in,
             &w_hh_fwd,
             &w_hh_bwd,
+            &Vec::new(),
             &w_out,
             &config,
             false,

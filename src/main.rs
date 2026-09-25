@@ -59,6 +59,7 @@ mod migration_transfer;
 mod monitor;
 #[cfg(feature = "morpho")]
 mod morphology;
+mod morphology_contract;
 mod network;
 mod neuron_kernels;
 mod node_auth;
@@ -822,9 +823,15 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     runtime_save_on_exit: bool,
 
-    /// Disable all console/logging output for maximum performance.
-    #[arg(long, short, default_value_t = false)]
-    quiet: bool,
+    /// Disable AARNN logging and metric collection for maximum performance.
+    #[arg(
+        long = "no-log",
+        short = 'q',
+        visible_alias = "quiet",
+        global = true,
+        default_value_t = false
+    )]
+    no_log: bool,
 
     /// Enable Genetic Algorithm parameter search
     #[arg(long, default_value_t = false)]
@@ -2568,6 +2575,11 @@ fn main() -> anyhow::Result<()> {
     // constructed. The result is ignored when another caller installed one.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Cli::parse();
+    if args.no_log {
+        crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    crate::obs::install_panic_hook();
+    let _log_flush = crate::obs::FinalLogFlush::new();
 
     normalize_ui_mode(&mut args)?;
 
@@ -2647,10 +2659,6 @@ fn main() -> anyhow::Result<()> {
         return apply_nested_command(&mut args, command);
     }
 
-    if args.quiet {
-        crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
     if args.runtime_action.is_some() {
         return handle_runtime_action(&args);
     }
@@ -2706,8 +2714,12 @@ fn main() -> anyhow::Result<()> {
         let log_path = std::env::var("NM_LOG_PATH").ok();
         if let Some(path) = log_path.as_deref() {
             if !path.is_empty() && path != "off" && path != "none" {
-                let _ = crate::obs::init_log_file(std::path::Path::new(path));
-                nm_log!("[info] Logging to file: {}", path);
+                match crate::obs::init_log_file(std::path::Path::new(path)) {
+                    Ok(()) => nm_log!("[logging] file_sink=enabled path={path}"),
+                    Err(error) => {
+                        nm_err!("[warn][logging] file_sink=disabled path={path} reason={error}")
+                    }
+                }
             }
         } else {
             let ts = std::time::SystemTime::now()
@@ -2715,8 +2727,23 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_default()
                 .as_secs();
             let path = format!("logs/nm-{}.log", ts);
-            let _ = crate::obs::init_log_file(std::path::Path::new(&path));
-            nm_log!("[info] Logging to file: {}", path);
+            match crate::obs::init_session_log_file(std::path::Path::new(&path)) {
+                Ok(()) => {
+                    nm_log!(
+                        "[logging] file_sink=enabled path={} pid={}",
+                        path,
+                        std::process::id()
+                    );
+                    nm_log!(
+                        "[session] pid={} started_unix_seconds={}",
+                        std::process::id(),
+                        ts
+                    );
+                }
+                Err(error) => {
+                    nm_err!("[warn][logging] file_sink=disabled path={path} reason={error}")
+                }
+            }
         }
     }
 
@@ -4128,14 +4155,6 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         runner.net.output_source_layer
                     );
                 }
-                let repaired_outputs = runner.ensure_output_connectivity();
-                if repaired_outputs > 0 {
-                    nm_log!(
-                        "[topology-repair] restored {} output-neuron hidden-layer connections during node startup",
-                        repaired_outputs
-                    );
-                }
-
                 #[cfg(feature = "stable_executor_live")]
                 let mut stable_runtime = if let Some(path) = args.stable_runtime_manifest.as_ref() {
                     Some(open_stable_runtime_manifest(path.clone(), args.brain_id.clone()).await?)
@@ -4654,21 +4673,16 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             .await;
     });
 
-    let shutdown_tx_ctrl = shutdown_tx.clone();
+    let shutdown_tx_signal = shutdown_tx.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        let _ = shutdown_tx_ctrl.send(true);
+        match crate::obs::wait_for_shutdown_signal().await {
+            Ok(signal) => {
+                crate::obs::note_shutdown_signal(signal);
+                let _ = shutdown_tx_signal.send(true);
+            }
+            Err(error) => nm_err!("[shutdown] signal_listener=failed error={error}"),
+        }
     });
-    #[cfg(unix)]
-    {
-        let shutdown_tx_term = shutdown_tx.clone();
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        tokio::spawn(async move {
-            sigterm.recv().await;
-            let _ = shutdown_tx_term.send(true);
-        });
-    }
 
     if args.node {
         let node_id_inner = node_id.clone();

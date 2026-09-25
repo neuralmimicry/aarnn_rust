@@ -4,6 +4,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -54,7 +55,21 @@ class RemoteAarnnClient(
                 throw error
             }
         }
-        return RemoteWorkspaceSnapshot(summary, activity, topology)
+        val displayViews = try {
+            parseDisplayViews(
+                request(
+                    GeneratedManagementClient.workspaceSnapshotPath(summary.workspaceId, ownerId),
+                    "GET",
+                ).body,
+            )
+        } catch (error: RemoteAarnnException) {
+            if (error.message?.startsWith("HTTP 404") == true) {
+                RemoteDisplayViews.unavailable()
+            } else {
+                throw error
+            }
+        }
+        return RemoteWorkspaceSnapshot(summary, activity, topology, displayViews)
     }
 
     private fun request(path: String, method: String, body: String? = null): RemoteResponse {
@@ -197,6 +212,111 @@ class RemoteAarnnClient(
         )
     }
 
+    private fun parseDisplayViews(body: String): RemoteDisplayViews {
+        val views = JSONObject(body).optJSONObject("display_snapshots")
+            ?: return RemoteDisplayViews.unavailable()
+        return RemoteDisplayViews(
+            syntheticColumns = views.optJSONObject("synthetic_columns")?.let(::parseDisplaySnapshot),
+            anatomical = views.optJSONObject("anatomical")?.let(::parseDisplaySnapshot),
+        )
+    }
+
+    private fun parseDisplaySnapshot(root: JSONObject): RemoteDisplaySnapshot {
+        val nodes = root.optJSONArray("nodes")?.let { values ->
+            buildList(values.length()) {
+                for (index in 0 until values.length()) {
+                    val value = values.getJSONObject(index)
+                    add(
+                        RemoteDisplayNode(
+                            id = value.optJSONObject("id").displayId(),
+                            role = value.optString("role").lowercase(Locale.ROOT),
+                            layer = if (value.isNull("layer")) null else value.optInt("layer"),
+                            position = value.optJSONObject("position_mm").displayPoint(),
+                            colourSlot = value.optLong("colour_slot", 0L).coerceAtLeast(0L),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+        val colourSlots = nodes.associate { it.id to it.colourSlot }
+        val edges = root.optJSONArray("edges")?.let { values ->
+            buildList(values.length()) {
+                for (index in 0 until values.length()) {
+                    val value = values.getJSONObject(index)
+                    add(
+                        RemoteDisplayLine(
+                            id = "edge:$index",
+                            sourceId = value.optJSONObject("source").displayId(),
+                            targetId = value.optJSONObject("target").displayId(),
+                            kind = value.optString("kind"),
+                            points = value.optJSONArray("points_mm").displayPoints(),
+                            colourSlot = colourSlots[value.optJSONObject("source").displayId()],
+                            radius = 0.0,
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+        val paths = root.optJSONArray("paths")?.let { values ->
+            buildList(values.length()) {
+                for (index in 0 until values.length()) {
+                    val value = values.getJSONObject(index)
+                    add(
+                        RemoteDisplayLine(
+                            id = "path:$index",
+                            sourceId = value.optJSONObject("owner").displayId(),
+                            targetId = value.optJSONObject("owner").displayId(),
+                            kind = value.optString("kind"),
+                            points = value.optJSONArray("points_mm").displayPoints(),
+                            colourSlot = colourSlots[value.optJSONObject("owner").displayId()],
+                            radius = value.optDouble("radius_mm", 0.0),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+        val markers = root.optJSONArray("markers")?.let { values ->
+            buildList(values.length()) {
+                for (index in 0 until values.length()) {
+                    val value = values.getJSONObject(index)
+                    add(
+                        RemoteDisplayMarker(
+                            id = value.optJSONObject("id").displayId(),
+                            kind = value.optString("kind"),
+                            position = value.optJSONObject("position_mm").displayPoint(),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+        val coverage = root.optJSONObject("coverage")
+        val region = coverage?.optJSONObject("region")?.let { value ->
+            RemoteDisplayBounds(
+                min = value.optJSONObject("min").displayPoint(),
+                max = value.optJSONObject("max").displayPoint(),
+            )
+        }
+        return RemoteDisplaySnapshot(
+            schemaVersion = root.optInt("schema_version"),
+            morphologyRevision = root.optLong("morphology_revision"),
+            topologyEpoch = root.optLong("topology_epoch"),
+            routeEpoch = root.optLong("route_epoch"),
+            sequence = root.optLong("sequence"),
+            mode = root.optString("mode").lowercase(Locale.ROOT),
+            provenance = root.optString("provenance").lowercase(Locale.ROOT),
+            complete = coverage?.optBoolean("complete") ?: false,
+            truncated = coverage?.optBoolean("truncated") ?: false,
+            unavailableReason = coverage?.optString("unavailable_reason")?.takeIf { it.isNotBlank() },
+            region = region,
+            membrane = coverage?.optJSONObject("membrane")?.let { value ->
+                RemoteDisplayMembrane(value.optJSONObject("centre_mm").displayPoint(), value.optJSONObject("radii_mm").displayPoint())
+            },
+            nodes = nodes,
+            edges = edges + paths,
+            markers = markers,
+        )
+    }
+
     private fun errorText(body: String): String = runCatching {
         JSONObject(body).optString("error").ifBlank { "request rejected" }
     }.getOrDefault("request rejected")
@@ -237,6 +357,71 @@ data class RemoteWorkspaceSnapshot(
     val summary: RemoteWorkspaceSummary,
     val activity: RemoteActivity,
     val topology: RemoteTopology,
+    val displayViews: RemoteDisplayViews,
+)
+
+data class RemoteDisplayViews(
+    val syntheticColumns: RemoteDisplaySnapshot?,
+    val anatomical: RemoteDisplaySnapshot?,
+) {
+    companion object {
+        fun unavailable() = RemoteDisplayViews(null, null)
+    }
+}
+
+data class RemoteDisplaySnapshot(
+    val schemaVersion: Int,
+    val morphologyRevision: Long,
+    val topologyEpoch: Long,
+    val routeEpoch: Long,
+    val sequence: Long,
+    val mode: String,
+    val provenance: String,
+    val complete: Boolean,
+    val truncated: Boolean,
+    val unavailableReason: String?,
+    val region: RemoteDisplayBounds?,
+    val membrane: RemoteDisplayMembrane?,
+    val nodes: List<RemoteDisplayNode>,
+    val edges: List<RemoteDisplayLine>,
+    val markers: List<RemoteDisplayMarker>,
+)
+
+data class RemoteDisplayMembrane(val centre: RemoteDisplayPoint, val radii: RemoteDisplayPoint)
+
+data class RemoteDisplayBounds(
+    val min: RemoteDisplayPoint,
+    val max: RemoteDisplayPoint,
+)
+
+data class RemoteDisplayNode(
+    val id: String,
+    val role: String,
+    val layer: Int?,
+    val position: RemoteDisplayPoint,
+    val colourSlot: Long,
+)
+
+data class RemoteDisplayLine(
+    val id: String,
+    val sourceId: String,
+    val targetId: String,
+    val kind: String,
+    val points: List<RemoteDisplayPoint>,
+    val colourSlot: Long? = null,
+    val radius: Double = 0.0,
+)
+
+data class RemoteDisplayMarker(
+    val id: String,
+    val kind: String,
+    val position: RemoteDisplayPoint,
+)
+
+data class RemoteDisplayPoint(
+    val x: Double,
+    val y: Double,
+    val z: Double,
 )
 
 data class RemoteTopology(
@@ -320,4 +505,26 @@ private fun JSONArray.toIntList(): List<Int> = buildList(length()) {
 
 private fun JSONArray.toIntLists(): List<List<Int>> = buildList(length()) {
     for (index in 0 until length()) add(optJSONArray(index)?.toIntList().orEmpty())
+}
+
+private fun JSONObject?.displayId(): String {
+    if (this == null) return ""
+    // Keep the schema-2 decimal string intact, including the full u64 range.
+    // optString also accepts the legacy JSON integer representation.
+    val value = optString("value").toULongOrNull() ?: return ""
+    val generation = optLong("generation")
+    if (value == 0uL || generation <= 0L) return ""
+    return "$value:$generation"
+}
+
+private fun JSONObject?.displayPoint(): RemoteDisplayPoint {
+    if (this == null) return RemoteDisplayPoint(0.0, 0.0, 0.0)
+    return RemoteDisplayPoint(optDouble("x"), optDouble("y"), optDouble("z"))
+}
+
+private fun JSONArray?.displayPoints(): List<RemoteDisplayPoint> {
+    if (this == null) return emptyList()
+    return buildList(length()) {
+        for (index in 0 until length()) add(optJSONObject(index).displayPoint())
+    }
 }

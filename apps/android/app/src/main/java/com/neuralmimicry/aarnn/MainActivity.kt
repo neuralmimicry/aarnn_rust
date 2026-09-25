@@ -95,6 +95,11 @@ class MainActivity : ComponentActivity() {
 
 private enum class AarnnTab { Dashboard, Graph, Account }
 
+private enum class GraphDisplayMode(val label: String) {
+    SyntheticColumns("Synthetic columns"),
+    Anatomical("Anatomical"),
+}
+
 @Suppress("DEPRECATION")
 private class CameraPreviewSurface(context: Context, private val cameraIndex: Int) : SurfaceView(context), SurfaceHolder.Callback {
     private var camera: Camera? = null
@@ -626,6 +631,7 @@ private fun GraphExplorerScreen(
     var rotation by rememberSaveable { mutableFloatStateOf(0f) }
     var panX by rememberSaveable { mutableFloatStateOf(0f) }
     var panY by rememberSaveable { mutableFloatStateOf(0f) }
+    var displayMode by rememberSaveable { mutableStateOf(GraphDisplayMode.Anatomical) }
     val snapshot = state.snapshot
 
     Column(
@@ -650,12 +656,14 @@ private fun GraphExplorerScreen(
                 )
                 if (snapshot != null) {
                     Text(
-                        if (snapshot.topology.edges.isNotEmpty()) {
-                            "Authoritative topology • ${snapshot.topology.edges.size} visible edges${if (snapshot.topology.truncated) " • bounded" else ""}"
+                        if (snapshot.displayViews.anatomical != null || snapshot.displayViews.syntheticColumns != null) {
+                            "Shared display contract • ${if (displayMode == GraphDisplayMode.Anatomical) "anatomical paths" else "synthetic columns"}"
+                        } else if (snapshot.topology.edges.isNotEmpty()) {
+                            "Legacy topology • ${snapshot.topology.edges.size} visible edges${if (snapshot.topology.truncated) " • bounded" else ""}"
                         } else {
                             "Topology projection unavailable"
                         },
-                        color = if (snapshot.topology.edges.isNotEmpty()) Color(0xFF1B7A45) else MaterialTheme.colorScheme.error,
+                        color = if (snapshot.displayViews.anatomical != null || snapshot.displayViews.syntheticColumns != null || snapshot.topology.edges.isNotEmpty()) Color(0xFF1B7A45) else MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -667,8 +675,26 @@ private fun GraphExplorerScreen(
             }
         }
 
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            GraphDisplayMode.values().forEach { candidate ->
+                if (candidate == displayMode) {
+                    Button(onClick = { displayMode = candidate }, modifier = Modifier.weight(1f)) {
+                        Text(candidate.label)
+                    }
+                } else {
+                    OutlinedButton(onClick = { displayMode = candidate }, modifier = Modifier.weight(1f)) {
+                        Text(candidate.label)
+                    }
+                }
+            }
+        }
+
         GraphExplorerCanvas(
             snapshot = snapshot,
+            displayMode = displayMode,
             zoom = zoom,
             rotation = rotation,
             pan = Offset(panX, panY),
@@ -702,14 +728,18 @@ private fun GraphExplorerScreen(
 @Composable
 private fun GraphExplorerCanvas(
     snapshot: RemoteWorkspaceSnapshot?,
+    displayMode: GraphDisplayMode,
     zoom: Float,
     rotation: Float,
     pan: Offset,
     onTransform: (Float, Float, Offset) -> Unit,
     modifier: Modifier,
 ) {
-    val layers = graphLayers(snapshot)
+    val display = snapshot?.displayViews?.forMode(displayMode)
+    val layers = graphLayers(snapshot, display)
     val topologyEdges = snapshot?.topology?.edges.orEmpty()
+    val displayLines = display?.edges.orEmpty()
+    val displayProjection = display?.let(::displayProjection)
     val nodeIds = layers.flatMapIndexed { column, layer ->
         layer.visibleNodeIds.mapIndexed { node, id -> id to nodePointKey(column, node) }
     }.toMap()
@@ -725,18 +755,111 @@ private fun GraphExplorerCanvas(
     ) {
         drawRect(Color(0xFF0B1018))
         val centre = Offset(size.width / 2f, size.height / 2f)
-        val positions = graphNodePositions(layers, size.width, size.height)
+        val positions = if (display != null) {
+            displayNodePositions(display, layers, size.width, size.height)
+        } else {
+            graphNodePositions(layers, size.width, size.height)
+        }
+        val activeDisplayIds = buildSet {
+            layers.forEach { layer ->
+                layer.activeIndices.forEach { activeIndex ->
+                    val visibleIndex = if (layer.count > layer.visibleNodeIds.size) {
+                        activeIndex * layer.visibleNodeIds.size / layer.count.coerceAtLeast(1)
+                    } else activeIndex
+                    layer.visibleNodeIds.getOrNull(visibleIndex)?.let(::add)
+                }
+            }
+        }
 
         withTransform({
             translate(left = pan.x, top = pan.y)
             rotate(degrees = rotation, pivot = centre)
             scale(scaleX = zoom, scaleY = zoom, pivot = centre)
         }) {
+            val membranePath = if (displayMode == GraphDisplayMode.Anatomical && display?.region != null) {
+                val membrane = display.membrane
+                val region = display.region
+                val minimum = displayPoint(
+                    membrane?.let { RemoteDisplayPoint(it.centre.x - it.radii.x, it.centre.y - it.radii.y, it.centre.z - it.radii.z) } ?: region.min,
+                    displayProjection, size.width, size.height,
+                )
+                val maximum = displayPoint(
+                    membrane?.let { RemoteDisplayPoint(it.centre.x + it.radii.x, it.centre.y + it.radii.y, it.centre.z + it.radii.z) } ?: region.max,
+                    displayProjection, size.width, size.height,
+                )
+                androidx.compose.ui.graphics.Path().apply {
+                    val bounds = androidx.compose.ui.geometry.Rect(minimum.x, maximum.y, maximum.x, minimum.y)
+                    if (membrane != null) addOval(bounds) else addRect(bounds)
+                }
+            } else null
+            if (membranePath != null) {
+                drawPath(membranePath, Color(0x1A7891BE))
+                drawContext.canvas.save()
+                drawContext.canvas.clipPath(membranePath)
+            }
             for (line in 1..5) {
                 val y = size.height * line / 6f
                 drawLine(Color(0xFF233044).copy(alpha = 0.45f), Offset(0f, y), Offset(size.width, y), 1f)
             }
-            if (topologyEdges.isNotEmpty()) {
+            if (display != null) {
+                displayLines.forEach { line ->
+                    val points = line.points.map { displayPoint(it, displayProjection, size.width, size.height) }
+                    val start = nodeIds[line.sourceId]?.let { key -> positions[key.first].getOrNull(key.second) }
+                    val target = nodeIds[line.targetId]?.let { key -> positions[key.first].getOrNull(key.second) }
+                    val route = (if (points.size >= 2) points else listOfNotNull(start, target))
+                    if (route.size >= 2) {
+                        val kind = line.kind.lowercase(Locale.ROOT)
+                        val anatomicalPath = kind.contains("axon") || kind.contains("dendrite")
+                        if (displayMode == GraphDisplayMode.Anatomical && !anatomicalPath) return@forEach
+                        val colour = if (anatomicalPath) {
+                            stableNeuronColour(
+                                line.sourceId,
+                                if (kind.contains("axon")) 0.055f else -0.055f,
+                                line.colourSlot,
+                            )
+                        } else displayLineColour(line.kind, displayMode)
+                        if (displayMode == GraphDisplayMode.Anatomical && anatomicalPath && line.radius > 0.0) {
+                            val projectionSpan = displayProjection?.let { maxOf(it.maxX - it.minX, it.maxY - it.minY) } ?: 1.0
+                            val halfWidth = (line.radius / projectionSpan * minOf(size.width, size.height) * 2.0)
+                                .toFloat()
+                                .coerceIn(1.8f, 9f)
+                            val polygon = androidx.compose.ui.graphics.Path().apply {
+                                route.zipWithNext().forEach { (a, b) ->
+                                    val direction = b - a
+                                    val length = direction.getDistance()
+                                    if (length > 1.0e-3f) {
+                                        val normal = Offset(-direction.y, direction.x) * (halfWidth / length)
+                                        moveTo((a + normal).x, (a + normal).y)
+                                        lineTo((a - normal).x, (a - normal).y)
+                                        lineTo((b - normal).x, (b - normal).y)
+                                        lineTo((b + normal).x, (b + normal).y)
+                                        close()
+                                    }
+                                }
+                            }
+                            drawPath(polygon, colour.copy(alpha = 0.94f))
+                            if (activeDisplayIds.contains(line.sourceId)) {
+                                drawPath(polygon, Color.White.copy(alpha = 0.38f))
+                            }
+                        } else {
+                            route.zipWithNext().forEach { (a, b) ->
+                                drawLine(colour, a, b, strokeWidth = 1.2f)
+                            }
+                        }
+                    }
+                }
+                display.markers.forEach { marker ->
+                    val point = displayPoint(marker.position, displayProjection, size.width, size.height)
+                    val lower = marker.kind.lowercase(Locale.ROOT)
+                    val colour = when {
+                        lower.contains("bouton") -> Color(0xFFFFB84A)
+                        lower.contains("postsynaptic") -> Color(0xFF8FD8FF)
+                        else -> Color(0xFFFFF0A8)
+                    }
+                    val radius = if (lower.contains("synapse") && !lower.contains("post")) 4.5f else 3.5f
+                    drawCircle(colour, radius, point)
+                }
+            } else if (topologyEdges.isNotEmpty()) {
                 topologyEdges.forEach { edge ->
                     val start = nodeIds[edge.sourceId]?.let { key -> positions[key.first].getOrNull(key.second) }
                     val target = nodeIds[edge.targetId]?.let { key -> positions[key.first].getOrNull(key.second) }
@@ -772,8 +895,18 @@ private fun GraphExplorerCanvas(
             }
             positions.forEachIndexed { column, nodes ->
                 val layer = layers[column]
-                val colour = graphLayerColour(column, layers.lastIndex)
+                val columnColour = graphLayerColour(column, layers.lastIndex)
                 nodes.forEachIndexed { node, point ->
+                    val nodeId = layer.visibleNodeIds.getOrNull(node)
+                    val colour = if (display != null && displayMode == GraphDisplayMode.Anatomical && nodeId != null) {
+                        stableNeuronColour(
+                            nodeId,
+                            0f,
+                            display.nodes.firstOrNull { it.id == nodeId }?.colourSlot,
+                        )
+                    } else {
+                        columnColour
+                    }
                     val active = layer.activeIndices.any { index ->
                         if (layer.count > layer.visibleNodeIds.size) {
                             index * layer.visibleNodeIds.size / layer.count == node
@@ -785,15 +918,16 @@ private fun GraphExplorerCanvas(
                         drawCircle(Color(0xFFFFB84A).copy(alpha = 0.22f), 11f, point)
                         drawCircle(Color.White.copy(alpha = 0.9f), 6.3f, point, style = Stroke(width = 1.3f))
                     }
-                    drawCircle(colour.copy(alpha = if (active) 1f else 0.62f), if (active) 4.7f else 3.5f, point)
+                    drawCircle(colour.copy(alpha = if (active) 1f else 0.85f), if (displayMode == GraphDisplayMode.Anatomical) 6f else if (active) 4.7f else 3.5f, point)
                 }
-                drawLine(
-                    colour.copy(alpha = 0.7f),
+                if (displayMode == GraphDisplayMode.SyntheticColumns) drawLine(
+                    columnColour.copy(alpha = 0.7f),
                     Offset(nodes.firstOrNull()?.x ?: 0f, 16f),
                     Offset(nodes.firstOrNull()?.x ?: 0f, size.height - 16f),
                     strokeWidth = 1f,
                 )
             }
+            if (membranePath != null) drawContext.canvas.restore()
         }
 
         if (snapshot == null) {
@@ -878,7 +1012,22 @@ private data class GraphLayer(
     val visibleNodeIds: List<String>,
 )
 
-private fun graphLayers(snapshot: RemoteWorkspaceSnapshot?): List<GraphLayer> {
+private data class DisplayProjection(
+    val minX: Double,
+    val maxX: Double,
+    val minY: Double,
+    val maxY: Double,
+)
+
+private fun RemoteDisplayViews.forMode(mode: GraphDisplayMode): RemoteDisplaySnapshot? = when (mode) {
+    GraphDisplayMode.SyntheticColumns -> syntheticColumns
+    GraphDisplayMode.Anatomical -> anatomical
+}
+
+private fun graphLayers(
+    snapshot: RemoteWorkspaceSnapshot?,
+    display: RemoteDisplaySnapshot? = null,
+): List<GraphLayer> {
     if (snapshot == null) {
         return listOf(
             demoGraphLayer("sensory", 8),
@@ -886,6 +1035,35 @@ private fun graphLayers(snapshot: RemoteWorkspaceSnapshot?): List<GraphLayer> {
             demoGraphLayer("hidden-1", 16),
             demoGraphLayer("output", 8),
         )
+    }
+    if (display != null && display.nodes.isNotEmpty()) {
+        val groups = display.nodes
+            .groupBy { node ->
+                when (node.role) {
+                    "sensory" -> "sensory"
+                    "output" -> "output"
+                    else -> "hidden-${node.layer ?: 0}"
+                }
+            }
+            .toSortedMap(compareBy { id ->
+                when {
+                    id == "sensory" -> 0
+                    id == "output" -> Int.MAX_VALUE
+                    else -> id.removePrefix("hidden-").toIntOrNull()?.plus(1) ?: 1
+                }
+            })
+        return groups.map { (id, nodes) ->
+            GraphLayer(
+                id = id,
+                count = nodes.size,
+                activeIndices = when {
+                    id == "sensory" -> snapshot.activity.sensory
+                    id == "output" -> snapshot.activity.output
+                    else -> snapshot.activity.hidden.getOrNull(id.removePrefix("hidden-").toIntOrNull() ?: 0).orEmpty()
+                },
+                visibleNodeIds = nodes.map { it.id },
+            )
+        }
     }
     val topology = snapshot.topology
     if (topology.layers.isNotEmpty() && topology.nodes.isNotEmpty()) {
@@ -932,6 +1110,82 @@ private fun graphNodePositions(layers: List<GraphLayer>, width: Float, height: F
         val spacing = (height - 44f) / visible.coerceAtLeast(1)
         (0 until visible).map { node -> Offset(x, 22f + spacing * (node + 0.5f)) }
     }
+}
+
+private fun displayNodePositions(
+    display: RemoteDisplaySnapshot,
+    layers: List<GraphLayer>,
+    width: Float,
+    height: Float,
+): List<List<Offset>> {
+    val projection = displayProjection(display)
+    val byId = display.nodes.associateBy { it.id }
+    return layers.map { layer ->
+        layer.visibleNodeIds.map { id ->
+            val point = byId[id]?.position ?: RemoteDisplayPoint(0.0, 0.0, 0.0)
+            displayPoint(point, projection, width, height)
+        }
+    }
+}
+
+private fun displayProjection(display: RemoteDisplaySnapshot): DisplayProjection {
+    display.region?.let { region ->
+        return DisplayProjection(
+            minX = region.min.x,
+            maxX = region.max.x,
+            minY = region.min.y,
+            maxY = region.max.y,
+        )
+    }
+    val points = display.nodes.map { it.position } +
+        display.edges.flatMap { it.points } +
+        display.markers.map { it.position }
+    return DisplayProjection(
+        minX = points.minOfOrNull { it.x } ?: -1.0,
+        maxX = points.maxOfOrNull { it.x } ?: 1.0,
+        minY = points.minOfOrNull { it.y } ?: -1.0,
+        maxY = points.maxOfOrNull { it.y } ?: 1.0,
+    )
+}
+
+private fun displayPoint(
+    point: RemoteDisplayPoint,
+    projection: DisplayProjection?,
+    width: Float,
+    height: Float,
+): Offset {
+    val bounds = projection ?: DisplayProjection(-1.0, 1.0, -1.0, 1.0)
+    val scaleX = (bounds.maxX - bounds.minX).coerceAtLeast(1.0e-9)
+    val scaleY = (bounds.maxY - bounds.minY).coerceAtLeast(1.0e-9)
+    val boundedX = point.x
+    val boundedY = point.y
+    return Offset(
+        x = 24f + ((boundedX - bounds.minX) / scaleX).toFloat() * (width - 48f),
+        y = height - 24f - ((boundedY - bounds.minY) / scaleY).toFloat() * (height - 48f),
+    )
+}
+
+private fun displayLineColour(kind: String, mode: GraphDisplayMode): Color {
+    if (mode == GraphDisplayMode.SyntheticColumns) return Color(0xFFFF8A00)
+    return when {
+        kind.contains("axon", ignoreCase = true) -> Color(0xFFFF7D7D)
+        kind.contains("dendrite", ignoreCase = true) -> Color(0xFF78FF9B)
+        kind.contains("route", ignoreCase = true) -> Color(0xFFFFEB78)
+        else -> Color(0xFF8FA4D0)
+    }
+}
+
+private fun stableNeuronColour(identity: String, variant: Float, colourSlot: Long? = null): Color {
+    if (colourSlot != null) {
+        val hue = ((colourSlot.toFloat() * 137.508f) % 360f + variant * 360f + 360f) % 360f
+        return Color.hsl(hue, 0.72f, 0.55f)
+    }
+    var hash = 2166136261L
+    identity.forEach { character ->
+        hash = (hash xor character.code.toLong()) * 16777619L and 0xFFFFFFFFL
+    }
+    val hue = (((hash % 3600L).toFloat() / 10f) + variant * 360f + 360f) % 360f
+    return Color.hsl(hue, 0.72f, 0.55f)
 }
 
 private fun graphLayerColour(column: Int, lastColumn: Int): Color = when {

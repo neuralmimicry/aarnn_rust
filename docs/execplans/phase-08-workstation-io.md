@@ -253,6 +253,43 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   focused provider suite, feature build, web parity test, Node syntax check and
   diff validation pass.
 
+- [x] `2026-09-25 10:47Z` Fixed the native webcam's missing MJPEG decode path
+  reported by a blank-preview screenshot. `webcam_input` disables Nokhwa's
+  defaults and previously enabled camera capture without its separate
+  `decoding` feature; `AbsoluteHighestFrameRate` can negotiate MJPEG, whose
+  decoder otherwise returns `NotImplementedError` and leaves the preview
+  empty. Enabled `decoding` and added a small MJPEG fixture to the existing
+  source-format test, which now covers MJPEG, NV12 and BGR. The focused test,
+  locked native feature check, workspace formatting check and `git diff
+  --check` pass. The screenshot does not identify the camera's actual FourCC,
+  and no live stream was opened; physical preview confirmation remains open.
+
+- [x] `2026-09-25 10:52Z` Added one-time webcam diagnostics for the first frame
+  capture or conversion error. Conversion failures include Nokhwa's source
+  format and decoder error, so a blank preview can be distinguished from an
+  MJPEG/other-format decode failure without logging on every simulation tick.
+  The locked MJPEG/NV12/BGR regression, locked feature check, formatting and
+  diff checks pass. The actual physical camera mode remains unverified.
+- [x] `2026-09-25 14:12Z` Traced the reported frozen webcam to synchronous
+  `Camera::frame()` inside `WebcamCaptureProvider::next_spikes()`, which the
+  simulation controller calls on its own thread (`src/providers.rs`,
+  `src/ui.rs`). Camera construction and `open_stream()` also run in the egui
+  handler. A stalled driver can therefore stop neural stepping, while the
+  preview correctly retains its last frame with no freshness indicator. Moved
+  camera open/read/decode and manual device refresh to background workers,
+  added a bounded latest-sample handoff, 250 ms–5 s reconnect backoff,
+  non-blocking cancellation, neutral sensory input after two seconds without a
+  fresh frame, preview invalidation and explicit camera health status.
+  `cargo metadata --no-deps --format-version 1` confirmed the root workspace
+  (packages `aarnn_rust`, `aarnn-biox6-exporter`, `xtask`). The referenced
+  specification requirements are Sections 16.17, 16.22 and 16.24; the gate
+  remains incomplete and this targeted fix does not claim governed media I/O.
+  `cargo fmt --all --check` and `git diff --check` pass. The focused feature
+  `cargo check` is blocked by seven existing unresolved
+  `Runner::log_gpu_cpu_fallback` calls in the already-dirty `src/runner.rs`;
+  it reports no diagnostics in the webcam changes. The physical camera path
+  remains unverified.
+
 ## Validation and acceptance
 
 - `UT-IOTIME-001`/`UT-IOSAMPLE-001`: capture mapping, uncertainty, dedupe/reorder/gap/coalescing and modality drop policies are exact and arrival-independent.
@@ -286,6 +323,20 @@ Browser/native media and USB AER adapters, scientific fixtures, federation,
 device timing and migration evidence are absent; layer-group paths remain
 reachable for rollback.
 
+The Rust webcam preview slice currently calls the blocking Nokhwa frame read
+from the simulation controller thread. A disconnected or stalled driver can
+therefore stall neural stepping as well as preview refresh. The egui camera
+start action also performs synchronous camera initialization. This conflicts
+with Sections 16.22 and 16.24; the fix isolates capture and reports loss of
+fresh frames while keeping the simulation path non-blocking. A backend call
+that never returns cannot be safely force-cancelled by Nokhwa, so recovery
+from that specific driver fault is limited to isolating it from neural/UI
+execution and signalling stale input until the call returns or the process
+exits. Initial startup camera enumeration still occurs during application
+construction; camera opening, streaming and user-triggered enumeration refresh
+run on background workers. A physical webcam was not available for verification
+in this session.
+
 ## Decision Log
 
 - Initial decision: capture/device time plus a versioned mapping determines biological eligibility; USB completion or network arrival time is used only when the device lacks a clock and its uncertainty is recorded. Authority: Sections 3.4 and 16.18.
@@ -303,6 +354,13 @@ reachable for rollback.
   explicitly selected microphone companion for a camera, is composed at the
   sensory boundary and is the only condition that turns on Graphic EQ for that
   video session. Authority: Sections 16.17, 16.21 and `INV-017`.
+- `2026-09-25 / DEC-0085C`: perform camera open/read/decode on a dedicated
+  worker. The simulation controller only tries to consume the latest bounded
+  visual sample and emits neutral input after the capture becomes stale;
+  preview pixels remain separate display state. Returned capture errors retry
+  with bounded backoff, and stop never joins a potentially blocked driver
+  call. Authority: Sections 16.17, 16.22 and 16.24. This is a legacy local UI
+  adapter fix, not the complete governed peripheral pipeline.
 
 ## Outcomes & Retrospective
 

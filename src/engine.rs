@@ -1,4 +1,10 @@
 use crate::config::{LIFParams, NetworkConfig, STDPParams};
+use crate::morphology_contract::{
+    AnatomicalId, AnatomicalKind, AxisAlignedBox, DisplayEdge, DisplayMode, DisplayNode,
+    DisplayProvenance, DisplayRole, DisplaySnapshot, Vec3,
+};
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+use crate::morphology_contract::{DisplayMarker, DisplayPath};
 use crate::runner::Runner;
 use crate::sim::{Learning, NeuronModel};
 use ndarray::Array1;
@@ -351,6 +357,233 @@ impl RunnerEngine {
         }
     }
 
+    /// Return the bounded, versioned display contract shared by native and web
+    /// clients. Legacy topology points are explicitly marked procedural: they
+    /// are useful for navigation, but they do not claim to be measured anatomy
+    /// or physical route geometry.
+    pub fn display_snapshot(
+        &self,
+        mode: DisplayMode,
+        sequence: u64,
+        requested_max_nodes: usize,
+        requested_max_edges: usize,
+    ) -> anyhow::Result<DisplaySnapshot> {
+        Self::display_snapshot_for_runner(
+            &self.runner,
+            mode,
+            sequence,
+            requested_max_nodes,
+            requested_max_edges,
+            true,
+        )
+    }
+
+    pub fn display_snapshot_for_runner(
+        runner: &Runner,
+        mode: DisplayMode,
+        sequence: u64,
+        requested_max_nodes: usize,
+        requested_max_edges: usize,
+        include_edges: bool,
+    ) -> anyhow::Result<DisplaySnapshot> {
+        const DEFAULT_MAX_NODES: usize = 512;
+        const DEFAULT_MAX_EDGES: usize = 4096;
+        const HARD_MAX_NODES: usize = 4096;
+        const HARD_MAX_EDGES: usize = 32_768;
+        let max_nodes = if requested_max_nodes == 0 {
+            DEFAULT_MAX_NODES
+        } else {
+            requested_max_nodes.clamp(1, HARD_MAX_NODES)
+        };
+        let max_edges = if requested_max_edges == 0 {
+            DEFAULT_MAX_EDGES
+        } else {
+            requested_max_edges.clamp(1, HARD_MAX_EDGES)
+        };
+
+        let hidden_layers = runner.net.num_hidden_layers;
+        let mut layer_counts = Vec::with_capacity(hidden_layers + 2);
+        layer_counts.push(runner.net.num_sensory_neurons);
+        for layer in 0..hidden_layers {
+            layer_counts.push(runner.layer_size(layer));
+        }
+        layer_counts.push(runner.net.num_output_neurons);
+
+        let topology_epoch = display_topology_epoch(&layer_counts);
+        let use_synthetic = matches!(mode, DisplayMode::SyntheticColumns);
+        #[cfg(feature = "growth3d")]
+        if include_edges {
+            if let Some(reconstruction) = &runner.procedural_reconstruction {
+                return if use_synthetic {
+                    reconstruction
+                        .synthetic_display_snapshot(sequence, max_nodes, max_edges)
+                        .map_err(Into::into)
+                } else {
+                    #[cfg(feature = "morpho")]
+                    if let Some(snapshot) =
+                        live_morphology_display_snapshot(runner, sequence, max_nodes, max_edges)?
+                    {
+                        return Ok(snapshot);
+                    }
+                    reconstruction
+                        .display_snapshot(sequence, max_nodes, max_edges)
+                        .map_err(Into::into)
+                };
+            }
+        }
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if !use_synthetic && include_edges {
+            if let Some(snapshot) =
+                live_morphology_display_snapshot(runner, sequence, max_nodes, max_edges)?
+            {
+                return Ok(snapshot);
+            }
+        }
+        #[cfg(feature = "growth3d")]
+        if !use_synthetic && include_edges {
+            if let Some(reconstruction) = &runner.procedural_reconstruction {
+                return reconstruction
+                    .display_snapshot(sequence, max_nodes, max_edges)
+                    .map_err(Into::into);
+            }
+        }
+        let has_legacy_points = {
+            #[cfg(feature = "growth3d")]
+            {
+                !runner.topo.sensory_nodes.is_empty()
+                    || runner.topo.layers.iter().any(|layer| !layer.is_empty())
+                    || !runner.topo.output_nodes.is_empty()
+            }
+            #[cfg(not(feature = "growth3d"))]
+            {
+                false
+            }
+        };
+        let provenance = if use_synthetic {
+            DisplayProvenance::SyntheticTopology
+        } else if has_legacy_points {
+            DisplayProvenance::ProceduralAnatomy
+        } else {
+            DisplayProvenance::Unavailable
+        };
+        let unavailable_reason = if use_synthetic {
+            None
+        } else if has_legacy_points {
+            Some("legacy topology exposes procedural soma points only; physical neurite paths are unavailable".to_owned())
+        } else {
+            Some("no anatomical geometry is available in this snapshot".to_owned())
+        };
+
+        let mut nodes = Vec::new();
+        for layer in 0..layer_counts.len() {
+            for index in 0..layer_counts[layer] {
+                let role = display_role(layer, hidden_layers);
+                let position = if use_synthetic {
+                    synthetic_display_position(
+                        layer,
+                        index,
+                        layer_counts.len(),
+                        layer_counts[layer],
+                    )
+                } else {
+                    legacy_display_position(&runner, role, layer, index).unwrap_or_else(|| {
+                        synthetic_display_position(
+                            layer,
+                            index,
+                            layer_counts.len(),
+                            layer_counts[layer],
+                        )
+                    })
+                };
+                nodes.push(DisplayNode {
+                    id: legacy_display_id(role, layer, index),
+                    role,
+                    layer: matches!(role, DisplayRole::Hidden).then_some(layer.saturating_sub(1)),
+                    position_mm: position,
+                    kind: AnatomicalKind::Soma,
+                    colour_slot: 0,
+                });
+            }
+        }
+
+        let mut edges = Vec::new();
+        if include_edges {
+            add_display_matrix_edges(
+                &runner.w_in,
+                DisplayRole::Sensory,
+                DisplayRole::Hidden,
+                0,
+                1,
+                "input",
+                &mut edges,
+            );
+            for (layer, matrix) in runner.w_hh_fwd.iter().enumerate() {
+                add_display_matrix_edges(
+                    matrix,
+                    DisplayRole::Hidden,
+                    DisplayRole::Hidden,
+                    layer + 1,
+                    layer + 2,
+                    "forward",
+                    &mut edges,
+                );
+            }
+            for (layer, matrix) in runner.w_hh_bwd.iter().enumerate() {
+                add_display_matrix_edges(
+                    matrix,
+                    DisplayRole::Hidden,
+                    DisplayRole::Hidden,
+                    layer + 2,
+                    layer + 1,
+                    "backward",
+                    &mut edges,
+                );
+            }
+            for (layer, matrix) in runner.w_hh_rec.iter().enumerate() {
+                add_display_matrix_edges(
+                    matrix,
+                    DisplayRole::Hidden,
+                    DisplayRole::Hidden,
+                    layer + 1,
+                    layer + 1,
+                    "recurrent",
+                    &mut edges,
+                );
+            }
+            if hidden_layers > 0 {
+                add_display_matrix_edges(
+                    &runner.w_out,
+                    DisplayRole::Hidden,
+                    DisplayRole::Output,
+                    hidden_layers,
+                    hidden_layers + 1,
+                    "output",
+                    &mut edges,
+                );
+            }
+        }
+        let coverage = if use_synthetic || !has_legacy_points {
+            None
+        } else {
+            display_bounds(&nodes)
+        };
+        DisplaySnapshot::bounded(
+            1,
+            topology_epoch,
+            topology_epoch,
+            sequence,
+            mode,
+            provenance,
+            coverage,
+            nodes,
+            edges,
+            max_nodes,
+            max_edges,
+            unavailable_reason,
+        )
+        .map_err(Into::into)
+    }
+
     pub fn last_step_error(&self) -> Option<&str> {
         self.last_step_error.as_deref()
     }
@@ -535,11 +768,597 @@ impl RunnerEngine {
     }
 }
 
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn live_morphology_display_snapshot(
+    runner: &Runner,
+    sequence: u64,
+    max_nodes: usize,
+    max_edges: usize,
+) -> anyhow::Result<Option<DisplaySnapshot>> {
+    let morphology = &runner.morph;
+    let has_geometry = morphology.somas.iter().any(|layer| !layer.is_empty())
+        || !morphology.sensory_somas.is_empty()
+        || !morphology.output_somas.is_empty()
+        || morphology
+            .axons
+            .iter()
+            .flatten()
+            .any(|axon| !axon.segments.is_empty())
+        || morphology
+            .dendrites
+            .iter()
+            .flatten()
+            .any(|dendrite| !dendrite.tree.branches.is_empty())
+        || !morphology.synapses.is_empty();
+    if !has_geometry {
+        return Ok(None);
+    }
+
+    let hidden_layers = runner.net.num_hidden_layers;
+    let layer_counts = std::iter::once(runner.net.num_sensory_neurons)
+        .chain((0..hidden_layers).map(|layer| runner.layer_size(layer)))
+        .chain(std::iter::once(runner.net.num_output_neurons))
+        .collect::<Vec<_>>();
+    let mut nodes = Vec::with_capacity(layer_counts.iter().sum());
+    let mut soma_position = |role: DisplayRole, layer: usize, index: usize| {
+        let point = match role {
+            DisplayRole::Sensory => morphology.sensory_somas.get(index).map(|soma| soma.pos),
+            DisplayRole::Hidden => morphology
+                .somas
+                .get(layer.saturating_sub(1))
+                .and_then(|somas| somas.get(index))
+                .map(|soma| soma.pos),
+            DisplayRole::Output => morphology.output_somas.get(index).map(|soma| soma.pos),
+            DisplayRole::Unassigned => None,
+        }?;
+        Some(Vec3 {
+            x: f64::from(point.x),
+            y: f64::from(point.y),
+            z: f64::from(point.z),
+        })
+    };
+    for (layer, count) in layer_counts.iter().copied().enumerate() {
+        let role = display_role(layer, hidden_layers);
+        for index in 0..count {
+            let position = soma_position(role, layer, index)
+                .or_else(|| legacy_display_position(runner, role, layer, index))
+                .unwrap_or_else(|| {
+                    synthetic_display_position(layer, index, layer_counts.len(), count)
+                });
+            nodes.push(DisplayNode {
+                id: legacy_display_id(role, layer, index),
+                role,
+                layer: matches!(role, DisplayRole::Hidden).then_some(layer.saturating_sub(1)),
+                position_mm: position,
+                kind: AnatomicalKind::Soma,
+                colour_slot: 0,
+            });
+        }
+    }
+
+    let node_for = |role: DisplayRole, layer: usize, index: usize| {
+        (index < layer_counts.get(layer).copied().unwrap_or(0))
+            .then(|| legacy_display_id(role, layer, index))
+    };
+    let mut paths = Vec::new();
+    // Keep the derived path identity namespace separate from the legacy
+    // display soma IDs. The owner identity is still the stable soma ID.
+    let mut path_value = 1u64 << 32;
+    let mut add_segments =
+        |owner: AnatomicalId,
+         kind: AnatomicalKind,
+         segments: Vec<(crate::morphology::Point3, crate::morphology::Point3)>,
+         paths: &mut Vec<DisplayPath>,
+         path_value: &mut u64| {
+            for (from, to) in segments {
+                if !from.x.is_finite()
+                    || !from.y.is_finite()
+                    || !from.z.is_finite()
+                    || !to.x.is_finite()
+                    || !to.y.is_finite()
+                    || !to.z.is_finite()
+                {
+                    continue;
+                }
+                let id = AnatomicalId::new(*path_value, 1).ok();
+                *path_value = path_value.saturating_add(1);
+                if let Some(id) = id {
+                    paths.push(DisplayPath {
+                        id,
+                        owner,
+                        kind,
+                        points_mm: vec![
+                            Vec3 {
+                                x: f64::from(from.x),
+                                y: f64::from(from.y),
+                                z: f64::from(from.z),
+                            },
+                            Vec3 {
+                                x: f64::from(to.x),
+                                y: f64::from(to.y),
+                                z: f64::from(to.z),
+                            },
+                        ],
+                        radius_mm: 0.01,
+                    });
+                }
+            }
+        };
+    for (layer, somas) in morphology.somas.iter().enumerate() {
+        for soma in somas {
+            let Some(owner) = node_for(DisplayRole::Hidden, layer + 1, soma.id) else {
+                continue;
+            };
+            if let Some(axon) = morphology
+                .axons
+                .get(layer)
+                .and_then(|items| items.get(soma.id))
+            {
+                add_segments(
+                    owner,
+                    AnatomicalKind::Axon,
+                    axon.segments.iter().map(|s| (s.from, s.to)).collect(),
+                    &mut paths,
+                    &mut path_value,
+                );
+            }
+            if let Some(dendrite) = morphology
+                .dendrites
+                .get(layer)
+                .and_then(|items| items.get(soma.id))
+            {
+                add_segments(
+                    owner,
+                    AnatomicalKind::Dendrite,
+                    dendrite
+                        .tree
+                        .branches
+                        .iter()
+                        .map(|s| (s.from, s.to))
+                        .collect(),
+                    &mut paths,
+                    &mut path_value,
+                );
+            }
+        }
+    }
+    for (role, somas, axons, dendrites) in [
+        (
+            DisplayRole::Sensory,
+            &morphology.sensory_somas,
+            &morphology.sensory_axons,
+            &morphology.sensory_dendrites,
+        ),
+        (
+            DisplayRole::Output,
+            &morphology.output_somas,
+            &morphology.output_axons,
+            &morphology.output_dendrites,
+        ),
+    ] {
+        for (index, _soma) in somas.iter().enumerate() {
+            let Some(owner) = node_for(
+                role,
+                if role == DisplayRole::Sensory {
+                    0
+                } else {
+                    hidden_layers + 1
+                },
+                index,
+            ) else {
+                continue;
+            };
+            if let Some(axon) = axons.get(index) {
+                add_segments(
+                    owner,
+                    AnatomicalKind::Axon,
+                    axon.segments.iter().map(|s| (s.from, s.to)).collect(),
+                    &mut paths,
+                    &mut path_value,
+                );
+            }
+            if let Some(dendrite) = dendrites.get(index) {
+                add_segments(
+                    owner,
+                    AnatomicalKind::Dendrite,
+                    dendrite
+                        .tree
+                        .branches
+                        .iter()
+                        .map(|s| (s.from, s.to))
+                        .collect(),
+                    &mut paths,
+                    &mut path_value,
+                );
+            }
+        }
+    }
+
+    let axon_branch_points = |segments: &[crate::morphology::AxonSeg], terminal: Option<usize>| {
+        let Some(mut index) = terminal.filter(|index| *index < segments.len()) else {
+            return Vec::new();
+        };
+        let mut chain = Vec::new();
+        loop {
+            chain.push(index);
+            let Some(parent) = segments[index].parent_idx else {
+                break;
+            };
+            if parent >= segments.len() || chain.contains(&parent) {
+                break;
+            }
+            index = parent;
+        }
+        chain.reverse();
+        let mut points = Vec::new();
+        for index in chain {
+            let segment = &segments[index];
+            if points.is_empty() {
+                points.push(segment.from);
+            }
+            points.push(segment.to);
+        }
+        points
+    };
+    let dendrite_branch_points = |segments: &[crate::morphology::DendSeg],
+                                  terminal: Option<usize>| {
+        let Some(mut index) = terminal.filter(|index| *index < segments.len()) else {
+            return Vec::new();
+        };
+        let mut chain = Vec::new();
+        loop {
+            chain.push(index);
+            let Some(parent) = segments[index].parent_idx else {
+                break;
+            };
+            if parent >= segments.len() || chain.contains(&parent) {
+                break;
+            }
+            index = parent;
+        }
+        chain.reverse();
+        let mut points = Vec::new();
+        for index in chain {
+            let segment = &segments[index];
+            if points.is_empty() {
+                points.push(segment.from);
+            }
+            points.push(segment.to);
+        }
+        points
+    };
+    let point = |p: crate::morphology::Point3| Vec3 {
+        x: f64::from(p.x),
+        y: f64::from(p.y),
+        z: f64::from(p.z),
+    };
+    let mut edges = Vec::new();
+    let mut markers = Vec::new();
+    for (synapse_index, synapse) in morphology.synapses.iter().enumerate() {
+        let (source, target, axon_segments, dendrite_segments) = match synapse.kind {
+            crate::morphology::SynKind::In => (
+                node_for(DisplayRole::Sensory, 0, synapse.pre_id),
+                node_for(
+                    DisplayRole::Hidden,
+                    synapse.post_layer.max(0) as usize + 1,
+                    synapse.post_id,
+                ),
+                morphology
+                    .sensory_axons
+                    .get(synapse.pre_id)
+                    .map(|axon| axon.segments.as_slice()),
+                morphology
+                    .dendrites
+                    .get(synapse.post_layer.max(0) as usize)
+                    .and_then(|items| items.get(synapse.post_id))
+                    .map(|dendrite| dendrite.tree.branches.as_slice()),
+            ),
+            crate::morphology::SynKind::Out => (
+                node_for(
+                    DisplayRole::Hidden,
+                    synapse.pre_layer.max(0) as usize + 1,
+                    synapse.pre_id,
+                ),
+                node_for(DisplayRole::Output, hidden_layers + 1, synapse.post_id),
+                morphology
+                    .axons
+                    .get(synapse.pre_layer.max(0) as usize)
+                    .and_then(|items| items.get(synapse.pre_id))
+                    .map(|axon| axon.segments.as_slice()),
+                morphology
+                    .output_dendrites
+                    .get(synapse.post_id)
+                    .map(|dendrite| dendrite.tree.branches.as_slice()),
+            ),
+            crate::morphology::SynKind::HiddenFwd
+            | crate::morphology::SynKind::HiddenBwd
+            | crate::morphology::SynKind::HiddenRec => (
+                node_for(
+                    DisplayRole::Hidden,
+                    synapse.pre_layer.max(0) as usize + 1,
+                    synapse.pre_id,
+                ),
+                node_for(
+                    DisplayRole::Hidden,
+                    synapse.post_layer.max(0) as usize + 1,
+                    synapse.post_id,
+                ),
+                morphology
+                    .axons
+                    .get(synapse.pre_layer.max(0) as usize)
+                    .and_then(|items| items.get(synapse.pre_id))
+                    .map(|axon| axon.segments.as_slice()),
+                morphology
+                    .dendrites
+                    .get(synapse.post_layer.max(0) as usize)
+                    .and_then(|items| items.get(synapse.post_id))
+                    .map(|dendrite| dendrite.tree.branches.as_slice()),
+            ),
+        };
+        let (Some(source), Some(target)) = (source, target) else {
+            continue;
+        };
+        let marker_base = (1u64 << 48).saturating_add((synapse_index as u64).saturating_mul(4));
+        if let Ok(id) = AnatomicalId::new(marker_base.saturating_add(1), 1) {
+            markers.push(DisplayMarker {
+                id,
+                owner: source,
+                kind: AnatomicalKind::Bouton,
+                position_mm: point(synapse.pre_site),
+                synapse_id: None,
+            });
+        }
+        if let Ok(id) = AnatomicalId::new(marker_base.saturating_add(2), 1) {
+            markers.push(DisplayMarker {
+                id,
+                owner: target,
+                kind: AnatomicalKind::PostsynapticSite,
+                position_mm: point(synapse.post_site),
+                synapse_id: None,
+            });
+        }
+        if let Ok(id) = AnatomicalId::new(marker_base.saturating_add(3), 1) {
+            markers.push(DisplayMarker {
+                id,
+                owner: source,
+                kind: AnatomicalKind::Synapse,
+                position_mm: Vec3 {
+                    x: (f64::from(synapse.pre_site.x) + f64::from(synapse.post_site.x)) * 0.5,
+                    y: (f64::from(synapse.pre_site.y) + f64::from(synapse.post_site.y)) * 0.5,
+                    z: (f64::from(synapse.pre_site.z) + f64::from(synapse.post_site.z)) * 0.5,
+                },
+                synapse_id: None,
+            });
+        }
+        let mut route = axon_segments
+            .map(|segments| axon_branch_points(segments, synapse.axon_seg_idx))
+            .unwrap_or_default();
+        let mut dendrite = dendrite_segments
+            .map(|segments| dendrite_branch_points(segments, synapse.dend_seg_idx))
+            .unwrap_or_default();
+        let mut points = route.drain(..).map(point).collect::<Vec<_>>();
+        if points.is_empty() {
+            points.push(point(synapse.pre_site));
+        }
+        points.push(point(synapse.pre_site));
+        if dendrite.is_empty() {
+            points.push(point(synapse.post_site));
+        } else {
+            for p in dendrite.iter().rev() {
+                points.push(point(*p));
+            }
+        }
+        points.push(point(synapse.post_site));
+        edges.push(DisplayEdge {
+            source,
+            target,
+            points_mm: points,
+            multiplicity: 1,
+            kind: "live_morphology_route".to_owned(),
+        });
+    }
+    let mut hash = display_topology_epoch(&layer_counts);
+    hash ^= (paths.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    hash ^= (edges.len() as u64).rotate_left(17);
+    let coverage = morphology
+        .skull_membrane
+        .map(|membrane| {
+            let radii =
+                membrane
+                    .radii
+                    .unwrap_or((membrane.radius, membrane.radius, membrane.radius));
+            let centre = Vec3 {
+                x: f64::from(membrane.center.x),
+                y: f64::from(membrane.center.y),
+                z: f64::from(membrane.center.z),
+            };
+            let extent = Vec3 {
+                x: f64::from(radii.0.abs()),
+                y: f64::from(radii.1.abs()),
+                z: f64::from(radii.2.abs()),
+            };
+            AxisAlignedBox {
+                min: Vec3 {
+                    x: centre.x - extent.x,
+                    y: centre.y - extent.y,
+                    z: centre.z - extent.z,
+                },
+                max: Vec3 {
+                    x: centre.x + extent.x,
+                    y: centre.y + extent.y,
+                    z: centre.z + extent.z,
+                },
+            }
+        })
+        .or_else(|| display_bounds(&nodes));
+    let mut snapshot = DisplaySnapshot::bounded_with_paths_and_markers(
+        hash.max(1),
+        hash.max(1),
+        hash.max(1),
+        sequence,
+        DisplayMode::Anatomical,
+        DisplayProvenance::ProceduralAnatomy,
+        coverage,
+        nodes,
+        edges,
+        paths,
+        markers,
+        max_nodes,
+        max_edges,
+        None,
+    )?;
+    snapshot.coverage.membrane = morphology.skull_membrane.and_then(|membrane| {
+        let (x, y, z) =
+            membrane
+                .radii
+                .unwrap_or((membrane.radius, membrane.radius, membrane.radius));
+        let centre_mm = Vec3 {
+            x: membrane.center.x as f64,
+            y: membrane.center.y as f64,
+            z: membrane.center.z as f64,
+        };
+        let radii_mm = Vec3 {
+            x: x as f64,
+            y: y as f64,
+            z: z as f64,
+        };
+        (centre_mm.is_finite() && radii_mm.is_finite() && x > 0.0 && y > 0.0 && z > 0.0).then_some(
+            crate::morphology_contract::DisplayMembrane {
+                centre_mm,
+                radii_mm,
+            },
+        )
+    });
+    Ok(Some(snapshot))
+}
+
 fn topology_node_id(layer: usize, index: usize) -> String {
     match layer {
         0 => format!("sensory:{index}"),
         _ => format!("layer:{layer}:{index}"),
     }
+}
+
+fn display_role(layer: usize, hidden_layers: usize) -> DisplayRole {
+    if layer == 0 {
+        DisplayRole::Sensory
+    } else if layer == hidden_layers + 1 {
+        DisplayRole::Output
+    } else {
+        DisplayRole::Hidden
+    }
+}
+
+fn legacy_display_id(role: DisplayRole, layer: usize, index: usize) -> AnatomicalId {
+    let role_tag = match role {
+        DisplayRole::Sensory => 1u64,
+        DisplayRole::Hidden => 2,
+        DisplayRole::Output => 3,
+        DisplayRole::Unassigned => 4,
+    };
+    // The IDs are stable within a topology generation and are deliberately
+    // scoped to this legacy display adapter. They are not persisted biological
+    // ownership IDs until the legacy dense topology has been migrated.
+    let value =
+        (role_tag << 60) | ((layer as u64 & 0x0fff_ffff) << 32) | (index as u64).saturating_add(1);
+    AnatomicalId::new(value.max(1), 1).expect("display identity is non-zero")
+}
+
+fn synthetic_display_position(
+    layer: usize,
+    index: usize,
+    layer_count: usize,
+    layer_size: usize,
+) -> Vec3 {
+    let x = if layer_count <= 1 {
+        0.0
+    } else {
+        -1.0 + 2.0 * layer as f64 / (layer_count - 1) as f64
+    };
+    let y = if layer_size <= 1 {
+        0.0
+    } else {
+        -1.0 + 2.0 * index as f64 / (layer_size - 1) as f64
+    };
+    Vec3 { x, y, z: 0.0 }
+}
+
+#[cfg(feature = "growth3d")]
+fn legacy_display_position(
+    runner: &Runner,
+    role: DisplayRole,
+    layer: usize,
+    index: usize,
+) -> Option<Vec3> {
+    let node = match role {
+        DisplayRole::Sensory => runner.topo.sensory_nodes.get(index),
+        DisplayRole::Hidden => runner.topo.layers.get(layer.saturating_sub(1))?.get(index),
+        DisplayRole::Output => runner.topo.output_nodes.get(index),
+        DisplayRole::Unassigned => None,
+    }?;
+    Some(Vec3 {
+        x: f64::from(node.x),
+        y: f64::from(node.y),
+        z: f64::from(node.z),
+    })
+}
+
+#[cfg(not(feature = "growth3d"))]
+fn legacy_display_position(
+    _runner: &Runner,
+    _role: DisplayRole,
+    _layer: usize,
+    _index: usize,
+) -> Option<Vec3> {
+    None
+}
+
+fn add_display_matrix_edges(
+    matrix: &ndarray::Array2<f64>,
+    source_role: DisplayRole,
+    target_role: DisplayRole,
+    source_layer: usize,
+    target_layer: usize,
+    kind: &str,
+    edges: &mut Vec<DisplayEdge>,
+) {
+    for ((target, source), weight) in matrix.indexed_iter() {
+        if !weight.is_finite() || *weight == 0.0 {
+            continue;
+        }
+        edges.push(DisplayEdge {
+            source: legacy_display_id(source_role, source_layer, source),
+            target: legacy_display_id(target_role, target_layer, target),
+            points_mm: Vec::new(),
+            multiplicity: 1,
+            kind: kind.to_owned(),
+        });
+    }
+}
+
+fn display_topology_epoch(layer_counts: &[usize]) -> u64 {
+    let mut hash = 14695981039346656037u64;
+    for count in layer_counts {
+        hash ^= *count as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    hash.max(1)
+}
+
+fn display_bounds(nodes: &[DisplayNode]) -> Option<AxisAlignedBox> {
+    let first = nodes.first()?.position_mm;
+    let mut min = first;
+    let mut max = first;
+    for node in nodes.iter().skip(1) {
+        let point = node.position_mm;
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        min.z = min.z.min(point.z);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        max.z = max.z.max(point.z);
+    }
+    Some(AxisAlignedBox { min, max })
 }
 
 fn topology_node_active(
@@ -714,5 +1533,260 @@ mod tests {
 
         let tiny = engine.topology_snapshot(1, 1);
         assert!(tiny.nodes.len() <= 1);
+    }
+
+    #[test]
+    fn display_snapshot_is_versioned_bounded_and_explicit_about_provenance() {
+        let mut spec = EngineSpec::default();
+        spec.net.num_sensory_neurons = 2;
+        spec.net.num_hidden_layers = 1;
+        spec.net.num_hidden_per_layer_initial = 3;
+        spec.net.num_output_neurons = 1;
+        let engine = RunnerEngine::new(spec).expect("engine");
+
+        let snapshot = engine
+            .display_snapshot(DisplayMode::SyntheticColumns, 7, 3, 2)
+            .expect("display snapshot");
+        assert_eq!(
+            snapshot.schema_version.raw(),
+            DisplaySnapshot::SCHEMA_VERSION
+        );
+        assert_eq!(snapshot.sequence, 7);
+        assert_eq!(snapshot.provenance, DisplayProvenance::SyntheticTopology);
+        assert!(snapshot.coverage.truncated);
+        assert!(!snapshot.coverage.complete);
+        assert!(snapshot.nodes.len() <= 3);
+        assert!(snapshot.edges.len() <= 2);
+        snapshot.validate().expect("valid display snapshot");
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    #[ignore = "MORPH-VIS-002: run with cargo xtask qa run --suite anatomical-growth"]
+    fn anatomy_sustained_growth_capture() {
+        assert_eq!(
+            std::env::var("NM_MORPHO_ASYNC").as_deref(),
+            Ok("0"),
+            "capture requires ordered, synchronous growth"
+        );
+        fastrand::seed(42);
+        let mut spec = EngineSpec::default();
+        spec.net = serde_json::from_str(include_str!("../config.json")).unwrap();
+        let mut engine = RunnerEngine::new(spec).unwrap();
+        let dir = std::env::var("ANATOMY_QA_DIR").expect("QA artefact directory");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut metrics = Vec::new();
+        let mut checked_resizes = 0;
+        let mut checked_roots = 0;
+        let started = std::time::Instant::now();
+        for step in 0..=1200 {
+            if step % 100 == 0 {
+                let snapshot = engine
+                    .display_snapshot(DisplayMode::Anatomical, step + 1, 512, 4096)
+                    .unwrap();
+                snapshot.validate().unwrap();
+                let synthetic = engine
+                    .display_snapshot(DisplayMode::SyntheticColumns, step + 1, 512, 4096)
+                    .unwrap();
+                synthetic.validate().unwrap();
+                assert_eq!(
+                    snapshot
+                        .nodes
+                        .iter()
+                        .map(|n| n.id)
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    synthetic.nodes.iter().map(|n| n.id).collect()
+                );
+                let longest = snapshot
+                    .paths
+                    .iter()
+                    .map(|path| path.points_mm[0].distance(path.points_mm[1]))
+                    .fold(0.0, f64::max);
+                metrics.push(serde_json::json!({"step": step, "nodes": snapshot.nodes.len(), "paths": snapshot.paths.len(), "longest_segment": longest, "truncated": snapshot.coverage.truncated, "elapsed_seconds": started.elapsed().as_secs_f64()}));
+                std::fs::write(
+                    format!("{dir}/frame-{step:04}.json"),
+                    serde_json::to_vec(&snapshot).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    format!("{dir}/synthetic-{step:04}.json"),
+                    serde_json::to_vec(&synthetic).unwrap(),
+                )
+                .unwrap();
+            }
+            if step == 1200 {
+                break;
+            }
+            // Observe the actual admission step rather than inferring it from
+            // the presentation sequence. This test-only copy also covers a
+            // growth clock whose boundary falls between capture frames.
+            let before = engine.runner.morph.clone();
+            engine.step(None);
+            assert!(engine.last_step_error().is_none());
+            {
+                let after = &engine.runner.morph;
+                if before.sensory_somas.len() != after.sensory_somas.len()
+                    || before.output_somas.len() != after.output_somas.len()
+                {
+                    checked_resizes += 1;
+                    for (old, new) in before
+                        .axons
+                        .iter()
+                        .zip(&after.axons)
+                        .flat_map(|(old, new)| old.iter().zip(new))
+                    {
+                        // The same step may legitimately prune and compact
+                        // leaves. Root trunks are explicitly protected by the
+                        // legacy model and must survive ordinary I/O growth.
+                        for a in old
+                            .segments
+                            .iter()
+                            .filter(|s| s.is_trunk && s.parent_idx.is_none())
+                        {
+                            checked_roots += 1;
+                            assert!(
+                                new.segments.iter().any(|b| b.is_trunk
+                                    && b.parent_idx.is_none()
+                                    && a.from.dist(b.from) <= 0.05
+                                    && a.to.dist(b.to) <= 0.05),
+                                "I/O formation replaced a protected axon root"
+                            );
+                        }
+                    }
+                    for (old, new) in before
+                        .dendrites
+                        .iter()
+                        .zip(&after.dendrites)
+                        .flat_map(|(old, new)| old.iter().zip(new))
+                    {
+                        for a in old
+                            .tree
+                            .branches
+                            .iter()
+                            .filter(|s| s.is_trunk && s.parent_idx.is_none())
+                        {
+                            checked_roots += 1;
+                            assert!(
+                                new.tree.branches.iter().any(|b| b.is_trunk
+                                    && b.parent_idx.is_none()
+                                    && a.from.dist(b.from) <= 0.05
+                                    && a.to.dist(b.to) <= 0.05),
+                                "I/O formation replaced a protected dendritic root"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked_resizes >= 2,
+            "must cross both reported development boundaries"
+        );
+        assert!(
+            checked_roots >= 210,
+            "must exercise the grown hidden population"
+        );
+        std::fs::write(format!("{dir}/growth-metrics.json"), serde_json::to_vec_pretty(&serde_json::json!({"seed":42,"profile":"debug CPU, synchronous offline growth; not a stimulus latency benchmark","checked_resizes":checked_resizes,"checked_protected_roots":checked_roots,"frames":metrics})).unwrap()).unwrap();
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn live_morphology_display_contains_paths_and_keeps_mode_ids_stable() {
+        let mut spec = EngineSpec::default();
+        spec.net.num_sensory_neurons = 1;
+        spec.net.num_hidden_layers = 1;
+        spec.net.num_hidden_per_layer_initial = 1;
+        spec.net.num_output_neurons = 1;
+        spec.net.use_morphology = true;
+        let mut engine = RunnerEngine::new(spec).expect("engine");
+        let soma = crate::morphology::Point3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        engine.runner.morph.somas = vec![vec![crate::morphology::Soma {
+            id: 0,
+            layer: 0,
+            pos: soma,
+            stimuli: 0.0,
+            atp: 1.0,
+            organelles: Vec::new(),
+            prev_err: Default::default(),
+            integral_err: Default::default(),
+            region_name: None,
+            type_name: None,
+        }]];
+        engine.runner.morph.axons = vec![vec![crate::morphology::Axon::default()]];
+        engine.runner.morph.axons[0][0]
+            .segments
+            .push(crate::morphology::AxonSeg {
+                from: soma,
+                to: crate::morphology::Point3 {
+                    x: soma.x + 0.15,
+                    y: soma.y + 0.05,
+                    z: soma.z + 0.10,
+                },
+                length: 0.187,
+                ..Default::default()
+            });
+        engine.runner.morph.dendrites = vec![vec![crate::morphology::Dendrite {
+            neuron_layer: 0,
+            neuron_id: 0,
+            tree: crate::morphology::DendriticTree {
+                branches: vec![crate::morphology::DendSeg {
+                    from: soma,
+                    to: crate::morphology::Point3 {
+                        x: soma.x - 0.12,
+                        y: soma.y + 0.04,
+                        z: soma.z + 0.08,
+                    },
+                    length: 0.15,
+                    ..Default::default()
+                }],
+            },
+            stimuli: 0.0,
+            atp: 1.0,
+            organelles: Vec::new(),
+        }]];
+        let anatomical = engine
+            .display_snapshot(DisplayMode::Anatomical, 1, 64, 64)
+            .expect("anatomical snapshot");
+        let synthetic = engine
+            .display_snapshot(DisplayMode::SyntheticColumns, 1, 64, 64)
+            .expect("synthetic snapshot");
+        assert_eq!(anatomical.provenance, DisplayProvenance::ProceduralAnatomy);
+        assert!(!anatomical.paths.is_empty());
+        assert_eq!(
+            anatomical
+                .nodes
+                .iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            synthetic
+                .nodes
+                .iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            anatomical
+                .paths
+                .iter()
+                .any(|path| path.kind == AnatomicalKind::Axon)
+        );
+        assert!(
+            anatomical
+                .paths
+                .iter()
+                .any(|path| path.kind == AnatomicalKind::Dendrite)
+        );
+        assert!(
+            anatomical
+                .markers
+                .iter()
+                .any(|marker| marker.kind == AnatomicalKind::Synapse)
+        );
+        anatomical.validate().expect("valid anatomical snapshot");
+        synthetic.validate().expect("valid synthetic snapshot");
     }
 }

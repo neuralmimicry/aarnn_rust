@@ -41,6 +41,57 @@ scripts/deploy.sh canary
 scripts/deploy.sh prod
 ```
 
+## Runtime diagnostics and log retention
+
+The native `aarnn_rust` binary writes timestamped session logs under `logs/` by
+default. Use `--no-log` (alias `-q` or `--quiet`) to suppress AARNN console/file
+diagnostics and timing metrics when profiling for maximum throughput:
+
+```bash
+cargo run --all-features --bin aarnn_rust -- --ui --no-log
+```
+
+Normal logs keep UI rendering separate from neural compute. `[ui.graphics]`
+records the renderer actually selected, WGPU adapter/backend/driver/API details
+or Glow GL strings, plus WGPU device-loss and surface errors. `[compute.cuda]`
+records CUDA driver/runtime versions, device UUID, context/kernel/synchronization
+errors, and the process-lifetime cached GPU-count probe. `[compute.backend]`
+records rate-limited transitions to CPU reference execution. Panic entries
+include a forced backtrace. SIGHUP, SIGTERM and Ctrl-C are logged as graceful
+shutdown requests, followed by a final log flush.
+
+Session files rotate at 20 MiB by default, retaining up to five rotated files.
+For default `logs/nm-<timestamp>.log` files, old sessions are pruned to at most
+10 sessions and 512 MiB total. Log entries are capped at 32 KiB. Available disk
+space is checked during writes (at least every five seconds); a warning is
+emitted below 2 GiB free, and the AARNN file sink flushes and disables itself
+below 512 MiB free. The warning/critical lines include structured
+`disk_pressure` and `action` fields for systemd/journald, node exporters, or
+other automated log monitors. The process preserves that free-space reserve
+instead of allowing its own log writer to consume it.
+
+Tune bounded retention and disk thresholds with these environment variables;
+invalid or out-of-range values fall back to the defaults or are clamped:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `NM_LOG_ROTATE_BYTES` | `20971520` | Maximum bytes per active/rotated file (64 KiB–1 GiB). |
+| `NM_LOG_ROTATE_COUNT` | `5` | Rotated files per session (1–20). |
+| `NM_LOG_ROTATE_SESSIONS` | `10` | Retained timestamped sessions (1–100). |
+| `NM_LOG_TOTAL_BYTES` | `536870912` | Aggregate timestamped log history budget (8 MiB–4 GiB). |
+| `NM_LOG_DISK_WARN_FREE_BYTES` | `2147483648` | Emit a disk-pressure warning at or below this free-space level. |
+| `NM_LOG_DISK_STOP_FREE_BYTES` | `536870912` | Flush and disable the file sink at or below this free-space reserve. |
+
+Example for a constrained workstation:
+
+```bash
+NM_LOG_ROTATE_BYTES=10485760 NM_LOG_ROTATE_COUNT=3 \
+NM_LOG_ROTATE_SESSIONS=5 NM_LOG_TOTAL_BYTES=134217728 \
+NM_LOG_DISK_WARN_FREE_BYTES=1073741824 \
+NM_LOG_DISK_STOP_FREE_BYTES=268435456 \
+target/debug/aarnn_rust --ui
+```
+
 ## Hybrid k3s and native AARNN nodes
 
 Cluster membership is held by the orchestrator process. Run exactly one

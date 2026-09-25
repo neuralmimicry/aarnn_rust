@@ -1,4 +1,5 @@
 use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus, EngineTopologySnapshot};
+use crate::morphology_contract::DisplaySnapshot;
 use anyhow::{Context, anyhow};
 use reqwest::Method;
 use reqwest::blocking::{Client, RequestBuilder};
@@ -184,6 +185,11 @@ pub struct WorkspaceSnapshotResponse {
     #[serde(default)]
     pub saved_at_ms: Option<u64>,
     pub snapshot_json: String,
+    /// Read-only view DTOs for the two supported endpoint presentations. These
+    /// are derived from the authoritative engine snapshot and are not part of
+    /// the persisted neural state.
+    #[serde(default)]
+    pub display_snapshots: std::collections::BTreeMap<String, DisplaySnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

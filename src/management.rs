@@ -1872,8 +1872,8 @@ impl ManagementGrpcService {
                 // The durable journal remains the recovery record.  A
                 // completion callback must never panic or rewrite a fenced
                 // operation after leadership changes.
-                eprintln!(
-                    "migration dispatch completion could not update journal: brain={} operation={} error={error}",
+                nm_err!(
+                    "[warn] migration dispatch completion could not update journal: brain={} operation={} error={error}",
                     operation.brain_id.raw(),
                     operation.operation_id
                 );
@@ -3921,8 +3921,8 @@ impl SecuredManagementGrpcService {
                 Err(error) => service.fail_migration(operation.clone(), error),
             };
             if let Err(error) = result {
-                eprintln!(
-                    "secured migration dispatch completion could not update journal: brain={} operation={} error={error}",
+                nm_err!(
+                    "[warn] secured migration dispatch completion could not update journal: brain={} operation={} error={error}",
                     operation.brain_id.raw(),
                     operation.operation_id
                 );

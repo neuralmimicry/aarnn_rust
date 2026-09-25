@@ -23,6 +23,12 @@
 use std::sync::Arc;
 #[cfg(feature = "ui")]
 use std::sync::Mutex;
+#[cfg(feature = "webcam_input")]
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+#[cfg(feature = "webcam_input")]
+use std::sync::mpsc::{self, Receiver, SyncSender};
+#[cfg(feature = "webcam_input")]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "ui")]
 const MAX_VIDEO_PREVIEW_PIXELS: usize = 640 * 480;
@@ -82,7 +88,9 @@ fn publish_video_preview(store: &VideoPreviewStore, width: usize, height: usize,
             out[target..target + 3].copy_from_slice(&rgb[source..source + 3]);
         }
     }
-    if let Ok(mut current) = store.lock() {
+    // Preview is best-effort display state. Never let UI texture extraction
+    // backpressure a live capture or simulation worker.
+    if let Ok(mut current) = store.try_lock() {
         let sequence = current
             .as_ref()
             .map(|frame| frame.sequence.saturating_add(1))
@@ -1363,17 +1371,408 @@ impl SensoryProvider for VideoFileProvider {
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 pub struct WebcamCaptureProvider {
     num_sensory_neurons: usize,
-    cam: nokhwa::Camera,
-    threshold: f32,
-    invert: bool,
-    use_max: bool,
-    preview: Option<VideoPreviewStore>,
+    requested_sensory_neurons: Arc<AtomicUsize>,
+    latest_sample: Arc<Mutex<WebcamLatestSample>>,
+    last_sample_sequence: u64,
+    latest_spikes: Vec<i8>,
+    stop_tx: SyncSender<()>,
+    stop_requested: Arc<std::sync::atomic::AtomicBool>,
+    monitor: WebcamCaptureMonitor,
 }
 
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
-unsafe impl Send for WebcamCaptureProvider {}
+struct WebcamLatestSample {
+    sequence: u64,
+    spikes: Vec<i8>,
+}
+
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
-unsafe impl Sync for WebcamCaptureProvider {}
+const WEBCAM_STALE_AFTER: Duration = Duration::from_secs(2);
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+const WEBCAM_RETRY_INITIAL: Duration = Duration::from_millis(250);
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+const WEBCAM_RETRY_MAX: Duration = Duration::from_secs(5);
+
+/// Current state of the isolated webcam capture worker.
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WebcamCapturePhase {
+    Starting = 0,
+    Streaming = 1,
+    Reconnecting = 2,
+    Failed = 3,
+    Stopped = 4,
+}
+
+/// UI-safe health snapshot for a webcam worker. Stale samples are excluded
+/// from neural input independently of the preview window state.
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+#[derive(Clone, Debug)]
+pub struct WebcamCaptureSnapshot {
+    pub phase: WebcamCapturePhase,
+    pub elapsed: Duration,
+    pub last_frame_age: Option<Duration>,
+    pub frames_received: u64,
+    pub last_error: Option<String>,
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+#[derive(Clone)]
+pub struct WebcamCaptureMonitor {
+    inner: Arc<WebcamCaptureMonitorInner>,
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+struct WebcamCaptureMonitorInner {
+    phase: AtomicU8,
+    started_at: Instant,
+    last_frame_elapsed_ms: std::sync::atomic::AtomicU64,
+    frames_received: std::sync::atomic::AtomicU64,
+    last_error: Mutex<Option<String>>,
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+impl WebcamCaptureMonitor {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(WebcamCaptureMonitorInner {
+                phase: AtomicU8::new(WebcamCapturePhase::Starting as u8),
+                started_at: Instant::now(),
+                last_frame_elapsed_ms: std::sync::atomic::AtomicU64::new(0),
+                frames_received: std::sync::atomic::AtomicU64::new(0),
+                last_error: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub fn snapshot(&self) -> WebcamCaptureSnapshot {
+        let elapsed = self.inner.started_at.elapsed();
+        let last_frame_ms = self.inner.last_frame_elapsed_ms.load(Ordering::Relaxed);
+        let last_frame_age = (last_frame_ms != 0).then(|| {
+            elapsed.saturating_sub(Duration::from_millis(last_frame_ms.saturating_sub(1)))
+        });
+        let phase = match self.inner.phase.load(Ordering::Relaxed) {
+            1 => WebcamCapturePhase::Streaming,
+            2 => WebcamCapturePhase::Reconnecting,
+            3 => WebcamCapturePhase::Failed,
+            4 => WebcamCapturePhase::Stopped,
+            _ => WebcamCapturePhase::Starting,
+        };
+        let last_error = self
+            .inner
+            .last_error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone());
+        WebcamCaptureSnapshot {
+            phase,
+            elapsed,
+            last_frame_age,
+            frames_received: self.inner.frames_received.load(Ordering::Relaxed),
+            last_error,
+        }
+    }
+
+    fn has_fresh_frame(&self) -> bool {
+        let last_frame_ms = self.inner.last_frame_elapsed_ms.load(Ordering::Relaxed);
+        if last_frame_ms == 0 {
+            return false;
+        }
+        let elapsed_ms = self
+            .inner
+            .started_at
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        elapsed_ms.saturating_sub(last_frame_ms.saturating_sub(1))
+            <= WEBCAM_STALE_AFTER.as_millis() as u64
+    }
+
+    pub fn is_stale(&self) -> bool {
+        !self.has_fresh_frame()
+    }
+
+    fn report_reconnecting(&self, error: String) {
+        self.set_error(Some(error));
+        self.inner
+            .phase
+            .store(WebcamCapturePhase::Reconnecting as u8, Ordering::Relaxed);
+    }
+
+    fn record_frame(&self) {
+        let elapsed_ms = self
+            .inner
+            .started_at
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        self.inner
+            .last_frame_elapsed_ms
+            .store(elapsed_ms.saturating_add(1), Ordering::Relaxed);
+        self.inner.frames_received.fetch_add(1, Ordering::Relaxed);
+        self.set_error(None);
+        self.inner
+            .phase
+            .store(WebcamCapturePhase::Streaming as u8, Ordering::Relaxed);
+    }
+
+    fn mark_failed(&self, error: String) {
+        self.set_error(Some(error));
+        self.inner
+            .phase
+            .store(WebcamCapturePhase::Failed as u8, Ordering::Relaxed);
+    }
+
+    fn mark_stopped(&self) {
+        self.inner
+            .phase
+            .store(WebcamCapturePhase::Stopped as u8, Ordering::Relaxed);
+    }
+
+    fn set_error(&self, error: Option<String>) {
+        if let Ok(mut current) = self.inner.last_error.lock() {
+            *current = error;
+        }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn decode_webcam_rgb_frame(frame: &nokhwa::Buffer) -> anyhow::Result<(usize, usize, Vec<u8>)> {
+    use nokhwa::pixel_format::RgbFormat;
+
+    let resolution = frame.resolution();
+    let width = resolution.width() as usize;
+    let height = resolution.height() as usize;
+    let expected_bytes = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or_else(|| anyhow::anyhow!("webcam frame dimensions overflow"))?;
+    if expected_bytes == 0 {
+        anyhow::bail!("webcam frame has zero width or height");
+    }
+
+    // `frame.buffer()` is in `source_frame_format()`, even when the camera was
+    // opened with `RequestedFormat<RgbFormat>`. Decode using Nokhwa's format
+    // tag so MJPEG, YUYV, NV12, RGB, BGR and grayscale frames all become RGB.
+    let source_format = frame.source_frame_format();
+    let rgb = frame
+        .decode_image::<RgbFormat>()
+        .map_err(|error| anyhow::anyhow!("{source_format:?} to RGB decode failed: {error}"))?
+        .into_raw();
+    anyhow::ensure!(
+        rgb.len() == expected_bytes,
+        "{source_format:?} decoded to {} bytes, expected {expected_bytes}",
+        rgb.len()
+    );
+    Ok((width, height, rgb))
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn webcam_rgb_to_spikes(
+    width: usize,
+    height: usize,
+    rgb: &[u8],
+    neuron_count: usize,
+    threshold: f32,
+    invert: bool,
+    use_max: bool,
+) -> Vec<i8> {
+    if neuron_count == 0 || width == 0 || height == 0 {
+        return vec![0; neuron_count];
+    }
+
+    // Accumulate luminance by column without allocating a second full-size
+    // image. Decoding/copying the device frame happens only on this worker.
+    let mut col_vals = vec![0.0f32; width];
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = (y * width + x) * 3;
+            let luminance = (0.299 * rgb[pixel] as f32
+                + 0.587 * rgb[pixel + 1] as f32
+                + 0.114 * rgb[pixel + 2] as f32)
+                / 255.0;
+            col_vals[x] += luminance;
+        }
+    }
+    for value in &mut col_vals {
+        *value /= height as f32;
+    }
+
+    let mut values = vec![0.0f32; neuron_count];
+    for (index, value) in values.iter_mut().enumerate() {
+        let start = (index * width) / neuron_count;
+        let mut end = ((index + 1) * width) / neuron_count;
+        if end <= start {
+            end = (start + 1).min(width);
+        }
+        if start >= end {
+            continue;
+        }
+        *value = if use_max {
+            col_vals[start..end].iter().copied().fold(0.0f32, f32::max)
+        } else {
+            col_vals[start..end].iter().sum::<f32>() / (end - start) as f32
+        };
+    }
+
+    let threshold = threshold.clamp(0.0, 1.0);
+    values
+        .into_iter()
+        .map(|value| {
+            let value = if invert { 1.0 - value } else { value };
+            i8::from(value >= threshold)
+        })
+        .collect()
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn open_webcam_camera(device_id: &str) -> anyhow::Result<nokhwa::Camera> {
+    use nokhwa::{
+        Camera,
+        pixel_format::RgbFormat,
+        utils::{CameraIndex, RequestedFormat, RequestedFormatType},
+    };
+
+    let requested =
+        RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+    let camera_index = device_id
+        .parse::<u32>()
+        .map(CameraIndex::Index)
+        .unwrap_or_else(|_| CameraIndex::String(device_id.to_owned()));
+    let mut camera = Camera::new(camera_index, requested)?;
+    camera.open_stream()?;
+    Ok(camera)
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn wait_for_webcam_retry(
+    stop_rx: &Receiver<()>,
+    stop_requested: &std::sync::atomic::AtomicBool,
+    delay: Duration,
+) -> bool {
+    if stop_requested.load(Ordering::Relaxed) {
+        return true;
+    }
+    match stop_rx.recv_timeout(delay) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => true,
+        Err(mpsc::RecvTimeoutError::Timeout) => stop_requested.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+fn webcam_capture_worker(
+    device_id: String,
+    num_sensory_neurons: Arc<AtomicUsize>,
+    latest_sample: Arc<Mutex<WebcamLatestSample>>,
+    stop_rx: Receiver<()>,
+    stop_requested: Arc<std::sync::atomic::AtomicBool>,
+    monitor: WebcamCaptureMonitor,
+    preview: Option<VideoPreviewStore>,
+) {
+    let mut retry_delay = WEBCAM_RETRY_INITIAL;
+    let mut first_error_logged = false;
+
+    while !stop_requested.load(Ordering::Relaxed) {
+        let mut camera = match open_webcam_camera(&device_id) {
+            Ok(camera) => camera,
+            Err(error) => {
+                let message = format!("camera open failed: {error}");
+                if !first_error_logged {
+                    crate::nm_log!("[webcam] {message}");
+                    first_error_logged = true;
+                }
+                monitor.report_reconnecting(message);
+                if wait_for_webcam_retry(&stop_rx, &stop_requested, retry_delay) {
+                    break;
+                }
+                retry_delay = retry_delay.saturating_mul(2).min(WEBCAM_RETRY_MAX);
+                continue;
+            }
+        };
+
+        let mut consecutive_errors = 0u8;
+        let mut reopen_camera = false;
+        while !stop_requested.load(Ordering::Relaxed) {
+            let frame = match camera.frame() {
+                Ok(frame) => frame,
+                Err(error) => {
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    let message = format!("camera frame capture failed: {error}");
+                    if !first_error_logged {
+                        crate::nm_log!("[webcam] {message}");
+                        first_error_logged = true;
+                    }
+                    monitor.report_reconnecting(message);
+                    if consecutive_errors >= 3 {
+                        reopen_camera = true;
+                        break;
+                    }
+                    if wait_for_webcam_retry(&stop_rx, &stop_requested, Duration::from_millis(100))
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            if stop_requested.load(Ordering::Relaxed) {
+                break;
+            }
+            let (width, height, rgb) = match decode_webcam_rgb_frame(&frame) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    let message = format!("camera frame conversion failed: {error:#}");
+                    if !first_error_logged {
+                        crate::nm_log!("[webcam] {message}");
+                        first_error_logged = true;
+                    }
+                    monitor.report_reconnecting(message);
+                    if consecutive_errors >= 3 {
+                        reopen_camera = true;
+                        break;
+                    }
+                    if wait_for_webcam_retry(&stop_rx, &stop_requested, Duration::from_millis(100))
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            if stop_requested.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if let Some(preview) = &preview {
+                publish_video_preview(preview, width, height, &rgb);
+            }
+            let neuron_count = num_sensory_neurons.load(Ordering::Relaxed);
+            let spikes = webcam_rgb_to_spikes(width, height, &rgb, neuron_count, 0.5, false, true);
+            if let Ok(mut sample) = latest_sample.try_lock() {
+                sample.sequence = sample.sequence.saturating_add(1);
+                sample.spikes = spikes;
+            }
+            monitor.record_frame();
+            consecutive_errors = 0;
+            retry_delay = WEBCAM_RETRY_INITIAL;
+        }
+
+        if stop_requested.load(Ordering::Relaxed) {
+            let _ = camera.stop_stream();
+            break;
+        }
+        if reopen_camera {
+            let _ = camera.stop_stream();
+            drop(camera);
+            if wait_for_webcam_retry(&stop_rx, &stop_requested, retry_delay) {
+                break;
+            }
+            retry_delay = retry_delay.saturating_mul(2).min(WEBCAM_RETRY_MAX);
+        }
+    }
+
+    monitor.mark_stopped();
+}
 
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 impl WebcamCaptureProvider {
@@ -1394,152 +1793,114 @@ impl WebcamCaptureProvider {
         num_sensory_neurons: usize,
         preview: Option<VideoPreviewStore>,
     ) -> anyhow::Result<Self> {
-        use nokhwa::{
-            Camera,
-            pixel_format::RgbFormat,
-            utils::{CameraIndex, RequestedFormat, RequestedFormatType},
-        };
-        let requested =
-            RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-        let camera_index = device_id
-            .parse::<u32>()
-            .map(CameraIndex::Index)
-            .unwrap_or_else(|_| CameraIndex::String(device_id.to_owned()));
-        let mut cam = Camera::new(camera_index, requested)?;
-        cam.open_stream()?;
+        let monitor = WebcamCaptureMonitor::new();
+        let requested_sensory_neurons = Arc::new(AtomicUsize::new(num_sensory_neurons));
+        let latest_sample = Arc::new(Mutex::new(WebcamLatestSample {
+            sequence: 0,
+            spikes: vec![0; num_sensory_neurons],
+        }));
+        let stop_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (stop_tx, stop_rx) = mpsc::sync_channel(1);
+        let worker_monitor = monitor.clone();
+        let worker_neuron_count = requested_sensory_neurons.clone();
+        let worker_latest_sample = latest_sample.clone();
+        let worker_stop_requested = stop_requested.clone();
+        let worker_device_id = device_id.to_owned();
+        let worker = std::thread::Builder::new()
+            .name("webcam-capture".to_string())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    webcam_capture_worker(
+                        worker_device_id,
+                        worker_neuron_count,
+                        worker_latest_sample,
+                        stop_rx,
+                        worker_stop_requested.clone(),
+                        worker_monitor.clone(),
+                        preview,
+                    );
+                }));
+                if let Err(payload) = result
+                    && !worker_stop_requested.load(Ordering::Relaxed)
+                {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| {
+                            payload
+                                .downcast_ref::<&str>()
+                                .map(|text| (*text).to_string())
+                        })
+                        .unwrap_or_else(|| "unknown camera worker panic".to_string());
+                    worker_monitor.mark_failed(format!("camera worker failed: {message}"));
+                    crate::nm_log!("[webcam] camera worker failed: {message}");
+                }
+            })?;
+        drop(worker);
         Ok(Self {
-            num_sensory_neurons: num_sensory_neurons,
-            cam,
-            threshold: 0.5,
-            invert: false,
-            use_max: true,
-            preview,
+            num_sensory_neurons,
+            requested_sensory_neurons,
+            latest_sample,
+            last_sample_sequence: 0,
+            latest_spikes: vec![0; num_sensory_neurons],
+            stop_tx,
+            stop_requested,
+            monitor,
         })
+    }
+
+    pub fn monitor(&self) -> WebcamCaptureMonitor {
+        self.monitor.clone()
+    }
+
+    fn request_stop(&mut self) {
+        if !self.stop_requested.swap(true, Ordering::Relaxed) {
+            let _ = self.stop_tx.try_send(());
+            self.monitor.mark_stopped();
+        }
     }
 }
 
 #[cfg(all(feature = "ui", feature = "webcam_input"))]
 impl SensoryProvider for WebcamCaptureProvider {
     fn next_spikes(&mut self) -> Vec<i8> {
-        let frame = match self.cam.frame() {
-            Ok(f) => f,
-            Err(_) => return vec![0; self.num_sensory_neurons],
-        };
-        let res = frame.resolution();
-        let w = res.width() as usize;
-        let h = res.height() as usize;
-        let buf = frame.buffer().to_vec();
-        let len = buf.len();
-        let pixels = w.saturating_mul(h);
+        if !self.monitor.has_fresh_frame() {
+            return vec![0; self.num_sensory_neurons];
+        }
+        if let Ok(sample) = self.latest_sample.try_lock()
+            && sample.sequence != self.last_sample_sequence
+        {
+            self.latest_spikes.clone_from(&sample.spikes);
+            self.last_sample_sequence = sample.sequence;
+        }
+        self.latest_spikes.clone()
+    }
 
-        // Convert to grayscale safely depending on buffer layout
-        let mut gray = vec![0.0f32; pixels];
-        if pixels == 0 || len == 0 {
-            // leave as zeros
-        } else if len == pixels {
-            // GRAY8
-            for i in 0..pixels {
-                gray[i] = buf[i] as f32 / 255.0;
-            }
-        } else if len == pixels * 2 {
-            // Likely YUYV422: [Y0 U Y1 V] per two pixels
-            for p in 0..pixels {
-                let base = (p / 2) * 4; // bytes per pair
-                let y_idx = if (p & 1) == 0 { base } else { base + 2 };
-                if y_idx < len {
-                    gray[p] = buf[y_idx] as f32 / 255.0;
-                }
-            }
-        } else if len >= pixels * 3 {
-            // Assume interleaved RGB/BGR with at least 3 bytes per pixel
-            // Heuristic: many drivers deliver RGB; even if BGR, luminance formula is symmetric enough for demo
-            let stride = len / pixels; // 3 or 4
-            for p in 0..pixels {
-                let i = p * stride;
-                if i + 2 < len {
-                    let r = buf[i] as f32;
-                    let g = buf[i + 1] as f32;
-                    let b = buf[i + 2] as f32;
-                    gray[p] = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
-                }
-            }
-        } else {
-            // Unknown format; fallback to zeros of correct length
-        }
-        if let Some(preview) = &self.preview {
-            let mut rgb = vec![0u8; pixels.saturating_mul(3)];
-            if len >= pixels.saturating_mul(3) && pixels > 0 {
-                let stride = len / pixels;
-                for index in 0..pixels {
-                    let source = index * stride;
-                    let target = index * 3;
-                    rgb[target..target + 3].copy_from_slice(&buf[source..source + 3]);
-                }
-            } else {
-                for (index, value) in gray.iter().copied().enumerate() {
-                    let value = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-                    rgb[index * 3..index * 3 + 3].fill(value);
-                }
-            }
-            publish_video_preview(preview, w, h, &rgb);
-        }
-        // Downsample
-        let mut col_vals = vec![0.0f32; w];
-        if w > 0 {
-            for x in 0..w {
-                let mut acc = 0.0f32;
-                for y in 0..h {
-                    acc += gray[y * w + x];
-                }
-                col_vals[x] = if h > 0 { acc / (h as f32) } else { 0.0 };
-            }
-        }
-        let mut vals = vec![0.0f32; self.num_sensory_neurons.max(0)];
-        let target = self.num_sensory_neurons.max(1);
-        for i in 0..target {
-            let start = (i * w) / target;
-            let mut end = ((i + 1) * w) / target;
-            if end <= start {
-                end = (start + 1).min(w);
-            }
-            if start >= end || w == 0 {
-                vals[i] = 0.0;
-                continue;
-            }
-            if self.use_max {
-                let mut m: f32 = 0.0;
-                for x in start..end {
-                    m = m.max(col_vals[x]);
-                }
-                vals[i] = m;
-            } else {
-                let mut acc = 0.0f32;
-                let mut cnt = 0usize;
-                for x in start..end {
-                    acc += col_vals[x];
-                    cnt += 1;
-                }
-                vals[i] = if cnt > 0 { acc / (cnt as f32) } else { 0.0 };
-            }
-        }
-        let thr = self.threshold.clamp(0.0, 1.0);
-        vals.into_iter()
-            .map(|v| {
-                let p = if self.invert { 1.0 - v } else { v };
-                if p >= thr { 1 } else { 0 }
-            })
-            .collect()
-    }
     fn stop(&mut self) {
-        let _ = self.cam.stop_stream();
+        self.request_stop();
     }
+
     fn set_num_sensory_neurons(&mut self, n_s: usize) {
         self.num_sensory_neurons = n_s;
+        self.latest_spikes.resize(n_s, 0);
+        self.requested_sensory_neurons.store(n_s, Ordering::Relaxed);
+        if let Ok(mut sample) = self.latest_sample.try_lock() {
+            sample.spikes.resize(n_s, 0);
+        }
+    }
+}
+
+#[cfg(all(feature = "ui", feature = "webcam_input"))]
+impl Drop for WebcamCaptureProvider {
+    fn drop(&mut self) {
+        self.request_stop();
     }
 }
 
 #[cfg(all(test, feature = "ui"))]
 mod tests {
+    #[cfg(feature = "webcam_input")]
+    use super::decode_webcam_rgb_frame;
     use super::{
         AudioFileProvider, CombinedVideoAudioProvider, SensoryProvider, list_microphone_devices,
         new_video_preview_store, publish_video_preview,
@@ -1616,6 +1977,41 @@ mod tests {
             }
             Err(error) => assert!(!error.to_string().trim().is_empty()),
         }
+    }
+
+    #[cfg(feature = "webcam_input")]
+    #[test]
+    fn webcam_rgb_decode_uses_the_declared_source_format() {
+        let mjpeg = nokhwa::Buffer::new(
+            nokhwa::utils::Resolution::new(2, 2),
+            include_bytes!("../tests/fixtures/webcam_mjpeg_2x2.jpg"),
+            nokhwa::utils::FrameFormat::MJPEG,
+        );
+        let (width, height, rgb) = decode_webcam_rgb_frame(&mjpeg).expect("decode MJPEG frame");
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(rgb.len(), width * height * 3);
+        assert!(
+            rgb.chunks_exact(3)
+                .all(|pixel| pixel[0] > pixel[1] && pixel[0] > pixel[2])
+        );
+
+        let nv12 = nokhwa::Buffer::new(
+            nokhwa::utils::Resolution::new(2, 2),
+            &[80, 80, 80, 80, 128, 128],
+            nokhwa::utils::FrameFormat::NV12,
+        );
+        let (width, height, rgb) = decode_webcam_rgb_frame(&nv12).expect("decode NV12 frame");
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(rgb.len(), width * height * 3);
+        assert!(rgb.iter().all(|channel| *channel > 0));
+
+        let bgr = nokhwa::Buffer::new(
+            nokhwa::utils::Resolution::new(1, 1),
+            &[10, 20, 30],
+            nokhwa::utils::FrameFormat::RAWBGR,
+        );
+        let (_, _, rgb) = decode_webcam_rgb_frame(&bgr).expect("decode BGR frame");
+        assert_eq!(rgb, [30, 20, 10]);
     }
 
     #[test]
