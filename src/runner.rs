@@ -1801,6 +1801,9 @@ impl Runner {
         }
     }
 
+    #[cfg(not(feature = "opencl"))]
+    fn log_gpu_cpu_fallback(&self, _stage: &'static str) {}
+
     fn normalize_i8_history(history: &mut VecDeque<Array1<i8>>, frame_len: usize, hist_len: usize) {
         let hist_len = hist_len.max(1);
         if history.is_empty() {

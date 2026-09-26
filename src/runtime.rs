@@ -1163,7 +1163,12 @@ impl RuntimeManager {
             stop_tx,
         });
 
-        manager.load_existing_workspaces().await?;
+        // Do not import persisted neural snapshots before the HTTP listener
+        // starts. Shared workspaces can have snapshots hundreds of MB in
+        // size, and synchronous engine construction here made the web UI
+        // appear unavailable for the entire restore. The scheduler performs
+        // the same reconciliation in the background after the manager is
+        // returned; workspace APIs also reconcile on demand.
         manager.spawn_scheduler(stop_rx);
         Ok(manager)
     }

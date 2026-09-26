@@ -234,10 +234,16 @@ pub fn resolve_service_access(
             .and_then(|item| item.get("can_request"))
             .and_then(json_bool)
             .unwrap_or_else(|| access_at_least(&visible_access_level, SERVICE_ACCESS_REQUEST));
+        // Access levels form an ordered ladder. Older stored sessions may
+        // contain a stale false capability flag beside a stronger grant;
+        // that flag must not revoke observation already implied by the
+        // effective access level.
+        let observation_access_level = max_access_level(&access_level, &visible_access_level);
         let can_observe = entry
             .and_then(|item| item.get("can_observe"))
             .and_then(json_bool)
-            .unwrap_or_else(|| access_at_least(&visible_access_level, SERVICE_ACCESS_OBSERVE));
+            .unwrap_or(false)
+            || access_at_least(&observation_access_level, SERVICE_ACCESS_OBSERVE);
         let can_use = entry
             .and_then(|item| item.get("can_use"))
             .and_then(json_bool)
@@ -414,6 +420,31 @@ mod tests {
         assert_eq!(aarnn.access_level, SERVICE_ACCESS_OBSERVE);
         assert!(aarnn.can_observe);
         assert!(!aarnn.can_use);
+    }
+
+    #[test]
+    fn stale_false_observation_flag_does_not_revoke_control_grant() {
+        let resolved = resolve_service_access(
+            Some(&json!({
+                "aarnn": {
+                    "service_key": "aarnn",
+                    "access_level": "control",
+                    "visible_access_level": "request",
+                    "public_access_level": "request",
+                    "can_observe": false
+                }
+            })),
+            true,
+            "user",
+            &["admin".to_string()],
+            true,
+            &[],
+        );
+
+        let aarnn = resolved.get("aarnn").expect("aarnn service should exist");
+        assert_eq!(aarnn.access_level, SERVICE_ACCESS_CONTROL);
+        assert!(aarnn.can_observe);
+        assert!(aarnn.can_control);
     }
 
     #[test]
