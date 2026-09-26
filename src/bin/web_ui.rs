@@ -1924,6 +1924,9 @@ async fn main() -> anyhow::Result<()> {
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: std::path::PathBuf::from(&args.runtime_root),
         tick_interval_ms: args.runtime_tick_ms.max(1),
+        initial_reconcile_delay_ms: env_opt("NM_RUNTIME_STARTUP_RECONCILE_DELAY_MS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10_000),
         local_worker_limit: if args.runtime_workers == 0 {
             std::thread::available_parallelism()
                 .map(|n| n.get())

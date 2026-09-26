@@ -50,6 +50,7 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: root.clone(),
         tick_interval_ms: 5,
+        initial_reconcile_delay_ms: 0,
         local_worker_limit: 1,
         max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
@@ -113,6 +114,7 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
     let resumed = RuntimeManager::new(RuntimeConfig {
         root_dir: root.clone(),
         tick_interval_ms: 5,
+        initial_reconcile_delay_ms: 0,
         local_worker_limit: 1,
         max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
@@ -136,6 +138,7 @@ async fn runtime_manager_isolates_users_by_workspace_root() {
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: root.clone(),
         tick_interval_ms: 10,
+        initial_reconcile_delay_ms: 0,
         local_worker_limit: 1,
         max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,
@@ -196,6 +199,7 @@ async fn runtime_manager_lists_requested_workspace_owners_in_order() {
     let runtime = RuntimeManager::new(RuntimeConfig {
         root_dir: root.clone(),
         tick_interval_ms: 10,
+        initial_reconcile_delay_ms: 0,
         local_worker_limit: 1,
         max_loaded_workspaces: usize::MAX,
         resume_existing_workspaces: true,

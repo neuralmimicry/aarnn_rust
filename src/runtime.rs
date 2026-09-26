@@ -954,6 +954,9 @@ impl RuntimeAutoscaler for ContinuumAutoscaler {
 pub struct RuntimeConfig {
     pub root_dir: PathBuf,
     pub tick_interval_ms: u64,
+    /// Time to let the owning service bind its health/API listener before the
+    /// scheduler imports persisted workspaces on a cold start.
+    pub initial_reconcile_delay_ms: u64,
     pub local_worker_limit: usize,
     /// Hard cap on memory-resident neural workspace engines.
     pub max_loaded_workspaces: usize,
@@ -970,6 +973,7 @@ impl Default for RuntimeConfig {
         Self {
             root_dir: default_root_dir(),
             tick_interval_ms: 25,
+            initial_reconcile_delay_ms: 10_000,
             local_worker_limit: default_worker_limit(),
             max_loaded_workspaces: max_loaded_workspaces_from_env(),
             resume_existing_workspaces: default_resume_existing_workspaces(),
@@ -1758,9 +1762,10 @@ impl RuntimeManager {
     fn spawn_scheduler(self: &Arc<Self>, mut stop_rx: watch::Receiver<bool>) {
         let manager = self.clone();
         let task = tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_millis(
-                manager.config.tick_interval_ms.max(1),
-            ));
+            let interval = Duration::from_millis(manager.config.tick_interval_ms.max(1));
+            let first_tick = tokio::time::Instant::now()
+                + Duration::from_millis(manager.config.initial_reconcile_delay_ms);
+            let mut ticker = tokio::time::interval_at(first_tick, interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
@@ -2287,40 +2292,58 @@ impl RuntimeManager {
                     );
                     continue;
                 }
-                let mut engine = match RunnerEngine::new(manifest.engine.clone()) {
-                    Ok(engine) => engine,
-                    Err(err) => {
-                        nm_err!(
-                            "[warn] failed constructing runtime engine for '{}': {}",
-                            manifest.workspace_id,
-                            err
-                        );
-                        continue;
-                    }
-                };
-
                 let latest_snapshot_path = workspace_dir.join(LATEST_SNAPSHOT_FILE);
-                let mut migrated_snapshot_json = None;
-                if let Ok(Some(snapshot_json)) = read_if_exists(&latest_snapshot_path) {
-                    if let Err(err) = engine.import_snapshot_json(&snapshot_json) {
-                        nm_err!(
-                            "[warn] failed importing latest runtime snapshot '{}': {}",
-                            latest_snapshot_path.display(),
-                            err
-                        );
-                    } else if engine.spec().net.deployment != manifest.engine.net.deployment {
-                        // Loading a legacy workspace is itself an import. Save
-                        // the canonical distributed policy immediately so the
-                        // next load does not repeat the migration.
-                        manifest.engine = engine.spec().clone();
-                        manifest.updated_at_ms = now_ms();
-                        manifest.last_saved_at_ms = Some(manifest.updated_at_ms);
-                        migrated_snapshot_json = Some(engine.export_snapshot_json()?);
+                let snapshot_path_for_load = latest_snapshot_path.clone();
+                let load_result = tokio::task::spawn_blocking(move || {
+                    let mut manifest = manifest;
+                    let mut engine = RunnerEngine::new(manifest.engine.clone())?;
+                    let mut migrated_snapshot_json = None;
+                    let mut import_error = None;
+                    if let Ok(Some(snapshot_json)) = read_if_exists(&snapshot_path_for_load) {
+                        if let Err(err) = engine.import_snapshot_json(&snapshot_json) {
+                            import_error = Some(err.to_string());
+                        } else if engine.spec().net.deployment != manifest.engine.net.deployment {
+                            // Loading a legacy workspace is itself an import. Save
+                            // the canonical distributed policy immediately so the
+                            // next load does not repeat the migration.
+                            manifest.engine = engine.spec().clone();
+                            manifest.updated_at_ms = now_ms();
+                            manifest.last_saved_at_ms = Some(manifest.updated_at_ms);
+                            migrated_snapshot_json = Some(engine.export_snapshot_json()?);
+                        }
                     }
+                    let status = engine.status();
+                    let activity = engine.activity();
+                    Ok::<_, anyhow::Error>((
+                        manifest,
+                        engine,
+                        migrated_snapshot_json,
+                        import_error,
+                        status,
+                        activity,
+                    ))
+                })
+                .await
+                .context("runtime workspace snapshot load task failed")?;
+                let (manifest, engine, migrated_snapshot_json, import_error, status, activity) =
+                    match load_result {
+                        Ok(loaded) => loaded,
+                        Err(err) => {
+                            nm_err!(
+                                "[warn] failed constructing runtime engine for '{}': {}",
+                                key.workspace_id,
+                                err
+                            );
+                            continue;
+                        }
+                    };
+                if let Some(err) = import_error {
+                    nm_err!(
+                        "[warn] failed importing latest runtime snapshot '{}': {}",
+                        latest_snapshot_path.display(),
+                        err
+                    );
                 }
-
-                let status = engine.status();
-                let activity = engine.activity();
                 let resume_suppressed =
                     !self.config.resume_existing_workspaces && manifest.desired_running;
                 let loaded_key = key.clone();
@@ -2398,6 +2421,62 @@ fn persist_handle_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_reconciliation_waits_for_service_startup_delay() {
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-runtime-startup-delay-{:08x}",
+            fastrand::u32(..)
+        ));
+        let initial = RuntimeManager::new(RuntimeConfig {
+            root_dir: root.clone(),
+            initial_reconcile_delay_ms: 0,
+            continuum: None,
+            ..RuntimeConfig::default()
+        })
+        .await
+        .unwrap();
+        initial
+            .create_workspace(
+                "system",
+                WorkspaceCreateRequest {
+                    workspace_id: Some("neuralmimicry-shared-snn".to_string()),
+                    ..WorkspaceCreateRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+        initial.shutdown().await;
+        drop(initial);
+
+        let resumed = RuntimeManager::new(RuntimeConfig {
+            root_dir: root.clone(),
+            initial_reconcile_delay_ms: 500,
+            continuum: None,
+            ..RuntimeConfig::default()
+        })
+        .await
+        .unwrap();
+        assert!(resumed.workspaces.read().await.is_empty());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if resumed.workspaces.read().await.contains_key(&WorkspaceKey {
+                user_id: "system".to_string(),
+                workspace_id: "neuralmimicry-shared-snn".to_string(),
+            }) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "scheduler did not reconcile the persisted workspace after its startup delay"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        resumed.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn test_autoscaler_config() -> ContinuumAutoscalerConfig {
         ContinuumAutoscalerConfig {
