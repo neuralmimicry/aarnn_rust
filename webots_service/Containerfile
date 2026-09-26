@@ -8,10 +8,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-LABEL org.opencontainers.image.title="NeuralMimicry Webots Broker" \
-      org.opencontainers.image.version="${BUILD_NUMBER}" \
-      org.opencontainers.image.revision="${GIT_COMMIT}"
-
 WORKDIR /build
 
 COPY webots_service/requirements.txt /tmp/webots-service-requirements.txt
@@ -37,7 +33,12 @@ PY
 
 FROM python:3.12-slim
 ARG TARGET_PAGE_SIZE
-LABEL org.opencontainers.image.page-size="${TARGET_PAGE_SIZE}"
+ARG BUILD_NUMBER=0
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.title="NeuralMimicry Webots Broker" \
+      org.opencontainers.image.version="${BUILD_NUMBER}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.page-size="${TARGET_PAGE_SIZE}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

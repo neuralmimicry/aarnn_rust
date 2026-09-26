@@ -1,0 +1,82 @@
+name: Webots Container
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/webots-container.yml
+      - webots_service/**
+      - webots_world/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webots-container-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.X_GITHUB_USERNAME }}
+          password: ${{ secrets.X_GITHUB_TOKEN }}
+
+      - name: Build and publish immutable and latest images
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./webots_service/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/neuralmimicry/webots:sha-${{ github.sha }}
+            ghcr.io/neuralmimicry/webots:latest
+          build-args: |
+            BUILD_NUMBER=${{ github.run_number }}
+            GIT_COMMIT=${{ github.sha }}
+            TARGET_PAGE_SIZE=4k
+          labels: |
+            org.opencontainers.image.source=https://github.com/neuralmimicry/aarnn_rust
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=webots-container
+          cache-to: type=gha,scope=webots-container,mode=max
+
+      - name: Verify published image platforms
+        env:
+          IMAGE: ghcr.io/neuralmimicry/webots:latest
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "${IMAGE}" \
+            > /tmp/webots-manifest.json
+          jq -e '
+            [.manifests[].platform
+              | select(
+                  .os == "linux"
+                  and (.architecture == "amd64" or .architecture == "arm64")
+                )
+              | .architecture]
+            | unique | length == 2
+          ' /tmp/webots-manifest.json
+          printf 'Published %s@%s\n' "${IMAGE}" "${IMAGE_DIGEST}"

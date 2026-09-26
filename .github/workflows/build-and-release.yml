@@ -15,6 +15,12 @@ on:
     paths-ignore:
       - Cargo.toml
       - Cargo.lock
+      # Webots has an independent multi-architecture image workflow; these
+      # container-only changes do not need the Rust release matrix.
+      - .github/workflows/build-and-release.yml
+      - .github/workflows/webots-container.yml
+      - webots_service/**
+      - webots_world/**
     # Version tags are publication metadata for the branch build. They must
     # not start a second full verify/package/container matrix for the same
     # commit.
