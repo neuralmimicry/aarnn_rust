@@ -314,7 +314,43 @@ class RemoteAarnnClient(
             nodes = nodes,
             edges = edges + paths,
             markers = markers,
+            rawJson = JSONObject(root.toString()),
         )
+    }
+
+    fun listFpvJobs(): List<JSONObject> {
+        val jobs = JSONObject(request("/api/fpv/jobs", "GET").body).optJSONArray("jobs") ?: JSONArray()
+        return buildList(jobs.length()) {
+            for (index in 0 until jobs.length()) add(jobs.getJSONObject(index))
+        }
+    }
+
+    fun submitFpvJob(networkId: String, scene: RemoteDisplaySnapshot, waypointIds: List<String>): JSONObject {
+        if (waypointIds.size < 2) throw RemoteAarnnException("Choose at least two camera waypoints")
+        val rawNodes = scene.rawJson.optJSONArray("nodes") ?: JSONArray()
+        val rawIdByDisplayId = buildMap {
+            for (index in 0 until rawNodes.length()) {
+                val node = rawNodes.getJSONObject(index)
+                put(node.optJSONObject("id").displayId(), node.getJSONObject("id"))
+            }
+        }
+        val rawWaypoints = JSONArray()
+        waypointIds.forEach { id ->
+            rawWaypoints.put(rawIdByDisplayId[id] ?: throw RemoteAarnnException("A route waypoint is not in the current projection"))
+        }
+        val payload = JSONObject()
+            .put("schema_version", 1)
+            .put("network_id", networkId)
+            .put("scene", scene.rawJson)
+            .put("waypoint_ids", rawWaypoints)
+            .put("active_node_ids", JSONArray())
+            .put("width", 1280)
+            .put("height", 720)
+            .put("frame_rate", 30)
+            .put("frame_count", 300)
+            .put("zoom", 1.0)
+            .put("focus_active_regions", true)
+        return JSONObject(request("/api/fpv/jobs", "POST", payload.toString()).body)
     }
 
     private fun errorText(body: String): String = runCatching {
@@ -326,7 +362,7 @@ class RemoteAarnnClient(
     companion object {
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val READ_TIMEOUT_MS = 15_000
-        private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+        private const val MAX_RESPONSE_BYTES = 16 * 1024 * 1024
     }
 }
 
@@ -385,6 +421,7 @@ data class RemoteDisplaySnapshot(
     val nodes: List<RemoteDisplayNode>,
     val edges: List<RemoteDisplayLine>,
     val markers: List<RemoteDisplayMarker>,
+    val rawJson: JSONObject,
 )
 
 data class RemoteDisplayMembrane(val centre: RemoteDisplayPoint, val radii: RemoteDisplayPoint)

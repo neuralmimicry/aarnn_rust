@@ -140,6 +140,30 @@ fn automatic_review_requires_residence_and_measurable_benefit() {
 }
 
 #[test]
+fn default_automatic_migration_budget_allows_shards_larger_than_sixty_four_mib() {
+    let (current, proposed) = plans();
+    let mut controller = PlacementController::new(AutomaticPlacementPolicy::default()).unwrap();
+    controller.adopt(current).unwrap();
+    let mut large_demands = demands();
+    for demand in large_demands.values_mut() {
+        demand.checkpoint_bytes = 64 * 1024 * 1024 + 1;
+    }
+
+    let review = controller
+        .review(
+            &proposed,
+            &large_demands,
+            &[resource("a"), resource("b")],
+            LogicalTag::new(200, 0),
+            0,
+        )
+        .expect("large shard should remain eligible for automatic migration");
+
+    assert!(review.approved);
+    assert!(review.estimated_transfer_bytes > 64 * 1024 * 1024);
+}
+
+#[test]
 fn automatic_review_enforces_budget_and_concurrency_limits() {
     let (_, proposed) = plans();
     let mut controller = controller(0);

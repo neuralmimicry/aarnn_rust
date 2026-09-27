@@ -24,6 +24,8 @@ COPY scripts/container_entrypoint.sh /usr/local/bin/aarnn-entrypoint
 
 RUN set -eux; \
     need_ui=0; \
+    need_fpv=0; \
+    case ",${CONTAINER_WORKLOAD}," in *,web-ui,*) need_fpv=1 ;; esac; \
     case ",${CARGO_FEATURES},${CONTAINER_WORKLOAD}," in \
         *,all,*|*,all-features,*|*,ui,*|*,image_input,*|*,video_input,*|*,webcam_input,*|*,robot_io,*|*,desktop_ui_workload,*|*,container,*|*,desktop-ui,*) need_ui=1 ;; \
     esac; \
@@ -89,6 +91,7 @@ RUN set -eux; \
         alsa_package="$(resolve_package libasound2t64 libasound2)"; \
         packages="$packages libgl1 libx11-6 libxext6 libxrender1 libice6 libsm6 libxcursor1 libxi6 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxkbcommon-x11-0 ${alsa_package} libgtk-3-0"; \
     fi; \
+    if [ "${need_fpv}" = "1" ]; then packages="$packages ffmpeg"; fi; \
     apt_install_retry $packages; \
     arch="$(dpkg --print-architecture)"; \
     deb="$(find /tmp/aarnn -maxdepth 1 -type f -name "aarnn-rust_*_${arch}.deb" | head -n 1)"; \

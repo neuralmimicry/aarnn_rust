@@ -13,12 +13,14 @@ use aarnn_rust::deployment::{default_infrastructure_roots, detect_infrastructure
 use aarnn_rust::deterministic::{BrainId, LeaseTerm};
 use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
-    ClusterNetworkSnapshotRequest, ConfigUpdate, ControlUpdate, NetworkActivityRequest,
-    NetworkActivityResponse, NetworkSnapshotRequest, NetworkUpdateRequest, SpikeBatch,
-    SpikeIndices, StatusRequest, control_update,
-    distributed_neuromorphic_client::DistributedNeuromorphicClient, network_update_request,
+    ClusterNetworkSnapshotRequest, ConfigUpdate, ControlUpdate, DisplayProjectionRequest,
+    NetworkActivityRequest, NetworkActivityResponse, NetworkSnapshotRequest,
+    NetworkSnapshotResponse, NetworkUpdateRequest, SpikeBatch, SpikeIndices, StatusRequest,
+    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    network_update_request,
 };
 use aarnn_rust::engine::{EngineSpec, RunnerEngine};
+use aarnn_rust::fpv_render_jobs::{self as fpv_jobs, FpvRenderError, FpvRenderRequest};
 use aarnn_rust::management::{
     Capability as ManagementCapability, ManagementError, MutationContext, Operation, OperationKind,
     OperationState, PersistedAuthorityError, PersistedManagementOrchestrator, Policy, Principal,
@@ -27,7 +29,7 @@ use aarnn_rust::migration_operation::{
     MIGRATION_OPERATION_SCHEMA_VERSION, MigrationJournal, MigrationOperation, MigrationRequest,
     MigrationTransition, PersistedMigrationJournal,
 };
-use aarnn_rust::morphology_contract::DisplayMode;
+use aarnn_rust::morphology_contract::{AxisAlignedBox, DisplayMode, DisplaySnapshot, Vec3};
 use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
     NmChainLoginObservedRequest, NmChainTokenMutationRequest,
@@ -56,6 +58,7 @@ use argon2::{
 };
 use axum::{
     Extension, Json, Router,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, Form, Path, Query, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware,
@@ -84,6 +87,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
@@ -120,6 +124,18 @@ async fn connect_cluster_client(
     Ok(client
         .max_decoding_message_size(grpc_max_msg_bytes)
         .max_encoding_message_size(grpc_max_msg_bytes))
+}
+
+async fn fetch_streamed_network_snapshot(
+    client: &mut DistributedNeuromorphicClient<tonic::transport::Channel>,
+    mut request: Request<NetworkSnapshotRequest>,
+) -> Result<NetworkSnapshotResponse, String> {
+    request.set_timeout(Duration::from_secs(6 * 60 * 60));
+    let response = client
+        .stream_network_snapshot(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    aarnn_rust::snapshot_transfer::collect_snapshot_stream(response.into_inner()).await
 }
 
 fn authenticated_grpc_request<T>(message: T) -> Request<T> {
@@ -182,6 +198,14 @@ struct Args {
     /// Optional node ID to select when the control surface opens.
     #[arg(long)]
     default_node: Option<String>,
+
+    /// Run only the persistent FPV frame worker against NM_FPV_JOB_ROOT.
+    #[arg(long, default_value_t = false)]
+    fpv_workers_only: bool,
+
+    /// Keep this HTTP gateway from also claiming FPV frames (dedicated workers can be deployed separately).
+    #[arg(long, default_value_t = false)]
+    disable_fpv_workers: bool,
 
     /// Auth mode: none, local, oidc.
     #[arg(long, default_value = "none")]
@@ -339,6 +363,7 @@ struct AppState {
     token_pricing: TokenPricing,
     commerce: CommerceConfig,
     llm_output_vocab: Arc<RwLock<DynamicOutputDecoder>>,
+    fpv_job_root: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -558,6 +583,12 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "cluster_snapshot"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "activity"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "export"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "fpv", "jobs"])
+        | ("GET", ["api", "fpv", "jobs", _])
+        | ("GET", ["api", "fpv", "jobs", _, "video"]) => Some(AccessRequirement::aarnn_observe()),
+        ("POST", ["api", "fpv", "jobs"])
+        | ("POST", ["api", "fpv", "jobs", _, "cancel"])
+        | ("POST", ["api", "fpv", "jobs", _, "retry"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "infer"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "stream"]) => Some(AccessRequirement::aarnn_use()),
@@ -1424,12 +1455,65 @@ struct SnapshotQuery {
     addr: Option<String>,
     network_id: Option<String>,
     node_id: Option<String>,
+    projection: Option<String>,
+    display_mode: Option<String>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
+    region_min_x: Option<f64>,
+    region_min_y: Option<f64>,
+    region_min_z: Option<f64>,
+    region_max_x: Option<f64>,
+    region_max_y: Option<f64>,
+    region_max_z: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
 struct RuntimeWorkspaceSnapshotQuery {
     owner: Option<String>,
     if_saved_after_ms: Option<u64>,
+    projection: Option<String>,
+    display_mode: Option<String>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
+    region_min_x: Option<f64>,
+    region_min_y: Option<f64>,
+    region_min_z: Option<f64>,
+    region_max_x: Option<f64>,
+    region_max_y: Option<f64>,
+    region_max_z: Option<f64>,
+}
+
+fn resolve_display_region(
+    min_x: Option<f64>,
+    min_y: Option<f64>,
+    min_z: Option<f64>,
+    max_x: Option<f64>,
+    max_y: Option<f64>,
+    max_z: Option<f64>,
+) -> Result<Option<AxisAlignedBox>, String> {
+    let values = [min_x, min_y, min_z, max_x, max_y, max_z];
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    if values.iter().any(Option::is_none) {
+        return Err("a spatial tile requires all six region_min/max coordinates".to_owned());
+    }
+    let region = AxisAlignedBox {
+        min: Vec3 {
+            x: min_x.unwrap(),
+            y: min_y.unwrap(),
+            z: min_z.unwrap(),
+        },
+        max: Vec3 {
+            x: max_x.unwrap(),
+            y: max_y.unwrap(),
+            z: max_z.unwrap(),
+        },
+    };
+    region
+        .validate()
+        .map_err(|error| format!("invalid spatial tile: {error}"))?;
+    Ok(Some(region))
 }
 
 #[derive(Deserialize, Default)]
@@ -1747,6 +1831,13 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut args = Args::parse();
     apply_env_overrides(&mut args);
+    let fpv_job_root = env_opt("NM_FPV_JOB_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data/fpv-jobs"));
+    if args.fpv_workers_only {
+        fpv_jobs::worker_loop(fpv_job_root).await;
+        return Ok(());
+    }
     if let Some(token) = args
         .orchestrator_bearer_token
         .as_deref()
@@ -1974,7 +2065,11 @@ async fn main() -> anyhow::Result<()> {
         token_pricing,
         commerce,
         llm_output_vocab: Arc::new(RwLock::new(load_dynamic_output_decoder())),
+        fpv_job_root: fpv_job_root.clone(),
     });
+    if !args.disable_fpv_workers {
+        tokio::spawn(fpv_jobs::worker_loop(fpv_job_root));
+    }
 
     let api = Router::new()
         .route("/openapi.json", get(openapi_json))
@@ -2039,6 +2134,11 @@ async fn main() -> anyhow::Result<()> {
             get(management_http_get_migration),
         )
         .route("/operations/{operation_id}", get(management_http_operation))
+        .route("/fpv/jobs", get(fpv_list_jobs).post(fpv_submit_job))
+        .route("/fpv/jobs/{job_id}", get(fpv_get_job))
+        .route("/fpv/jobs/{job_id}/cancel", post(fpv_cancel_job))
+        .route("/fpv/jobs/{job_id}/retry", post(fpv_retry_job))
+        .route("/fpv/jobs/{job_id}/video", get(fpv_download_video))
         .route("/status", get(status))
         .route("/snapshot", get(snapshot))
         .route("/cluster_snapshot", get(cluster_snapshot))
@@ -4435,6 +4535,49 @@ async fn runtime_workspace_snapshot(
         .workspace_saved_snapshot(&owner, &workspace_id, query.if_saved_after_ms)
         .await
     {
+        Ok(Some(mut snapshot)) if query.projection.as_deref() == Some("display") => {
+            let snapshot_bytes = snapshot.snapshot_json.len();
+            let region = match resolve_display_region(
+                query.region_min_x,
+                query.region_min_y,
+                query.region_min_z,
+                query.region_max_x,
+                query.region_max_y,
+                query.region_max_z,
+            ) {
+                Ok(region) => region,
+                Err(error) => {
+                    return (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
+                        .into_response();
+                }
+            };
+            match display_projection_for_snapshot_json(
+                &snapshot.snapshot_json,
+                query.max_nodes.unwrap_or(512),
+                query.max_edges.unwrap_or(4096),
+                query.display_mode.as_deref(),
+                region,
+            ) {
+                Ok((projection, display_snapshots)) => {
+                    snapshot.snapshot_json = projection;
+                    snapshot.display_snapshots = display_snapshots;
+                    Json(json!({
+                        "workspace_id": snapshot.workspace_id,
+                        "saved_at_ms": snapshot.saved_at_ms,
+                        "snapshot_json": snapshot.snapshot_json,
+                        "snapshot_projection": "dashboard-v1",
+                        "snapshot_bytes": snapshot_bytes,
+                        "display_snapshots": snapshot.display_snapshots,
+                    }))
+                    .into_response()
+                }
+                Err(error) => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": format!("workspace snapshot projection failed: {error}") })),
+                )
+                    .into_response(),
+            }
+        }
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (
@@ -5234,6 +5377,182 @@ async fn bearer_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthU
     AuthUser::from_central_session(&session, Some(access_token))
 }
 
+fn fpv_error_response(error: FpvRenderError) -> Response {
+    let message = error.to_string();
+    let status = match &error {
+        FpvRenderError::Invalid(message) if message.contains("not found") => StatusCode::NOT_FOUND,
+        FpvRenderError::Invalid(_) => StatusCode::BAD_REQUEST,
+        FpvRenderError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        FpvRenderError::Render(_) | FpvRenderError::Encode(_) => StatusCode::UNPROCESSABLE_ENTITY,
+    };
+    (status, Json(json!({"error": message}))).into_response()
+}
+
+async fn fpv_list_jobs(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    match tokio::task::spawn_blocking(move || fpv_jobs::list_jobs(&root, &owner)).await {
+        Ok(Ok(jobs)) => Json(json!({"jobs": jobs})).into_response(),
+        Ok(Err(error)) => fpv_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fpv_submit_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(request): Json<FpvRenderRequest>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    match tokio::task::spawn_blocking(move || fpv_jobs::submit_job(&root, &owner, request)).await {
+        Ok(Ok(job)) => (StatusCode::CREATED, Json(job)).into_response(),
+        Ok(Err(error)) => fpv_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fpv_get_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    match tokio::task::spawn_blocking(move || fpv_jobs::get_job_status(&root, &job_id, &owner))
+        .await
+    {
+        Ok(Ok(job)) => Json(job).into_response(),
+        Ok(Err(error)) => fpv_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fpv_cancel_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    match tokio::task::spawn_blocking(move || fpv_jobs::cancel_job(&root, &job_id, &owner)).await {
+        Ok(Ok(job)) => Json(job).into_response(),
+        Ok(Err(error)) => fpv_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fpv_retry_job(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    match tokio::task::spawn_blocking(move || fpv_jobs::retry_job(&root, &job_id, &owner)).await {
+        Ok(Ok(job)) => Json(job).into_response(),
+        Ok(Err(error)) => fpv_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn fpv_download_video(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let root = state.fpv_job_root.clone();
+    let owner = user.username;
+    let download_name = job_id.clone();
+    let path =
+        match tokio::task::spawn_blocking(move || fpv_jobs::video_path(&root, &job_id, &owner))
+            .await
+        {
+            Ok(Ok(path)) => path,
+            Ok(Err(error)) => return fpv_error_response(error),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error.to_string()})),
+                )
+                    .into_response();
+            }
+        };
+    let file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let content_length = match file.metadata().await {
+        Ok(metadata) => metadata.len(),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let stream = async_stream::stream! {
+        let mut file = file;
+        let mut buffer = vec![0u8; fpv_jobs::FPV_RENDER_FRAME_CHUNK_BYTES];
+        loop {
+            match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(count) => yield Ok::<Bytes, std::io::Error>(Bytes::copy_from_slice(&buffer[..count])),
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/mp4")
+        .header(header::CONTENT_LENGTH, content_length)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{download_name}.mp4\""),
+        )
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response()
+        })
+}
+
 async fn status(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatusQuery>,
@@ -5455,6 +5774,23 @@ async fn snapshot(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SnapshotQuery>,
 ) -> impl IntoResponse {
+    let requested_region = if query.projection.as_deref() == Some("display") {
+        match resolve_display_region(
+            query.region_min_x,
+            query.region_min_y,
+            query.region_min_z,
+            query.region_max_x,
+            query.region_max_y,
+            query.region_max_z,
+        ) {
+            Ok(region) => region,
+            Err(error) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
+            }
+        }
+    } else {
+        None
+    };
     let Some(network_id) = query.network_id.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -5499,23 +5835,91 @@ async fn snapshot(
             }
         };
 
-        match client
-            .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
+        if query.projection.as_deref() == Some("display") {
+            let mut request = authenticated_grpc_request(DisplayProjectionRequest {
+                network_id: network_id.clone(),
+                max_nodes: query.max_nodes.unwrap_or(512).clamp(1, 4096) as u32,
+                max_edges: query.max_edges.unwrap_or(4096).clamp(1, 32_768) as u32,
+                display_mode: query.display_mode.clone().unwrap_or_default(),
+                region: requested_region.map(|region| {
+                    aarnn_rust::distributed::proto::DisplayRegion {
+                        min_x_mm: region.min.x,
+                        min_y_mm: region.min.y,
+                        min_z_mm: region.min.z,
+                        max_x_mm: region.max.x,
+                        max_y_mm: region.max.y,
+                        max_z_mm: region.max.z,
+                    }
+                }),
+            });
+            request.set_timeout(Duration::from_secs(60));
+            match client.get_display_projection(request).await {
+                Ok(response) => {
+                    let response = response.into_inner();
+                    let network_summary: Value =
+                        match serde_json::from_str(&response.network_summary_json) {
+                            Ok(summary) => summary,
+                            Err(error) => {
+                                last_error = format!(
+                                    "network summary decode failed via {}: {}",
+                                    target_addr, error
+                                );
+                                continue;
+                            }
+                        };
+                    let display_snapshots: Value =
+                        match serde_json::from_str(&response.display_snapshots_json) {
+                            Ok(snapshots) => snapshots,
+                            Err(error) => {
+                                last_error = format!(
+                                    "display projection decode failed via {}: {}",
+                                    target_addr, error
+                                );
+                                continue;
+                            }
+                        };
+                    let snapshot_json = json!({
+                        "net": network_summary,
+                        "t": response.step,
+                        "t_ms": f64::from_bits(response.sim_time_ms_bits),
+                    })
+                    .to_string();
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "network_id": response.network_id,
+                            "snapshot_json": snapshot_json,
+                            "snapshot_projection": "dashboard-v1",
+                            "source": target_addr,
+                            "display_snapshots": display_snapshots,
+                        })),
+                    )
+                        .into_response();
+                }
+                Err(error) => {
+                    last_error =
+                        format!("display projection failed via {}: {}", target_addr, error);
+                    continue;
+                }
+            }
+        }
+
+        let response = fetch_streamed_network_snapshot(
+            &mut client,
+            authenticated_grpc_request(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
                 cut_epoch: 0,
-            }))
-            .await
-        {
+            }),
+        )
+        .await;
+        match response {
             Ok(resp) => {
-                let resp = resp.into_inner();
-                let display_snapshots = display_snapshots_for_snapshot_json(&resp.snapshot_json);
                 return (
                     StatusCode::OK,
                     Json(json!({
                         "network_id": resp.network_id,
                         "snapshot_json": resp.snapshot_json,
                         "source": target_addr,
-                        "display_snapshots": display_snapshots,
                     })),
                 )
                     .into_response();
@@ -5533,24 +5937,50 @@ async fn snapshot(
         .into_response()
 }
 
-fn display_snapshots_for_snapshot_json(snapshot_json: &str) -> Value {
-    let mut engine = match RunnerEngine::new(EngineSpec::default()) {
-        Ok(engine) => engine,
-        Err(_) => return json!({}),
-    };
-    if engine.import_snapshot_json(snapshot_json).is_err() {
-        return json!({});
-    }
+fn display_projection_for_snapshot_json(
+    snapshot_json: &str,
+    max_nodes: usize,
+    max_edges: usize,
+    requested_mode: Option<&str>,
+    region: Option<AxisAlignedBox>,
+) -> Result<(String, BTreeMap<String, DisplaySnapshot>), String> {
+    let snapshot = decode_snapshot_with_profile_backfill(snapshot_json)
+        .map_err(|error| format!("invalid network snapshot: {error}"))?;
+    let mut engine = RunnerEngine::new(EngineSpec::default())
+        .map_err(|error| format!("could not initialize display projection: {error}"))?;
+    engine
+        .import_snapshot_json(snapshot_json)
+        .map_err(|error| format!("could not import snapshot for display: {error}"))?;
     let sequence = engine.status().step.saturating_add(1);
-    let synthetic = engine.display_snapshot(DisplayMode::SyntheticColumns, sequence, 512, 4096);
-    let anatomical = engine.display_snapshot(DisplayMode::Anatomical, sequence, 512, 4096);
-    match (synthetic, anatomical) {
-        (Ok(synthetic), Ok(anatomical)) => json!({
-            "synthetic_columns": synthetic,
-            "anatomical": anatomical,
-        }),
-        _ => json!({}),
+    let view_modes: Vec<(&str, DisplayMode)> = match requested_mode.unwrap_or_default() {
+        "" => vec![
+            ("synthetic_columns", DisplayMode::SyntheticColumns),
+            ("anatomical", DisplayMode::Anatomical),
+        ],
+        "synthetic_columns" => vec![("synthetic_columns", DisplayMode::SyntheticColumns)],
+        "anatomical" => vec![("anatomical", DisplayMode::Anatomical)],
+        _ => return Err("unsupported display mode".to_owned()),
+    };
+    let mut display_snapshots = BTreeMap::new();
+    for (key, mode) in view_modes {
+        let display_snapshot = engine
+            .display_snapshot_in_region(mode, sequence, max_nodes, max_edges, region)
+            .map_err(|error| format!("{key} display projection failed: {error}"))?;
+        display_snapshots.insert(key.to_owned(), display_snapshot);
     }
+    if display_snapshots
+        .values()
+        .all(|display_snapshot| display_snapshot.nodes.is_empty())
+    {
+        return Err("snapshot produced no visible neurons".to_owned());
+    }
+    let projection = serde_json::to_string(&json!({
+        "net": snapshot.net,
+        "t": snapshot.t,
+        "t_ms": snapshot.t_ms,
+    }))
+    .map_err(|error| format!("dashboard projection encoding failed: {error}"))?;
+    Ok((projection, display_snapshots))
 }
 
 async fn cluster_snapshot(
@@ -6724,15 +7154,17 @@ async fn export(
             }
         };
 
-        match client
-            .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
+        match fetch_streamed_network_snapshot(
+            &mut client,
+            authenticated_grpc_request(NetworkSnapshotRequest {
                 network_id: network_id.clone(),
                 cut_epoch: 0,
-            }))
-            .await
+            }),
+        )
+        .await
         {
             Ok(resp) => {
-                snapshot_json = Some(resp.into_inner().snapshot_json);
+                snapshot_json = Some(resp.snapshot_json);
                 break;
             }
             Err(e) => {
@@ -7042,20 +7474,21 @@ async fn fetch_network_config(
                 Json(json!({ "error": format!("connect failed: {}", e) })),
             )
         })?;
-    let snapshot_json = client
-        .get_network_snapshot(authenticated_grpc_request(NetworkSnapshotRequest {
+    let response = fetch_streamed_network_snapshot(
+        &mut client,
+        authenticated_grpc_request(NetworkSnapshotRequest {
             network_id: network_id.to_string(),
             cut_epoch: 0,
-        }))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("snapshot failed: {}", e) })),
-            )
-        })?
-        .into_inner()
-        .snapshot_json;
+        }),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": format!("snapshot failed: {}", e) })),
+        )
+    })?;
+    let snapshot_json = response.snapshot_json;
 
     if let Ok(snapshot) = decode_snapshot_with_profile_backfill(&snapshot_json) {
         Ok(snapshot.net)
@@ -8558,6 +8991,22 @@ mod tests {
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/topology"),
             Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/fpv/jobs"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/fpv/jobs/fpv-1/video"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/fpv/jobs"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/fpv/jobs/fpv-1/cancel"),
+            Some(AccessRequirement::aarnn_use())
         );
     }
 

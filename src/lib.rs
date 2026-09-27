@@ -63,6 +63,8 @@ pub mod federation;
 pub mod field_events;
 /// FPAA discovery, verification, and routing helpers.
 pub mod fpaa;
+/// Persistent, shared-filesystem-backed FPV render jobs for the web interface.
+pub mod fpv_render_jobs;
 /// Rust output generated from the versioned management protobuf schema.
 pub mod generated_management;
 /// Opt-in live managed-network durability owner.
@@ -173,6 +175,8 @@ pub mod runtime;
 pub mod runtime_api;
 /// Shared file/lease primitives for runtime coordination on PVC-backed deployments.
 pub mod shared_fs;
+/// Bounded-frame transfer for complete network snapshots.
+pub mod snapshot_transfer;
 
 #[cfg(feature = "growth3d")]
 /// Topological and spatial layout definitions for 3D neural growth.

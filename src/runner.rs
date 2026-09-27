@@ -7475,11 +7475,18 @@ impl Runner {
         let mut config = ReconstructionConfig::default();
         config.seed = seed.max(1);
         config.conduction_velocity_m_per_s = self.net.aarnn_velocity.max(1.0e-6) as f64;
-        crate::morphology_contract::reconstruct_point_only_connectome(
+        let reconstruction = crate::morphology_contract::reconstruct_point_only_connectome(
             connectome,
             environment,
             config,
-        )
+        )?;
+        if !reconstruction.soma_position_repairs.is_empty() {
+            nm_log!(
+                "[import-morphology] resolved {} overlapping soma positions in procedural geometry; source coordinates and network weights were preserved",
+                reconstruction.soma_position_repairs.len()
+            );
+        }
+        Ok(reconstruction)
     }
 
     #[cfg(feature = "growth3d")]

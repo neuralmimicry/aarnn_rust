@@ -2358,8 +2358,6 @@ pub struct ShardCheckpointPayload {
 }
 
 impl ShardCheckpointPayload {
-    pub const MAX_BYTES: usize = 64 * 1024 * 1024;
-
     pub fn new(
         brain_id: crate::deterministic::BrainId,
         shard_id: ShardId,
@@ -2406,9 +2404,6 @@ impl ShardCheckpointPayload {
 
     pub fn seal(mut self) -> Result<Self, DurabilityError> {
         let bytes = self.encoded_bytes_without_digest()?;
-        if bytes.len() > Self::MAX_BYTES {
-            return Err(DurabilityError::PayloadTooLarge { bytes: bytes.len() });
-        }
         let mut digest = StateDigestBuilder::default();
         digest.add_domain("shard-checkpoint:v1", bytes);
         self.state_digest = digest.finish();
@@ -2426,9 +2421,6 @@ impl ShardCheckpointPayload {
             .verify()
             .map_err(|error| DurabilityError::Corrupt(error.to_string()))?;
         let bytes = self.encoded_bytes_without_digest()?;
-        if bytes.len() > Self::MAX_BYTES {
-            return Err(DurabilityError::PayloadTooLarge { bytes: bytes.len() });
-        }
         let mut digest = StateDigestBuilder::default();
         digest.add_domain("shard-checkpoint:v1", bytes);
         if digest.finish() != self.state_digest {

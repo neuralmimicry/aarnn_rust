@@ -18,7 +18,6 @@ use thiserror::Error;
 
 pub const CLUSTER_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 const LEGACY_CLUSTER_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
-pub const MAX_SHARD_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardSnapshotInput {
@@ -91,8 +90,6 @@ pub enum ClusterSnapshotError {
     EmptyAssignment { node_id: String },
     #[error("shard '{node_id}' repeats layer {layer}")]
     DuplicateLayer { node_id: String, layer: u32 },
-    #[error("shard '{node_id}' snapshot is too large ({bytes} bytes)")]
-    SnapshotTooLarge { node_id: String, bytes: usize },
     #[error("shard '{node_id}' snapshot is invalid: {reason}")]
     InvalidSnapshot { node_id: String, reason: String },
     #[error("shard '{node_id}' has frontier {actual}, expected {expected}")]
@@ -129,12 +126,6 @@ fn digest_snapshot(
     snapshot_json: &str,
     node_id: &str,
 ) -> Result<(crate::runner::Snapshot, StateDigest), ClusterSnapshotError> {
-    if snapshot_json.len() > MAX_SHARD_SNAPSHOT_BYTES {
-        return Err(ClusterSnapshotError::SnapshotTooLarge {
-            node_id: node_id.to_owned(),
-            bytes: snapshot_json.len(),
-        });
-    }
     let snapshot = decode_snapshot_with_profile_backfill(snapshot_json).map_err(|error| {
         ClusterSnapshotError::InvalidSnapshot {
             node_id: node_id.to_owned(),
@@ -751,17 +742,6 @@ fn assemble_with_cut(
         }
 
         let (snapshot, state_digest) = digest_snapshot(&input.snapshot_json, &node_id)?;
-        let combined_bytes = input
-            .snapshot_json
-            .len()
-            .saturating_add(input.channel_state_json.len())
-            .saturating_add(input.authoritative_state_json.len());
-        if combined_bytes > MAX_SHARD_SNAPSHOT_BYTES {
-            return Err(ClusterSnapshotError::SnapshotTooLarge {
-                node_id,
-                bytes: combined_bytes,
-            });
-        }
         let channel_state_digest = digest_channel_state(&input.channel_state_json, &node_id)?;
         if expected_assignment.len() > 1 {
             let expected_range = assigned.first().copied().map(|first| {

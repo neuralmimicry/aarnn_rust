@@ -454,10 +454,8 @@ fn receive_sources_parallel(
                         ));
                     }
                     let mut receiver = ShardTransferReceiver::new(manifest.clone())?;
-                    let mut frames = source.frames()?;
-                    frames.reverse();
-                    for frame in frames {
-                        receiver.accept(frame)?;
+                    for frame_index in (0..manifest.frame_count).rev() {
+                        receiver.accept(source.frame(frame_index)?)?;
                     }
                     receiver
                         .finalize()

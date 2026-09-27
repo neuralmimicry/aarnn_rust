@@ -398,6 +398,22 @@ impl BlockingRuntimeClient {
         self.request_json(Method::GET, &path)
     }
 
+    pub fn fpv_render_jobs(&mut self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let response: serde_json::Value = self.request_json(Method::GET, "/api/fpv/jobs")?;
+        Ok(response
+            .get("jobs")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn submit_fpv_render_job(
+        &mut self,
+        request: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.request_json_with_body(Method::POST, "/api/fpv/jobs", request)
+    }
+
     pub fn control_workspace(
         &mut self,
         workspace_id: &str,
