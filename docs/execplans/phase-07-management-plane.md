@@ -87,6 +87,18 @@ Implement resources, grants, bindings, capability reports, actuator lease record
 
 ## Progress
 
+- [~] `2026-09-26 20:00Z` Investigated the live AARNN access screenshot and
+  canonical browser resolver. The authenticated `pbisaacs` session is shown as
+  an admin with `aarnn:control`, while the workspace selector says observation
+  is not granted. Rust's `resolve_service_access` already repairs stale false
+  observation flags against the effective access level; `web_ui/service-access.js`
+  still trusts that stale boolean. The fix is presentation-only: server route
+  authorization remains authoritative, and no access grant or auth policy is
+  being changed. Relevant source: `web_ui/service-access.js`; current AARNN
+  runtime still serves the previous image digest. Planned evidence: focused
+  browser-resolver regression check, JS syntax check and Actions-built ARM64
+  image before rollout.
+
 - [x] `2026-08-23 12:00Z` Audited management endpoints, browser/Rust UI call
   paths, authentication and deployment boundaries; direct runtime/worker
   management remains reachable and is retained for rollback.
@@ -341,3 +353,35 @@ closure remain open; Phase 8 governed I/O cannot be promoted before this gate.
   user identity, durable replicated audit and production OIDC/PKCE/workload
   identity are still not implemented; the management feature remains an
   explicit opt-in reference path.
+
+## Progress update — 2026-09-26
+
+- [x] Reproduced the reported admin-observation mismatch with a Node regression
+  test: an effective `aarnn:control` grant paired with stale
+  `can_observe: false` hid the shared workspace. The browser resolver now
+  derives observation from the effective access level, matching Rust's
+  resolver; request-only access remains denied. No server policy or user grant
+  changed.
+- [x] Updated all four browser bundle cache keys and added the regression test
+  to the Node 24 GitHub Actions verification job. `node scripts/qa/test_service_access.cjs`,
+  both `node --check` commands, `git diff --check`, and
+  `cargo test --locked --lib service_access::tests` passed (9 Rust tests).
+- [~] The change is on `codex/aarnn-observe-access-ui`; remote Actions
+  verification and merge are pending before the corrected UI can be rolled
+  out.
+
+### Surprises & Discoveries — WEB-ACCESS-MONOTONIC
+
+The reported screenshot showed `pbisaacs` as an admin with `aarnn:control`,
+while the workspace selector denied observation. The Rust server resolver
+already repaired the stale false flag, but the browser resolver did not. The
+existing browser cache key (`af91fee`) also predated this UI revision, so the
+bundle URLs were advanced to force clients to fetch the corrected helper.
+
+### Decision Log — WEB-ACCESS-MONOTONIC
+
+- 2026-09-26 / `WEB-ACCESS-MONOTONIC`: A stale false presentation flag cannot
+  revoke observation implied by the effective service access level. Preserve
+  request-only denial, leave all endpoint authorisation server-side, and
+  version browser bundle URLs with the fix. Authority: Sections 16.5 and
+  16.12; existing Rust `resolve_service_access` behaviour and regression test.

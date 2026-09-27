@@ -114,6 +114,7 @@
         entry.visible_access_level,
         maxAccessLevel(accessLevel, publicAccessLevel)
       );
+      const observationAccessLevel = maxAccessLevel(accessLevel, visibleAccessLevel);
       services[serviceKey] = {
         ...entry,
         service_key: serviceKey,
@@ -122,7 +123,9 @@
         visible_access_level: visibleAccessLevel,
         visible: typeof entry.visible === "boolean" ? entry.visible : visibleAccessLevel !== SERVICE_ACCESS_NONE,
         can_request: typeof entry.can_request === "boolean" ? entry.can_request : accessAtLeast(visibleAccessLevel, SERVICE_ACCESS_REQUEST),
-        can_observe: typeof entry.can_observe === "boolean" ? entry.can_observe : accessAtLeast(visibleAccessLevel, SERVICE_ACCESS_OBSERVE),
+        // A stale stored false cannot revoke observation implied by a stronger
+        // effective grant such as control. The server remains authoritative.
+        can_observe: entry.can_observe === true || accessAtLeast(observationAccessLevel, SERVICE_ACCESS_OBSERVE),
         can_use: typeof entry.can_use === "boolean" ? entry.can_use : accessAtLeast(accessLevel, SERVICE_ACCESS_USE),
         can_control: typeof entry.can_control === "boolean" ? entry.can_control : accessAtLeast(accessLevel, SERVICE_ACCESS_CONTROL)
       };

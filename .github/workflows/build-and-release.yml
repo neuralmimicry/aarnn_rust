@@ -244,6 +244,9 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Verify browser service-access level normalization
+        run: node scripts/qa/test_service_access.cjs
+
       - name: Verify simulator content and generated worlds
         run: cargo xtask qa run --suite simulator-content
 
