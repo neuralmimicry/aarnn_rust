@@ -1111,6 +1111,10 @@ jobs:
             podman build --no-cache "${build_args[@]}"
           fi
 
+          if [[ "${{ matrix.workload }}" == "web-ui" ]]; then
+            podman run --rm --entrypoint ffmpeg "${arch_tag}" -version >/dev/null
+          fi
+
           # GHCR can return 403 for cross-tag blob-reuse checks even after a
           # successful login.  A stable, distinct gzip profile avoids that
           # registry probe while remaining compatible with standard runtimes.

@@ -152,8 +152,6 @@ const MAX_PENDING_COMMANDS_PER_NODE: usize = 64;
 /// heartbeat indefinitely. The result is diagnostic data, never executable
 /// input.
 const MAX_COMMAND_RESULT_ERROR_BYTES: usize = 2048;
-/// Treat configs above this as "large" and avoid broadcasting to all nodes without affinity.
-const LARGE_NETWORK_CONFIG_BYTES: usize = 64 * 1024 * 1024;
 
 fn stable_registration_to_proto(
     registration: StableWorkerRegistration,
@@ -1992,6 +1990,10 @@ struct CausalSpikeIngress {
 const CAUSAL_INGRESS_SCHEMA_VERSION: u32 = 1;
 #[cfg(feature = "replicated_durability")]
 const MAX_CAUSAL_INGRESS_SPIKES: usize = 16 * 1024 * 1024;
+// Keep the realtime spike-ingress payload bound independent from the larger
+// durable network checkpoint limit.
+#[cfg(feature = "replicated_durability")]
+const MAX_CAUSAL_INGRESS_BYTES: usize = 64 * 1024 * 1024;
 
 fn capture_channel_state(net: &ManagedNetwork) -> ManagedChannelState {
     ManagedChannelState {
@@ -2058,14 +2060,6 @@ fn local_shard_snapshot(net: &ManagedNetwork) -> Result<(String, String, u64, u6
         .map_err(|error| error.to_string())?;
     #[cfg(not(feature = "replicated_durability"))]
     let channel_state_json = local_channel_state_json(net)?;
-    if snapshot_json.len().saturating_add(channel_state_json.len())
-        > cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
-    {
-        return Err(format!(
-            "shard snapshot exceeds {} bytes",
-            cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
-        ));
-    }
     let snapshot = crate::runner::decode_snapshot_with_profile_backfill(&snapshot_json)
         .map_err(|error| error.to_string())?;
     Ok((
@@ -5718,7 +5712,7 @@ impl DistributedNode {
         if ingress.schema_version != CAUSAL_INGRESS_SCHEMA_VERSION
             || ingress.network_id.trim().is_empty()
             || ingress.spike_indices.len() > MAX_CAUSAL_INGRESS_SPIKES
-            || ingress.aer_payload.len() > cluster_snapshot::MAX_SHARD_SNAPSHOT_BYTES
+            || ingress.aer_payload.len() > MAX_CAUSAL_INGRESS_BYTES
         {
             return Err(Status::invalid_argument("invalid causal ingress payload"));
         }
@@ -5977,17 +5971,35 @@ impl DistributedNode {
                 return None;
             }
         };
-        let snapshot_result =
-            tokio::time::timeout(Duration::from_secs(2), client.get_network_snapshot(request))
-                .await;
+        let mut request = request;
+        request.set_timeout(Duration::from_secs(6 * 60 * 60));
+        let snapshot_result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.stream_network_snapshot(request),
+        )
+        .await;
 
         match snapshot_result {
             Ok(Ok(response)) => {
+                let response =
+                    match crate::snapshot_transfer::collect_snapshot_stream(response.into_inner())
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(err) => {
+                            nm_err!(
+                                "[warn] Live snapshot stream failed for network {}: {}",
+                                source.network_id,
+                                err
+                            );
+                            return None;
+                        }
+                    };
                 if let Some(node_id) = source.primary_node_id.as_ref() {
                     let mut state = self.state.write().await;
                     state.clients.insert(node_id.clone(), client);
                 }
-                Some(response.into_inner().snapshot_json)
+                Some(response.snapshot_json)
             }
             Ok(Err(err)) => {
                 nm_err!(
@@ -7895,14 +7907,10 @@ impl DistributedNode {
                 affinity_node_capacities
             };
             if target_node_capacities.is_empty() {
-                if config_json.len() >= LARGE_NETWORK_CONFIG_BYTES {
-                    nm_log!(
-                        "[warn] Rebalance deferred for network {}: no eligible nodes advertise it yet (config={} bytes)",
-                        net_id,
-                        config_json.len()
-                    );
-                    continue;
-                }
+                // A large checkpoint still participates in ordinary
+                // placement/rebalance. Its byte size is handled by the
+                // snapshot stream framing, not by silently starving the
+                // network until a worker happens to advertise it.
                 target_node_capacities = node_capacities.clone();
             }
             let existing_affinity_nodes: HashSet<String> = network_affinity
@@ -9772,6 +9780,8 @@ impl DistributedNeuromorphic for DistributedNode {
     }
 
     type StreamSpikesStream = tokio_stream::wrappers::ReceiverStream<Result<SpikeBatch, Status>>;
+    type StreamNetworkSnapshotStream =
+        tokio_stream::wrappers::ReceiverStream<Result<NetworkSnapshotChunk, Status>>;
 
     async fn stream_spikes(
         &self,
@@ -10330,6 +10340,133 @@ impl DistributedNeuromorphic for DistributedNode {
         }))
     }
 
+    async fn stream_network_snapshot(
+        &self,
+        request: Request<NetworkSnapshotRequest>,
+    ) -> Result<Response<Self::StreamNetworkSnapshotStream>, Status> {
+        let response =
+            <Self as proto::distributed_neuromorphic_server::DistributedNeuromorphic>::get_network_snapshot(
+                self, request,
+            )
+            .await?
+            .into_inner();
+        let chunks = crate::snapshot_transfer::SnapshotChunkEncoder::new(response);
+        let (sender, receiver) = mpsc::channel(2);
+        tokio::spawn(async move {
+            for chunk in chunks {
+                if sender.send(Ok(chunk)).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            receiver,
+        )))
+    }
+
+    async fn get_display_projection(
+        &self,
+        request: Request<DisplayProjectionRequest>,
+    ) -> Result<Response<DisplayProjectionResponse>, Status> {
+        if live_causal_transport_enabled() {
+            validate_live_request(&request)?;
+        }
+        let request = request.into_inner();
+        let network_id = request.network_id;
+        let max_nodes = (request.max_nodes as usize).clamp(1, 4096);
+        let max_edges = (request.max_edges as usize).clamp(1, 32_768);
+        let region = request
+            .region
+            .map(|region| crate::morphology_contract::AxisAlignedBox {
+                min: crate::morphology_contract::Vec3 {
+                    x: region.min_x_mm,
+                    y: region.min_y_mm,
+                    z: region.min_z_mm,
+                },
+                max: crate::morphology_contract::Vec3 {
+                    x: region.max_x_mm,
+                    y: region.max_y_mm,
+                    z: region.max_z_mm,
+                },
+            });
+        if let Some(region) = region {
+            region.validate().map_err(|error| {
+                Status::invalid_argument(format!("invalid display tile: {error}"))
+            })?;
+        }
+        let view_modes: Vec<(&'static str, crate::morphology_contract::DisplayMode)> =
+            match request.display_mode.as_str() {
+                "" => vec![
+                    (
+                        "synthetic_columns",
+                        crate::morphology_contract::DisplayMode::SyntheticColumns,
+                    ),
+                    (
+                        "anatomical",
+                        crate::morphology_contract::DisplayMode::Anatomical,
+                    ),
+                ],
+                "synthetic_columns" => vec![(
+                    "synthetic_columns",
+                    crate::morphology_contract::DisplayMode::SyntheticColumns,
+                )],
+                "anatomical" => vec![(
+                    "anatomical",
+                    crate::morphology_contract::DisplayMode::Anatomical,
+                )],
+                _ => return Err(Status::invalid_argument("unsupported display mode")),
+            };
+        let network = {
+            let state = self.state.read().await;
+            state.networks.get(&network_id).cloned()
+        }
+        .ok_or_else(|| Status::not_found("network not hosted on this node"))?;
+
+        let (step, sim_time_ms_bits, network_summary_json, display_snapshots_json) =
+            tokio::task::spawn_blocking(move || {
+                let network = network.blocking_read();
+                let runner = &network.runner;
+                let step = runner.t.max(0) as u64;
+                let sim_time_ms_bits = runner.t_ms.max(0.0).to_bits();
+                let network_summary_json = serde_json::to_string(&runner.net)
+                    .map_err(|error| format!("network summary encoding failed: {error}"))?;
+                let mut display_snapshots = BTreeMap::new();
+                for (key, mode) in view_modes {
+                    let display_snapshot =
+                        crate::engine::RunnerEngine::display_snapshot_for_runner_in_region(
+                            runner,
+                            mode,
+                            step.saturating_add(1),
+                            max_nodes,
+                            max_edges,
+                            true,
+                            region,
+                        )
+                        .map_err(|error| format!("{key} display projection failed: {error}"))?;
+                    display_snapshots.insert(key, display_snapshot);
+                }
+                let display_snapshots_json = serde_json::to_string(&display_snapshots)
+                    .map_err(|error| format!("display projection encoding failed: {error}"))?;
+                Ok::<_, String>((
+                    step,
+                    sim_time_ms_bits,
+                    network_summary_json,
+                    display_snapshots_json,
+                ))
+            })
+            .await
+            .map_err(|error| Status::internal(format!("display projection task failed: {error}")))?
+            .map_err(Status::internal)?;
+
+        Ok(Response::new(DisplayProjectionResponse {
+            network_id,
+            step,
+            sim_time_ms_bits,
+            network_summary_json,
+            display_snapshots_json,
+        }))
+    }
+
     async fn get_cluster_network_snapshot(
         &self,
         request: Request<ClusterNetworkSnapshotRequest>,
@@ -10546,14 +10683,17 @@ impl DistributedNeuromorphic for DistributedNode {
                     &sender_node_id,
                 )
                 .map_err(|error| error.to_string())?;
+                let mut request = request;
+                request.set_timeout(Duration::from_secs(6 * 60 * 60));
                 let response = tokio::time::timeout(
                     Duration::from_secs(3),
-                    client.get_network_snapshot(request),
+                    client.stream_network_snapshot(request),
                 )
                 .await
                 .map_err(|_| "shard snapshot request timed out".to_owned())?
                 .map_err(|error| error.to_string())?
                 .into_inner();
+                let response = crate::snapshot_transfer::collect_snapshot_stream(response).await?;
                 if response.network_id != network_id_for_task {
                     return Err(format!(
                         "shard returned network '{}' instead of requested network",

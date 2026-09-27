@@ -62,6 +62,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -73,10 +74,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -85,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.absoluteValue
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,7 +97,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class AarnnTab { Dashboard, Graph, Account }
+private enum class AarnnTab { Dashboard, Graph, Fpv, Account }
 
 private enum class GraphDisplayMode(val label: String) {
     SyntheticColumns("Synthetic columns"),
@@ -239,6 +243,7 @@ private fun AarnnRemoteScreen() {
                                 when (selectedTab) {
                                     AarnnTab.Dashboard.ordinal -> "Neural dashboard"
                                     AarnnTab.Graph.ordinal -> "Graph Explorer"
+                                    AarnnTab.Fpv.ordinal -> "FPV Planner"
                                     else -> "Account & connection"
                                 },
                                 style = MaterialTheme.typography.labelMedium,
@@ -265,6 +270,12 @@ private fun AarnnRemoteScreen() {
                         onClick = { selectedTab = AarnnTab.Graph.ordinal },
                         icon = { Icon(Icons.Default.Share, contentDescription = "Graph Explorer") },
                         label = { Text("Graph") },
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == AarnnTab.Fpv.ordinal,
+                        onClick = { selectedTab = AarnnTab.Fpv.ordinal },
+                        icon = { Icon(Icons.Default.Share, contentDescription = "FPV Planner") },
+                        label = { Text("FPV") },
                     )
                     NavigationBarItem(
                         selected = selectedTab == AarnnTab.Account.ordinal,
@@ -313,6 +324,13 @@ private fun AarnnRemoteScreen() {
                     contentPadding = innerPadding,
                     onOpenAccount = { selectedTab = AarnnTab.Account.ordinal },
                     onRefresh = controller::refresh,
+                )
+            } else if (selectedTab == AarnnTab.Fpv.ordinal) {
+                FpvPlannerScreen(
+                    state = state,
+                    contentPadding = innerPadding,
+                    onSubmit = controller::submitFpvJob,
+                    onRefreshJobs = controller::refreshFpvJobs,
                 )
             } else {
                 AccountScreen(
@@ -403,6 +421,124 @@ private fun DashboardScreen(
             item { LayerActivityCard(snapshot) }
             item { DistributedNodesCard(snapshot) }
         }
+    }
+}
+
+@Composable
+private fun FpvPlannerScreen(
+    state: RemoteConnectionUiState,
+    contentPadding: PaddingValues,
+    onSubmit: (List<String>) -> Unit,
+    onRefreshJobs: () -> Unit,
+) {
+    val snapshot = state.snapshot
+    val scene = snapshot?.displayViews?.anatomical
+    var route by remember(snapshot?.summary?.networkId, scene?.sequence) { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(snapshot?.summary?.networkId) { onRefreshJobs() }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(
+            start = 12.dp,
+            top = contentPadding.calculateTopPadding() + 8.dp,
+            end = 12.dp,
+            bottom = contentPadding.calculateBottomPadding() + 10.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("FPV Planner", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            "Click neurons in order to plan a camera route. Planning reads the bounded display projection; the live neural network keeps running.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (scene == null || scene.nodes.isEmpty()) {
+            Text(snapshot?.let { "No anatomical projection is available for ${it.summary.name}." } ?: "Connect to load a network overview.")
+        } else {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF09141C), RoundedCornerShape(12.dp))
+                    .pointerInput(scene.sequence, route) {
+                        detectTapGestures { tap ->
+                            val projector = FpvProjector(scene, Size(size.width.toFloat(), size.height.toFloat()))
+                            val nearest = scene.nodes.minByOrNull { node ->
+                                (projector.project(node.position) - tap).getDistance()
+                            }
+                            nearest?.let { node ->
+                                val distance = (projector.project(node.position) - tap).getDistance()
+                                if (distance <= 26f && route.size < 512) route = route + node.id
+                            }
+                        }
+                    },
+            ) {
+                val projector = FpvProjector(scene, size)
+                val routeNodes = route.mapNotNull { id -> scene.nodes.firstOrNull { it.id == id } }
+                routeNodes.zipWithNext().forEach { (from, to) ->
+                    drawLine(
+                        color = Color(0xFFFFBA66),
+                        start = projector.project(from.position),
+                        end = projector.project(to.position),
+                        strokeWidth = 3f,
+                    )
+                }
+                scene.nodes.forEach { node ->
+                    val point = projector.project(node.position)
+                    val order = route.indexOf(node.id)
+                    drawCircle(
+                        color = if (order >= 0) Color(0xFFFFBA66) else Color(0xFF83B9CD),
+                        radius = if (order >= 0) 5f else 2.5f,
+                        center = point,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${route.size} waypoints · ${scene.nodes.size} visible neurons", modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = { route = emptyList() }, enabled = route.isNotEmpty()) { Text("Clear") }
+                Button(onClick = { onSubmit(route) }, enabled = route.size >= 2 && !state.fpvBusy) {
+                    Text(if (state.fpvBusy) "Submitting…" else "Render FPV")
+                }
+            }
+            if (scene.truncated) {
+                Text("This overview is sampled. Route-specific spatial tile rendering is available in the web FPV Studio.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        state.fpvMessage?.let { Text(it, color = if (it.contains("failed", true) || it.contains("HTTP", true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Render jobs", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = onRefreshJobs) { Text("Refresh") }
+        }
+        if (state.fpvJobs.isEmpty()) {
+            Text("No saved FPV render jobs.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            state.fpvJobs.take(5).forEach { job ->
+                val count = job.optInt("frame_count")
+                val complete = job.optInt("completed_frames")
+                Text("${job.optString("job_id")} · ${job.optString("state")} · $complete/$count frames", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+private class FpvProjector(scene: RemoteDisplaySnapshot, private val size: Size) {
+    private val minX = scene.nodes.minOfOrNull { it.position.x } ?: 0.0
+    private val maxX = scene.nodes.maxOfOrNull { it.position.x } ?: 1.0
+    private val minY = scene.nodes.minOfOrNull { it.position.y } ?: 0.0
+    private val maxY = scene.nodes.maxOfOrNull { it.position.y } ?: 1.0
+    private val minZ = scene.nodes.minOfOrNull { it.position.z } ?: 0.0
+    private val maxZ = scene.nodes.maxOfOrNull { it.position.z } ?: 1.0
+    private val useZ = (maxY - minY).absoluteValue < 1e-8 && (maxZ - minZ).absoluteValue > 1e-8
+    private val yLow = if (useZ) minZ else minY
+    private val yHigh = if (useZ) maxZ else maxY
+    private val xSpan = (maxX - minX).coerceAtLeast(1e-8)
+    private val ySpan = (yHigh - yLow).coerceAtLeast(1e-8)
+    private val margin = 18f
+    private val scale = minOf((size.width - margin * 2) / xSpan.toFloat(), (size.height - margin * 2) / ySpan.toFloat()).coerceAtLeast(0.001f)
+    private val left = (size.width - xSpan.toFloat() * scale) * 0.5f
+    private val top = (size.height - ySpan.toFloat() * scale) * 0.5f
+
+    fun project(point: RemoteDisplayPoint): Offset {
+        val y = if (useZ) point.z else point.y
+        return Offset(left + margin + (point.x - minX).toFloat() * scale, size.height - top - margin - (y - yLow).toFloat() * scale)
     }
 }
 

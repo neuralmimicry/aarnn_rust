@@ -24,6 +24,15 @@ service DistributedNeuromorphic {
   // Fetch a full network snapshot (weights/topology) as JSON
   rpc GetNetworkSnapshot(NetworkSnapshotRequest) returns (NetworkSnapshotResponse);
 
+  // Stream full snapshots in independently bounded frames. The unary RPC is
+  // retained for compatibility; internal node and UI clients use this path so
+  // total network size is not constrained by a gRPC message limit.
+  rpc StreamNetworkSnapshot(NetworkSnapshotRequest) returns (stream NetworkSnapshotChunk);
+
+  // Return only a bounded, read-only display projection. The biological
+  // execution remains independent of presentation and no weights are sent.
+  rpc GetDisplayProjection(DisplayProjectionRequest) returns (DisplayProjectionResponse);
+
   // Fetch a complete, common-frontier snapshot assembled from every assigned
   // shard. This is additive to GetNetworkSnapshot, which remains a
   // single-node compatibility path during migration.
@@ -152,6 +161,63 @@ message NetworkSnapshotResponse {
   // Complete sealed shard state when durable managed execution is enabled;
   // empty for the explicitly compatibility-only runner projection.
   string authoritative_state_json = 9;
+}
+
+message NetworkSnapshotTransferMetadata {
+  string network_id = 1;
+  uint64 step = 2;
+  uint64 sim_time_ms_bits = 3;
+  uint64 cut_epoch = 4;
+  string participant_json = 5;
+  string channel_marker_json = 6;
+  uint64 snapshot_bytes = 7;
+  bytes snapshot_sha256 = 8;
+  uint64 channel_state_bytes = 9;
+  bytes channel_state_sha256 = 10;
+  uint64 authoritative_state_bytes = 11;
+  bytes authoritative_state_sha256 = 12;
+}
+
+message NetworkSnapshotChunk {
+  // Sequence numbers start at zero and increase across all payload kinds.
+  uint64 sequence = 1;
+  // 1=snapshot JSON, 2=channel state JSON, 3=authoritative state JSON.
+  uint32 payload_kind = 2;
+  uint64 offset = 3;
+  uint64 total_bytes = 4;
+  bytes payload = 5;
+  // Present only on the first chunk.
+  NetworkSnapshotTransferMetadata metadata = 6;
+  bool final_chunk = 7;
+}
+
+message DisplayProjectionRequest {
+  string network_id = 1;
+  uint32 max_nodes = 2;
+  uint32 max_edges = 3;
+  // Optional renderer view. Empty retains the dual-view compatibility response.
+  string display_mode = 4;
+  // Optional spatial tile. The backend filters before applying the payload
+  // budget, so zoomed renderers can request detail without transferring a
+  // whole connectome. Omitted preserves the bounded overview contract.
+  DisplayRegion region = 5;
+}
+
+message DisplayRegion {
+  double min_x_mm = 1;
+  double min_y_mm = 2;
+  double min_z_mm = 3;
+  double max_x_mm = 4;
+  double max_y_mm = 5;
+  double max_z_mm = 6;
+}
+
+message DisplayProjectionResponse {
+  string network_id = 1;
+  uint64 step = 2;
+  uint64 sim_time_ms_bits = 3;
+  string network_summary_json = 4;
+  string display_snapshots_json = 5;
 }
 
 message ClusterNetworkSnapshotRequest {

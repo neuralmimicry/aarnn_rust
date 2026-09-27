@@ -19,8 +19,7 @@ use crate::node_auth::{
     certificate_sha256_der, live_causal_transport_enabled, validate_peer_metadata,
 };
 use crate::stable_executor_store::{
-    MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES, StableExecutorCheckpointSet,
-    StableExecutorCheckpointStore, StableExecutorStoreError,
+    StableExecutorCheckpointSet, StableExecutorCheckpointStore, StableExecutorStoreError,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -104,7 +103,7 @@ impl CheckpointTransferManifest {
             || self.plan_digest == StateDigest([0; 16])
             || self.payload_digest == StateDigest([0; 16])
             || self.total_bytes == 0
-            || self.total_bytes > MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES as u64
+            || self.total_bytes > usize::MAX as u64
             || self.frame_bytes == 0
             || self.frame_bytes as usize > MAX_CHECKPOINT_TRANSFER_FRAME_BYTES
             || self.frame_count == 0
@@ -284,7 +283,7 @@ impl CheckpointTransferSource {
         if frame_bytes == 0 || frame_bytes > MAX_CHECKPOINT_TRANSFER_FRAME_BYTES {
             return Err(CheckpointTransferError::InvalidFrameSize);
         }
-        if payload.is_empty() || payload.len() > MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES {
+        if payload.is_empty() {
             return Err(CheckpointTransferError::PayloadTooLarge(payload.len()));
         }
         let set: StableExecutorCheckpointSet = serde_json::from_slice(&payload)
@@ -333,23 +332,35 @@ impl CheckpointTransferSource {
 
     pub fn frames(&self) -> Result<Vec<CheckpointTransferFrame>, CheckpointTransferError> {
         self.manifest.verify()?;
-        self.payload
-            .chunks(self.manifest.frame_bytes as usize)
-            .enumerate()
-            .map(|(index, payload)| {
-                CheckpointTransferFrame {
-                    schema_version: CHECKPOINT_TRANSFER_SCHEMA_VERSION,
-                    transfer_id: self.manifest.transfer_id,
-                    manifest_digest: self.manifest.manifest_digest,
-                    frame_index: u32::try_from(index)
-                        .map_err(|_| CheckpointTransferError::SizeOverflow)?,
-                    frame_count: self.manifest.frame_count,
-                    payload: payload.to_vec(),
-                    frame_digest: StateDigest([0; 16]),
-                }
-                .seal()
-            })
+        (0..self.manifest.frame_count)
+            .map(|index| self.frame(index))
             .collect()
+    }
+
+    pub fn frame(&self, index: u32) -> Result<CheckpointTransferFrame, CheckpointTransferError> {
+        if index >= self.manifest.frame_count {
+            return Err(CheckpointTransferError::InvalidFrame);
+        }
+        let frame_bytes = self.manifest.frame_bytes as usize;
+        let start = (index as usize)
+            .checked_mul(frame_bytes)
+            .ok_or(CheckpointTransferError::SizeOverflow)?;
+        let end = start.saturating_add(frame_bytes).min(self.payload.len());
+        let payload = self
+            .payload
+            .get(start..end)
+            .filter(|payload| !payload.is_empty())
+            .ok_or(CheckpointTransferError::InvalidFrame)?;
+        CheckpointTransferFrame {
+            schema_version: CHECKPOINT_TRANSFER_SCHEMA_VERSION,
+            transfer_id: self.manifest.transfer_id,
+            manifest_digest: self.manifest.manifest_digest,
+            frame_index: index,
+            frame_count: self.manifest.frame_count,
+            payload: payload.to_vec(),
+            frame_digest: StateDigest([0; 16]),
+        }
+        .seal()
     }
 }
 
@@ -393,20 +404,25 @@ impl CheckpointTransferReceiver {
         self.frames.len()
     }
 
-    pub fn finalize(self) -> Result<ReceivedCheckpoint, CheckpointTransferError> {
+    pub fn finalize(mut self) -> Result<ReceivedCheckpoint, CheckpointTransferError> {
         if self.frames.len() != self.manifest.frame_count as usize {
             return Err(CheckpointTransferError::Incomplete {
                 received: self.frames.len(),
                 expected: self.manifest.frame_count as usize,
             });
         }
-        let mut payload = Vec::with_capacity(self.manifest.total_bytes as usize);
+        let payload_capacity = usize::try_from(self.manifest.total_bytes)
+            .map_err(|_| CheckpointTransferError::SizeOverflow)?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(payload_capacity)
+            .map_err(|_| CheckpointTransferError::PayloadTooLarge(payload_capacity))?;
         for index in 0..self.manifest.frame_count {
             let frame = self
                 .frames
-                .get(&index)
+                .remove(&index)
                 .ok_or(CheckpointTransferError::MissingFrame(index))?;
-            payload.extend_from_slice(&frame.payload);
+            payload.extend(frame.payload);
         }
         if payload.len() as u64 != self.manifest.total_bytes {
             return Err(CheckpointTransferError::PayloadLengthMismatch);
@@ -626,7 +642,6 @@ pub async fn send_checkpoint_transfer(
             "source node does not match the transfer session",
         ));
     }
-    let frames = source.frames()?;
     let (tx, rx) = mpsc::channel(4);
     let manifest_chunk = proto::CheckpointTransferChunk {
         schema_version: CHECKPOINT_TRANSFER_SCHEMA_VERSION,
@@ -640,11 +655,15 @@ pub async fn send_checkpoint_transfer(
     };
     let source_node_for_sender = source_node.to_owned();
     let destination_node_for_sender = destination_node.to_owned();
+    let frame_count = manifest.frame_count;
     let producer = tokio::spawn(async move {
         tx.send(manifest_chunk)
             .await
             .map_err(|error| error.to_string())?;
-        for frame in frames {
+        for frame_index in 0..frame_count {
+            let frame = source
+                .frame(frame_index)
+                .map_err(|error| error.to_string())?;
             tx.send(proto::CheckpointTransferChunk {
                 schema_version: frame.schema_version,
                 source_node_id: source_node_for_sender.clone(),
@@ -882,5 +901,38 @@ fn error_acknowledgement(
             text
         },
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deterministic::PartitionGeneration;
+
+    #[test]
+    fn checkpoint_transfer_manifest_accepts_payloads_larger_than_sixty_four_mib() {
+        let total_bytes: usize = 64 * 1024 * 1024 + 1;
+        let frame_bytes = MAX_CHECKPOINT_TRANSFER_FRAME_BYTES;
+        let frame_count = total_bytes.div_ceil(frame_bytes) as u32;
+        let manifest = CheckpointTransferManifest {
+            schema_version: CHECKPOINT_TRANSFER_SCHEMA_VERSION,
+            transfer_id: EventId::new(1).unwrap(),
+            source_node: "source-node".to_owned(),
+            brain_id: crate::managed_durability::managed_brain_id("large-checkpoint"),
+            checkpoint_id: EventId::new(2).unwrap(),
+            lease_term: LeaseTerm::INITIAL,
+            partition_generation: PartitionGeneration::INITIAL,
+            plan_digest: StateDigest([1; 16]),
+            payload_digest: StateDigest([2; 16]),
+            total_bytes: total_bytes as u64,
+            frame_bytes: frame_bytes as u32,
+            frame_count,
+            manifest_digest: StateDigest([0; 16]),
+        }
+        .seal()
+        .unwrap();
+
+        manifest.verify().unwrap();
+        assert_eq!(manifest.total_bytes, total_bytes as u64);
     }
 }

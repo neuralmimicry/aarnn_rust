@@ -177,18 +177,20 @@ async fn fetch_biological_topology_witness(
     bearer_token: Option<String>,
 ) -> Result<Box<crate::runner::Snapshot>, String> {
     let mut client = connect_cluster_client(addr.clone()).await?;
-    let request = authenticated_grpc_request(
+    let mut request = authenticated_grpc_request(
         NetworkSnapshotRequest {
             network_id: network_id.clone(),
             cut_epoch: 0,
         },
         bearer_token.as_deref(),
     )?;
+    request.set_timeout(std::time::Duration::from_secs(6 * 60 * 60));
     let response = client
-        .get_network_snapshot(request)
+        .stream_network_snapshot(request)
         .await
         .map_err(|error| format!("biological topology witness request failed: {error}"))?
         .into_inner();
+    let response = crate::snapshot_transfer::collect_snapshot_stream(response).await?;
     if response.network_id != network_id {
         return Err(format!(
             "topology witness node '{}' returned network '{}' instead of '{}'",
@@ -1578,6 +1580,12 @@ enum ToolTaskResult {
     RemoteTokenBalance {
         result: Result<TokenBalanceResponse, String>,
     },
+    FpvRenderJobs {
+        result: Result<Vec<serde_json::Value>, String>,
+    },
+    FpvRenderSubmitted {
+        result: Result<serde_json::Value, String>,
+    },
     RemoteWorkspacePush {
         workspace_id: String,
         result: Result<(), String>,
@@ -2328,6 +2336,15 @@ struct App {
     // Dedicated read-only network graph workspace. This only changes the
     // presentation shell; it cannot issue neural or management commands.
     graph_explorer: bool,
+    /// Read-only first-person camera route planner over the same bounded
+    /// display contract used by the web FPV Studio.
+    fpv_planner: bool,
+    fpv_waypoints: Vec<crate::morphology_contract::AnatomicalId>,
+    fpv_render_jobs: Vec<serde_json::Value>,
+    fpv_jobs_refresh_inflight: bool,
+    fpv_job_submit_inflight: bool,
+    fpv_jobs_last_refresh: Option<Instant>,
+    fpv_job_message: Option<String>,
     /// Read-only virtual placement view. It is deliberately separate from
     /// the biological graph so host placement cannot be mistaken for model
     /// topology or used as an implicit control path.
@@ -2519,6 +2536,324 @@ fn webcam_display_label(device: &WebcamDeviceInfo, devices: &[WebcamDeviceInfo])
 
 #[cfg(feature = "ui")]
 impl App {
+    fn queue_fpv_jobs_refresh(&mut self, force: bool) {
+        if self.fpv_jobs_refresh_inflight
+            || (!force
+                && self
+                    .fpv_jobs_last_refresh
+                    .is_some_and(|last| last.elapsed() < Duration::from_secs(5)))
+        {
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            self.fpv_job_message = Some(
+                "Connect this UI to an AARNN runtime workspace to submit and review shared FPV jobs."
+                    .to_owned(),
+            );
+            return;
+        };
+        let tx = self.tool_task_tx.clone();
+        self.fpv_jobs_refresh_inflight = true;
+        std::thread::spawn(move || {
+            let result = binding
+                .client()
+                .map_err(|error| error.to_string())
+                .and_then(|mut client| client.fpv_render_jobs().map_err(|error| error.to_string()));
+            let _ = tx.send(ToolTaskResult::FpvRenderJobs { result });
+        });
+    }
+
+    fn queue_fpv_render_job(&mut self) {
+        if self.fpv_job_submit_inflight {
+            return;
+        }
+        if self.fpv_waypoints.len() < 2 {
+            self.fpv_job_message = Some("Choose at least two camera waypoints first.".to_owned());
+            return;
+        }
+        let Some(binding) = self.remote_workspace_binding.clone() else {
+            self.fpv_job_message = Some(
+                "Connect this UI to an AARNN runtime workspace before submitting a render."
+                    .to_owned(),
+            );
+            return;
+        };
+        let scene = self
+            .ui_snapshot
+            .try_read()
+            .ok()
+            .and_then(|snapshot| snapshot.display_contracts.get("anatomical").cloned());
+        let Some(scene) = scene else {
+            self.fpv_job_message = Some("No anatomical projection is available yet.".to_owned());
+            return;
+        };
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "network_id": self.biox6_network_id_hint(),
+            "scene": scene.as_ref(),
+            "waypoint_ids": self.fpv_waypoints,
+            "active_node_ids": [],
+            "width": 1280,
+            "height": 720,
+            "frame_rate": 30,
+            "frame_count": 300,
+            "zoom": 1.0,
+            "focus_active_regions": true,
+        });
+        let tx = self.tool_task_tx.clone();
+        self.fpv_job_submit_inflight = true;
+        self.fpv_job_message = Some("Submitting FPV render job…".to_owned());
+        std::thread::spawn(move || {
+            let result = binding
+                .client()
+                .map_err(|error| error.to_string())
+                .and_then(|mut client| {
+                    let submitted = client
+                        .submit_fpv_render_job(&request)
+                        .map_err(|error| error.to_string())?;
+                    let jobs = client
+                        .fpv_render_jobs()
+                        .map_err(|error| error.to_string())?;
+                    Ok(serde_json::json!({
+                        "submitted": submitted,
+                        "jobs": jobs,
+                    }))
+                });
+            let _ = tx.send(ToolTaskResult::FpvRenderSubmitted { result });
+        });
+    }
+
+    fn render_fpv_planner(&mut self, ui: &mut egui::Ui) {
+        self.queue_fpv_jobs_refresh(false);
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("FPV Planner");
+            ui.separator();
+            ui.label("Click neurons in order to add camera waypoints.");
+            if ui.button("Clear route").clicked() {
+                self.fpv_waypoints.clear();
+            }
+            if ui.button("Export route").clicked() && self.fpv_waypoints.len() >= 2 {
+                let scene = self
+                    .ui_snapshot
+                    .try_read()
+                    .ok()
+                    .and_then(|snapshot| snapshot.display_contracts.get("anatomical").cloned());
+                if let Some(scene) = scene {
+                    let plan = serde_json::json!({
+                        "schema_version": 1,
+                        "network_id": self.biox6_network_id_hint(),
+                        "waypoint_ids": self.fpv_waypoints,
+                        "scene": scene.as_ref(),
+                    });
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("aarnn-fpv-route.json")
+                        .save_file()
+                    {
+                        match crate::shared_fs::atomic_write(
+                            &path,
+                            serde_json::to_vec_pretty(&plan)
+                                .unwrap_or_default()
+                                .as_slice(),
+                        ) {
+                            Ok(()) => {
+                                self.status = format!("FPV route exported to {}", path.display())
+                            }
+                            Err(error) => self.status = format!("FPV route export failed: {error}"),
+                        }
+                    }
+                }
+            }
+            if ui
+                .add_enabled(
+                    self.fpv_waypoints.len() >= 2 && !self.fpv_job_submit_inflight,
+                    egui::Button::new(if self.fpv_job_submit_inflight {
+                        "Submitting…"
+                    } else {
+                        "Render FPV"
+                    }),
+                )
+                .clicked()
+            {
+                self.queue_fpv_render_job();
+            }
+            if ui.button("Refresh jobs").clicked() {
+                self.queue_fpv_jobs_refresh(true);
+            }
+            ui.label(format!("{} waypoints", self.fpv_waypoints.len()));
+        });
+        ui.separator();
+
+        let scene = self
+            .ui_snapshot
+            .try_read()
+            .ok()
+            .and_then(|snapshot| snapshot.display_contracts.get("anatomical").cloned());
+        let Some(scene) = scene else {
+            ui.label("No bounded anatomical projection is available yet.");
+            ui.label("The planner reads display geometry only and does not pause or modify network execution.");
+            return;
+        };
+        if scene.nodes.is_empty() {
+            ui.label("The current projection contains no neurons.");
+            return;
+        }
+
+        let available =
+            (ui.available_size() - egui::vec2(0.0, 116.0)).max(egui::vec2(120.0, 120.0));
+        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(8, 18, 26));
+        let mut min = scene.nodes[0].position_mm;
+        let mut max = min;
+        for node in scene.nodes.iter().skip(1) {
+            let p = node.position_mm;
+            min.x = min.x.min(p.x);
+            min.y = min.y.min(p.y);
+            min.z = min.z.min(p.z);
+            max.x = max.x.max(p.x);
+            max.y = max.y.max(p.y);
+            max.z = max.z.max(p.z);
+        }
+        let use_z = (max.y - min.y).abs() < 1.0e-8 && (max.z - min.z).abs() > 1.0e-8;
+        let mut min_x = min.x;
+        let mut max_x = max.x;
+        let (mut min_y, mut max_y) = if use_z {
+            (min.z, max.z)
+        } else {
+            (min.y, max.y)
+        };
+        if (max_x - min_x).abs() < 1.0e-8 {
+            min_x -= 1.0;
+            max_x += 1.0;
+        }
+        if (max_y - min_y).abs() < 1.0e-8 {
+            min_y -= 1.0;
+            max_y += 1.0;
+        }
+        let margin = 24.0_f32;
+        let scale = ((rect.width() - margin * 2.0) / (max_x - min_x) as f32)
+            .min((rect.height() - margin * 2.0) / (max_y - min_y) as f32)
+            .max(0.001);
+        let project = |position: crate::morphology_contract::Vec3| {
+            egui::pos2(
+                rect.left() + margin + ((position.x - min_x) as f32) * scale,
+                rect.bottom()
+                    - margin
+                    - (((if use_z { position.z } else { position.y }) - min_y) as f32) * scale,
+            )
+        };
+        let positions = scene
+            .nodes
+            .iter()
+            .map(|node| (node.id, project(node.position_mm)))
+            .collect::<HashMap<_, _>>();
+        let mut route_points = Vec::new();
+        for id in &self.fpv_waypoints {
+            if let Some(position) = positions.get(id) {
+                route_points.push(*position);
+            }
+        }
+        for pair in route_points.windows(2) {
+            painter.line_segment(
+                [pair[0], pair[1]],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 185, 102)),
+            );
+        }
+        let waypoint_index = self
+            .fpv_waypoints
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index + 1))
+            .collect::<HashMap<_, _>>();
+        for node in &scene.nodes {
+            let point = project(node.position_mm);
+            let route_order = waypoint_index.get(&node.id).copied();
+            painter.circle_filled(
+                point,
+                if route_order.is_some() { 4.8 } else { 2.0 },
+                if route_order.is_some() {
+                    egui::Color32::from_rgb(255, 185, 102)
+                } else {
+                    egui::Color32::from_rgb(111, 174, 199)
+                },
+            );
+            if let Some(order) = route_order {
+                painter.text(
+                    point + egui::vec2(5.0, -5.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    order.to_string(),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+        if response.clicked() && self.fpv_waypoints.len() < 512 {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                let nearest = scene
+                    .nodes
+                    .iter()
+                    .map(|node| (node, project(node.position_mm).distance(pointer)))
+                    .filter(|(_, distance)| *distance <= 18.0)
+                    .min_by(|left, right| left.1.total_cmp(&right.1));
+                if let Some((node, _)) = nearest {
+                    self.fpv_waypoints.push(node.id);
+                }
+            }
+        }
+        painter.text(
+            rect.left_top() + egui::vec2(10.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{} neurons · {} edges · {} waypoints{}",
+                scene.nodes.len(),
+                scene.edges.len(),
+                self.fpv_waypoints.len(),
+                if scene.coverage.truncated {
+                    " · sampled tile"
+                } else {
+                    ""
+                }
+            ),
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_gray(205),
+        );
+        if let Some(message) = self.fpv_job_message.as_deref() {
+            ui.label(message);
+        }
+        ui.horizontal(|ui| {
+            ui.strong("Shared render jobs");
+            ui.label("The CLI, web, Android, and Rust UI read the same durable job status.");
+        });
+        if self.fpv_render_jobs.is_empty() {
+            ui.label("No FPV jobs found for this account.");
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("fpv_render_jobs")
+                .max_height(92.0)
+                .show(ui, |ui| {
+                    for job in self.fpv_render_jobs.iter().take(10) {
+                        let job_id = job
+                            .get("job_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown job");
+                        let state = job
+                            .get("state")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown");
+                        let completed = job
+                            .get("completed_frames")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0);
+                        let total = job
+                            .get("frame_count")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0);
+                        ui.label(format!("{job_id} · {state} · {completed}/{total} frames"));
+                    }
+                });
+        }
+    }
+
     fn view_source_label(&self) -> String {
         match &self.view_source {
             ViewSource::Standalone => "Standalone".to_string(),
@@ -5032,6 +5367,13 @@ impl App {
                     )
                 })
                 .unwrap_or(false),
+            fpv_planner: false,
+            fpv_waypoints: Vec::new(),
+            fpv_render_jobs: Vec::new(),
+            fpv_jobs_refresh_inflight: false,
+            fpv_job_submit_inflight: false,
+            fpv_jobs_last_refresh: None,
+            fpv_job_message: None,
             placement_explorer: false,
             placement_camera_zoom: 1.0,
             placement_camera_rotation: 0.0,
@@ -12588,6 +12930,39 @@ impl eframe::App for App {
                             }
                         }
                     }
+                    ToolTaskResult::FpvRenderJobs { result } => {
+                        self.fpv_jobs_refresh_inflight = false;
+                        self.fpv_jobs_last_refresh = Some(Instant::now());
+                        match result {
+                            Ok(jobs) => {
+                                self.fpv_render_jobs = jobs;
+                                self.fpv_job_message = None;
+                            }
+                            Err(error) => self.fpv_job_message = Some(error),
+                        }
+                    }
+                    ToolTaskResult::FpvRenderSubmitted { result } => {
+                        self.fpv_job_submit_inflight = false;
+                        match result {
+                            Ok(response) => {
+                                let submitted = response.get("submitted").unwrap_or(&response);
+                                let job_id = submitted
+                                    .get("job_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("FPV job");
+                                self.fpv_render_jobs = response
+                                    .get("jobs")
+                                    .and_then(serde_json::Value::as_array)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                self.fpv_jobs_last_refresh = Some(Instant::now());
+                                self.fpv_job_message = Some(format!(
+                                    "Render {job_id} queued. Job progress is shared with the Rust CLI, web, and Android clients."
+                                ));
+                            }
+                            Err(error) => self.fpv_job_message = Some(error),
+                        }
+                    }
                 }
             }
         }
@@ -13280,13 +13655,14 @@ impl eframe::App for App {
                     ui.separator();
                     if ui
                         .selectable_label(
-                            !self.graph_explorer && !self.placement_explorer,
+                            !self.graph_explorer && !self.placement_explorer && !self.fpv_planner,
                             "Dashboard",
                         )
                         .clicked()
                     {
                         self.graph_explorer = false;
                         self.placement_explorer = false;
+                        self.fpv_planner = false;
                     }
                     if ui
                         .selectable_label(self.graph_explorer, "Graph Explorer")
@@ -13294,6 +13670,7 @@ impl eframe::App for App {
                     {
                         self.graph_explorer = true;
                         self.placement_explorer = false;
+                        self.fpv_planner = false;
                     }
                     if ui
                         .selectable_label(self.placement_explorer, "Placement")
@@ -13301,8 +13678,18 @@ impl eframe::App for App {
                     {
                         self.graph_explorer = false;
                         self.placement_explorer = true;
+                        self.fpv_planner = false;
                     }
-                    if self.graph_explorer {
+                    if ui.selectable_label(self.fpv_planner, "FPV Planner").clicked() {
+                        self.graph_explorer = false;
+                        self.placement_explorer = false;
+                        self.fpv_planner = true;
+                        self.fpv_waypoints.clear();
+                    }
+                    if self.fpv_planner {
+                        ui.separator();
+                        ui.label("Plan an offline camera path over the selected bounded network view");
+                    } else if self.graph_explorer {
                         ui.separator();
                         ui.label("Read-only connected topology");
                         ui.add(
@@ -13357,22 +13744,24 @@ impl eframe::App for App {
             // full width and keep operational controls on the Dashboard tab.
             // Use a distinct panel id so egui's remembered dashboard width
             // cannot reappear when switching back to the graph.
-            let controls_panel_id = if self.graph_explorer || self.placement_explorer {
-                "graph_explorer_controls"
-            } else {
-                "controls"
-            };
-            let controls_panel_min_width = if self.graph_explorer || self.placement_explorer {
-                0.0
-            } else {
-                CONTROLS_PANEL_MIN_WIDTH
-            };
+            let controls_panel_id =
+                if self.graph_explorer || self.placement_explorer || self.fpv_planner {
+                    "graph_explorer_controls"
+                } else {
+                    "controls"
+                };
+            let controls_panel_min_width =
+                if self.graph_explorer || self.placement_explorer || self.fpv_planner {
+                    0.0
+                } else {
+                    CONTROLS_PANEL_MIN_WIDTH
+                };
             egui::Panel::right(controls_panel_id)
                     .resizable(true)
                     .size_range(controls_panel_min_width..=600.0)
                     .default_size(controls_panel_min_width)
                     .show_inside(ui, |ui| {
-                    if self.graph_explorer || self.placement_explorer {
+                    if self.graph_explorer || self.placement_explorer || self.fpv_planner {
                         return;
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -17845,6 +18234,10 @@ impl eframe::App for App {
 
             let state_arc_for_layout = state_arc.clone();
             egui::CentralPanel::default().show_inside(ui, |ui| {
+            if self.fpv_planner {
+                self.render_fpv_planner(ui);
+                return;
+            }
             // Main drawing area
             let avail = ui.available_size();
             let panel_rect = ui.allocate_space(avail).1;

@@ -83,6 +83,7 @@ mod scientific_validation;
 mod shard_executor;
 mod shared_fs;
 mod sim;
+mod snapshot_transfer;
 #[allow(dead_code)]
 mod spike_io;
 mod stable_executor_authority;
@@ -317,6 +318,11 @@ enum CliCommand {
         #[command(subcommand)]
         command: OperationCommand,
     },
+    /// Inspect and manage asynchronous FPV renders through the authenticated web API.
+    Fpv {
+        #[command(subcommand)]
+        command: FpvCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -353,6 +359,40 @@ enum NodeCommand {
 enum OperationCommand {
     /// Inspect a persisted migration journal without mutating it.
     Watch(OperationWatchCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum FpvCommand {
+    /// List the authenticated user's recent render jobs.
+    Jobs(FpvApiCommand),
+    /// Show progress and artifact availability for one render job.
+    Status(FpvJobCommand),
+    /// Cancel a queued or running render job.
+    Cancel(FpvJobCommand),
+    /// Retry a failed render job.
+    Retry(FpvJobCommand),
+}
+
+#[derive(Debug, Args)]
+struct FpvApiCommand {
+    /// AARNN web API base URL (or set NM_AARNN_API_URL).
+    #[arg(long)]
+    api_url: Option<String>,
+    /// Access token (or set NM_AARNN_ACCESS_TOKEN / NM_RUNTIME_ACCESS_TOKEN).
+    #[arg(long)]
+    token: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct FpvJobCommand {
+    /// Durable FPV job identifier.
+    job_id: String,
+    /// AARNN web API base URL (or set NM_AARNN_API_URL).
+    #[arg(long)]
+    api_url: Option<String>,
+    /// Access token (or set NM_AARNN_ACCESS_TOKEN / NM_RUNTIME_ACCESS_TOKEN).
+    #[arg(long)]
+    token: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -2008,7 +2048,91 @@ fn apply_nested_command(args: &mut Cli, command: CliCommand) -> anyhow::Result<(
                 handle_operation_watch(args)
             }
         },
+        CliCommand::Fpv { command } => handle_fpv_command(args, command),
     }
+}
+
+fn handle_fpv_command(args: &Cli, command: FpvCommand) -> anyhow::Result<()> {
+    let (api_url, token, method, path) = match command {
+        FpvCommand::Jobs(options) => (
+            options.api_url,
+            options.token,
+            reqwest::Method::GET,
+            "/api/fpv/jobs".to_owned(),
+        ),
+        FpvCommand::Status(options) => (
+            options.api_url,
+            options.token,
+            reqwest::Method::GET,
+            format!("/api/fpv/jobs/{}", fpv_job_id_segment(&options.job_id)?),
+        ),
+        FpvCommand::Cancel(options) => (
+            options.api_url,
+            options.token,
+            reqwest::Method::POST,
+            format!(
+                "/api/fpv/jobs/{}/cancel",
+                fpv_job_id_segment(&options.job_id)?
+            ),
+        ),
+        FpvCommand::Retry(options) => (
+            options.api_url,
+            options.token,
+            reqwest::Method::POST,
+            format!(
+                "/api/fpv/jobs/{}/retry",
+                fpv_job_id_segment(&options.job_id)?
+            ),
+        ),
+    };
+    let api_url = api_url
+        .or_else(|| std::env::var("NM_AARNN_API_URL").ok())
+        .or_else(|| args.runtime_url.clone())
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("set --api-url or NM_AARNN_API_URL to the AARNN web API"))?;
+    let token = token
+        .or_else(|| std::env::var("NM_AARNN_ACCESS_TOKEN").ok())
+        .or_else(|| std::env::var("NM_RUNTIME_ACCESS_TOKEN").ok())
+        .or_else(|| args.runtime_access_token.clone())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("set --token or NM_AARNN_ACCESS_TOKEN for FPV job access")
+        })?;
+    let endpoint = format!(
+        "{}{}",
+        normalize_runtime_url(&api_url).trim_end_matches('/'),
+        path
+    );
+    let response = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?
+        .request(method, endpoint)
+        .bearer_auth(token.strip_prefix("Bearer ").unwrap_or(&token))
+        .send()
+        .context("FPV API request failed")?;
+    let status = response.status();
+    let body = response.text().context("failed to read FPV API response")?;
+    if !status.is_success() {
+        anyhow::bail!("FPV API returned HTTP {status}: {}", body.trim());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).context("FPV API returned invalid JSON")?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+fn fpv_job_id_segment(job_id: &str) -> anyhow::Result<&str> {
+    if job_id.is_empty()
+        || job_id.len() > 64
+        || !job_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        anyhow::bail!("invalid FPV job ID")
+    }
+    Ok(job_id)
 }
 
 fn read_migration_brain_id(path: &str) -> anyhow::Result<crate::deterministic::BrainId> {

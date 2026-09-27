@@ -294,6 +294,150 @@ impl PointOnlyConnectome {
     }
 }
 
+/// Choose deterministic, evenly spaced indices for a bounded display view.
+/// The returned allocation is proportional to `max_nodes`, never to the
+/// underlying network size.
+pub fn display_layer_samples(layer_counts: &[usize], max_nodes: usize) -> Vec<Vec<usize>> {
+    let max_nodes = max_nodes.max(1);
+    let total_nodes = layer_counts
+        .iter()
+        .fold(0usize, |total, count| total.saturating_add(*count));
+    if total_nodes <= max_nodes {
+        return layer_counts
+            .iter()
+            .map(|count| (0..*count).collect())
+            .collect();
+    }
+
+    let active_layers = layer_counts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, count)| (*count > 0).then_some(index))
+        .collect::<Vec<_>>();
+    let mut quotas = vec![0usize; layer_counts.len()];
+    if active_layers.len() > max_nodes {
+        let mut selected_layers = active_layers;
+        selected_layers.sort_by(|left, right| {
+            layer_counts[*right]
+                .cmp(&layer_counts[*left])
+                .then_with(|| left.cmp(right))
+        });
+        for layer in selected_layers.into_iter().take(max_nodes) {
+            quotas[layer] = 1;
+        }
+    } else {
+        for layer in &active_layers {
+            quotas[*layer] = 1;
+        }
+        let mut remaining = max_nodes - active_layers.len();
+        let mut small_layers = active_layers.clone();
+        small_layers.sort_by_key(|layer| (layer_counts[*layer], *layer));
+        for layer in &small_layers {
+            let extra = layer_counts[*layer].saturating_sub(1);
+            if extra <= remaining {
+                quotas[*layer] = layer_counts[*layer];
+                remaining -= extra;
+            }
+        }
+        let spare_capacity = active_layers
+            .iter()
+            .filter(|layer| quotas[**layer] < layer_counts[**layer])
+            .fold(0u128, |total, layer| {
+                total.saturating_add(layer_counts[*layer].saturating_sub(quotas[*layer]) as u128)
+            });
+        let mut assigned: usize = quotas.iter().sum();
+        if remaining > 0 && spare_capacity > 0 {
+            for layer in &active_layers {
+                if quotas[*layer] >= layer_counts[*layer] {
+                    continue;
+                }
+                let capacity = layer_counts[*layer].saturating_sub(quotas[*layer]) as u128;
+                let extra = ((remaining as u128).saturating_mul(capacity) / spare_capacity)
+                    .min(capacity) as usize;
+                quotas[*layer] = quotas[*layer].saturating_add(extra);
+                assigned = assigned.saturating_add(extra);
+            }
+        }
+        while assigned < max_nodes {
+            let mut progressed = false;
+            for layer in &active_layers {
+                if quotas[*layer] >= layer_counts[*layer] {
+                    continue;
+                }
+                quotas[*layer] += 1;
+                assigned += 1;
+                progressed = true;
+                if assigned == max_nodes {
+                    break;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+    }
+
+    layer_counts
+        .iter()
+        .zip(quotas)
+        .map(|(count, quota)| evenly_spaced_indices(*count, quota))
+        .collect()
+}
+
+fn evenly_spaced_indices(total: usize, limit: usize) -> Vec<usize> {
+    if total <= limit {
+        return (0..total).collect();
+    }
+    if limit == 0 {
+        return Vec::new();
+    }
+    if limit == 1 {
+        return vec![total / 2];
+    }
+    (0..limit)
+        .map(|index| (index as u128 * (total - 1) as u128 / (limit - 1) as u128) as usize)
+        .collect()
+}
+
+const MAX_DISPLAY_PATH_POINTS: usize = 256;
+
+fn sampled_path_positions(samples: &[PathSample], max_points: usize) -> Vec<Vec3> {
+    evenly_spaced_indices(samples.len(), max_points.max(2))
+        .into_iter()
+        .map(|index| samples[index].position_mm)
+        .collect()
+}
+
+fn append_bounded_display_path(
+    path: &PhysicalPath,
+    owner: AnatomicalId,
+    paths: &mut Vec<DisplayPath>,
+    omitted: &mut bool,
+) {
+    let indices = evenly_spaced_indices(path.samples.len(), MAX_DISPLAY_PATH_POINTS);
+    if indices.len() < path.samples.len() {
+        *omitted = true;
+    }
+    let points_mm = indices
+        .iter()
+        .map(|index| path.samples[*index].position_mm)
+        .collect::<Vec<_>>();
+    if points_mm.len() < 2 {
+        return;
+    }
+    let radius_mm = indices
+        .iter()
+        .map(|index| path.samples[*index].radius_mm.0)
+        .fold(0.0, f64::max);
+    paths.push(DisplayPath {
+        id: path.id,
+        owner,
+        kind: path.kind,
+        points_mm,
+        radius_mm,
+    });
+}
+
 /// Controls for deterministic reconstruction of anatomy from point-only data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReconstructionConfig {
@@ -739,10 +883,10 @@ pub enum MorphologyError {
     EmptyConnectome,
     #[error("point-only reconstruction configuration is invalid")]
     InvalidReconstructionConfig,
-    #[error(
-        "two soma volumes overlap and cannot be reconstructed without changing source positions"
-    )]
+    #[error("overlapping soma positions cannot be resolved inside the growth environment")]
     SomaOverlap,
+    #[error("soma position is outside the deterministic spatial-index range")]
+    SpatialIndexCoordinateOverflow,
     #[error("no collision-free route candidate was found for connection {0}")]
     RouteUnavailable(u64),
     #[error("schema or primitive validation failed: {0}")]
@@ -921,6 +1065,16 @@ pub struct ReconstructionConnectionResult {
     pub status: ReconstructionConnectionStatus,
 }
 
+/// Geometry-only correction applied when imported soma centers overlap.
+/// `source_position_mm` remains the position in the imported network; the
+/// resolved position is used only by the procedural morphology projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SomaPositionRepair {
+    pub neuron_id: NeuronId,
+    pub source_position_mm: Vec3,
+    pub resolved_position_mm: Vec3,
+}
+
 /// The result of importing a point-only connectome.  Failed routes remain in
 /// this report and the source connection list is retained, so a failed
 /// geometric reconstruction can never silently remove a recurrent edge.
@@ -930,15 +1084,19 @@ pub struct PointOnlyReconstruction {
     pub source: String,
     pub seed: u64,
     pub connectome: PointOnlyConnectome,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soma_position_repairs: Vec<SomaPositionRepair>,
     pub environment: GrowthEnvironment,
     pub state: MorphologyState,
     pub neuron_order: Vec<NeuronId>,
     pub soma_ids: BTreeMap<NeuronId, AnatomicalId>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths_by_owner: BTreeMap<NeuronId, Vec<AnatomicalId>>,
     pub connections: Vec<ReconstructionConnectionResult>,
 }
 
 impl PointOnlyReconstruction {
-    pub const SCHEMA_VERSION: u16 = 2;
+    pub const SCHEMA_VERSION: u16 = 3;
 
     pub fn display_snapshot(
         &self,
@@ -946,8 +1104,26 @@ impl PointOnlyReconstruction {
         max_nodes: usize,
         max_edges: usize,
     ) -> Result<DisplaySnapshot, MorphologyError> {
-        let mut nodes = Vec::with_capacity(self.connectome.neurons.len());
-        for neuron in &self.connectome.neurons {
+        let sample_indices = evenly_spaced_indices(self.connectome.neurons.len(), max_nodes.max(1));
+        let visible_somas = sample_indices
+            .iter()
+            .filter_map(|index| {
+                let neuron = self.connectome.neurons.get(*index)?;
+                self.soma_ids
+                    .get(&neuron.id)
+                    .copied()
+                    .map(|soma| (neuron.id, soma))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let visible_neurons = visible_somas.keys().copied().collect::<BTreeSet<_>>();
+        let mut nodes = Vec::with_capacity(sample_indices.len());
+        let resolved_positions = self
+            .soma_position_repairs
+            .iter()
+            .map(|repair| (repair.neuron_id, repair.resolved_position_mm))
+            .collect::<BTreeMap<_, _>>();
+        for index in sample_indices {
+            let neuron = &self.connectome.neurons[index];
             let id = *self
                 .soma_ids
                 .get(&neuron.id)
@@ -961,15 +1137,22 @@ impl PointOnlyReconstruction {
                     ConnectomeRole::Unassigned => DisplayRole::Unassigned,
                 },
                 layer: neuron.layer,
-                position_mm: neuron.position_mm,
+                position_mm: resolved_positions
+                    .get(&neuron.id)
+                    .copied()
+                    .unwrap_or(neuron.position_mm),
                 kind: AnatomicalKind::Soma,
                 colour_slot: 0,
             });
         }
         let owner_for_site =
             |id: AnatomicalId| self.state.elements.get(&id).map(|element| element.owner);
-        let mut edges = Vec::new();
-        for result in &self.connections {
+        let mut edges = Vec::with_capacity(max_edges.min(4096));
+        let mut omitted_edges = false;
+        let sampled_connections = evenly_spaced_indices(self.connections.len(), max_edges.max(1));
+        omitted_edges |= sampled_connections.len() < self.connections.len();
+        for connection_index in sampled_connections {
+            let result = &self.connections[connection_index];
             let ReconstructionConnectionStatus::Reconstructed { synapse_id, .. } = result.status
             else {
                 continue;
@@ -983,19 +1166,31 @@ impl PointOnlyReconstruction {
             let Some(target) = self.soma_ids.get(&result.post).copied() else {
                 continue;
             };
-            let mut points = synapse
-                .route
-                .axon
-                .samples
-                .iter()
-                .map(|s| s.position_mm)
-                .collect::<Vec<_>>();
+            if !visible_neurons.contains(&result.pre) || !visible_neurons.contains(&result.post) {
+                omitted_edges = true;
+                continue;
+            }
+            let mut points =
+                sampled_path_positions(&synapse.route.axon.samples, MAX_DISPLAY_PATH_POINTS / 2);
+            omitted_edges |= synapse.route.axon.samples.len() > MAX_DISPLAY_PATH_POINTS / 2;
             if let Some(dendrite) = &synapse.route.dendrite {
-                points.extend(dendrite.samples.iter().rev().map(|s| s.position_mm));
+                omitted_edges |= dendrite.samples.len() > MAX_DISPLAY_PATH_POINTS - points.len();
+                points.extend(
+                    sampled_path_positions(
+                        &dendrite.samples,
+                        MAX_DISPLAY_PATH_POINTS - points.len(),
+                    )
+                    .into_iter()
+                    .rev(),
+                );
             }
             if owner_for_site(synapse.pre_site) == Some(result.pre)
                 && owner_for_site(synapse.post_site) == Some(result.post)
             {
+                if edges.len() >= max_edges.max(1) {
+                    omitted_edges = true;
+                    continue;
+                }
                 edges.push(DisplayEdge {
                     source,
                     target,
@@ -1011,33 +1206,50 @@ impl PointOnlyReconstruction {
         // dendritic and it omits branches that do not terminate a synapse.
         // These paths are derived from the same immutable route state used by
         // timing, so the renderer cannot accidentally invent anatomy.
-        let mut paths = self
-            .state
-            .paths
-            .values()
-            .filter_map(|path| {
-                let owner = self
-                    .soma_ids
-                    .iter()
-                    .find_map(|(neuron, soma)| (*neuron == path.owner).then_some(*soma))?;
-                let points_mm = path
-                    .samples
-                    .iter()
-                    .map(|sample| sample.position_mm)
-                    .collect::<Vec<_>>();
-                (points_mm.len() >= 2).then_some(DisplayPath {
-                    id: path.id,
-                    owner,
-                    kind: path.kind,
-                    points_mm,
-                    radius_mm: path.swept_radius_mm().ok()?,
-                })
-            })
-            .collect::<Vec<_>>();
-        paths.sort_by_key(|path| path.id);
+        let mut omitted_paths = false;
+        let mut paths = Vec::with_capacity(max_edges.min(4096));
+        if self.paths_by_owner.is_empty() {
+            // Old serialized reconstructions predate the owner index. Keep
+            // them readable while rebuilding only bounded display geometry.
+            for path in self.state.paths.values() {
+                if !visible_neurons.contains(&path.owner) {
+                    continue;
+                }
+                if paths.len() >= max_edges.max(1) {
+                    omitted_paths = true;
+                    break;
+                }
+                if let Some(owner) = visible_somas.get(&path.owner).copied() {
+                    append_bounded_display_path(path, owner, &mut paths, &mut omitted_paths);
+                }
+            }
+        } else {
+            for neuron in &visible_neurons {
+                let Some(owner) = visible_somas.get(neuron).copied() else {
+                    continue;
+                };
+                let Some(path_ids) = self.paths_by_owner.get(neuron) else {
+                    continue;
+                };
+                for path_id in path_ids {
+                    if paths.len() >= max_edges.max(1) {
+                        omitted_paths = true;
+                        break;
+                    }
+                    if let Some(path) = self.state.paths.get(path_id) {
+                        append_bounded_display_path(path, owner, &mut paths, &mut omitted_paths);
+                    }
+                }
+                if omitted_paths {
+                    break;
+                }
+            }
+        }
 
-        let mut markers = Vec::new();
-        for result in &self.connections {
+        let mut markers = Vec::with_capacity(max_edges.min(4096));
+        let mut omitted_markers = false;
+        for connection_index in evenly_spaced_indices(self.connections.len(), max_edges.max(1)) {
+            let result = &self.connections[connection_index];
             let ReconstructionConnectionStatus::Reconstructed { synapse_id, .. } = result.status
             else {
                 continue;
@@ -1051,6 +1263,14 @@ impl PointOnlyReconstruction {
             let Some(target) = self.soma_ids.get(&result.post).copied() else {
                 continue;
             };
+            if !visible_neurons.contains(&result.pre) || !visible_neurons.contains(&result.post) {
+                omitted_markers = true;
+                continue;
+            }
+            if markers.len().saturating_add(3) > max_edges.max(1) {
+                omitted_markers = true;
+                continue;
+            }
             let Some(pre_position) = synapse
                 .route
                 .axon
@@ -1104,7 +1324,8 @@ impl PointOnlyReconstruction {
             }
         }
 
-        DisplaySnapshot::bounded_with_paths_and_markers(
+        let sampled_nodes = visible_neurons.len() < self.connectome.neurons.len();
+        let mut snapshot = DisplaySnapshot::bounded_with_paths_and_markers(
             self.state.revision,
             self.state.topology_epoch,
             self.state
@@ -1124,7 +1345,12 @@ impl PointOnlyReconstruction {
             max_nodes,
             max_edges,
             None,
-        )
+        )?;
+        if sampled_nodes || omitted_edges || omitted_paths || omitted_markers {
+            snapshot.coverage.truncated = true;
+            snapshot.coverage.complete = false;
+        }
+        Ok(snapshot)
     }
 
     /// Produce the synthetic column view from the same stable anatomical
@@ -1161,13 +1387,11 @@ impl PointOnlyReconstruction {
                 *count += 1;
             }
         }
+        let samples_by_layer = display_layer_samples(&counts, max_nodes);
         let mut seen_by_layer = vec![0usize; layer_count];
-        let mut nodes = Vec::with_capacity(self.connectome.neurons.len());
+        let mut nodes = Vec::with_capacity(max_nodes.max(1));
+        let mut visible_neurons = BTreeSet::new();
         for neuron in &self.connectome.neurons {
-            let id = *self
-                .soma_ids
-                .get(&neuron.id)
-                .ok_or(MorphologyError::InvalidOwnership)?;
             let layer = match neuron.role {
                 ConnectomeRole::Sensory => 0,
                 ConnectomeRole::Output => layer_count.saturating_sub(1),
@@ -1180,6 +1404,14 @@ impl PointOnlyReconstruction {
             };
             let index = seen_by_layer[layer];
             seen_by_layer[layer] += 1;
+            if samples_by_layer[layer].binary_search(&index).is_err() {
+                continue;
+            }
+            let id = *self
+                .soma_ids
+                .get(&neuron.id)
+                .ok_or(MorphologyError::InvalidOwnership)?;
+            visible_neurons.insert(neuron.id);
             let x = if layer_count <= 1 {
                 0.0
             } else {
@@ -1205,8 +1437,23 @@ impl PointOnlyReconstruction {
                 colour_slot: 0,
             });
         }
-        let mut edges = Vec::with_capacity(self.connectome.connections.len());
-        for connection in &self.connectome.connections {
+        let mut edges = Vec::with_capacity(max_edges.min(4096));
+        let mut omitted_edges = false;
+        let sampled_connections =
+            evenly_spaced_indices(self.connectome.connections.len(), max_edges.max(1));
+        omitted_edges |= sampled_connections.len() < self.connectome.connections.len();
+        for connection_index in sampled_connections {
+            let connection = &self.connectome.connections[connection_index];
+            if !visible_neurons.contains(&connection.pre)
+                || !visible_neurons.contains(&connection.post)
+            {
+                omitted_edges = true;
+                continue;
+            }
+            if edges.len() >= max_edges.max(1) {
+                omitted_edges = true;
+                continue;
+            }
             let source = *self
                 .soma_ids
                 .get(&connection.pre)
@@ -1223,7 +1470,8 @@ impl PointOnlyReconstruction {
                 kind: "connectome".to_owned(),
             });
         }
-        DisplaySnapshot::bounded(
+        let sampled_nodes = visible_neurons.len() < self.connectome.neurons.len();
+        let mut snapshot = DisplaySnapshot::bounded(
             self.state.revision,
             self.state.topology_epoch,
             self.state.topology_epoch.max(1),
@@ -1236,7 +1484,12 @@ impl PointOnlyReconstruction {
             max_nodes,
             max_edges,
             None,
-        )
+        )?;
+        if sampled_nodes || omitted_edges {
+            snapshot.coverage.truncated = true;
+            snapshot.coverage.complete = false;
+        }
+        Ok(snapshot)
     }
 }
 
@@ -1290,17 +1543,16 @@ pub fn reconstruct_point_only_connectome(
             .then_with(|| left.id.cmp(&right.id))
     });
 
+    let mut geometry_neurons = neurons.clone();
+    let soma_position_repairs =
+        resolve_overlapping_soma_positions(&mut geometry_neurons, &environment, &config)?;
+    let mut geometry_connectome = connectome.clone();
+    geometry_connectome.neurons = geometry_neurons.clone();
+
     let mut state = MorphologyState::empty(&environment)?;
     let mut next_id = 1u64;
     let mut soma_ids = BTreeMap::new();
-    for neuron in &neurons {
-        if neurons.iter().any(|other| {
-            other.id != neuron.id
-                && other.position_mm.distance(neuron.position_mm)
-                    < 2.0 * config.soma_radius_mm + config.clearance_mm
-        }) {
-            return Err(MorphologyError::SomaOverlap);
-        }
+    for neuron in &geometry_neurons {
         environment.validate_step(
             neuron.position_mm,
             neuron.position_mm,
@@ -1349,7 +1601,7 @@ pub fn reconstruct_point_only_connectome(
             }
             let result = build_connection_route(
                 connection,
-                &connectome,
+                &geometry_connectome,
                 &soma_ids,
                 &mut state,
                 &environment,
@@ -1390,21 +1642,195 @@ pub fn reconstruct_point_only_connectome(
     };
     state.topology_epoch = state.revision;
     state.validate()?;
-    let neuron_order = neurons.iter().map(|neuron| neuron.id).collect();
+    let neuron_order = geometry_neurons.iter().map(|neuron| neuron.id).collect();
+    let mut canonical_connectome = connectome;
+    canonical_connectome.neurons = neurons;
+    canonical_connectome.connections = connection_list;
+    let mut paths_by_owner = BTreeMap::<NeuronId, Vec<AnatomicalId>>::new();
+    for (path_id, path) in &state.paths {
+        paths_by_owner.entry(path.owner).or_default().push(*path_id);
+    }
     Ok(PointOnlyReconstruction {
         schema_version: SchemaVersion::new(PointOnlyReconstruction::SCHEMA_VERSION)?,
         source: "point_only_connectome_procedural_reconstruction".to_owned(),
         seed: config.seed,
-        connectome: PointOnlyConnectome {
-            neurons,
-            connections: connection_list,
-        },
+        connectome: canonical_connectome,
+        soma_position_repairs,
         environment,
         state,
         neuron_order,
         soma_ids,
+        paths_by_owner,
         connections: connection_results,
     })
+}
+
+fn resolve_overlapping_soma_positions(
+    neurons: &mut [PointOnlyNeuron],
+    environment: &GrowthEnvironment,
+    config: &ReconstructionConfig,
+) -> Result<Vec<SomaPositionRepair>, MorphologyError> {
+    // Leave a small numerical margin so the serialized positions remain on
+    // the non-overlapping side of the boundary after f64 coordinate math.
+    let minimum_separation = 2.0 * config.soma_radius_mm + config.clearance_mm + 1.0e-6;
+    let mut placed = BTreeMap::<(i64, i64, i64), Vec<(NeuronId, Vec3)>>::new();
+    let mut repairs = Vec::new();
+
+    for (index, neuron) in neurons.iter_mut().enumerate() {
+        let source_position = neuron.position_mm;
+        environment.validate_step(source_position, source_position, config.soma_radius_mm)?;
+        let nearby = nearby_somas(&placed, source_position, minimum_separation)?;
+        let conflicts = nearby
+            .into_iter()
+            .filter_map(|(other_id, other_position)| {
+                let distance = source_position.distance(other_position);
+                (distance < minimum_separation).then_some((other_id, other_position, distance))
+            })
+            .collect::<Vec<_>>();
+
+        if conflicts.is_empty() {
+            insert_soma(&mut placed, neuron.id, source_position, minimum_separation)?;
+            continue;
+        }
+
+        let mut repulsion = Vec3::ZERO;
+        let mut minimum_shift: f64 = 0.0;
+        for (other_index, (other_id, other_position, distance)) in conflicts.iter().enumerate() {
+            let overlap = minimum_separation - *distance;
+            minimum_shift = minimum_shift.max(overlap);
+            let delta = source_position.sub(*other_position);
+            let direction = if *distance > f64::EPSILON {
+                delta.scale(1.0 / *distance)
+            } else {
+                deterministic_unit(
+                    config.seed ^ index as u64,
+                    other_id.raw().wrapping_add(other_index as u64 + 0x50A4),
+                )
+            };
+            repulsion = repulsion.add(direction.scale(overlap));
+        }
+        let preferred = if repulsion.norm() > f64::EPSILON {
+            repulsion.normalised()
+        } else {
+            deterministic_unit(config.seed, index as u64 + 0x50A4)
+        };
+        let minimum_shift = minimum_shift.max(minimum_separation * 0.125);
+        let mut resolved = None;
+
+        // Search outward in a stable direction order. Imported positions and
+        // network weights stay untouched; only this geometry projection moves.
+        for shell in 0..=128 {
+            let radius = minimum_shift + minimum_separation * 0.25 * shell as f64;
+            for direction_index in 0..24 {
+                let direction = if direction_index == 0 {
+                    preferred
+                } else {
+                    deterministic_unit(
+                        config.seed ^ index as u64,
+                        (shell as u64)
+                            .wrapping_mul(31)
+                            .wrapping_add(direction_index as u64)
+                            .wrapping_add(0x50A4),
+                    )
+                };
+                if direction.norm() <= f64::EPSILON {
+                    continue;
+                }
+                let candidate = source_position.add(direction.scale(radius));
+                if !candidate.is_finite()
+                    || environment
+                        .validate_step(candidate, candidate, config.soma_radius_mm)
+                        .is_err()
+                    || nearby_somas(&placed, candidate, minimum_separation)?
+                        .iter()
+                        .any(|(_, other_position)| {
+                            candidate.distance(*other_position) < minimum_separation
+                        })
+                {
+                    continue;
+                }
+                resolved = Some(candidate);
+                break;
+            }
+            if resolved.is_some() {
+                break;
+            }
+        }
+
+        let resolved_position_mm = resolved.ok_or(MorphologyError::SomaOverlap)?;
+        neuron.position_mm = resolved_position_mm;
+        repairs.push(SomaPositionRepair {
+            neuron_id: neuron.id,
+            source_position_mm: source_position,
+            resolved_position_mm,
+        });
+        insert_soma(
+            &mut placed,
+            neuron.id,
+            resolved_position_mm,
+            minimum_separation,
+        )?;
+    }
+
+    Ok(repairs)
+}
+
+fn soma_cell_key(position: Vec3, cell_width: f64) -> Result<(i64, i64, i64), MorphologyError> {
+    let coordinate = |value: f64| {
+        let scaled = (value / cell_width).floor();
+        let upper_exclusive = -(i64::MIN as f64);
+        if !scaled.is_finite() || scaled < i64::MIN as f64 || scaled >= upper_exclusive {
+            return Err(MorphologyError::SpatialIndexCoordinateOverflow);
+        }
+        Ok(scaled as i64)
+    };
+    Ok((
+        coordinate(position.x)?,
+        coordinate(position.y)?,
+        coordinate(position.z)?,
+    ))
+}
+
+fn nearby_somas(
+    placed: &BTreeMap<(i64, i64, i64), Vec<(NeuronId, Vec3)>>,
+    position: Vec3,
+    cell_width: f64,
+) -> Result<Vec<(NeuronId, Vec3)>, MorphologyError> {
+    let (x, y, z) = soma_cell_key(position, cell_width)?;
+    let mut nearby = Vec::new();
+    for dx in -1i64..=1 {
+        let Some(cell_x) = x.checked_add(dx) else {
+            continue;
+        };
+        for dy in -1i64..=1 {
+            let Some(cell_y) = y.checked_add(dy) else {
+                continue;
+            };
+            for dz in -1i64..=1 {
+                let Some(cell_z) = z.checked_add(dz) else {
+                    continue;
+                };
+                if let Some(bucket) = placed.get(&(cell_x, cell_y, cell_z)) {
+                    nearby.extend(bucket.iter().copied());
+                }
+            }
+        }
+    }
+    nearby.sort_by_key(|(id, _)| *id);
+    Ok(nearby)
+}
+
+fn insert_soma(
+    placed: &mut BTreeMap<(i64, i64, i64), Vec<(NeuronId, Vec3)>>,
+    id: NeuronId,
+    position: Vec3,
+    cell_width: f64,
+) -> Result<(), MorphologyError> {
+    placed
+        .entry(soma_cell_key(position, cell_width)?)
+        .or_default()
+        .push((id, position));
+    Ok(())
 }
 
 fn next_anatomical_id(next: &mut u64) -> Result<AnatomicalId, MorphologyError> {
@@ -2928,6 +3354,98 @@ mod tests {
             )),
             "{:?}",
             first.connections
+        );
+    }
+
+    #[test]
+    fn point_only_import_deterministically_repairs_overlapping_somas_without_changing_source() {
+        let mut connectome = point_connectome(false);
+        let original_position = connectome.neurons[0].position_mm;
+        connectome.neurons[1].position_mm = original_position;
+        let mut reversed = connectome.clone();
+        reversed.neurons.reverse();
+        reversed.connections.reverse();
+
+        let first = reconstruct_point_only_connectome(
+            connectome,
+            reconstruction_environment(),
+            ReconstructionConfig::default(),
+        )
+        .expect("overlapping imported somas should be repaired");
+        let second = reconstruct_point_only_connectome(
+            reversed,
+            reconstruction_environment(),
+            ReconstructionConfig::default(),
+        )
+        .expect("reversed overlapping import should be repaired");
+
+        assert_eq!(first, second);
+        assert_eq!(first.soma_position_repairs.len(), 1);
+        assert_eq!(first.connectome.connections.len(), 2);
+        let repaired = &first.soma_position_repairs[0];
+        assert_eq!(repaired.source_position_mm, original_position);
+        assert_ne!(repaired.resolved_position_mm, original_position);
+
+        let resolved_positions = first
+            .connectome
+            .neurons
+            .iter()
+            .map(|neuron| {
+                let position = first
+                    .soma_position_repairs
+                    .iter()
+                    .find(|repair| repair.neuron_id == neuron.id)
+                    .map(|repair| repair.resolved_position_mm)
+                    .unwrap_or(neuron.position_mm);
+                (neuron.id, position)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let minimum_separation = 2.0 * ReconstructionConfig::default().soma_radius_mm
+            + ReconstructionConfig::default().clearance_mm;
+        for (index, left) in first.connectome.neurons.iter().enumerate() {
+            for right in first.connectome.neurons.iter().skip(index + 1) {
+                assert!(
+                    resolved_positions[&left.id].distance(resolved_positions[&right.id])
+                        >= minimum_separation
+                );
+            }
+        }
+
+        let display = first.display_snapshot(1, 16, 16).unwrap();
+        let repaired_soma_id = first.soma_ids[&repaired.neuron_id];
+        let displayed = display
+            .nodes
+            .iter()
+            .find(|node| node.id == repaired_soma_id)
+            .expect("repaired soma is displayed");
+        assert_eq!(displayed.position_mm, repaired.resolved_position_mm);
+
+        let mut legacy = serde_json::to_value(&first).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("soma_position_repairs");
+        let restored: PointOnlyReconstruction = serde_json::from_value(legacy).unwrap();
+        assert!(restored.soma_position_repairs.is_empty());
+    }
+
+    #[test]
+    fn display_layer_sampling_is_bounded_evenly_spaced_and_preserves_layers() {
+        let samples = display_layer_samples(&[1_000_000, 2, 1_000_000], 64);
+        assert_eq!(samples.iter().map(Vec::len).sum::<usize>(), 64);
+        assert_eq!(samples[0].first(), Some(&0));
+        assert_eq!(samples[0].last(), Some(&999_999));
+        assert_eq!(samples[1], vec![0, 1]);
+        assert_eq!(samples[2].first(), Some(&0));
+        assert_eq!(samples[2].last(), Some(&999_999));
+        assert!(
+            samples
+                .iter()
+                .all(|layer| layer.windows(2).all(|pair| pair[0] < pair[1]))
+        );
+        assert_eq!(
+            samples,
+            display_layer_samples(&[1_000_000, 2, 1_000_000], 64)
         );
     }
 

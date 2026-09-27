@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub const STABLE_EXECUTOR_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
-pub const MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StableExecutorStoreError {
@@ -162,11 +161,6 @@ impl StableExecutorCheckpointStore {
         let partition_generation = set.partition_generation;
         let payload = serde_json::to_vec(&set)
             .map_err(|error| StableExecutorStoreError::Encoding(error.to_string()))?;
-        if payload.len() > MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES {
-            return Err(StableExecutorStoreError::InvalidSet(
-                "checkpoint set exceeds the bounded storage limit",
-            ));
-        }
         self.store
             .publish(
                 checkpoint_id,
@@ -190,11 +184,6 @@ impl StableExecutorCheckpointStore {
         partition_generation: PartitionGeneration,
         payload: Vec<u8>,
     ) -> Result<CheckpointManifest, StableExecutorStoreError> {
-        if payload.len() > MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES {
-            return Err(StableExecutorStoreError::InvalidSet(
-                "checkpoint set exceeds the bounded storage limit",
-            ));
-        }
         let set: StableExecutorCheckpointSet = serde_json::from_slice(&payload)
             .map_err(|error| StableExecutorStoreError::Encoding(error.to_string()))?;
         set.verify()?;
@@ -253,11 +242,6 @@ impl StableExecutorCheckpointStore {
         plan: CompiledExecutionPlan,
     ) -> Result<StableShardExecutor, StableExecutorStoreError> {
         let checkpoint = self.verify(checkpoint_id)?;
-        if checkpoint.payload.len() > MAX_STABLE_EXECUTOR_CHECKPOINT_BYTES {
-            return Err(StableExecutorStoreError::InvalidSet(
-                "checkpoint payload exceeds the bounded storage limit",
-            ));
-        }
         let set: StableExecutorCheckpointSet = serde_json::from_slice(&checkpoint.payload)
             .map_err(|error| StableExecutorStoreError::Encoding(error.to_string()))?;
         set.verify()?;

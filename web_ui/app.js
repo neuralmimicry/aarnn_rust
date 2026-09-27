@@ -132,6 +132,21 @@ const rasterCtx = rasterCanvas ? rasterCanvas.getContext("2d") : null;
 const rasterFramesEl = document.getElementById("raster-frames");
 const surfaceTabs = document.querySelectorAll("[data-surface-tab]");
 const dashboardSurface = document.getElementById("dashboard-surface");
+const fpvSurface = document.getElementById("fpv-surface");
+const fpvCanvas = document.getElementById("fpv-map");
+const fpvCtx = fpvCanvas ? fpvCanvas.getContext("2d") : null;
+const fpvSourceStatus = document.getElementById("fpv-source-status");
+const fpvMapEmpty = document.getElementById("fpv-map-empty");
+const fpvJobsEl = document.getElementById("fpv-jobs");
+const fpvJobFeedback = document.getElementById("fpv-job-feedback");
+const fpvSubmitBtn = document.getElementById("fpv-submit");
+const fpvResolution = document.getElementById("fpv-resolution");
+const fpvDetail = document.getElementById("fpv-detail");
+const fpvDuration = document.getElementById("fpv-duration");
+const fpvFrameRate = document.getElementById("fpv-frame-rate");
+const fpvFocusActive = document.getElementById("fpv-focus-active");
+const fpvZoom = document.getElementById("fpv-zoom");
+const fpvZoomValue = document.getElementById("fpv-zoom-value");
 const placementSurface = document.getElementById("placement-surface");
 const placementCanvas = document.getElementById("placement-canvas");
 const placementCtx = placementCanvas ? placementCanvas.getContext("2d") : null;
@@ -236,7 +251,8 @@ const state = {
   snapshotFailures: 0,
   snapshotMeta: {
     sourceKey: "",
-    savedAtMs: 0
+    savedAtMs: 0,
+    projectionKey: ""
   },
   instrumentation: loadInstrumentationState(),
   placement: {
@@ -248,6 +264,17 @@ const state = {
     detailShardId: null,
     hitTargets: [],
     drag: null
+  },
+  fpv: {
+    visible: false,
+    scene: null,
+    activeNodeIds: [],
+    waypoints: [],
+    jobs: [],
+    sourceKey: "",
+    loadingProjection: false,
+    reloadProjectionAfterLoad: false,
+    loadingJobs: false
   }
 };
 const routeParams = new URLSearchParams(window.location.search || "");
@@ -284,6 +311,7 @@ const serviceAccessApi = window.NMServiceAccess || {
 };
 let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
+let snapshotBudgetRefreshTimer = 0;
 let ioSourceRunner = null;
 let runtimeStatusRequestSeq = 0;
 let runtimeStatusFetchInFlight = false;
@@ -348,7 +376,8 @@ function clearRestrictedRuntimeState() {
   state.graph = null;
   state.snapshotMeta = {
     sourceKey: "",
-    savedAtMs: 0
+    savedAtMs: 0,
+    projectionKey: ""
   };
   state.lastSnapshotPollAt = 0;
 }
@@ -1354,7 +1383,8 @@ async function performLogout() {
   state.graph = null;
   state.snapshotMeta = {
     sourceKey: "",
-    savedAtMs: 0
+    savedAtMs: 0,
+    projectionKey: ""
   };
   resetTargetsUi();
   refreshWorkspaceSelect();
@@ -2261,11 +2291,397 @@ function attachPlacementControls() {
 
 function setSurfaceTab(name) {
   const placement = name === "placement";
+  const fpv = name === "fpv";
   state.placement.visible = placement;
+  state.fpv.visible = fpv;
   surfaceTabs.forEach(tab => tab.classList.toggle("active", tab.dataset.surfaceTab === name));
-  if (dashboardSurface) dashboardSurface.hidden = placement;
+  if (dashboardSurface) dashboardSurface.hidden = placement || fpv;
   if (placementSurface) placementSurface.hidden = !placement;
+  if (fpvSurface) fpvSurface.hidden = !fpv;
   if (placement) renderPlacement();
+  if (fpv) {
+    drawFpvMap();
+    loadFpvJobs();
+    if (!state.fpv.scene || state.fpv.sourceKey !== sourceRequestKey(activeSource())) loadFpvProjection();
+  }
+}
+
+function fpvActiveNodeIds(scene) {
+  const activity = state.activity || {};
+  const sensoryActive = ((activity.sensory && activity.sensory.indices) || []).length > 0;
+  const outputActive = ((activity.output && activity.output.indices) || []).length > 0;
+  const activeHiddenLayers = new Set((activity.hidden || []).flatMap((layer, index) =>
+    ((layer && layer.indices) || []).length ? [index] : []));
+  return (scene.nodes || []).filter(node => {
+    const role = String(node.role || "").toLowerCase();
+    return (role === "sensory" && sensoryActive) || (role === "output" && outputActive) ||
+      (role === "hidden" && activeHiddenLayers.has(Number(node.layer)));
+  }).map(node => node.id);
+}
+
+function fpvScene() {
+  if (state.fpv.scene && state.fpv.sourceKey === sourceRequestKey(activeSource())) return state.fpv.scene;
+  const views = state.snapshot && state.snapshot.display_snapshots;
+  if (!views || typeof views !== "object") return null;
+  return views.anatomical || views.Anatomical || Object.values(views)[0] || null;
+}
+
+async function loadFpvProjection() {
+  const source = activeSource();
+  if (!source) return;
+  if (state.fpv.loadingProjection) {
+    state.fpv.reloadProjectionAfterLoad = true;
+    return;
+  }
+  if (state.authMode !== "none" && (!state.user || !hasAarnnObserveAccess())) {
+    fpvSourceStatus.textContent = "AARNN observation access is required to plan a route.";
+    return;
+  }
+  const sourceKey = sourceRequestKey(source);
+  const detail = Math.max(512, Math.min(4096, Number(fpvDetail && fpvDetail.value || 4096)));
+  const edgeBudget = Math.min(8192, detail * 2);
+  state.fpv.loadingProjection = true;
+  fpvSourceStatus.textContent = `Loading bounded network overview (${detail.toLocaleString()} neuron detail)…`;
+  try {
+    let url;
+    let fetcher = fetch;
+    if (source.kind === "workspace") {
+      url = buildWorkspaceApiUrl(source.workspace, "/snapshot", {
+        projection: "display", display_mode: "anatomical", max_nodes: detail, max_edges: edgeBudget
+      });
+      fetcher = runtimeFetch;
+    } else {
+      url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&display_mode=anatomical&max_nodes=${detail}&max_edges=${edgeBudget}`;
+      if (source.nodeId) url += `&node_id=${encodeURIComponent(source.nodeId)}`;
+    }
+    const response = await fetcher(url);
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Projection request failed (${response.status})`);
+    const data = await response.json();
+    const views = data.display_snapshots;
+    const scene = views && (views.anatomical || views.Anatomical || Object.values(views)[0]);
+    if (!scene || !Array.isArray(scene.nodes) || scene.nodes.length < 2) {
+      throw new Error("The selected network has no usable spatial display projection yet.");
+    }
+    if (sourceKey !== sourceRequestKey(activeSource()) ||
+        detail !== Number(fpvDetail && fpvDetail.value || 4096)) return;
+    state.fpv.scene = scene;
+    state.fpv.activeNodeIds = fpvActiveNodeIds(scene);
+    state.fpv.waypoints = [];
+    state.fpv.sourceKey = sourceKey;
+    fpvSourceStatus.textContent = `${source.networkId}: ${scene.nodes.length.toLocaleString()} sampled neurons${scene.coverage && scene.coverage.truncated ? " · overview is sampled" : " · projection complete"}`;
+    drawFpvMap();
+  } catch (error) {
+    state.fpv.scene = null;
+    state.fpv.waypoints = [];
+    fpvSourceStatus.textContent = error && error.message ? error.message : "Could not load network overview.";
+    drawFpvMap();
+  } finally {
+    state.fpv.loadingProjection = false;
+    if (state.fpv.reloadProjectionAfterLoad) {
+      state.fpv.reloadProjectionAfterLoad = false;
+      const nextSource = activeSource();
+      const nextDetail = Number(fpvDetail && fpvDetail.value || 4096);
+      if (nextSource && (sourceKey !== sourceRequestKey(nextSource) || detail !== nextDetail || !state.fpv.scene)) {
+        loadFpvProjection();
+      }
+    }
+  }
+}
+
+function addFpvWaypointFromPointer(event) {
+  const scene = fpvScene();
+  if (!scene || !fpvCanvas) return;
+  if (state.fpv.waypoints.length >= 512) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = "A camera route can contain at most 512 waypoints.";
+    return;
+  }
+  const bounds = fpvCanvas.getBoundingClientRect();
+  const x = (event.clientX - bounds.left) * fpvCanvas.width / Math.max(1, bounds.width);
+  const y = (event.clientY - bounds.top) * fpvCanvas.height / Math.max(1, bounds.height);
+  const node = scene.nodes.map(candidate => {
+    const position = candidate.position_mm || { x: 0, y: 0, z: 0 };
+    return { candidate, x: Number(position.x) || 0, y: Number(position.y) || 0, z: Number(position.z) || 0 };
+  });
+  const minX = Math.min(...node.map(point => point.x));
+  const maxX = Math.max(...node.map(point => point.x));
+  const rawY = node.map(point => point.y);
+  const useZ = Math.max(...rawY) - Math.min(...rawY) < 1e-5 && node.some(point => Math.abs(point.z) > 1e-5);
+  const yValues = node.map(point => useZ ? point.z : point.y);
+  let minY = Math.min(...yValues), maxY = Math.max(...yValues);
+  let xLow = minX, xHigh = maxX;
+  if (xHigh - xLow < 1e-6) { xLow -= 1; xHigh += 1; }
+  if (maxY - minY < 1e-6) { minY -= 1; maxY += 1; }
+  const margin = 34;
+  const scale = Math.min((fpvCanvas.width - margin * 2) / (xHigh - xLow), (fpvCanvas.height - margin * 2) / (maxY - minY));
+  const offsetX = (fpvCanvas.width - margin * 2 - (xHigh - xLow) * scale) / 2;
+  const offsetY = (fpvCanvas.height - margin * 2 - (maxY - minY) * scale) / 2;
+  let nearest = null;
+  let nearestDistance = 18 * (fpvCanvas.width / Math.max(1, bounds.width));
+  node.forEach((point, index) => {
+    const sx = margin + (point.x - xLow) * scale + offsetX;
+    const sy = fpvCanvas.height - margin - (yValues[index] - minY) * scale - offsetY;
+    const distance = Math.hypot(sx - x, sy - y);
+    if (distance < nearestDistance) { nearestDistance = distance; nearest = point.candidate; }
+  });
+  if (!nearest) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = "Click close to a sampled neuron to add a camera waypoint.";
+    return;
+  }
+  const id = displayIdKey(nearest.id);
+  if (id) {
+    state.fpv.waypoints.push(id);
+    if (fpvJobFeedback) fpvJobFeedback.textContent = `${state.fpv.waypoints.length} camera waypoint${state.fpv.waypoints.length === 1 ? "" : "s"} plotted.`;
+    drawFpvMap();
+  }
+}
+
+function drawFpvMap() {
+  if (!fpvCanvas || !fpvCtx || !fpvSurface || fpvSurface.hidden) return;
+  const scene = fpvScene();
+  const ctx = fpvCtx;
+  const width = fpvCanvas.width;
+  const height = fpvCanvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#09141c";
+  ctx.fillRect(0, 0, width, height);
+  if (!scene || !Array.isArray(scene.nodes) || !scene.nodes.length) {
+    if (fpvMapEmpty) fpvMapEmpty.hidden = false;
+    if (fpvSubmitBtn) fpvSubmitBtn.disabled = true;
+    return;
+  }
+  if (fpvMapEmpty) fpvMapEmpty.hidden = true;
+  const nodes = scene.nodes;
+  const positions = nodes.map(node => node.position_mm || { x: 0, y: 0, z: 0 });
+  const spreadY = Math.max(...positions.map(point => Number(point.y) || 0)) - Math.min(...positions.map(point => Number(point.y) || 0));
+  const useZ = spreadY < 1e-5 && positions.some(point => Math.abs(Number(point.z) || 0) > 1e-5);
+  const values = positions.map((point, index) => ({
+    node: nodes[index],
+    x: Number(point.x) || 0,
+    y: useZ ? (Number(point.z) || 0) : (Number(point.y) || 0)
+  }));
+  let minX = Math.min(...values.map(point => point.x));
+  let maxX = Math.max(...values.map(point => point.x));
+  let minY = Math.min(...values.map(point => point.y));
+  let maxY = Math.max(...values.map(point => point.y));
+  if (maxX - minX < 1e-6) { minX -= 1; maxX += 1; }
+  if (maxY - minY < 1e-6) { minY -= 1; maxY += 1; }
+  const margin = 34;
+  const scale = Math.min((width - margin * 2) / (maxX - minX), (height - margin * 2) / (maxY - minY));
+  const pointById = new Map();
+  values.forEach((point, index) => {
+    point.sx = margin + (point.x - minX) * scale + (width - margin * 2 - (maxX - minX) * scale) / 2;
+    point.sy = height - margin - (point.y - minY) * scale - (height - margin * 2 - (maxY - minY) * scale) / 2;
+    pointById.set(displayIdKey(point.node.id), point);
+  });
+  const active = new Set((state.fpv.activeNodeIds || []).map(displayIdKey));
+  const edgeStep = Math.max(1, Math.ceil((scene.edges || []).length / 5000));
+  ctx.lineWidth = 0.65;
+  ctx.strokeStyle = "rgba(102, 151, 174, 0.12)";
+  (scene.edges || []).filter((_, index) => index % edgeStep === 0).forEach(edge => {
+    const from = pointById.get(displayIdKey(edge.source));
+    const to = pointById.get(displayIdKey(edge.target));
+    if (!from || !to) return;
+    ctx.beginPath(); ctx.moveTo(from.sx, from.sy); ctx.lineTo(to.sx, to.sy); ctx.stroke();
+  });
+  if (state.fpv.waypoints.length > 1) {
+    ctx.beginPath();
+    state.fpv.waypoints.forEach((id, index) => {
+      const point = pointById.get(id);
+      if (!point) return;
+      if (index === 0) ctx.moveTo(point.sx, point.sy); else ctx.lineTo(point.sx, point.sy);
+    });
+    ctx.strokeStyle = "#ffba66"; ctx.lineWidth = 2.5; ctx.stroke();
+  }
+  const waypointIndex = new Map(state.fpv.waypoints.map((id, index) => [id, index + 1]));
+  values.forEach(point => {
+    const id = displayIdKey(point.node.id);
+    const routeIndex = waypointIndex.get(id);
+    const radius = routeIndex ? 5.2 : (active.has(id) ? 3.1 : 1.8);
+    ctx.beginPath(); ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = routeIndex ? "#ffba66" : active.has(id) ? "#65e0a9" : "rgba(153, 186, 201, 0.72)";
+    ctx.fill();
+    if (routeIndex) {
+      ctx.fillStyle = "#09141c"; ctx.font = "bold 8px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(routeIndex), point.sx, point.sy + 0.5);
+    }
+  });
+  if (fpvSubmitBtn) fpvSubmitBtn.disabled = state.fpv.waypoints.length < 2;
+}
+
+async function loadFpvJobs() {
+  if (!fpvJobsEl || state.fpv.loadingJobs || (state.authMode !== "none" && !state.user)) return;
+  state.fpv.loadingJobs = true;
+  try {
+    const response = await fetch("/api/fpv/jobs");
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Could not load jobs (${response.status})`);
+    const data = await response.json();
+    state.fpv.jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    renderFpvJobs();
+  } catch (error) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = error && error.message ? error.message : "Could not load render jobs.";
+  } finally {
+    state.fpv.loadingJobs = false;
+  }
+}
+
+function renderFpvJobs() {
+  if (!fpvJobsEl) return;
+  if (!state.fpv.jobs.length) {
+    fpvJobsEl.innerHTML = "<div class=\"panel-empty muted\">No render jobs yet.</div>";
+    return;
+  }
+  fpvJobsEl.innerHTML = state.fpv.jobs.map(job => {
+    const progress = job.frame_count ? Math.max(0, Math.min(100, Math.round(Number(job.completed_frames || 0) * 100 / Number(job.frame_count)))) : 0;
+    const created = Number(job.created_at_ms) ? new Date(Number(job.created_at_ms)).toLocaleString() : "";
+    const detail = `${Number(job.width)}×${Number(job.height)} · ${Number(job.frame_rate)} fps · ${Number(job.completed_frames)}/${Number(job.frame_count)} frames${job.error ? ` · ${job.error}` : ""}`;
+    let action = "";
+    if (job.video_ready) action = `<a class="btn ghost small" href="/api/fpv/jobs/${encodeURIComponent(job.job_id)}/video">Download MP4</a>`;
+    else if (job.state === "failed") action = `<button class="secondary-btn" type="button" data-fpv-action="retry" data-job-id="${escapeHtml(job.job_id)}">Retry</button>`;
+    else if (!["cancelled", "complete"].includes(job.state)) action = `<button class="secondary-btn" type="button" data-fpv-action="cancel" data-job-id="${escapeHtml(job.job_id)}">Cancel</button>`;
+    return `<article class="fpv-job-card"><div><div class="fpv-job-title">${escapeHtml(job.network_id || "Network")}</div><div class="fpv-job-meta">${escapeHtml(job.job_id)} · ${escapeHtml(created)}</div></div><div><div class="fpv-job-meta">${escapeHtml(job.state)} · ${escapeHtml(detail)}</div><div class="fpv-progress"><span style="width:${progress}%"></span></div></div><div class="fpv-job-actions">${action}</div></article>`;
+  }).join("");
+}
+
+function fpvTileQuery(source, region, nodeBudget = 4096, edgeBudget = 8192) {
+  const query = {
+    projection: "display", display_mode: "anatomical",
+    max_nodes: nodeBudget, max_edges: edgeBudget,
+    region_min_x: region.min.x, region_min_y: region.min.y, region_min_z: region.min.z,
+    region_max_x: region.max.x, region_max_y: region.max.y, region_max_z: region.max.z
+  };
+  if (source.kind === "workspace") {
+    return {
+      url: buildWorkspaceApiUrl(source.workspace, "/snapshot", query),
+      fetcher: runtimeFetch
+    };
+  }
+  const params = new URLSearchParams({
+    addr: source.addr, network_id: source.networkId, ...query
+  });
+  if (source.nodeId) params.set("node_id", source.nodeId);
+  return { url: `/api/snapshot?${params}`, fetcher: fetch };
+}
+
+async function captureFpvRouteTiles(source, overview) {
+  const nodeById = new Map((overview.nodes || []).map(node => [displayIdKey(node.id), node]));
+  const routeNodes = state.fpv.waypoints.map(id => nodeById.get(id)).filter(Boolean);
+  if (routeNodes.length < 2) throw new Error("The plotted route no longer matches the current overview.");
+  const positions = (overview.nodes || []).map(node => node.position_mm || { x: 0, y: 0, z: 0 });
+  const coverage = overview.coverage && overview.coverage.region;
+  const min = coverage && coverage.min ? coverage.min : {
+    x: Math.min(...positions.map(point => Number(point.x) || 0)),
+    y: Math.min(...positions.map(point => Number(point.y) || 0)),
+    z: Math.min(...positions.map(point => Number(point.z) || 0))
+  };
+  const max = coverage && coverage.max ? coverage.max : {
+    x: Math.max(...positions.map(point => Number(point.x) || 0)),
+    y: Math.max(...positions.map(point => Number(point.y) || 0)),
+    z: Math.max(...positions.map(point => Number(point.z) || 0))
+  };
+  const span = Math.max(Number(max.x) - Number(min.x), Number(max.y) - Number(min.y), Number(max.z) - Number(min.z), 1);
+  const tileHalf = Math.max(span / (12 * Math.max(0.2, Number(fpvZoom && fpvZoom.value || 1))), 0.05);
+  const tileCount = Math.min(16, routeNodes.length);
+  const centers = Array.from({ length: tileCount }, (_, index) => {
+    const routeIndex = tileCount === 1 ? 0 : Math.round(index * (routeNodes.length - 1) / (tileCount - 1));
+    return routeNodes[routeIndex].position_mm;
+  });
+  const tileScenes = [];
+  for (let offset = 0; offset < centers.length; offset += 4) {
+    const batch = centers.slice(offset, offset + 4);
+    const loaded = await Promise.all(batch.map(async center => {
+      const region = {
+        min: { x: Number(center.x) - tileHalf, y: Number(center.y) - tileHalf, z: Number(center.z) - tileHalf },
+        max: { x: Number(center.x) + tileHalf, y: Number(center.y) + tileHalf, z: Number(center.z) + tileHalf }
+      };
+      const request = fpvTileQuery(source, region);
+      const response = await request.fetcher(request.url);
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Spatial tile request failed (${response.status})`);
+      const data = await response.json();
+      const views = data.display_snapshots;
+      const tile = views && (views.anatomical || views.Anatomical || Object.values(views)[0]);
+      if (!tile || !Array.isArray(tile.nodes)) throw new Error("The server returned an invalid spatial tile.");
+      return tile;
+    }));
+    tileScenes.push(...loaded);
+  }
+
+  const nodes = new Map();
+  routeNodes.forEach(node => nodes.set(displayIdKey(node.id), node));
+  tileScenes.forEach(tile => (tile.nodes || []).forEach(node => {
+    if (nodes.size < 65536 || nodes.has(displayIdKey(node.id))) nodes.set(displayIdKey(node.id), node);
+  }));
+  const selectedNodes = Array.from(nodes.values());
+  const visible = new Set(selectedNodes.map(node => displayIdKey(node.id)));
+  const mergeRecords = (key, identity) => {
+    const records = new Map();
+    tileScenes.forEach(tile => (tile[key] || []).forEach(item => records.set(identity(item), item)));
+    return Array.from(records.values());
+  };
+  const edges = mergeRecords("edges", edge => `${displayIdKey(edge.source)}:${displayIdKey(edge.target)}:${edge.kind || ""}`)
+    .filter(edge => visible.has(displayIdKey(edge.source)) && visible.has(displayIdKey(edge.target)));
+  const paths = mergeRecords("paths", path => displayIdKey(path.id))
+    .filter(path => visible.has(displayIdKey(path.owner)));
+  const markers = mergeRecords("markers", marker => displayIdKey(marker.id))
+    .filter(marker => visible.has(displayIdKey(marker.owner)));
+  return {
+    ...overview,
+    nodes: selectedNodes,
+    edges,
+    paths,
+    markers,
+    coverage: {
+      ...overview.coverage,
+      complete: tileScenes.every(tile => tile.coverage && tile.coverage.complete),
+      truncated: tileScenes.some(tile => !tile.coverage || tile.coverage.truncated)
+    }
+  };
+}
+
+async function submitFpvJob() {
+  const scene = fpvScene();
+  if (!scene || state.fpv.waypoints.length < 2) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = "Choose at least two route waypoints first.";
+    return;
+  }
+  const source = activeSource();
+  const [width, height] = String(fpvResolution && fpvResolution.value || "1280x720").split("x").map(Number);
+  const frameRate = Math.max(1, Number(fpvFrameRate && fpvFrameRate.value || 30));
+  const frameCount = Math.max(1, Number(fpvDuration && fpvDuration.value || 20) * frameRate);
+  const scratchBytes = width * height * 3 * frameCount;
+  if (scratchBytes > 8 * 1024 * 1024 * 1024) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = "That duration and resolution exceed the 8 GiB temporary frame-storage limit. Choose a shorter or smaller render.";
+    return;
+  }
+  if (fpvSubmitBtn) fpvSubmitBtn.disabled = true;
+  if (fpvJobFeedback) fpvJobFeedback.textContent = "Loading route-specific spatial tiles…";
+  try {
+    const renderScene = await captureFpvRouteTiles(source, scene);
+    if (fpvJobFeedback) fpvJobFeedback.textContent = `Submitting render with ${renderScene.nodes.length.toLocaleString()} spatially selected neurons…`;
+    const response = await fetch("/api/fpv/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        network_id: source && source.networkId || state.activeNetwork || "network",
+        scene: renderScene,
+        waypoint_ids: state.fpv.waypoints.map(key => {
+          const node = renderScene.nodes.find(candidate => displayIdKey(candidate.id) === key);
+          return node && node.id;
+        }).filter(Boolean),
+        active_node_ids: fpvFocusActive && fpvFocusActive.checked ? state.fpv.activeNodeIds : [],
+        width, height, frame_rate: frameRate, frame_count: frameCount,
+        zoom: Number(fpvZoom && fpvZoom.value || 1),
+        focus_active_regions: Boolean(fpvFocusActive && fpvFocusActive.checked)
+      })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Job submission failed (${response.status})`);
+    if (fpvJobFeedback) fpvJobFeedback.textContent = `Render ${result.job_id} queued. You can leave this page; progress and the MP4 will be available when you return.`;
+    await loadFpvJobs();
+  } catch (error) {
+    if (fpvJobFeedback) fpvJobFeedback.textContent = error && error.message ? error.message : "Could not submit render job.";
+  } finally {
+    drawFpvMap();
+  }
 }
 function sourceRequestKey(source) {
   if (!source) return "";
@@ -3403,6 +3819,7 @@ function setLayout(layout, {
   save = true,
   resetView = true
 } = {}) {
+  const previousLayout = state.render.layout;
   state.render.layout = layout === "conventional" ? "conventional" : "aarnn";
   if (resetView && state.render.layout === "conventional") {
     state.view.rotation = 0;
@@ -3413,6 +3830,7 @@ function setLayout(layout, {
   updateLayoutButtons();
   updateNetworkViewLayout();
   rebuildGraph();
+  if (previousLayout !== state.render.layout) refreshSnapshotForView();
 }
 function setLayoutForActiveNetwork() {
   const meta = getActiveNetworkMeta();
@@ -3530,6 +3948,27 @@ async function pollAll() {
   refreshNetworkSelect();
   renderPlacement();
 }
+function snapshotDisplayBudget() {
+  const rect = canvas ? canvas.getBoundingClientRect() : { width: 640, height: 360 };
+  const width = Math.max(1, Number(rect.width) || 640);
+  const height = Math.max(1, Number(rect.height) || 360);
+  const zoom = Math.max(0.4, Math.min(2.5, Number(state.view.zoom) || 1));
+  // A zoomed view has a smaller world-space viewport and can use more of its
+  // available pixels for detail. The Rust display contract clamps these
+  // client hints to its own hard safety bounds.
+  const maxNodes = Math.max(64, Math.min(4096, Math.floor(width * height * zoom * zoom / 400)));
+  const maxEdges = Math.max(64, Math.min(32768, Number(state.render.edgeLimit) || 6000));
+  return { maxNodes, maxEdges };
+}
+
+function refreshSnapshotForView() {
+  if (snapshotBudgetRefreshTimer) clearTimeout(snapshotBudgetRefreshTimer);
+  snapshotBudgetRefreshTimer = setTimeout(() => {
+    snapshotBudgetRefreshTimer = 0;
+    fetchSnapshotForActive();
+  }, 180);
+}
+
 async function fetchSnapshotForActive() {
   if (state.authMode !== "none" && !hasAarnnObserveAccess()) return;
   if (state.authMode !== "none" && !state.user) return;
@@ -3537,10 +3976,14 @@ async function fetchSnapshotForActive() {
   const source = activeSource();
   if (!source) return;
   const requestKey = sourceRequestKey(source);
+  const budget = snapshotDisplayBudget();
+  const displayMode = state.render.layout === "conventional" ? "synthetic_columns" : "anatomical";
+  const projectionKey = `${displayMode}:${budget.maxNodes}:${budget.maxEdges}`;
   const knownSnapshotMeta = state.snapshotMeta.sourceKey === requestKey ? state.snapshotMeta : null;
   if (source.kind === "workspace" && state.snapshot) {
     const savedAtMs = workspaceSnapshotSavedAtMs(source);
-    if (savedAtMs > 0 && knownSnapshotMeta && knownSnapshotMeta.savedAtMs >= savedAtMs) {
+    if (savedAtMs > 0 && knownSnapshotMeta && knownSnapshotMeta.savedAtMs >= savedAtMs &&
+        knownSnapshotMeta.projectionKey === projectionKey) {
       return;
     }
   }
@@ -3554,12 +3997,17 @@ async function fetchSnapshotForActive() {
   let url = "";
   let fetcher = fetch;
   if (source.kind === "workspace") {
-    url = buildWorkspaceApiUrl(source.workspace, "/snapshot", knownSnapshotMeta && knownSnapshotMeta.savedAtMs > 0 ? {
-      if_saved_after_ms: knownSnapshotMeta.savedAtMs
-    } : {});
+    const sameProjection = knownSnapshotMeta && knownSnapshotMeta.projectionKey === projectionKey;
+    url = buildWorkspaceApiUrl(source.workspace, "/snapshot", {
+      projection: "display",
+      display_mode: displayMode,
+      max_nodes: budget.maxNodes,
+      max_edges: budget.maxEdges,
+      if_saved_after_ms: sameProjection && knownSnapshotMeta.savedAtMs > 0 ? knownSnapshotMeta.savedAtMs : undefined
+    });
     fetcher = runtimeFetch;
   } else {
-    url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}`;
+    url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&display_mode=${encodeURIComponent(displayMode)}&max_nodes=${budget.maxNodes}&max_edges=${budget.maxEdges}`;
     if (source.nodeId) {
       url += `&node_id=${encodeURIComponent(source.nodeId)}`;
     }
@@ -3593,7 +4041,8 @@ async function fetchSnapshotForActive() {
           state.snapshot = snapshot;
           state.snapshotMeta = {
             sourceKey: requestKey,
-            savedAtMs: source.kind === "workspace" ? Number(data.saved_at_ms || workspaceSnapshotSavedAtMs(source) || 0) || 0 : 0
+            savedAtMs: source.kind === "workspace" ? Number(data.saved_at_ms || workspaceSnapshotSavedAtMs(source) || 0) || 0 : 0,
+            projectionKey
           };
           syncControlsToSnapshot(snapshot);
           const rebuild = () => {
@@ -3690,6 +4139,10 @@ async function pollActivity() {
     const currentSource = activeSource();
     if (requestSeq === activityRequestSeq && requestKey === sourceRequestKey(currentSource)) {
       state.activity = activity;
+      if (state.fpv.scene) {
+        state.fpv.activeNodeIds = fpvActiveNodeIds(state.fpv.scene);
+        drawFpvMap();
+      }
       pushInstrumentationFrame(activity);
       drawNetwork();
       renderPlacement();
@@ -4116,6 +4569,57 @@ function resizeCanvas() {
   drawNetwork();
 }
 window.addEventListener("resize", resizeCanvas);
+function cullScreenSpaceNodes(nodes, project, width, height, spacing) {
+  const candidates = [];
+  let order = 0;
+  [nodes.sensory, ...nodes.hidden, nodes.output].forEach(layer => {
+    layer.forEach(node => {
+      const screen = project(node);
+      const currentOrder = order++;
+      if (![screen.x, screen.y].every(Number.isFinite) ||
+          screen.x < -spacing || screen.y < -spacing ||
+          screen.x > width + spacing || screen.y > height + spacing) return;
+      candidates.push({
+        node,
+        screen,
+        order: currentOrder,
+        depth: Number.isFinite(Number(node.z)) ? Number(node.z) : 0
+      });
+    });
+  });
+
+  // The canvas view is orthographic in x/y. Use z only to select which
+  // coincident glyph represents the frontmost neuron, then retain one glyph
+  // per screen-space footprint. The underlying network and its graph remain
+  // complete; this set is used only by the presentation layer.
+  candidates.sort((left, right) => right.depth - left.depth || left.order - right.order);
+  const cells = new Map();
+  const visible = new Set();
+  const cellSize = Math.max(1, spacing);
+  const minimumDistanceSquared = spacing * spacing;
+  for (const candidate of candidates) {
+    const cellX = Math.floor(candidate.screen.x / cellSize);
+    const cellY = Math.floor(candidate.screen.y / cellSize);
+    let occluded = false;
+    for (let x = cellX - 1; x <= cellX + 1 && !occluded; x += 1) {
+      for (let y = cellY - 1; y <= cellY + 1 && !occluded; y += 1) {
+        const occupants = cells.get(`${x}:${y}`) || [];
+        occluded = occupants.some(point => {
+          const dx = point.x - candidate.screen.x;
+          const dy = point.y - candidate.screen.y;
+          return dx * dx + dy * dy < minimumDistanceSquared;
+        });
+      }
+    }
+    if (occluded) continue;
+    visible.add(candidate.node);
+    const key = `${cellX}:${cellY}`;
+    const occupants = cells.get(key) || [];
+    occupants.push(candidate.screen);
+    cells.set(key, occupants);
+  }
+  return visible;
+}
 function drawNetwork() {
   if (!supportsCanvas2d) {
     if (edgeCountEl) {
@@ -4163,6 +4667,13 @@ function drawNetwork() {
     const r = rotate(point.x, point.y, cosR, sinR);
     return { x: centerX + state.view.offsetX + r.x * radius, y: centerY + state.view.offsetY + r.y * radius };
   };
+  const visibleScreenNodes = cullScreenSpaceNodes(
+    nodes,
+    project,
+    rect.width,
+    rect.height,
+    state.render.layout === "aarnn" ? 12 : 5
+  );
   const membraneHull = anatomicalMembraneHull(state.graph, project);
   if (membraneHull) {
     ctx.beginPath();
@@ -4181,6 +4692,8 @@ function drawNetwork() {
     ctx.clip();
   }
   edges.forEach(edge => {
+    if ((edge.from && !visibleScreenNodes.has(edge.from)) ||
+        (edge.to && !visibleScreenNodes.has(edge.to))) return;
     const kind = String(edge.kind || "").toLowerCase();
     const anatomicalPath = kind.includes("axon") || kind.includes("dendrite");
     if (state.render.layout === "aarnn" && !anatomicalPath) return;
@@ -4228,13 +4741,13 @@ function drawNetwork() {
   const active = state.activity || {};
   const hiddenActive = active.hidden || [];
   const outputActive = active.output ? active.output.indices || [] : [];
-  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", [], cosR, sinR, screenNodes);
+  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", [], cosR, sinR, screenNodes, true, visibleScreenNodes);
   nodes.hidden.forEach((layer, idx) => {
     const activeIdx = hiddenActive[idx] ? hiddenActive[idx].indices || [] : [];
-    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes);
+    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes, true, visibleScreenNodes);
   });
   drawEarlyNodes(nodes.early || [], centerX, centerY, radius, cosR, sinR, screenNodes);
-  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes);
+  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes, true, visibleScreenNodes);
 
   if (membraneHull) ctx.restore();
   // Draw region labels if enabled
@@ -4330,9 +4843,10 @@ function drawTubePolygon(points, halfWidth, colour, alpha = 1) {
   ctx.fill();
   ctx.globalAlpha = 1;
 }
-function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true) {
+function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true, visibleNodes = null) {
   const activeSet = new Set(activeIndices);
   nodes.forEach((node, idx) => {
+    if (visibleNodes && !visibleNodes.has(node)) return;
     const rotated = rotate(node.x, node.y, cosR, sinR);
     const x = cx + state.view.offsetX + rotated.x * radius;
     const y = cy + state.view.offsetY + rotated.y * radius;
@@ -5235,6 +5749,11 @@ function rebuildGraph() {
   if (!state.snapshot) {
     state.graph = null;
     drawNetwork();
+    return;
+  }
+  const requestedDisplayKey = state.render.layout === "conventional" ? "synthetic_columns" : "anatomical";
+  if (state.snapshot.display_snapshots && !state.snapshot.display_snapshots[requestedDisplayKey]) {
+    refreshSnapshotForView();
     return;
   }
   // An anatomical contract is authoritative for anatomical presentation. If
@@ -6305,6 +6824,7 @@ function attachCanvasControls() {
     const delta = Math.sign(e.deltaY);
     state.view.zoom = Math.min(2.5, Math.max(0.4, state.view.zoom - delta * 0.05));
     drawNetwork();
+    refreshSnapshotForView();
   });
   if (typeof window.PointerEvent !== "function") {
     canvas.addEventListener("touchstart", e => {
@@ -6330,6 +6850,7 @@ function attachCanvasControls() {
       stopDrag();
     });
   }
+  window.addEventListener("resize", refreshSnapshotForView);
 }
 if (loginForm) {
   loginForm.addEventListener("submit", e => {
@@ -6408,8 +6929,56 @@ if (newBtn) {
 surfaceTabs.forEach(tab => {
   tab.addEventListener("click", () => setSurfaceTab(tab.dataset.surfaceTab || "dashboard"));
 });
+if (fpvCanvas) fpvCanvas.addEventListener("click", addFpvWaypointFromPointer);
+if (document.getElementById("fpv-refresh-projection")) {
+  document.getElementById("fpv-refresh-projection").addEventListener("click", loadFpvProjection);
+}
+if (fpvDetail) {
+  fpvDetail.addEventListener("change", () => {
+    state.fpv.scene = null;
+    state.fpv.sourceKey = "";
+    state.fpv.activeNodeIds = [];
+    state.fpv.waypoints = [];
+    drawFpvMap();
+    loadFpvProjection();
+  });
+}
+if (document.getElementById("fpv-clear-route")) {
+  document.getElementById("fpv-clear-route").addEventListener("click", () => {
+    state.fpv.waypoints = [];
+    drawFpvMap();
+  });
+}
+if (document.getElementById("fpv-refresh-jobs")) {
+  document.getElementById("fpv-refresh-jobs").addEventListener("click", loadFpvJobs);
+}
+if (fpvSubmitBtn) fpvSubmitBtn.addEventListener("click", submitFpvJob);
+if (fpvZoom && fpvZoomValue) {
+  fpvZoom.addEventListener("input", () => { fpvZoomValue.textContent = `${Number(fpvZoom.value).toFixed(1)}×`; });
+}
+if (fpvJobsEl) {
+  fpvJobsEl.addEventListener("click", async event => {
+    const button = event.target.closest("[data-fpv-action]");
+    if (!button) return;
+    const jobId = button.dataset.jobId;
+    const action = button.dataset.fpvAction;
+    if (!jobId || !["cancel", "retry"].includes(action)) return;
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/fpv/jobs/${encodeURIComponent(jobId)}/${action}`, { method: "POST" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `${action} failed (${response.status})`);
+      if (fpvJobFeedback) fpvJobFeedback.textContent = action === "retry" ? `Render ${jobId} queued again.` : `Render ${jobId} cancelled.`;
+      await loadFpvJobs();
+    } catch (error) {
+      if (fpvJobFeedback) fpvJobFeedback.textContent = error && error.message ? error.message : `${action} failed.`;
+      button.disabled = false;
+    }
+  });
+}
 window.addEventListener("resize", () => {
   if (state.placement.visible) renderPlacement();
+  if (state.fpv.visible) drawFpvMap();
 });
 [modelSelector, learningSelector].forEach(selector => {
   selector.querySelectorAll("button").forEach(btn => {
@@ -6496,3 +7065,6 @@ setInterval(() => {
 setInterval(pollAll, POLL_MS);
 setInterval(pollActivity, ACTIVITY_POLL_MS);
 setInterval(pollSnapshot, SNAPSHOT_POLL_TICK_MS);
+setInterval(() => {
+  if (state.fpv.visible && pageIsVisible()) loadFpvJobs();
+}, 5000);

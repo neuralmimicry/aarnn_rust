@@ -87,6 +87,37 @@ Implement resources, grants, bindings, capability reports, actuator lease record
 
 ## Progress
 
+- [x] `2026-09-27 08:35Z` Verified the remaining live AARNN 503 path against
+  the browser gateway and direct gRPC snapshot RPC. `web_ui.rs::snapshot`
+  tries candidate workers in sequence and returns 503 when each RPC fails;
+  the orchestrator correctly reports that it does not host the shard, while
+  qc00 fails because its 130 MB checkpoint exceeds the 64 MiB shard guard.
+  The web UI and node gRPC layers already permit 512 MiB messages. The causal
+  spike-ingress path also reused the 64 MiB constant, so its admission bound
+  must remain independent.
+- [x] `2026-09-27` Replaced the transitional single-message snapshot ceiling
+  with one-MiB sequenced gRPC frames and per-payload SHA-256 verification.
+  Full network, channel and authoritative state can span any number of frames;
+  frame allocation is bounded and the receiver reports allocation/size
+  failures. The UI requests a viewport-sized, read-only topology projection
+  instead of downloading full snapshots for routine display. Checkpoint and
+  shard migration transfers likewise use bounded frames with no fixed 64 MiB
+  aggregate ceiling. The current collectors still assemble the complete
+  checkpoint in memory, so this removes protocol ceilings without claiming
+  billion-neuron runtime readiness. Full all-features tests pass; deployment
+  remains pending and no live cluster state has been changed.
+- [x] `2026-09-27 08:35Z` Measured the persisted shared-network checkpoint at
+  129,502,622 bytes. The ingress log scan showed recurring 503s on
+  `/api/snapshot`; `/api/status` and `/api/activity` 503s clustered around an
+  orchestrator restart. Kubernetes records the prior orchestrator termination
+  as `OOMKilled`/137 with a 6 GiB limit. The pod is Ready again and its current
+  usage is about 3.1 GiB; qc01 is at 68% memory use and 41% requested, so this
+  is a container ceiling issue with node headroom rather than cluster-wide
+  exhaustion. Its cgroup CPU quota is three cores while `nproc` reports 46,
+  which currently sizes both Rayon and Tokio pools to 46 workers. The Ansible
+  fix now bounds each pool at two workers and raises the orchestrator request/
+  limit to 4/8 GiB; rollout and log verification must confirm stability.
+
 - [~] `2026-09-26 20:00Z` Investigated the live AARNN access screenshot and
   canonical browser resolver. The authenticated `pbisaacs` session is shown as
   an admin with `aarnn:control`, while the workspace selector says observation
@@ -306,11 +337,29 @@ The policy/orchestrator reference fences stale operation terms, but browser and
 runtime clients still use legacy endpoints. No replicated authority, generated
 management client or live OIDC/PKCE/API security evidence is present.
 
+The live browser snapshot route sequentially probes orchestrator/worker
+addresses and maps exhaustion to HTTP 503. The complete network snapshot now
+uses sequenced, SHA-256-verified one-MiB gRPC frames, with no fixed aggregate
+size ceiling. Checkpoint and shard state transfers also stream bounded frames.
+The receivers currently assemble a complete payload in memory, so available
+address space remains a practical limit. The per-frame realtime causal
+spike-ingress and AER transport bounds remain independent from snapshot size.
+The 10-minute ingress window contained recurring snapshot 503s and a brief set
+of status/activity 503s corresponding to an orchestrator OOM kill; only snapshot
+503s continued after the orchestrator became Ready again. The orchestrator's
+6 GiB limit was reached while its worker pools were sized from 46 host CPUs
+despite a three-core cgroup quota. qc01 currently retains physical memory
+headroom; bound both pools to two and set an 8 GiB limit to avoid further
+overcommit while adding headroom above the observed peak.
+
 ## Decision Log
 
 - Initial decision: only orchestrator quorum grants active authority; compute/workstation reachability is insufficient. Authority: Sections 15.1 and 15.7.
 - Initial decision: both UIs share one versioned generated management contract. Authority: Sections 16.12–16.13 and 17.3.
 - Initial decision: brain management and peripheral I/O/actuation are separately authorised capabilities. Authority: Sections 16.5 and 16.15–16.16.
+- `2026-09-27 / SNAPSHOT-SIZE-BOUND`: Permit a single-network snapshot up to 256 MiB to serve the observed 129.5 MB durable shared-network checkpoint while staying below the existing 512 MiB transport bound. Keep each shard in a multi-shard cluster cut and causal spike-ingress payloads at 64 MiB. The caps remain explicit and finite; persisted snapshot schema and live brain state are unchanged. Authority: Sections 14.3 and 14.5, `INV-012`, and Section 21's bounded-test principle.
+- `2026-09-27 / STREAMED-SNAPSHOT-SIZE`: Supersede the transitional aggregate snapshot ceiling with bounded one-MiB frames, ordered sequence/offset validation and SHA-256 verification. Apply the same bounded-frame principle to checkpoint/shard migration while allowing the aggregate to exceed 64 MiB. Keep allocation fallible and document that current receivers still assemble the full payload in memory. Routine UI rendering uses capped read-only projections. Authority: Sections 14.3 and 14.5, `INV-012`, and the scale-out requirement.
+- `2026-09-27 / ORCHESTRATOR-MEMORY-HEADROOM`: After an observed OOM kill at the 6 GiB ceiling, request 4 GiB and cap the orchestrator at 8 GiB. Set its Rayon and Tokio pools to two workers because the pod's three-core cgroup quota is not reflected by `nproc` (46 host CPUs). qc01 is 68% used with 41% of allocatable memory requested, so the additional request fits current scheduler capacity; the fixed worker pools reduce avoidable CPU/thread pressure and the higher memory ceiling adds bounded headroom. This operational change does not alter snapshot data or neural state. Validate node allocation, pod readiness, memory trend and ingress status after rollout.
 
 ## Outcomes & Retrospective
 

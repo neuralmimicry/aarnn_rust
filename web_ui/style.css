@@ -168,6 +168,107 @@ body::before,
   box-shadow: var(--nm-shadow);
 }
 
+.fpv-surface {
+  padding: 14px;
+  border: 1px solid var(--nm-border);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(38, 56, 70, 0.96), rgba(27, 40, 51, 0.88));
+  box-shadow: var(--nm-shadow);
+}
+
+.fpv-toolbar,
+.fpv-jobs-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.fpv-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--nm-muted);
+  font-size: 0.82rem;
+}
+
+.fpv-select select {
+  min-height: 34px;
+  border: 1px solid var(--nm-border-strong);
+  border-radius: 8px;
+  padding: 5px 9px;
+  color: var(--nm-text);
+  background: #17242d;
+  font: inherit;
+}
+
+.fpv-map-wrap {
+  position: relative;
+  overflow: hidden;
+  min-height: 220px;
+  border: 1px solid var(--nm-border);
+  border-radius: 12px;
+  background: #09141c;
+}
+
+#fpv-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+}
+
+#fpv-map-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.fpv-route-help {
+  margin: 8px 2px 16px;
+  color: var(--nm-muted);
+  font-size: 0.78rem;
+}
+
+.fpv-jobs-header {
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.fpv-jobs {
+  display: grid;
+  gap: 8px;
+}
+
+.fpv-job-card {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(140px, 2fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--nm-border);
+  border-radius: 10px;
+  background: rgba(9, 20, 28, 0.65);
+}
+
+.fpv-job-title { color: var(--nm-text); font-size: 0.84rem; }
+.fpv-job-meta { color: var(--nm-muted); font-size: 0.74rem; }
+.fpv-job-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.fpv-job-actions button, .fpv-job-actions a { white-space: nowrap; }
+.fpv-progress { height: 6px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: #25343e; }
+.fpv-progress > span { display: block; height: 100%; background: #63d9a3; transition: width 180ms ease; }
+
+@media (max-width: 760px) {
+  .fpv-job-card { grid-template-columns: 1fr; }
+  .fpv-job-actions { justify-content: flex-start; }
+  .fpv-toolbar { align-items: flex-start; }
+}
+
 .placement-header,
 .placement-legend {
   display: flex;

@@ -42,7 +42,11 @@ impl Default for AutomaticPlacementPolicy {
             minimum_residence_quanta: 100,
             minimum_improvement_milli: 50,
             maximum_concurrent_migrations: 1,
-            migration_budget_bytes: 64 * 1024 * 1024,
+            // Resource eligibility, placement capacity and the in-flight
+            // migration limit are the default safety gates. Do not strand a
+            // valid shard behind a protocol-era 64 MiB threshold; deployments
+            // may still set an explicit lower byte budget when required.
+            migration_budget_bytes: u64::MAX,
         }
     }
 }

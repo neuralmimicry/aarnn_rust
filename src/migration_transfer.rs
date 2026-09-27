@@ -98,6 +98,7 @@ impl ShardTransferManifest {
             || self.checkpoint_digest == StateDigest([0; 16])
             || self.payload_digest == StateDigest([0; 16])
             || self.total_bytes == 0
+            || self.total_bytes > usize::MAX as u64
             || self.frame_bytes == 0
             || self.frame_bytes as usize > MAX_TRANSFER_FRAME_BYTES
             || self.frame_count == 0
@@ -236,7 +237,7 @@ impl ShardTransferSource {
         }
         let payload = serde_json::to_vec(state)
             .map_err(|error| MigrationTransferError::Encoding(error.to_string()))?;
-        if payload.is_empty() || payload.len() > ShardCheckpointPayload::MAX_BYTES {
+        if payload.is_empty() {
             return Err(MigrationTransferError::PayloadTooLarge(payload.len()));
         }
         let mut digest = StateDigestBuilder::default();
@@ -280,23 +281,35 @@ impl ShardTransferSource {
 
     pub fn frames(&self) -> Result<Vec<ShardTransferFrame>, MigrationTransferError> {
         self.manifest.verify()?;
-        self.payload
-            .chunks(self.manifest.frame_bytes as usize)
-            .enumerate()
-            .map(|(index, payload)| {
-                ShardTransferFrame {
-                    schema_version: SHARD_TRANSFER_SCHEMA_VERSION,
-                    transfer_id: self.manifest.transfer_id,
-                    manifest_digest: self.manifest.manifest_digest,
-                    frame_index: u32::try_from(index)
-                        .map_err(|_| MigrationTransferError::SizeOverflow)?,
-                    frame_count: self.manifest.frame_count,
-                    payload: payload.to_vec(),
-                    frame_digest: StateDigest([0; 16]),
-                }
-                .seal()
-            })
+        (0..self.manifest.frame_count)
+            .map(|index| self.frame(index))
             .collect()
+    }
+
+    pub fn frame(&self, index: u32) -> Result<ShardTransferFrame, MigrationTransferError> {
+        if index >= self.manifest.frame_count {
+            return Err(MigrationTransferError::InvalidFrame);
+        }
+        let frame_bytes = self.manifest.frame_bytes as usize;
+        let start = (index as usize)
+            .checked_mul(frame_bytes)
+            .ok_or(MigrationTransferError::SizeOverflow)?;
+        let end = start.saturating_add(frame_bytes).min(self.payload.len());
+        let payload = self
+            .payload
+            .get(start..end)
+            .filter(|payload| !payload.is_empty())
+            .ok_or(MigrationTransferError::InvalidFrame)?;
+        ShardTransferFrame {
+            schema_version: SHARD_TRANSFER_SCHEMA_VERSION,
+            transfer_id: self.manifest.transfer_id,
+            manifest_digest: self.manifest.manifest_digest,
+            frame_index: index,
+            frame_count: self.manifest.frame_count,
+            payload: payload.to_vec(),
+            frame_digest: StateDigest([0; 16]),
+        }
+        .seal()
     }
 
     /// Reconstruct the verified immutable source state locally. This is used
@@ -305,7 +318,8 @@ impl ShardTransferSource {
     /// payload buffer or bypassing frame verification.
     pub fn imported_state(&self) -> Result<ImportedShardState, MigrationTransferError> {
         let mut receiver = ShardTransferReceiver::new(self.manifest.clone())?;
-        for frame in self.frames()? {
+        for index in 0..self.manifest.frame_count {
+            let frame = self.frame(index)?;
             receiver.accept(frame)?;
         }
         receiver.finalize()
@@ -540,20 +554,25 @@ impl ShardTransferReceiver {
         self.frames.len()
     }
 
-    pub fn finalize(self) -> Result<ImportedShardState, MigrationTransferError> {
+    pub fn finalize(mut self) -> Result<ImportedShardState, MigrationTransferError> {
         if self.frames.len() != self.manifest.frame_count as usize {
             return Err(MigrationTransferError::Incomplete {
                 received: self.frames.len(),
                 expected: self.manifest.frame_count as usize,
             });
         }
-        let mut payload = Vec::with_capacity(self.manifest.total_bytes as usize);
+        let payload_capacity = usize::try_from(self.manifest.total_bytes)
+            .map_err(|_| MigrationTransferError::SizeOverflow)?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(payload_capacity)
+            .map_err(|_| MigrationTransferError::SizeOverflow)?;
         for index in 0..self.manifest.frame_count {
             let frame = self
                 .frames
-                .get(&index)
+                .remove(&index)
                 .ok_or(MigrationTransferError::MissingFrame { frame: index })?;
-            payload.extend_from_slice(&frame.payload);
+            payload.extend(frame.payload);
         }
         if payload.len() as u64 != self.manifest.total_bytes {
             return Err(MigrationTransferError::PayloadLengthMismatch);
@@ -1079,6 +1098,37 @@ mod tests {
             .record_marker(ChannelMarker::new("source->destination", 1, None, b"channel").unwrap())
             .unwrap();
         coordinator.finalise().unwrap()
+    }
+
+    #[test]
+    fn shard_transfer_manifest_accepts_payloads_larger_than_sixty_four_mib() {
+        let total_bytes: u64 = 64 * 1024 * 1024 + 1;
+        let frame_bytes = MAX_TRANSFER_FRAME_BYTES as u32;
+        let frame_count = total_bytes.div_ceil(u64::from(frame_bytes)) as u32;
+        let manifest = ShardTransferManifest {
+            schema_version: SHARD_TRANSFER_SCHEMA_VERSION,
+            transfer_id: EventId::new(1).unwrap(),
+            source_node: "source".to_owned(),
+            brain_id: BrainId::new(7).unwrap(),
+            shard_id: ShardId::new(11).unwrap(),
+            source_term: LeaseTerm::INITIAL,
+            topology_generation: TopologyGeneration::INITIAL,
+            partition_generation: PartitionGeneration::INITIAL,
+            cut_tag: LogicalTag::ZERO,
+            source_plan_digest: StateDigest([1; 16]),
+            checkpoint_digest: StateDigest([2; 16]),
+            payload_digest: StateDigest([3; 16]),
+            durable_wal_sequence: None,
+            total_bytes,
+            frame_bytes,
+            frame_count,
+            manifest_digest: StateDigest([0; 16]),
+        }
+        .seal()
+        .unwrap();
+
+        manifest.verify().unwrap();
+        assert_eq!(manifest.total_bytes, total_bytes);
     }
 
     #[test]

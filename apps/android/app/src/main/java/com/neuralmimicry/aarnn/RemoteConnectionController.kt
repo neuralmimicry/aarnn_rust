@@ -16,6 +16,9 @@ data class RemoteConnectionUiState(
     val snapshot: RemoteWorkspaceSnapshot? = null,
     val error: String? = null,
     val lastUpdatedMs: Long? = null,
+    val fpvJobs: List<org.json.JSONObject> = emptyList(),
+    val fpvBusy: Boolean = false,
+    val fpvMessage: String? = null,
 )
 
 /** Keeps all network work off Compose and Android's main thread. */
@@ -42,6 +45,7 @@ class RemoteConnectionController : AutoCloseable {
                 val nextClient = RemoteAarnnClient(endpoint.trim(), virtualHost.trim())
                 nextClient.login(username.trim(), password)
                 val snapshot = nextClient.loadWorkspace(PREFERRED_WORKSPACE)
+                val jobs = runCatching { nextClient.listFpvJobs() }.getOrDefault(emptyList())
                 client = nextClient
                 post {
                     uiState = uiState.copy(
@@ -49,6 +53,7 @@ class RemoteConnectionController : AutoCloseable {
                         snapshot = snapshot,
                         error = null,
                         lastUpdatedMs = System.currentTimeMillis(),
+                        fpvJobs = jobs,
                     )
                     scheduleRefresh()
                 }
@@ -71,12 +76,15 @@ class RemoteConnectionController : AutoCloseable {
                 val workspaceId = uiState.snapshot?.summary?.workspaceId
                 runCatching { activeClient.loadWorkspace(workspaceId) }
                     .onSuccess { snapshot ->
+                        val jobs = runCatching { activeClient.listFpvJobs() }
+                            .getOrDefault(uiState.fpvJobs)
                         post {
                             uiState = uiState.copy(
                                 state = RemoteConnectionState.Connected,
                                 snapshot = snapshot,
                                 error = null,
                                 lastUpdatedMs = System.currentTimeMillis(),
+                                fpvJobs = jobs,
                             )
                         }
                     }
@@ -85,6 +93,47 @@ class RemoteConnectionController : AutoCloseable {
                     }
             } finally {
                 refreshInFlight.set(false)
+            }
+        }
+    }
+
+    fun refreshFpvJobs() {
+        executor.execute {
+            val activeClient = client ?: return@execute
+            runCatching { activeClient.listFpvJobs() }
+                .onSuccess { jobs -> post { uiState = uiState.copy(fpvJobs = jobs, fpvMessage = null) } }
+                .onFailure { error -> post { uiState = uiState.copy(fpvMessage = error.message ?: "Could not load FPV jobs") } }
+        }
+    }
+
+    fun submitFpvJob(waypointIds: List<String>) {
+        val snapshot = uiState.snapshot
+        val scene = snapshot?.displayViews?.anatomical
+        if (snapshot == null || scene == null) {
+            uiState = uiState.copy(fpvMessage = "No anatomical projection is available for FPV planning")
+            return
+        }
+        uiState = uiState.copy(fpvBusy = true, fpvMessage = "Submitting FPV render…")
+        executor.execute {
+            val result = runCatching {
+                val activeClient = client ?: error("Connect to AARNN first")
+                val response = activeClient
+                    .submitFpvJob(snapshot.summary.networkId, scene, waypointIds)
+                val jobs = activeClient.listFpvJobs()
+                response to jobs
+            }
+            result.onSuccess { (response, jobs) ->
+                post {
+                    uiState = uiState.copy(
+                        fpvJobs = jobs,
+                        fpvBusy = false,
+                        fpvMessage = "Render ${response.optString("job_id")} queued; return here to check progress.",
+                    )
+                }
+            }.onFailure { error ->
+                post {
+                    uiState = uiState.copy(fpvBusy = false, fpvMessage = error.message ?: "FPV submission failed")
+                }
             }
         }
     }

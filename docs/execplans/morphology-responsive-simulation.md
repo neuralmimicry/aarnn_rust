@@ -282,6 +282,13 @@ endpoint owners prepare. Add fault/retry/reclamation tests before enabling it.
   are processed first, paired axon/dendrite routes reserve swept 3D volumes,
   and rejected routes remain explicit. The reconstruction is persisted with
   snapshot provenance and used by the anatomical display adapter.
+- [x] `2026-09-27` Imported point-only morphology now detects overlapping soma
+  volumes and deterministically separates them in the procedural geometry
+  projection. The versioned reconstruction stores each source and resolved
+  position; network coordinates and weights remain intact, and legacy
+  reconstruction snapshots load with an empty repair list. Regression tests
+  cover stable ordering, non-overlap, source preservation, display positions,
+  and legacy deserialization.
 - [ ] Complete distributed prepare/activate/recovery evidence for structural
   changes.
 - [x] `2026-09-24 10:30Z` Replaced the anatomical display fallback for live
@@ -733,6 +740,13 @@ records and is therefore excluded from neural anatomical/synthetic parity.
   Suppress combined route strokes in that mode while retaining route DTOs for
   inspection and timing. Activity overlays are presentation-only and keyed by
   the current activity projection. Authority: VIS-01/08, CORE-03 and SIG-06.
+- `2026-09-27 MORPH-014`: Repair imported overlapping soma centers in the
+  procedural geometry projection using deterministic placement bounded by
+  the declared growth environment. Persist source and resolved coordinates
+  with reconstruction schema version 3; schema-2 reconstructions deserialize
+  with no repair records. The source network topology and weights are kept
+  unchanged. Authority: GROW-09, ENV-02/03 and the import-resilience
+  requirement.
 - `2026-09-24 MORPH-014`: Anchor every anatomical client to the committed
   membrane coverage frame, and bound or clip projected neurite geometry to
   that frame. Preserve stored bends and retain the last complete snapshot
