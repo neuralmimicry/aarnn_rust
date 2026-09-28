@@ -18,18 +18,7 @@ RUN python -m venv /opt/venv \
 COPY webots_service /build/webots_service
 COPY webots_world /build/webots_world
 
-RUN /opt/venv/bin/python - <<'PY'
-import compileall
-import pathlib
-import shutil
-
-package_dir = pathlib.Path("/build/webots_service")
-compileall.compile_dir(str(package_dir), force=True, quiet=1, legacy=True)
-for path in package_dir.rglob("*.py"):
-    path.unlink()
-for cache_dir in sorted(package_dir.rglob("__pycache__"), reverse=True):
-    shutil.rmtree(cache_dir)
-PY
+RUN /opt/venv/bin/python -c "import compileall, pathlib, shutil; package_dir = pathlib.Path('/build/webots_service'); compileall.compile_dir(str(package_dir), force=True, quiet=1, legacy=True); [path.unlink() for path in package_dir.rglob('*.py')]; [shutil.rmtree(path) for path in sorted(package_dir.rglob('__pycache__'), reverse=True)]"
 
 FROM python:3.12-slim
 ARG TARGET_PAGE_SIZE
