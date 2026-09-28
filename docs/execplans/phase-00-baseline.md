@@ -138,10 +138,15 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   --check` passed. Native image builds remain to be verified by manual dispatch
   on the actual self-hosted runners; the local Podman executable cannot load
   `libgpgme.so.11`.
-- [ ] `2026-09-28 05:53Z` Run the non-publishing workflow-dispatch build for the
-  task branch on native Linux X64 and ARM64 runners, then merge only after both
-  builds pass. The main push will verify and publish the multi-architecture
-  immutable SHA and `latest` tags.
+- [x] `2026-09-28 05:59Z` Ran workflow dispatch `36384153953` on the X64 and
+  ARM64 self-hosted runners. The native X64 image build passed. ARM64 exposed a
+  Containerfile Docker BuildKit heredoc that Podman's parser treated as
+  Dockerfile instructions (`Unknown instruction: IMPORT`). Updated the build
+  step to equivalent `python -c` syntax; no GHCR authentication or push ran.
+- [~] `2026-09-28 05:59Z` Re-run workflow dispatch after the Podman-compatible
+  Containerfile update. Merge only after both native builds pass; the main push
+  will then verify and publish the multi-architecture immutable SHA and
+  `latest` tags.
 
 ## Validation and acceptance
 
@@ -187,6 +192,11 @@ The 2026-09-27 Webots image workflow failure is a container-tool mismatch:
 Docker QEMU setup runs before any build step, but the self-hosted runner is
 Podman-based and has no Docker executable. Native X64 and ARM64 runners are
 available, so there is no need to add QEMU or a Docker-compatible daemon.
+The first native multi-architecture check then found a second compatibility
+issue: Podman does not accept the Docker BuildKit heredoc `RUN` block in the
+Webots Containerfile. Its equivalent bytecode-compilation/removal operation is
+now expressed as a Python `-c` command; both native architectures must pass
+before publication.
 
 ## Decision Log
 
@@ -208,6 +218,9 @@ available, so there is no need to add QEMU or a Docker-compatible daemon.
   image behavior without Docker, Buildx or QEMU. Authority: Phase 0 CI safety
   net and repository requirement to keep Linux Actions jobs on self-hosted
   runners.
+- `2026-09-28` Keep the Webots Containerfile build step compatible with Podman
+  by avoiding BuildKit-only heredoc syntax while preserving the bytecode-only
+  package transformation.
 
 ## Outcomes & Retrospective
 
