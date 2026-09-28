@@ -116,6 +116,32 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   disables runtime device use. Aligned the dedicated fixture command with the
   all-features profile. Ruby YAML parsing and `git diff --check` passed; the
   changed workflow command is `.github/workflows/build-and-release.yml:303`.
+- [x] `2026-09-28 05:53Z` Inspected Webots container run `36332404746`:
+  `docker/setup-qemu-action@v3` fails on runner `sm00` because no `docker`
+  executable exists. GitHub runner inventory confirms an online Linux ARM64
+  runner (`qc01-aarnn-rust`); the failed run confirms the Linux X64 lane. The
+  workflow currently publishes amd64+arm64 under immutable `sha-*` and
+  `latest` tags using Docker Buildx. Replace that path with native Podman builds
+  for both architectures, followed by a Podman manifest publish and Skopeo
+  platform verification. A local Podman probe is currently unusable because
+  its binary cannot load `libgpgme.so.11`; CI setup must test executable
+  availability and install usable system packages rather than test only PATH.
+- [~] `2026-09-28 05:53Z` Updating `.github/workflows/webots-container.yml` to
+  remove Docker/QEMU/Buildx dependencies while preserving published image
+  names, immutable SHA reference, `latest` alias, build arguments and OCI
+  metadata; then validate workflow YAML, shell syntax and the diff.
+- [x] `2026-09-28 05:53Z` Reworked Webots publication into native Podman
+  amd64/arm64 builds and a GHCR manifest job. Manual dispatches build both
+  architectures without registry login or push; main-branch runs retain the
+  immutable `sha-*` and `latest` publication behavior. `actionlint`, Ruby YAML
+  parsing, `bash -n`, ShellCheck for both matrix expansions and `git diff
+  --check` passed. Native image builds remain to be verified by manual dispatch
+  on the actual self-hosted runners; the local Podman executable cannot load
+  `libgpgme.so.11`.
+- [ ] `2026-09-28 05:53Z` Run the non-publishing workflow-dispatch build for the
+  task branch on native Linux X64 and ARM64 runners, then merge only after both
+  builds pass. The main push will verify and publish the multi-architecture
+  immutable SHA and `latest` tags.
 
 ## Validation and acceptance
 
@@ -157,6 +183,11 @@ dedicated invocation omitted `--all-features`. This disabled the compile-time
 OpenCL helper required by current `Runner` call sites; the OpenCL environment
 switch controls runtime device selection only.
 
+The 2026-09-27 Webots image workflow failure is a container-tool mismatch:
+Docker QEMU setup runs before any build step, but the self-hosted runner is
+Podman-based and has no Docker executable. Native X64 and ARM64 runners are
+available, so there is no need to add QEMU or a Docker-compatible daemon.
+
 ## Decision Log
 
 - Initial decision: Phase 0 is observational and must not repair known distributed defects. Authority: Section 20.1.
@@ -170,6 +201,13 @@ switch controls runtime device selection only.
   though it omits the heavier duplicate X64 library, integration, doctest and
   release-smoke gates. The workflow uses the quoted Cargo test selector and
   disables OpenCL for deterministic CPU validation.
+- `2026-09-28` Webots container publication will build natively with Podman on
+  Linux X64 and ARM64 self-hosted runners, publish architecture-qualified
+  staging tags, then assemble the existing immutable SHA and `latest` aliases
+  with a multi-architecture manifest. This preserves native page-size and
+  image behavior without Docker, Buildx or QEMU. Authority: Phase 0 CI safety
+  net and repository requirement to keep Linux Actions jobs on self-hosted
+  runners.
 
 ## Outcomes & Retrospective
 
