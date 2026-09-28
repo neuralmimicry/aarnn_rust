@@ -135,18 +135,21 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
   architectures without registry login or push; main-branch runs retain the
   immutable `sha-*` and `latest` publication behavior. `actionlint`, Ruby YAML
   parsing, `bash -n`, ShellCheck for both matrix expansions and `git diff
-  --check` passed. Native image builds remain to be verified by manual dispatch
-  on the actual self-hosted runners; the local Podman executable cannot load
-  `libgpgme.so.11`.
+  --check` passed. The local Podman executable cannot load `libgpgme.so.11`, so
+  runtime builds are verified on the actual self-hosted runners.
 - [x] `2026-09-28 05:59Z` Ran workflow dispatch `36384153953` on the X64 and
   ARM64 self-hosted runners. The native X64 image build passed. ARM64 exposed a
   Containerfile Docker BuildKit heredoc that Podman's parser treated as
   Dockerfile instructions (`Unknown instruction: IMPORT`). Updated the build
   step to equivalent `python -c` syntax; no GHCR authentication or push ran.
-- [~] `2026-09-28 05:59Z` Re-run workflow dispatch after the Podman-compatible
-  Containerfile update. Merge only after both native builds pass; the main push
-  will then verify and publish the multi-architecture immutable SHA and
-  `latest` tags.
+- [x] `2026-09-28 06:02Z` Re-ran manual dispatch `36384360838`; native amd64
+  (X64, 41 seconds) and arm64 (ARM64, 1 minute 25 seconds) image builds both
+  passed, including the Containerfile transformation and architecture checks.
+  Authentication, GHCR pushes and manifest publication were skipped as
+  intended for this branch dispatch.
+- [ ] `2026-09-28 06:02Z` Merge the tested change and validate the main-branch
+  manifest assembly, Skopeo platform checks, immutable SHA tag and `latest`
+  publication.
 
 ## Validation and acceptance
 
