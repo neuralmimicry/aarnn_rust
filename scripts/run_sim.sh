@@ -118,7 +118,7 @@ LAUNCH_ENGINE=1              # 0 = start brain servers only (no engine window)
 WEBGL_HOST="${WEBGL_HOST:-127.0.0.1}"
 WEBGL_PORT="${WEBGL_PORT:-8080}"
 WEBGL_ORCHESTRATOR_PORT="${WEBGL_ORCHESTRATOR_PORT:-}"
-WEBGL_RUNTIME_FEATURES="${NM_WEBGL_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,cuda}"
+WEBGL_RUNTIME_FEATURES="${NM_WEBGL_RUNTIME_FEATURES:-engine_runtime,ui,robot_io,morpho,cuda}"
 
 # ---------------------------------------------------------------------------
 # Robot type tables

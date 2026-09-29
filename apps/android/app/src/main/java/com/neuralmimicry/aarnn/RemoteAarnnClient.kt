@@ -233,6 +233,7 @@ class RemoteAarnnClient(
                             layer = if (value.isNull("layer")) null else value.optInt("layer"),
                             position = value.optJSONObject("position_mm").displayPoint(),
                             colourSlot = value.optLong("colour_slot", 0L).coerceAtLeast(0L),
+                            somaRadiusMM = value.optDouble("soma_radius_mm").takeIf { it.isFinite() && it > 0.0 },
                         ),
                     )
                 }
@@ -252,6 +253,7 @@ class RemoteAarnnClient(
                             points = value.optJSONArray("points_mm").displayPoints(),
                             colourSlot = colourSlots[value.optJSONObject("source").displayId()],
                             radius = 0.0,
+                            isPath = false,
                         ),
                     )
                 }
@@ -270,6 +272,7 @@ class RemoteAarnnClient(
                             points = value.optJSONArray("points_mm").displayPoints(),
                             colourSlot = colourSlots[value.optJSONObject("owner").displayId()],
                             radius = value.optDouble("radius_mm", 0.0),
+                            isPath = true,
                         ),
                     )
                 }
@@ -306,6 +309,7 @@ class RemoteAarnnClient(
             provenance = root.optString("provenance").lowercase(Locale.ROOT),
             complete = coverage?.optBoolean("complete") ?: false,
             truncated = coverage?.optBoolean("truncated") ?: false,
+            volumetricClearanceVerified = coverage?.optBoolean("volumetric_clearance_verified") ?: false,
             unavailableReason = coverage?.optString("unavailable_reason")?.takeIf { it.isNotBlank() },
             region = region,
             membrane = coverage?.optJSONObject("membrane")?.let { value ->
@@ -314,7 +318,7 @@ class RemoteAarnnClient(
             nodes = nodes,
             edges = edges + paths,
             markers = markers,
-            rawJson = JSONObject(root.toString()),
+            rawJson = root.toString(),
         )
     }
 
@@ -325,9 +329,29 @@ class RemoteAarnnClient(
         }
     }
 
-    fun submitFpvJob(networkId: String, scene: RemoteDisplaySnapshot, waypointIds: List<String>): JSONObject {
+    fun submitFpvJob(
+        networkId: String,
+        scene: RemoteDisplaySnapshot,
+        waypointIds: List<String>,
+        visualizationKeyframes: List<FpvVisualizationKeyframe>,
+        cameraZoom: Double,
+        autoVisualizationLatencyMs: Double,
+    ): JSONObject {
         if (waypointIds.size < 2) throw RemoteAarnnException("Choose at least two camera waypoints")
-        val rawNodes = scene.rawJson.optJSONArray("nodes") ?: JSONArray()
+        if (visualizationKeyframes.size != waypointIds.size || visualizationKeyframes.withIndex().any { (index, keyframe) ->
+                keyframe.waypointId != waypointIds[index] || keyframe.stage !in 1..9 ||
+                    !keyframe.zoom.isFinite() || keyframe.zoom !in 0.2..4.0
+            }) {
+            throw RemoteAarnnException("Visualisation settings must match each camera waypoint")
+        }
+        if (!cameraZoom.isFinite() || cameraZoom !in 0.2..4.0 ||
+            !autoVisualizationLatencyMs.isFinite() || autoVisualizationLatencyMs !in 0.0..10_000.0
+        ) {
+            throw RemoteAarnnException("Camera zoom or visualisation latency is outside its supported range")
+        }
+        val sceneJson = runCatching { JSONObject(scene.rawJson) }
+            .getOrElse { throw RemoteAarnnException("The display snapshot is no longer valid", it) }
+        val rawNodes = sceneJson.optJSONArray("nodes") ?: JSONArray()
         val rawIdByDisplayId = buildMap {
             for (index in 0 until rawNodes.length()) {
                 val node = rawNodes.getJSONObject(index)
@@ -338,17 +362,32 @@ class RemoteAarnnClient(
         waypointIds.forEach { id ->
             rawWaypoints.put(rawIdByDisplayId[id] ?: throw RemoteAarnnException("A route waypoint is not in the current projection"))
         }
+        val rawKeyframes = JSONArray()
+        visualizationKeyframes.forEach { keyframe ->
+            val rawId = rawIdByDisplayId[keyframe.waypointId]
+                ?: throw RemoteAarnnException("A visualisation waypoint is not in the current projection")
+            rawKeyframes.put(
+                JSONObject()
+                    .put("waypoint_id", rawId)
+                    .put("automatic", keyframe.automatic)
+                    .put("stage", keyframe.stage)
+                    .put("zoom", keyframe.zoom),
+            )
+        }
         val payload = JSONObject()
             .put("schema_version", 1)
             .put("network_id", networkId)
-            .put("scene", scene.rawJson)
+            .put("scene", sceneJson)
             .put("waypoint_ids", rawWaypoints)
             .put("active_node_ids", JSONArray())
             .put("width", 1280)
             .put("height", 720)
             .put("frame_rate", 30)
             .put("frame_count", 300)
-            .put("zoom", 1.0)
+            .put("zoom", cameraZoom)
+            .put("auto_visualization_latency_ms", autoVisualizationLatencyMs)
+            .put("visualization_policy_version", VisualizationPolicy.VERSION)
+            .put("visualization_keyframes", rawKeyframes)
             .put("focus_active_regions", true)
         return JSONObject(request("/api/fpv/jobs", "POST", payload.toString()).body)
     }
@@ -415,13 +454,15 @@ data class RemoteDisplaySnapshot(
     val provenance: String,
     val complete: Boolean,
     val truncated: Boolean,
+    val volumetricClearanceVerified: Boolean,
     val unavailableReason: String?,
     val region: RemoteDisplayBounds?,
     val membrane: RemoteDisplayMembrane?,
     val nodes: List<RemoteDisplayNode>,
     val edges: List<RemoteDisplayLine>,
     val markers: List<RemoteDisplayMarker>,
-    val rawJson: JSONObject,
+    /** Immutable encoded scene retained for lossless FPV job submission. */
+    val rawJson: String,
 )
 
 data class RemoteDisplayMembrane(val centre: RemoteDisplayPoint, val radii: RemoteDisplayPoint)
@@ -437,6 +478,7 @@ data class RemoteDisplayNode(
     val layer: Int?,
     val position: RemoteDisplayPoint,
     val colourSlot: Long,
+    val somaRadiusMM: Double?,
 )
 
 data class RemoteDisplayLine(
@@ -447,6 +489,7 @@ data class RemoteDisplayLine(
     val points: List<RemoteDisplayPoint>,
     val colourSlot: Long? = null,
     val radius: Double = 0.0,
+    val isPath: Boolean = false,
 )
 
 data class RemoteDisplayMarker(

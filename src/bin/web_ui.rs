@@ -2159,6 +2159,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/visualization-policy.js", get(visualization_policy_js))
         .route("/service-access.js", get(service_access_js))
         .route("/management-client.generated.js", get(management_client_js))
         .route("/aer-transport.js", get(aer_transport_js))
@@ -2212,6 +2213,22 @@ async fn app_js() -> impl IntoResponse {
         HeaderValue::from_static("no-store, max-age=0"),
     );
     (headers, include_str!("../../web_ui/app.js"))
+}
+
+async fn visualization_policy_js() -> impl IntoResponse {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    (
+        headers,
+        include_str!("../../web_ui/visualization-policy.js"),
+    )
 }
 
 async fn service_access_js() -> impl IntoResponse {

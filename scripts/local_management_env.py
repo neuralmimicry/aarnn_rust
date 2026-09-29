@@ -41,6 +41,57 @@ def _run_openssl(args: list[str]) -> None:
         raise RuntimeError("openssl could not create the local management TLS identity") from exc
 
 
+def _local_tls_material_is_current(
+    ca_key: Path, ca_crt: Path, dev_key: Path, dev_crt: Path
+) -> bool:
+    """Check that the cached launcher identity is usable for another run.
+
+    Local certificates are deliberately short-lived. File presence alone is
+    insufficient: an expired certificate makes every worker's mutual-TLS
+    connection fail while the launcher can still report that its processes
+    started. Keep a small validity margin and rotate the local CA and client
+    identity together when cached material is stale or inconsistent.
+    """
+    try:
+        for certificate in (ca_crt, dev_crt):
+            subprocess.run(
+                [
+                    "openssl",
+                    "x509",
+                    "-in",
+                    str(certificate),
+                    "-noout",
+                    "-checkend",
+                    "3600",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        subprocess.run(
+            ["openssl", "verify", "-CAfile", str(ca_crt), str(dev_crt)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for certificate, private_key in ((ca_crt, ca_key), (dev_crt, dev_key)):
+            certificate_key = subprocess.run(
+                ["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"],
+                check=True,
+                capture_output=True,
+            ).stdout
+            private_key_public = subprocess.run(
+                ["openssl", "pkey", "-in", str(private_key), "-pubout"],
+                check=True,
+                capture_output=True,
+            ).stdout
+            if certificate_key != private_key_public:
+                return False
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
 def _ensure_tls(runtime_root: Path) -> dict[str, str]:
     values = {name: os.environ.get(name, "") for name in TLS_NAMES}
     present = [bool(values[name]) for name in TLS_NAMES]
@@ -62,7 +113,13 @@ def _ensure_tls(runtime_root: Path) -> dict[str, str]:
     dev_csr = tls_dir / "dev.csr"
     extensions = tls_dir / "dev-extensions.cnf"
 
-    if not all(path.is_file() and path.stat().st_size > 0 for path in (ca_key, ca_crt, dev_key, dev_crt)):
+    cached_files_exist = all(
+        path.is_file() and path.stat().st_size > 0
+        for path in (ca_key, ca_crt, dev_key, dev_crt)
+    )
+    if not cached_files_exist or not _local_tls_material_is_current(
+        ca_key, ca_crt, dev_key, dev_crt
+    ):
         _run_openssl(
             [
                 "req",

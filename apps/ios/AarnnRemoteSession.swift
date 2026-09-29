@@ -84,11 +84,13 @@ public actor AarnnRemoteSession {
         public let layer: Int?
         public let positionMM: DisplayPoint
         public let colourSlot: UInt32?
+        public let somaRadiusMM: Double?
 
         enum CodingKeys: String, CodingKey {
             case id, role, layer
             case positionMM = "position_mm"
             case colourSlot = "colour_slot"
+            case somaRadiusMM = "soma_radius_mm"
         }
     }
 
@@ -141,6 +143,7 @@ public actor AarnnRemoteSession {
         public let complete: Bool
         public let truncated: Bool
         public let unavailableReason: String?
+        public let volumetricClearanceVerified: Bool
         public let region: DisplayRegion?
         public let membrane: DisplayMembrane?
         public let nodes: [DisplayNode]
@@ -162,11 +165,13 @@ public actor AarnnRemoteSession {
             let unavailableReason: String?
             let region: DisplayRegion?
             let membrane: DisplayMembrane?
+            let volumetricClearanceVerified: Bool?
 
             enum CodingKeys: String, CodingKey {
                 case complete, truncated
                 case unavailableReason = "unavailable_reason"
                 case region, membrane
+                case volumetricClearanceVerified = "volumetric_clearance_verified"
             }
         }
 
@@ -187,6 +192,7 @@ public actor AarnnRemoteSession {
             complete = coverage?.complete ?? false
             truncated = coverage?.truncated ?? false
             unavailableReason = coverage?.unavailableReason
+            volumetricClearanceVerified = coverage?.volumetricClearanceVerified ?? false
             region = coverage?.region
             membrane = coverage?.membrane
         }

@@ -101,6 +101,67 @@ sampling, interpolation or dropped frames must not feed back into propagation.
 Clients without a compatible activity projection must retain base geometry and
 must not invent a biological event.
 
+## VIS-12 — Staged, responsive visualisation
+
+Every dashboard client shall expose one ordered visualisation-complexity
+slider with nine manual stages and an `Auto` choice. The stages are shared by
+Rust desktop, web, Android and iOS clients:
+
+| Stage | Arrangement and visible geometry |
+| --- | --- |
+| 1 | Synthetic vertical columns; one screen pixel per neuron; no connections. |
+| 2 | Synthetic vertical columns; one screen pixel per neuron and one-pixel graph connections. |
+| 3 | Synthetic vertical columns; multi-pixel neurons and one-pixel graph connections. |
+| 4 | Anatomical arrangement; one-pixel neurons; no connections. |
+| 5 | Anatomical arrangement; one-pixel neurons and straight one-pixel graph connections. |
+| 6 | Anatomical arrangement; one-pixel neurons and branching straight graph connections. |
+| 7 | Anatomical arrangement; branching committed neurites at one-pixel width, only when volumetric clearance is verified. |
+| 8 | Stage 7 geometry with multi-pixel soma and committed dendrite/axon volumes, only when volumetric clearance is verified. |
+| 9 | Stage 8 geometry plus committed boutons, postsynaptic sites and synapses, only when volumetric clearance is verified. |
+
+Detailed neurites shall use their committed grown 3D centre-line samples and
+physical radii. Rendered length and spacing therefore come from the network's
+actual coordinates, including the distance between each soma, branch point and
+connected structure; renderers shall not stretch decorative paths to fit a
+layout. A path's displayed centre-line length is the sum of the Euclidean
+distances between its consecutive committed samples. Stages 7–9 require both a
+producer clearance witness and non-zero physical soma/neurite radii; missing
+legacy measurements remain unavailable rather than being estimated for display.
+
+Neuron brightness represents the compatible activity projection at every
+stage. Activity remains presentation telemetry and cannot change event
+admission, ordering, propagation, closure or committed neural state. If the
+activity projection is missing or stale, render the last compatible activity
+sample or the base neuron colour; never infer a neural event from display
+sampling.
+
+`Auto` selects from the same nine stages using view zoom and measured
+visualisation-computation latency. Its thresholds, latency window and
+hysteresis are versioned as presentation policy and shared with automated
+fixtures. Clients shall lower detail promptly when measured render cost exceeds
+the configured frame budget, and raise detail gradually after sustained spare
+capacity to avoid stage oscillation. A requested or automatic stage shall be
+clamped to the highest available stage when the snapshot lacks required
+geometry or verified volumetric clearance, with that limitation visible to
+the user.
+
+Visualisation projection, geometry validation, rasterisation and FPV video
+rendering are independent read-only computation. They shall use bounded
+buffers, parallel work where it helps, cancellation or stale-result rejection,
+and must not block or acquire execution-critical locks while neural stimulus
+traversal proceeds. A slow, unavailable or failed visualisation cannot pause,
+retime, drop or mutate neural computation.
+
+The FPV planner exposes the same stage policy for each camera waypoint. A
+render job captures the visualisation-policy version, immutable stage keyframes
+and latency sample with the camera path. Manual
+keyframes are interpolated by route progress; automatic keyframes also use the
+rendered camera zoom and measured render cost. Changing detail during planning
+or rendering affects presentation only and never changes replay or live neural
+state. The final MP4 records the chosen policy and its resolved per-frame
+stages in job metadata. Workers reject unknown policy versions rather than
+silently rendering a resumed job with different stage semantics.
+
 ## Repeatable visual regression
 
 Run `cargo xtask qa run --suite anatomical-render-browser` for the shared

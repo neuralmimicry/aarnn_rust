@@ -5,6 +5,7 @@ import android.content.Context
 import android.hardware.Camera
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
@@ -16,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,12 +69,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -89,6 +93,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.absoluteValue
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,6 +107,36 @@ private enum class AarnnTab { Dashboard, Graph, Fpv, Account }
 private enum class GraphDisplayMode(val label: String) {
     SyntheticColumns("Synthetic columns"),
     Anatomical("Anatomical"),
+}
+
+@Composable
+private fun VisualizationControls(
+    stage: Int,
+    automatic: Boolean,
+    highestAvailable: Int,
+    onStageChange: (Int) -> Unit,
+    onAutomaticChange: (Boolean) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Visual detail", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+            androidx.compose.material3.Checkbox(checked = automatic, onCheckedChange = onAutomaticChange)
+            Text("Auto")
+        }
+        androidx.compose.material3.Slider(
+            value = stage.toFloat(),
+            onValueChange = { onStageChange(it.toInt().coerceIn(1, 9)) },
+            valueRange = 1f..9f,
+            steps = 7,
+        )
+        val resolved = minOf(stage, highestAvailable).coerceIn(1, 9)
+        Text(
+            "${if (automatic) "Auto" else "Manual"} · stage $resolved · ${VisualizationPolicy.stages[resolved - 1]}" +
+                if (resolved < stage) " · geometry available through stage $highestAvailable" else "",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Suppress("DEPRECATION")
@@ -229,6 +264,40 @@ private fun AarnnRemoteScreen() {
         videoAudioEnabled = granted
     }
     val state = controller.uiState
+    var visualizationStage by rememberSaveable { mutableIntStateOf(5) }
+    var visualizationAutomatic by rememberSaveable { mutableStateOf(true) }
+    var visualizationZoom by rememberSaveable { mutableFloatStateOf(1f) }
+    var visualizationStageChangedAt by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    val visualizationLatency = remember { VisualizationLatencyTracker() }
+    val highestVisualizationStage = VisualizationPolicy.highestAvailable(
+        state.snapshot?.displayViews?.syntheticColumns,
+        state.snapshot?.displayViews?.anatomical,
+    )
+
+    LaunchedEffect(
+        visualizationAutomatic,
+        visualizationStage,
+        visualizationZoom,
+        highestVisualizationStage,
+        state.snapshot?.summary?.networkId,
+    ) {
+        while (visualizationAutomatic) {
+            delay(250)
+            val now = SystemClock.elapsedRealtime()
+            val measuredLatency = visualizationLatency.p95Milliseconds()
+            val next = VisualizationPolicy.update(
+                visualizationStage,
+                visualizationZoom.toDouble(),
+                measuredLatency,
+                highestVisualizationStage,
+                now - visualizationStageChangedAt,
+            )
+            if (next != visualizationStage) {
+                visualizationStage = next
+                visualizationStageChangedAt = now
+            }
+        }
+    }
 
     DisposableEffect(controller) { onDispose { controller.close() } }
 
@@ -317,6 +386,24 @@ private fun AarnnRemoteScreen() {
                     },
                     canPopOutVideo = videoSource != null,
                     onPopOutVideo = { videoPreviewOpen = videoSource != null },
+                    visualizationStage = visualizationStage,
+                    visualizationAutomatic = visualizationAutomatic,
+                    visualizationZoom = visualizationZoom,
+                    highestVisualizationStage = highestVisualizationStage,
+                    visualizationLatency = visualizationLatency,
+                    onVisualizationStageChange = {
+                        visualizationStage = it
+                        visualizationAutomatic = false
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
+                    onVisualizationAutomaticChange = {
+                        visualizationAutomatic = it
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
+                    onZoomChanged = {
+                        visualizationZoom = it
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
                 )
             } else if (selectedTab == AarnnTab.Graph.ordinal) {
                 GraphExplorerScreen(
@@ -324,6 +411,24 @@ private fun AarnnRemoteScreen() {
                     contentPadding = innerPadding,
                     onOpenAccount = { selectedTab = AarnnTab.Account.ordinal },
                     onRefresh = controller::refresh,
+                    visualizationStage = visualizationStage,
+                    visualizationAutomatic = visualizationAutomatic,
+                    visualizationZoom = visualizationZoom,
+                    highestVisualizationStage = highestVisualizationStage,
+                    visualizationLatency = visualizationLatency,
+                    onVisualizationStageChange = {
+                        visualizationStage = it
+                        visualizationAutomatic = false
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
+                    onVisualizationAutomaticChange = {
+                        visualizationAutomatic = it
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
+                    onZoomChanged = {
+                        visualizationZoom = it
+                        visualizationStageChangedAt = SystemClock.elapsedRealtime()
+                    },
                 )
             } else if (selectedTab == AarnnTab.Fpv.ordinal) {
                 FpvPlannerScreen(
@@ -331,6 +436,10 @@ private fun AarnnRemoteScreen() {
                     contentPadding = innerPadding,
                     onSubmit = controller::submitFpvJob,
                     onRefreshJobs = controller::refreshFpvJobs,
+                    visualizationStage = visualizationStage,
+                    visualizationAutomatic = visualizationAutomatic,
+                    visualizationZoom = visualizationZoom,
+                    visualizationLatency = visualizationLatency,
                 )
             } else {
                 AccountScreen(
@@ -384,6 +493,14 @@ private fun DashboardScreen(
     onVideoAudioEnabledChange: (Boolean) -> Unit,
     canPopOutVideo: Boolean,
     onPopOutVideo: () -> Unit,
+    visualizationStage: Int,
+    visualizationAutomatic: Boolean,
+    visualizationZoom: Float,
+    highestVisualizationStage: Int,
+    visualizationLatency: VisualizationLatencyTracker,
+    onVisualizationStageChange: (Int) -> Unit,
+    onVisualizationAutomaticChange: (Boolean) -> Unit,
+    onZoomChanged: (Float) -> Unit,
 ) {
     val snapshot = state.snapshot
     LazyColumn(
@@ -417,7 +534,20 @@ private fun DashboardScreen(
         } else {
             item { WorkspaceHero(snapshot, onRefresh) }
             item { MetricsGrid(snapshot) }
-            item { NeuralActivityCard(snapshot, onOpenGraph) }
+            item {
+                NeuralActivityCard(
+                    snapshot = snapshot,
+                    onOpenGraph = onOpenGraph,
+                    visualizationStage = visualizationStage,
+                    visualizationAutomatic = visualizationAutomatic,
+                    visualizationZoom = visualizationZoom,
+                    highestVisualizationStage = highestVisualizationStage,
+                    visualizationLatency = visualizationLatency,
+                    onVisualizationStageChange = onVisualizationStageChange,
+                    onVisualizationAutomaticChange = onVisualizationAutomaticChange,
+                    onZoomChanged = onZoomChanged,
+                )
+            }
             item { LayerActivityCard(snapshot) }
             item { DistributedNodesCard(snapshot) }
         }
@@ -428,12 +558,20 @@ private fun DashboardScreen(
 private fun FpvPlannerScreen(
     state: RemoteConnectionUiState,
     contentPadding: PaddingValues,
-    onSubmit: (List<String>) -> Unit,
+    onSubmit: (List<String>, List<FpvVisualizationKeyframe>, Double, Double) -> Unit,
     onRefreshJobs: () -> Unit,
+    visualizationStage: Int,
+    visualizationAutomatic: Boolean,
+    visualizationZoom: Float,
+    visualizationLatency: VisualizationLatencyTracker,
 ) {
     val snapshot = state.snapshot
     val scene = snapshot?.displayViews?.anatomical
     var route by remember(snapshot?.summary?.networkId, scene?.sequence) { mutableStateOf(emptyList<String>()) }
+    var waypointSettings by remember(snapshot?.summary?.networkId, scene?.sequence) {
+        mutableStateOf(emptyList<FpvVisualizationKeyframe>())
+    }
+    var selectedWaypointIndex by remember(snapshot?.summary?.networkId, scene?.sequence) { mutableIntStateOf(-1) }
     LaunchedEffect(snapshot?.summary?.networkId) { onRefreshJobs() }
     Column(
         modifier = Modifier.fillMaxSize().padding(
@@ -466,7 +604,16 @@ private fun FpvPlannerScreen(
                             }
                             nearest?.let { node ->
                                 val distance = (projector.project(node.position) - tap).getDistance()
-                                if (distance <= 26f && route.size < 512) route = route + node.id
+                                if (distance <= 26f && route.size < 512) {
+                                    route = route + node.id
+                                    waypointSettings = waypointSettings + FpvVisualizationKeyframe(
+                                        waypointId = node.id,
+                                        automatic = visualizationAutomatic,
+                                        stage = visualizationStage,
+                                        zoom = visualizationZoom.toDouble().coerceIn(0.2, 4.0),
+                                    )
+                                    selectedWaypointIndex = route.lastIndex
+                                }
                             }
                         }
                     },
@@ -491,13 +638,65 @@ private fun FpvPlannerScreen(
                     )
                 }
             }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                route.indices.forEach { index ->
+                    TextButton(onClick = { selectedWaypointIndex = index }) {
+                        Text(if (index == selectedWaypointIndex) "Waypoint ${index + 1} · selected" else "${index + 1}")
+                    }
+                }
+            }
+            val availableStage = VisualizationPolicy.highestAvailable(null, scene)
+            val selectedSettings = waypointSettings.getOrNull(selectedWaypointIndex)
+            if (selectedSettings != null) {
+                Text("Visualisation at waypoint ${selectedWaypointIndex + 1}", fontWeight = FontWeight.SemiBold)
+                VisualizationControls(
+                    stage = selectedSettings.stage,
+                    automatic = selectedSettings.automatic,
+                    highestAvailable = availableStage,
+                    onStageChange = { stage ->
+                        waypointSettings = waypointSettings.toMutableList().also { values ->
+                            values[selectedWaypointIndex] = values[selectedWaypointIndex].copy(stage = stage, automatic = false)
+                        }
+                    },
+                    onAutomaticChange = { automatic ->
+                        waypointSettings = waypointSettings.toMutableList().also { values ->
+                            values[selectedWaypointIndex] = values[selectedWaypointIndex].copy(automatic = automatic)
+                        }
+                    },
+                )
+                GraphSliderRow(
+                    "Zoom",
+                    selectedSettings.zoom.toFloat(),
+                    0.2f,
+                    4f,
+                    "%.1fx",
+                ) { zoom ->
+                    waypointSettings = waypointSettings.toMutableList().also { values ->
+                        values[selectedWaypointIndex] = values[selectedWaypointIndex].copy(zoom = zoom.toDouble())
+                    }
+                }
+            } else {
+                Text("Choose a route waypoint to set its manual or automatic visualisation stage.", style = MaterialTheme.typography.labelSmall)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${route.size} waypoints · ${scene.nodes.size} visible neurons", modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = { route = emptyList() }, enabled = route.isNotEmpty()) { Text("Clear") }
-                Button(onClick = { onSubmit(route) }, enabled = route.size >= 2 && !state.fpvBusy) {
+                OutlinedButton(onClick = {
+                    route = emptyList()
+                    waypointSettings = emptyList()
+                    selectedWaypointIndex = -1
+                }, enabled = route.isNotEmpty()) { Text("Clear") }
+                Button(onClick = {
+                    val latency = visualizationLatency.p95Milliseconds()
+                    onSubmit(route, waypointSettings, waypointSettings.firstOrNull()?.zoom ?: 1.0, latency)
+                }, enabled = route.size >= 2 && waypointSettings.size == route.size && !state.fpvBusy) {
                     Text(if (state.fpvBusy) "Submitting…" else "Render FPV")
                 }
             }
+            Text("Each waypoint stores a manual stage or Auto choice; the render job records its resolved stage per frame.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (scene.truncated) {
                 Text("This overview is sampled. Route-specific spatial tile rendering is available in the web FPV Studio.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -741,7 +940,18 @@ private fun MetricCard(label: String, value: String, glyph: String, accent: Colo
 }
 
 @Composable
-private fun NeuralActivityCard(snapshot: RemoteWorkspaceSnapshot, onOpenGraph: () -> Unit) {
+private fun NeuralActivityCard(
+    snapshot: RemoteWorkspaceSnapshot,
+    onOpenGraph: () -> Unit,
+    visualizationStage: Int,
+    visualizationAutomatic: Boolean,
+    visualizationZoom: Float,
+    highestVisualizationStage: Int,
+    visualizationLatency: VisualizationLatencyTracker,
+    onVisualizationStageChange: (Int) -> Unit,
+    onVisualizationAutomaticChange: (Boolean) -> Unit,
+    onZoomChanged: (Float) -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -751,7 +961,28 @@ private fun NeuralActivityCard(snapshot: RemoteWorkspaceSnapshot, onOpenGraph: (
                 }
                 TextButton(onClick = onOpenGraph) { Text("Explore") }
             }
-            NeuralNetworkCanvas(snapshot)
+            VisualizationControls(
+                stage = visualizationStage,
+                automatic = visualizationAutomatic,
+                highestAvailable = highestVisualizationStage,
+                onStageChange = onVisualizationStageChange,
+                onAutomaticChange = onVisualizationAutomaticChange,
+            )
+            val mode = if (visualizationStage <= 3) GraphDisplayMode.SyntheticColumns else GraphDisplayMode.Anatomical
+            GraphExplorerCanvas(
+                snapshot = snapshot,
+                displayMode = mode,
+                visualizationStage = minOf(visualizationStage, highestVisualizationStage),
+                visualizationLatency = visualizationLatency,
+                zoom = visualizationZoom,
+                rotation = 0f,
+                pan = Offset.Zero,
+                onTransform = { gestureZoom, _, _ ->
+                    onZoomChanged((visualizationZoom * gestureZoom).coerceIn(MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM))
+                },
+                modifier = Modifier.fillMaxWidth().height(148.dp),
+            )
+            GraphSliderRow("Zoom", visualizationZoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, "%.1fx", onZoomChanged)
         }
     }
 }
@@ -762,12 +993,19 @@ private fun GraphExplorerScreen(
     contentPadding: PaddingValues,
     onOpenAccount: () -> Unit,
     onRefresh: () -> Unit,
+    visualizationStage: Int,
+    visualizationAutomatic: Boolean,
+    visualizationZoom: Float,
+    highestVisualizationStage: Int,
+    visualizationLatency: VisualizationLatencyTracker,
+    onVisualizationStageChange: (Int) -> Unit,
+    onVisualizationAutomaticChange: (Boolean) -> Unit,
+    onZoomChanged: (Float) -> Unit,
 ) {
-    var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     var rotation by rememberSaveable { mutableFloatStateOf(0f) }
     var panX by rememberSaveable { mutableFloatStateOf(0f) }
     var panY by rememberSaveable { mutableFloatStateOf(0f) }
-    var displayMode by rememberSaveable { mutableStateOf(GraphDisplayMode.Anatomical) }
+    val displayMode = if (visualizationStage <= 3) GraphDisplayMode.SyntheticColumns else GraphDisplayMode.Anatomical
     val snapshot = state.snapshot
 
     Column(
@@ -811,31 +1049,24 @@ private fun GraphExplorerScreen(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            GraphDisplayMode.values().forEach { candidate ->
-                if (candidate == displayMode) {
-                    Button(onClick = { displayMode = candidate }, modifier = Modifier.weight(1f)) {
-                        Text(candidate.label)
-                    }
-                } else {
-                    OutlinedButton(onClick = { displayMode = candidate }, modifier = Modifier.weight(1f)) {
-                        Text(candidate.label)
-                    }
-                }
-            }
-        }
+        VisualizationControls(
+            stage = visualizationStage,
+            automatic = visualizationAutomatic,
+            highestAvailable = highestVisualizationStage,
+            onStageChange = onVisualizationStageChange,
+            onAutomaticChange = onVisualizationAutomaticChange,
+        )
 
         GraphExplorerCanvas(
             snapshot = snapshot,
             displayMode = displayMode,
-            zoom = zoom,
+            visualizationStage = minOf(visualizationStage, highestVisualizationStage),
+            visualizationLatency = visualizationLatency,
+            zoom = visualizationZoom,
             rotation = rotation,
             pan = Offset(panX, panY),
             onTransform = { gestureZoom, gestureRotation, gesturePan ->
-                zoom = (zoom * gestureZoom).coerceIn(MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM)
+                onZoomChanged((visualizationZoom * gestureZoom).coerceIn(MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM))
                 rotation = (rotation + gestureRotation).coerceIn(-180f, 180f)
                 panX += gesturePan.x
                 panY += gesturePan.y
@@ -846,12 +1077,14 @@ private fun GraphExplorerScreen(
         )
 
         GraphControls(
-            zoom = zoom,
+            zoom = visualizationZoom,
             rotation = rotation,
-            onZoomChange = { zoom = it },
+            onZoomChange = {
+                onZoomChanged(it)
+            },
             onRotationChange = { rotation = it },
             onReset = {
-                zoom = 1f
+                onZoomChanged(1f)
                 rotation = 0f
                 panX = 0f
                 panY = 0f
@@ -865,6 +1098,8 @@ private fun GraphExplorerScreen(
 private fun GraphExplorerCanvas(
     snapshot: RemoteWorkspaceSnapshot?,
     displayMode: GraphDisplayMode,
+    visualizationStage: Int,
+    visualizationLatency: VisualizationLatencyTracker,
     zoom: Float,
     rotation: Float,
     pan: Offset,
@@ -883,6 +1118,11 @@ private fun GraphExplorerCanvas(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0xFF0B1018))
+            .drawWithContent {
+                val started = System.nanoTime()
+                drawContent()
+                visualizationLatency.record((System.nanoTime() - started).coerceAtLeast(0L) / 1_000_000.0)
+            }
             .pointerInput(Unit) {
                 detectTransformGestures { _, gesturePan, gestureZoom, gestureRotation ->
                     onTransform(gestureZoom, gestureRotation, gesturePan)
@@ -896,6 +1136,10 @@ private fun GraphExplorerCanvas(
         } else {
             graphNodePositions(layers, size.width, size.height)
         }
+        val displayPositions = display?.nodes?.associate { node ->
+            node.id to displayPoint(node.position, displayProjection, size.width, size.height)
+        }.orEmpty()
+        val displayNodesById = display?.nodes?.associateBy { it.id }.orEmpty()
         val activeDisplayIds = buildSet {
             layers.forEach { layer ->
                 layer.activeIndices.forEach { activeIndex ->
@@ -933,20 +1177,32 @@ private fun GraphExplorerCanvas(
                 drawContext.canvas.save()
                 drawContext.canvas.clipPath(membranePath)
             }
-            for (line in 1..5) {
-                val y = size.height * line / 6f
-                drawLine(Color(0xFF233044).copy(alpha = 0.45f), Offset(0f, y), Offset(size.width, y), 1f)
-            }
             if (display != null) {
+                val usedStraightSources = mutableSetOf<String>()
+                val usedStraightTargets = mutableSetOf<String>()
                 displayLines.forEach { line ->
-                    val points = line.points.map { displayPoint(it, displayProjection, size.width, size.height) }
-                    val start = nodeIds[line.sourceId]?.let { key -> positions[key.first].getOrNull(key.second) }
-                    val target = nodeIds[line.targetId]?.let { key -> positions[key.first].getOrNull(key.second) }
-                    val route = (if (points.size >= 2) points else listOfNotNull(start, target))
+                    val shouldDraw = when {
+                        visualizationStage == 1 || visualizationStage == 4 -> false
+                        visualizationStage <= 6 -> !line.isPath
+                        else -> line.isPath && display.volumetricClearanceVerified
+                    }
+                    if (!shouldDraw) return@forEach
+                    if (visualizationStage == 5 &&
+                        (!usedStraightSources.add(line.sourceId) || !usedStraightTargets.add(line.targetId))
+                    ) return@forEach
+                    val start = displayPositions[line.sourceId]
+                        ?: nodeIds[line.sourceId]?.let { key -> positions[key.first].getOrNull(key.second) }
+                    val target = displayPositions[line.targetId]
+                        ?: nodeIds[line.targetId]?.let { key -> positions[key.first].getOrNull(key.second) }
+                    val sampledPath = visualizationStage >= 7
+                    val route = if (sampledPath) {
+                        line.points.map { displayPoint(it, displayProjection, size.width, size.height) }
+                    } else {
+                        listOfNotNull(start, target)
+                    }
                     if (route.size >= 2) {
                         val kind = line.kind.lowercase(Locale.ROOT)
                         val anatomicalPath = kind.contains("axon") || kind.contains("dendrite")
-                        if (displayMode == GraphDisplayMode.Anatomical && !anatomicalPath) return@forEach
                         val colour = if (anatomicalPath) {
                             stableNeuronColour(
                                 line.sourceId,
@@ -954,37 +1210,28 @@ private fun GraphExplorerCanvas(
                                 line.colourSlot,
                             )
                         } else displayLineColour(line.kind, displayMode)
-                        if (displayMode == GraphDisplayMode.Anatomical && anatomicalPath && line.radius > 0.0) {
-                            val projectionSpan = displayProjection?.let { maxOf(it.maxX - it.minX, it.maxY - it.minY) } ?: 1.0
-                            val halfWidth = (line.radius / projectionSpan * minOf(size.width, size.height) * 2.0)
-                                .toFloat()
-                                .coerceIn(1.8f, 9f)
-                            val polygon = androidx.compose.ui.graphics.Path().apply {
-                                route.zipWithNext().forEach { (a, b) ->
-                                    val direction = b - a
-                                    val length = direction.getDistance()
-                                    if (length > 1.0e-3f) {
-                                        val normal = Offset(-direction.y, direction.x) * (halfWidth / length)
-                                        moveTo((a + normal).x, (a + normal).y)
-                                        lineTo((a - normal).x, (a - normal).y)
-                                        lineTo((b - normal).x, (b - normal).y)
-                                        lineTo((b + normal).x, (b + normal).y)
-                                        close()
-                                    }
-                                }
-                            }
-                            drawPath(polygon, colour.copy(alpha = 0.94f))
-                            if (activeDisplayIds.contains(line.sourceId)) {
-                                drawPath(polygon, Color.White.copy(alpha = 0.38f))
-                            }
-                        } else {
-                            route.zipWithNext().forEach { (a, b) ->
-                                drawLine(colour, a, b, strokeWidth = 1.2f)
-                            }
+                        val physicalScale = displayProjection?.let { bounds ->
+                            minOf(
+                                (size.width - 48f) / (bounds.maxX - bounds.minX).coerceAtLeast(1.0e-9).toFloat(),
+                                (size.height - 48f) / (bounds.maxY - bounds.minY).coerceAtLeast(1.0e-9).toFloat(),
+                            )
+                        } ?: 1f
+                        val strokeWidth = when {
+                            visualizationStage in 2..3 || visualizationStage in 5..6 || visualizationStage == 7 -> 1f
+                            visualizationStage >= 8 -> (2.0 * line.radius).toFloat() * physicalScale
+                            else -> 1f
+                        }.coerceAtLeast(0.5f)
+                        route.zipWithNext().forEach { (a, b) ->
+                            drawLine(
+                                if (activeDisplayIds.contains(line.sourceId) && visualizationStage >= 7) Color.White else colour,
+                                a,
+                                b,
+                                strokeWidth = strokeWidth,
+                            )
                         }
                     }
                 }
-                display.markers.forEach { marker ->
+                if (visualizationStage >= 9 && display.volumetricClearanceVerified) display.markers.forEach { marker ->
                     val point = displayPoint(marker.position, displayProjection, size.width, size.height)
                     val lower = marker.kind.lowercase(Locale.ROOT)
                     val colour = when {
@@ -995,7 +1242,7 @@ private fun GraphExplorerCanvas(
                     val radius = if (lower.contains("synapse") && !lower.contains("post")) 4.5f else 3.5f
                     drawCircle(colour, radius, point)
                 }
-            } else if (topologyEdges.isNotEmpty()) {
+            } else if (topologyEdges.isNotEmpty() && visualizationStage in setOf(2, 3, 5, 6)) {
                 topologyEdges.forEach { edge ->
                     val start = nodeIds[edge.sourceId]?.let { key -> positions[key.first].getOrNull(key.second) }
                     val target = nodeIds[edge.targetId]?.let { key -> positions[key.first].getOrNull(key.second) }
@@ -1006,7 +1253,7 @@ private fun GraphExplorerCanvas(
                         drawLine(colour.copy(alpha = alpha), start, target, strokeWidth = 1.1f)
                     }
                 }
-            } else if (snapshot == null) {
+            } else if (snapshot == null && visualizationStage in setOf(2, 3, 5, 6)) {
                 // The disconnected screen is an explicitly labelled local
                 // demonstration. Never invent connection lines for a live
                 // workspace whose authoritative topology is unavailable.
@@ -1038,7 +1285,7 @@ private fun GraphExplorerCanvas(
                         stableNeuronColour(
                             nodeId,
                             0f,
-                            display.nodes.firstOrNull { it.id == nodeId }?.colourSlot,
+                            displayNodesById[nodeId]?.colourSlot,
                         )
                     } else {
                         columnColour
@@ -1050,13 +1297,29 @@ private fun GraphExplorerCanvas(
                             index == node
                         }
                     }
-                    if (active) {
-                        drawCircle(Color(0xFFFFB84A).copy(alpha = 0.22f), 11f, point)
-                        drawCircle(Color.White.copy(alpha = 0.9f), 6.3f, point, style = Stroke(width = 1.3f))
+                    val pixelNeuron = visualizationStage <= 2 || visualizationStage in 4..7
+                    val physicalSomaRadius = if (visualizationStage >= 8 && display != null && display.volumetricClearanceVerified) {
+                        nodeId?.let { displayNodesById[it]?.somaRadiusMM }?.let { radiusMM ->
+                            val projection = displayProjection
+                            if (projection == null) null else radiusMM.toFloat() * minOf(
+                                (size.width - 48f) / (projection.maxX - projection.minX).coerceAtLeast(1.0e-9).toFloat(),
+                                (size.height - 48f) / (projection.maxY - projection.minY).coerceAtLeast(1.0e-9).toFloat(),
+                            )
+                        }
+                    } else null
+                    val neuronRadius = when {
+                        visualizationStage == 3 -> 1.5f
+                        physicalSomaRadius != null -> physicalSomaRadius
+                        else -> 0.5f
+                    }.coerceAtLeast(0.5f)
+                    val activityColour = if (active) Color.White else colour.copy(alpha = 0.35f)
+                    if (pixelNeuron) {
+                        drawRect(activityColour, topLeft = Offset(point.x - 0.5f, point.y - 0.5f), size = Size(1f, 1f))
+                    } else {
+                        drawCircle(activityColour, neuronRadius, point)
                     }
-                    drawCircle(colour.copy(alpha = if (active) 1f else 0.85f), if (displayMode == GraphDisplayMode.Anatomical) 6f else if (active) 4.7f else 3.5f, point)
                 }
-                if (displayMode == GraphDisplayMode.SyntheticColumns) drawLine(
+                if (visualizationStage <= 3 && displayMode == GraphDisplayMode.SyntheticColumns) drawLine(
                     columnColour.copy(alpha = 0.7f),
                     Offset(nodes.firstOrNull()?.x ?: 0f, 16f),
                     Offset(nodes.firstOrNull()?.x ?: 0f, size.height - 16f),

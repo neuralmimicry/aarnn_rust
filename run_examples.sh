@@ -10,9 +10,9 @@ cd "$SCRIPT_DIR"
 
 export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 
-# Script to start two example networks:
-# 1. A standalone network running in a single process.
-# 2. A distributed network (orchestrator + node) with autodiscovery.
+# Start one local distributed brain with its local orchestrator serving as the
+# cluster master and workstation I/O ingress. Workers join that brain using
+# separate stable node IDs; the dashboard probe verifies this distinction.
 
 # Initialise before installing traps so an early prerequisite failure can
 # still run the cleanup handler safely under `set -u`.
@@ -121,7 +121,9 @@ validate_port_start() {
     fi
 }
 
-ORCH_PORT_START="${AARNN_ORCH_PORT_START:-50051}"
+# Choose an isolated high port by default so workers from a previous example
+# run that still retry 50051 cannot silently join this new local cell.
+ORCH_PORT_START="${AARNN_ORCH_PORT_START:-$((30000 + RANDOM % 20000))}"
 NODE1_PORT_START="${AARNN_NODE1_PORT_START:-50075}"
 NODE2_PORT_START="${AARNN_NODE2_PORT_START:-50087}"
 WEB_UI_PORT_START="${AARNN_WEB_PORT_START:-8080}"
@@ -163,33 +165,47 @@ fi
 eval "$(python3 "$SCRIPT_DIR/scripts/local_management_env.py" \
     --runtime-root "$EXAMPLE_RUNTIME_ROOT" --shell)"
 
-# An explicit audio source is loaded by the native Rust UI at startup.  Keep
-# this opt-in so the example launcher remains useful on machines without the
-# operator's media files, while validating the requested source before any
-# cluster processes are started.
+# Configure a sensory layer before any workers load the brain. Audio playback
+# remains opt-in; this lets the user choose a file later from the dashboard
+# without starting with a network that has nowhere to route its samples.
+AARNN_AUDIO_SENSORY_NEURONS="${AARNN_AUDIO_SENSORY_NEURONS:-64}"
+case "$AARNN_AUDIO_SENSORY_NEURONS" in
+    ''|*[!0-9]*)
+        echo "AARNN_AUDIO_SENSORY_NEURONS must be a positive integer" >&2
+        exit 1
+        ;;
+esac
+if [ "$AARNN_AUDIO_SENSORY_NEURONS" -lt 1 ]; then
+    echo "AARNN_AUDIO_SENSORY_NEURONS must be at least 1" >&2
+    exit 1
+fi
+if [ "$AARNN_AUDIO_SENSORY_NEURONS" -gt 65536 ]; then
+    echo "AARNN_AUDIO_SENSORY_NEURONS must be at most 65536" >&2
+    exit 1
+fi
+export AARNN_AUDIO_SENSORY_NEURONS
+
 if [ -n "${AARNN_AUDIO_FILE:-}" ]; then
     if [ ! -f "$AARNN_AUDIO_FILE" ] || [ ! -r "$AARNN_AUDIO_FILE" ]; then
         echo "AARNN_AUDIO_FILE is not a readable regular file: $AARNN_AUDIO_FILE" >&2
         exit 1
     fi
-    AARNN_AUDIO_SENSORY_NEURONS="${AARNN_AUDIO_SENSORY_NEURONS:-64}"
-    case "$AARNN_AUDIO_SENSORY_NEURONS" in
-        ''|*[!0-9]*)
-            echo "AARNN_AUDIO_SENSORY_NEURONS must be a positive integer" >&2
-            exit 1
-            ;;
-    esac
-    if [ "$AARNN_AUDIO_SENSORY_NEURONS" -lt 1 ]; then
-        echo "AARNN_AUDIO_SENSORY_NEURONS must be at least 1" >&2
-        exit 1
-    fi
-    if [ "$AARNN_AUDIO_SENSORY_NEURONS" -gt 65536 ]; then
-        echo "AARNN_AUDIO_SENSORY_NEURONS must be at most 65536" >&2
-        exit 1
-    fi
-    export AARNN_AUDIO_FILE AARNN_AUDIO_SENSORY_NEURONS
+    export AARNN_AUDIO_FILE
     echo "Native Rust UI audio source: $AARNN_AUDIO_FILE (sensory neurons: $AARNN_AUDIO_SENSORY_NEURONS)"
 fi
+
+# A UI file picker is commonly used after startup, so create the run-local
+# sensory contract regardless of whether playback was requested on the
+# command line. The helper preserves any positive width already configured in
+# either input document and never edits the checked-in files.
+AUDIO_IO_CONFIG_PATH="$EXAMPLE_RUNTIME_ROOT/audio-input-config.json"
+python3 "$SCRIPT_DIR/scripts/qa/prepare_audio_io_contract.py" \
+    --config "$CONFIG_PATH" \
+    --network "$NETWORK_PATH" \
+    --output "$AUDIO_IO_CONFIG_PATH" \
+    --sensory-neurons "$AARNN_AUDIO_SENSORY_NEURONS"
+CONFIG_PATH="$AUDIO_IO_CONFIG_PATH"
+echo "Prepared managed sensory I/O contract: $CONFIG_PATH"
 
 # The normal example uses the checked-in snapshot unchanged. The optional
 # verification mode makes a private growth-capable copy, then exercises the
@@ -268,14 +284,23 @@ fi
 export NMD_TFLITE_ALLOW_LARGE=1
 
 EXECUTION_ARGS=(
-    --execution-mode distributed,sharded
+    --execution-mode "distributed,sharded"
     --execution-scope cluster
     --execution-desired-shards 2
 )
 
-echo "Starting Distributed Orchestrator (Brain ID: cluster_master)..."
-NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 NM_DISTRIBUTED_AUTOSTART=1 \
-"$BIN_DIR/aarnn_rust" --orchestrator --brain-id cluster_master \
+CLUSTER_BRAIN_ID="cluster_master"
+NODE1_ID="node_1"
+NODE2_ID="node_2"
+
+# Keep the orchestrator's advertised autostart state and each worker's local
+# managed Runner state consistent. A per-command assignment on only the
+# orchestrator leaves sensory admission paused on the selected worker.
+export NM_DISTRIBUTED_AUTOSTART=1
+
+echo "Starting local cluster master and I/O ingress (Brain ID: $CLUSTER_BRAIN_ID)..."
+NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 \
+"$BIN_DIR/aarnn_rust" --orchestrator --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$ORCH_PORT" --advertise-addr "127.0.0.1:$ORCH_PORT" \
     "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" "${EXECUTION_ARGS[@]}" \
     "${NATIVE_UI_ARGS[@]}" > orchestrator.log 2>&1 &
@@ -285,15 +310,21 @@ PIDS=("$!")
 sleep 2
 require_process "${PIDS[0]}" "Orchestrator"
 
-echo "Starting Distributed Nodes (Brain IDs: node_1, node_2) connecting to orchestrator at http://127.0.0.1:$ORCH_PORT ..."
-"$BIN_DIR/aarnn_rust" --node --brain-id node_1 \
+echo "Starting worker nodes $NODE1_ID and $NODE2_ID for brain $CLUSTER_BRAIN_ID at http://127.0.0.1:$ORCH_PORT ..."
+# These workers have no matching local copy of the run-local, I/O-aligned
+# startup snapshot. Do not let the default repository config start a placeholder
+# network before the orchestrator's LoadNetwork command arrives; the loaded
+# cluster snapshot is the authority for topology and sensory width.
+NM_PRELOAD_NODE_NETWORK=0 \
+"$BIN_DIR/aarnn_rust" --node --node-id "$NODE1_ID" --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$NODE1_PORT" --advertise-addr "127.0.0.1:$NODE1_PORT" \
     --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_1.log 2>&1 &
 NODE1_PID="$!"
 PIDS+=("$!")
 sleep 1
 require_process "${PIDS[1]}" "Node node_1"
-"$BIN_DIR/aarnn_rust" --node --brain-id node_2 \
+NM_PRELOAD_NODE_NETWORK=0 \
+"$BIN_DIR/aarnn_rust" --node --node-id "$NODE2_ID" --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$NODE2_PORT" --advertise-addr "127.0.0.1:$NODE2_PORT" \
     --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_2.log 2>&1 &
 NODE2_PID="$!"
@@ -331,6 +362,22 @@ if ! curl --fail --silent --show-error --max-time 1 "$WEB_UI_URL/api/config" >/d
     exit 1
 fi
 
+# Process creation is not proof that a worker joined or hosts the intended
+# brain. Check the same status projection as the dashboard, including stable
+# NodeIds, active brain membership, and the absence of worker-ID brain records.
+if ! CLUSTER_WORKERS="$(python3 "$SCRIPT_DIR/scripts/qa/wait_for_local_cluster.py" \
+    --base-url "$WEB_UI_URL" \
+    --orchestrator "http://127.0.0.1:$ORCH_PORT" \
+    --brain-id "$CLUSTER_BRAIN_ID" \
+    --worker "$NODE1_ID=127.0.0.1:$NODE1_PORT" --pid "$NODE1_ID=$NODE1_PID" \
+    --worker "$NODE2_ID=127.0.0.1:$NODE2_PORT" --pid "$NODE2_ID=$NODE2_PID" \
+    --timeout "${AARNN_CLUSTER_READY_TIMEOUT_S:-45}")"; then
+    echo "Distributed cluster did not become ready; recent service logs follow:" >&2
+    tail -n 60 orchestrator.log node_1.log node_2.log webui.log >&2
+    exit 1
+fi
+echo "Cluster worker readiness verified: $CLUSTER_WORKERS"
+
 if [ "$VERIFY_HIERARCHICAL_SHARDING" = "1" ]; then
     python3 "$SCRIPT_DIR/scripts/qa/verify_hierarchical_sharding.py" \
         --base-url "$WEB_UI_URL" \
@@ -352,6 +399,8 @@ fi
 
 echo "----------------------------------------------------------------"
 echo "The distributed example network is running."
+echo "Local cluster master / I/O ingress brain: $CLUSTER_BRAIN_ID"
+echo "Joined workers: $CLUSTER_WORKERS"
 echo "Orchestrator gRPC: http://127.0.0.1:$ORCH_PORT"
 echo "Web dashboard URL (port $WEB_UI_PORT): $WEB_UI_URL"
 echo "Native Rust UI: $NATIVE_UI_STATUS."

@@ -18,6 +18,27 @@ fn container_entrypoint_forwards_provider_bound_node_identity() {
     assert!(entrypoint.contains("stable-node"));
     assert!(entrypoint.contains("default_args+=(--node-id \"${AARNN_NODE_ID}\")"));
     assert!(entrypoint.contains("A deployment may provide a host- or provider-bound identity"));
+    assert!(entrypoint.contains("--brain-id \"${AARNN_BRAIN_ID:-cluster_master}\""));
+}
+
+#[test]
+fn container_cluster_wrappers_keep_worker_ids_separate_from_the_hosted_brain() {
+    let node_launcher = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/run_container_node.sh"
+    ))
+    .expect("node container launcher must be present");
+    assert!(node_launcher.contains("NODE_ID=\"${NODE_ID:-node_1}\""));
+    assert!(node_launcher.contains("BRAIN_ID=\"${BRAIN_ID:-cluster_master}\""));
+    assert!(node_launcher.contains("--node-id \"${NODE_ID}\""));
+    assert!(node_launcher.contains("--brain-id \"${BRAIN_ID}\""));
+
+    let orchestrator_launcher = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/run_container_orchestrator.sh"
+    ))
+    .expect("orchestrator container launcher must be present");
+    assert!(orchestrator_launcher.contains("BRAIN_ID=\"${BRAIN_ID:-cluster_master}\""));
 }
 
 #[test]

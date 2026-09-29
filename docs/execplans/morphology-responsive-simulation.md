@@ -27,6 +27,7 @@ the morphology brief supplied on 2026-09-24, and the repository invariants in
 | COM-01..07 | `src/topology_model.rs::ExecutionPlanRegistry` | contract activation metadata; full Runner adoption remains staged |
 | CORE-01..04, RUN-01..04 | `Runner` async morphology path and runtime worker boundary | no UI dependency in the new contract; load isolation integration remains open |
 | VIS-01..11, UI-01..04 | `src/ui.rs`, `web_ui/app.js`, Android `MainActivity.kt` and iOS `AarnnConnectomeView.swift` | shared display vocabulary, adjacency-aware colour slots, volumetric neurite polygons, activity brightness cues and versioned `display_snapshots`; generated physical routes are consumed by anatomical adapters |
+| VIS-12 | User request 2026-09-28; `docs/specifications/morphology-and-responsive-simulation.md` | one nine-stage manual/automatic selector across four dashboards; per-waypoint FPV stage keyframes; presentation-only work with verified volumetric clearance for stages 7–9 |
 | DIST-01..03 | stable shard plan, causal transport and phase gate tests | physical route identity is independent of placement; distributed morphology activation remains next |
 | QA-01..04 | existing morphology, UI and phase gate suites | three new deterministic contract tests |
 
@@ -92,6 +93,39 @@ path already has typed identities, topology/partition generations, route
 validation and activation at logical boundaries. Rust UI has `Conventional` and
 `Aarnn` layout modes; web UI has matching `conventional` and `aarnn` modes.
 
+The current user changes at discovery time are limited to
+`webots_world/worlds/.multi_neuroworld.wbproj` and
+`webots_world/worlds/multi_neuroworld.wbt`; neither is part of this work.
+The relevant UI surfaces are `src/ui.rs` plus `src/ui/anatomy.rs`,
+`web_ui/index.html`/`web_ui/app.js`, Android `MainActivity.kt` and
+`RemoteAarnnClient.kt`, and iOS `AarnnConnectomeView.swift` plus
+`AarnnRemoteSession.swift`. FPV clients are Rust desktop, web and Android;
+they share the request/renderer in `src/fpv_render_jobs.rs`. Workspace metadata
+was confirmed with `cargo metadata --format-version 1 --no-deps`.
+
+The 2026-09-29 cluster-view follow-up is scoped to the native workstation path
+in `src/ui.rs`. `decode_cluster_snapshot_projection` and
+`merge_cluster_snapshot_projection` provide a bounded aggregate
+`runner::Snapshot`; the cluster stage resolver currently consults only
+`Topology3D`, and the render path hard-codes
+`snapshot_topology_allowed = Standalone`. By contrast, `Snapshot` also carries
+the versioned `procedural_reconstruction` contract. Thus anatomy present in a
+cluster snapshot is not necessarily eligible to reach the native anatomical
+renderer. Synthetic cluster edges are separately computed by
+`compute_edges_from_snapshot` on a named background thread, but that function
+uses the global Rayon pool; while the cache is empty, the stage-1..3 canvas can
+show no lines. The screenshot reports “available through 3” and zero cached
+connections, consistent with those two independent gaps. The screenshot's
+“(busy)” connection-count labels also indicate that the connection cache is not
+ready; status should distinguish snapshot/projection loading from truly absent
+connections. The relevant cluster result and stale-generation checks are in
+`ClusterSnapshotMsg` handling and `cluster_edge_result_is_current`.
+
+The worktree already contains broad, unrelated edits across Rust, web, mobile,
+launchers, QA and generated/runtime data. These will be preserved; edits in
+this follow-up are limited to the native cluster projection, focused tests,
+and this plan unless evidence requires a narrower supporting change.
+
 ## Architecture and safety constraints
 
 The new contract uses stable `(value, generation)` anatomical IDs and treats
@@ -107,6 +141,11 @@ delivery. Network arrival/transport time is not consulted.
 The contract is framework-free and does not import UI, HTTP, gRPC, database,
 OS, GPU or media dependencies. It is a reference boundary, not a claim that
 the old Runner has already migrated to stable anatomical IDs.
+
+All stage selection and display filtering remain presentation state. The
+neural execution path owns no visualisation policy, camera state, pixel buffer
+or render latency metric. Stages 7–9 require an explicit snapshot clearance
+witness; a client must not infer it from provenance or a successful projection.
 
 ## Milestones
 
@@ -144,7 +183,111 @@ Bind accepted change sets to affected stable shard owners and the existing
 `ExecutionPlanRegistry`; activate only at a future logical boundary after both
 endpoint owners prepare. Add fault/retry/reclamation tests before enabling it.
 
+### Milestone 5 — Staged cross-product visualisation
+
+Add one versioned nine-stage presentation policy, shared fixtures and a
+manual/Auto control across Rust desktop, web, Android and iOS. Auto uses zoom
+and measured visualisation latency with documented hysteresis. Dashboard
+renderers filter the existing immutable display contract to the selected
+stage, retain activity as brightness-only telemetry, and keep 3D clearance
+validation separate from neural execution. FPV route points carry manual or
+automatic stage keyframes into immutable render requests; workers resolve the
+stage per frame while preserving bounded, resumable MP4 rendering. A client
+must show when source geometry cannot safely support a requested stage.
+
 ## Progress
+
+- [x] `2026-09-29 10:00Z` Fixed the C. elegans native cluster dashboard
+  projection. Cluster snapshot merging now retains the richest immutable
+  procedural reconstruction found on any shard. A bounded background worker
+  builds synthetic and anatomical display contracts for the selected cluster;
+  stage availability and anatomical rendering consume those contracts, and
+  stale network/step/revision/request results are fenced. Cluster edge scans
+  no longer use the global Rayon pool, and the dashboard reports whether edges
+  are waiting, building, incomplete or absent. Anatomical contracts retain
+  logical connectome edges even when a physical route was rejected.
+
+  The supplied workspace snapshot confirms 422 source neurons and 3,682
+  logical connections, but is schema 3 and has no measured soma radius. It
+  contains 208 reconstructed physical routes; without soma-radius and clearance
+  evidence the selector correctly stops at stage 6. The
+  rejected-route regression passes. Verification: 33 focused native
+  topology-presentation tests; `cargo xtask qa run --suite staged-visualisation`;
+  the explicit
+  `anatomical_display_keeps_logical_edges_when_route_reconstruction_is_rejected`
+  test; `cargo fmt --all -- --check`; `node --check` for the web client and
+  policy test; `git diff --check`; and the exact simulator release build,
+  `cargo build --release --locked --no-default-features --features
+  engine_runtime,ui,robot_io,cuda --bin aarnn_rust` (5m46s; warnings only).
+  The supplied run showed saturated CPU
+  and spike-forwarding timeouts; the live Webots cluster was not relaunched, so
+  no post-fix screenshot or real-time performance claim is made.
+
+- [x] `2026-09-28 11:35Z` Repaired the native cluster-master visualisation regressions.
+  The cluster view has no local display contract, so the stage resolver capped
+  it at synthetic neurons; the legacy renderer also suppressed all anatomical
+  matrix overlays, and the Graphic EQ deliberately decayed its bands in cluster
+  mode. The stage resolver now uses the selected cluster's topology and merged
+  matrix cache for legacy stages 4–6; the renderer applies stage-specific pixel
+  sizes and connection visibility, while stages 7–9 remain clearance-gated.
+  The Graphic EQ now displays and smooths the master audio input spectrum.
+  Cluster edge generation runs on a worker and rejects stale results. Thirteen
+  focused native UI tests and the registered `staged-visualisation` QA lane
+  pass. `cargo build --release --locked --all-features --bin aarnn_rust --bin
+  web_ui` passes (4m23s; existing compiler warnings only), as do
+  `cargo fmt --all -- --check` and `git diff --check`.
+
+- [x] `2026-09-28 09:24Z` Discovery for VIS-12 is complete: the Rust workspace
+  has one primary package; the dashboard has Rust, web, Android and iOS
+  surfaces; Rust/web/Android have FPV planners; all clients consume the v2
+  display snapshot; web display projection already uses `spawn_blocking`, and
+  FPV frames already run as independent jobs. Existing snapshots do not expose
+  a volumetric-clearance witness, so stages 7–9 must remain unavailable until
+  that is added and populated. Verified by `cargo metadata --format-version 1
+  --no-deps`, source/reference searches and inspection of the snapshot/FPV
+  request paths. The two dirty Webots world files are unrelated and preserved.
+
+- [x] `2026-09-28 10:17Z` VIS-12 implementation is present across Rust desktop,
+  web, Android and the portable iOS view. All clients expose the same nine
+  stages, Auto zoom/latency policy and per-waypoint FPV settings where a planner
+  exists. A versioned shared QA fixture now checks stage IDs, labels, zoom and
+  latency bands, dwell and physical-clearance gating. Browser policy checks and
+  Android `:app:testDebugUnitTest` pass; Rust policy tests pass (4 tests), the
+  FPV render suite passes (10 tests), and the committed-geometry regression
+  verifies exact sampled 3D endpoints and lengths. The geometry fixture now
+  places its hidden-layer dendrite at the legacy model's actual layer index.
+  FPV requests/status capture policy version 1 and reject unknown versions;
+  old manifests default to version 1. Android SDK 36 and Java 21 were supplied by
+  environment variables; no local SDK configuration was written. iOS cannot be
+  compiled here because Swift/Xcode are unavailable. The legacy display model
+  provides no physical soma/neurite radii or clearance witness, so its UI
+  correctly caps at stage 6; new contract geometry may expose stages 7–9 only
+  when the witness and measured radii are present. `webots_world/worlds/` dirty
+  files remain unrelated and preserved.
+
+- [x] `2026-09-28 10:33Z` Final VIS-12 verification passed. The registered
+  `staged-visualisation` suite passed its shared policy fixture, four Rust
+  policy tests and committed-growth geometry regression; the FPV renderer suite
+  passed all 11 tests. `anatomical-render-browser` passed its feature-enabled
+  native checks and actual Chrome canvas assertions for stage filtering,
+  repeated pixels and membrane clipping (bundle:
+  `target/qa/anatomy/run-1n_ed93b`). Android `:app:testDebugUnitTest` passed
+  with Java 21 and the installed SDK (`--rerun-tasks`, 26 tasks executed).
+  `cargo fmt --all -- --check` and
+  `git diff --check` passed. The iOS source could not be compiled because this
+  host has no Swift/Xcode toolchain; device/GPU checks remain separate evidence
+  gates. The neural traversal path consumes no visualisation stage or latency;
+  the tested selection and render products remain read-only presentation data.
+
+- [x] `2026-09-28 10:47Z` Fixed the executable-only build regression reported
+  by `run_examples.sh`: `src/ui.rs` is compiled under both the library and
+  executable crate roots, but the executable had not declared the new
+  presentation and FPV modules. Added those same source modules to
+  `src/main.rs` behind the existing `ui` feature. The exact launcher build,
+  `cargo build --release --locked --all-features --bin aarnn_rust --bin web_ui`,
+  now passes; `cargo xtask qa run --suite staged-visualisation`, formatting and
+  diff-whitespace checks pass again. Existing compiler warnings remain
+  non-fatal.
 
 - [x] `2026-09-24` Diagnosed the output-raster mismatch. `Runner` was
   evaluating every configured output row, importing/startup was repairing empty
@@ -528,6 +671,32 @@ unchanged. The generated anatomy is not yet a distributed structural commit.
 
 ## Surprises & Discoveries
 
+- `run_examples.sh` builds `src/main.rs` with every feature, while the
+  visualisation and FPV unit suites primarily compiled `src/lib.rs`. These
+  roots each compile the shared `src/ui.rs`, but maintain separate module
+  declarations. The library-only checks therefore missed two modules required
+  by the executable references. Declaring the canonical `src/visualization.rs`
+  and `src/fpv_render_jobs.rs` source files in `src/main.rs` closes the gap
+  without creating a second implementation. The launcher's exact release build
+  passes after this correction.
+
+- The geometry regression fixture originally stored its hidden dendrite at
+  layer index zero, while the legacy adapter indexes hidden dendrites after the
+  sensory layer. Its earlier assertion only proved that some dendrite path was
+  present, not that the configured hidden branch was displayed. The fixture now
+  uses the canonical hidden-layer slot and matches committed samples by stable
+  owner and anatomical kind.
+- The legacy renderer stores segment coordinates as `f32`. Display snapshots
+  preserve those promoted coordinates exactly; comparing their `f64` arc length
+  to the legacy `Point3::dist` result needs a small rounding tolerance. The
+  physical radii remain absent and are not fabricated for display.
+- The native cluster projection is a merged `Runner::Snapshot`, not the
+  standalone UI display-contract snapshot. Reusing standalone capability data
+  silently capped the cluster slider and hid its available legacy matrix graph.
+  Cluster graph extraction also ran synchronously while polling the snapshot
+  channel, so it is now presentation-worker work and its result is fenced by
+  network, assignment, snapshot step, density and request generation.
+
 - The shipped 3x70 hidden-cell configuration reproduces the reported transition
   at 500 ms: development calls `Runner::resize_sensory` and `resize_output`,
   which rebuilt all morphology from the weight matrices. Seed 42's synchronous
@@ -613,6 +782,21 @@ The WebGL surface is a separately scoped robot-body simulator with its own
 records and is therefore excluded from neural anatomical/synthetic parity.
 
 ## Decision Log
+
+- `2026-09-28 VIS-12-001`: Use one ordered nine-stage presentation policy in
+  each client, checked against `qa/fixtures/visualization/complexity-policy-v1.json`.
+  Auto combines zoom and a bounded p95 visualisation-latency sample, downshifts
+  promptly and upshifts one stage after a 1.5-second dwell. FPV requests capture
+  policy version, per-waypoint mode, stage and zoom plus planner latency, and
+  publish the version with the immutable resolved frame track, so render workers
+  do not depend on their own load or neural scheduling. Detailed neurites use
+  committed sampled coordinates and physical radii. Stages 7–9 require both
+  measured soma/neurite radii and an explicit geometry-clearance witness;
+  legacy snapshots remain capped at stage 6 when those records are absent.
+  Authority: VIS-12, `INV-007`/`INV-008` presentation isolation and the user's
+  2026-09-28 stage/physical-length requirements. Evidence: cross-client policy
+  fixture, Rust policy and render tests, Android unit suite and browser checks;
+  iOS compilation remains unverified without Apple tooling.
 
 - `2026-09-24 MORPH-021`: I/O resizing appends/removes only peripheral ownership
   and contacts, retaining hidden arbors, soma positions and membrane state.

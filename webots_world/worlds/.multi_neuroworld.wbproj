@@ -7,4 +7,3 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: HEXAPOD_01:hex_s_26_head_camera;1;1.33333;0;0

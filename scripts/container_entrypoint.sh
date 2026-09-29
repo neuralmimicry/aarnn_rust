@@ -19,8 +19,8 @@ case "$workload" in
         default_args=(
             --orchestrator
             --grpc-addr "${AARNN_GRPC_ADDR:-0.0.0.0:50051}"
-            --brain-id "${AARNN_BRAIN_ID:-orchestrator}"
-            --execution-mode distributed,sharded
+            --brain-id "${AARNN_BRAIN_ID:-cluster_master}"
+            --execution-mode "distributed,sharded"
             --execution-scope cluster
         )
         ;;
@@ -30,8 +30,8 @@ case "$workload" in
             --node
             --grpc-addr "${AARNN_GRPC_ADDR:-0.0.0.0:50051}"
             --orchestrator-addr "${AARNN_ORCHESTRATOR_ADDR:-http://orchestrator:50051}"
-            --brain-id "${AARNN_BRAIN_ID:-node}"
-            --execution-mode distributed,sharded
+            --brain-id "${AARNN_BRAIN_ID:-cluster_master}"
+            --execution-mode "distributed,sharded"
             --execution-scope cluster
         )
         ;;

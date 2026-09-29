@@ -28,6 +28,14 @@ route to the pod overlay. Until membership and scheduling state are externalised
 orchestrator replicas are intentionally unsupported because they form independent
 cluster views.
 
+Keep the operator resource tree, each brain's ownership tree and physical
+cluster placement separate. In a local cell, the singleton orchestrator also
+serves as cluster master and workstation I/O ingress; worker node IDs remain
+separate from the brain IDs they host. The Rust UI's multiple remote
+orchestrator connections are independent endpoint sessions, not a delegated
+parent hierarchy. See [distributed hierarchy](architecture/distributed-hierarchy.md)
+and [ADR-0006](architecture/decisions/ADR-0006-cluster-brain-node-hierarchy.md).
+
 ## Causal migration boundary
 
 The repository now contains additive reference contracts for the distributed

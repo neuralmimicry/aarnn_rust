@@ -6,7 +6,9 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
+require(path.join(root, 'web_ui/visualization-policy.js'));
 const source = fs.readFileSync(path.join(root, 'web_ui/app.js'), 'utf8');
+const policySource = fs.readFileSync(path.join(root, 'web_ui/visualization-policy.js'), 'utf8');
 function extract(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, name);
@@ -14,11 +16,18 @@ function extract(name) {
   return source.slice(start, end < 0 ? source.length : end);
 }
 const functions = ['displayIdKey', 'stableNeuronColour', 'buildContractGraph', 'rotate',
-  'anatomicalMembraneHull', 'drawTubePolygon', 'drawNodes', 'drawEarlyNodes', 'drawNetwork', 'rebuildGraph'].map(extract).join('\n');
+  'visualizationSnapshots', 'maximumVisualizationStage', 'resolvedVisualizationStage',
+  'cullScreenSpaceNodes', 'anatomicalMembraneHull', 'drawTubePolygon', 'drawNodes',
+  'drawEarlyNodes', 'drawNetwork', 'rebuildGraph'].map(extract).join('\n');
+assert.match(source, /const sensoryActive = active\.sensory \? active\.sensory\.indices \|\| \[\] : \[\]/,
+  'sensory activity must be wired into the node renderer');
+assert.match(source, /drawNodes\(nodes\.sensory,[^\n]*sensoryActive/,
+  'sensory nodes must receive their live activity indices');
 const fixture = JSON.parse(fs.readFileSync(path.join(root, 'qa/fixtures/morphology/anatomical-stability.json')));
-const context = { state: { snapshot: { display_snapshots: { anatomical: fixture } }, render: { layout: 'aarnn' } }, drawNetwork() {}, console };
+const context = { state: { snapshot: { display_snapshots: { anatomical: fixture } }, render: { layout: 'aarnn' } }, drawNetwork() {}, console,
+  visualizationPolicy: globalThis.AARNNVisualizationPolicy };
 vm.createContext(context);
-vm.runInContext(functions + '\ndrawNetwork = () => {}; function buildGraph(snapshot, layout) { return buildContractGraph(snapshot, layout); }', context);
+vm.runInContext(functions + '\ndrawNetwork = () => {}; function buildGraph(snapshot, layout) { return buildContractGraph(snapshot, layout); } function refreshSnapshotForView() { state.graph = null; }', context);
 assert.notEqual(vm.runInContext("displayIdKey({value:'2305843013508661249',generation:1})", context), vm.runInContext("displayIdKey({value:'2305843013508661250',generation:1})", context));
 assert.equal(vm.runInContext("displayIdKey({value:2305843013508661249,generation:1})", context), '', 'unsafe legacy numeric identity must be rejected');
 vm.runInContext(`
@@ -59,11 +68,14 @@ if (process.argv.includes('--browser')) {
   // Keep the visual fixture pristine after the VM's deliberate mutations.
   const pristine = fs.readFileSync(path.join(root, 'qa/fixtures/morphology/anatomical-stability.json'), 'utf8');
   fs.writeFileSync(file, `<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#181818;color:white}canvas{width:800px;height:600px}</style><canvas width="800" height="600"></canvas><pre id="result"></pre><script>
+  ${policySource}
+  const visualizationPolicy = globalThis.AARNNVisualizationPolicy;
   const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d'), supportsCanvas2d = true;
   const edgeCountEl = document.createElement('span');
   function renderInstrumentation() {}
-  const state = {snapshot:{display_snapshots:{anatomical:${pristine}}},render:{layout:'aarnn',showRegionLabels:false},
-    view:{offsetX:0,offsetY:0,zoom:1,rotation:0},placement:{selectedLayers:new Set()},instrumentation:{},activity:{}};
+  const state = {snapshot:{display_snapshots:{anatomical:${pristine}}},render:{layout:'aarnn',showRegionLabels:false,visualizationStage:6,visualizationAuto:false},
+    view:{offsetX:0,offsetY:0,zoom:1,rotation:0},placement:{selectedLayers:new Set()},instrumentation:{},activity:{},
+    visualization:{lastMeasuredAt:0,lastStageChangeAt:performance.now(),latencyMs:16,latencySamples:[]}};
   ${functions}
   function buildGraph(snapshot, layout) { return buildContractGraph(snapshot, layout); }
   try {
@@ -76,6 +88,25 @@ if (process.argv.includes('--browser')) {
       rebuildGraph();
       if(canvas.toDataURL() !== reference) throw Error('pixels changed across unchanged snapshots');
     }
+    state.render.visualizationStage=4;drawNetwork();const noConnections=canvas.toDataURL();
+    state.render.visualizationStage=6;drawNetwork();const branchingConnections=canvas.toDataURL();
+    if(noConnections===branchingConnections)throw Error('stage 4 and stage 6 must draw different connection detail');
+    const synthetic=JSON.parse(${JSON.stringify(pristine)});
+    synthetic.mode='SyntheticColumns';synthetic.paths=[];
+    const positions=new Map(synthetic.nodes.map((node,index)=>[node.id.value,{x:(index%4)-1.5,y:Math.floor(index/4)-0.5,z:0}]));
+    synthetic.nodes.forEach(node=>{node.position_mm=positions.get(node.id.value);});
+    synthetic.edges.forEach(edge=>{edge.points_mm=[positions.get(edge.source.value),positions.get(edge.target.value)];});
+    state.snapshot.display_snapshots.synthetic_columns=synthetic;
+    state.render.layout='conventional';state.graph=null;rebuildGraph();
+    state.activity={sensory:{indices:[]},hidden:[],output:{indices:[]}};
+    state.render.visualizationStage=1;drawNetwork();const syntheticPixels=canvas.toDataURL();
+    state.render.visualizationStage=2;drawNetwork();const syntheticLines=canvas.toDataURL();
+    if(syntheticPixels===syntheticLines)throw Error('stage 2 must show synthetic connection lines');
+    state.render.visualizationStage=3;drawNetwork();const inactiveSensory=canvas.toDataURL();
+    state.activity.sensory.indices=[0];drawNetwork();const activeSensory=canvas.toDataURL();
+    if(inactiveSensory===activeSensory)throw Error('stage 3 sensory activity must change neuron brightness');
+    state.snapshot.display_snapshots.synthetic_columns=null;
+    state.render.layout='aarnn';state.render.visualizationStage=6;state.graph=null;rebuildGraph();
     // Inject the reported long-pipe failure and verify every painted pixel
     // remains inside the membrane, including tube radius and marker discs.
     state.graph.edges.push({from:state.graph.nodes.sensory[0],to:state.graph.nodes.sensory[0],kind:'axon',radius:0.03,points:[{x:-20,y:-8},{x:0,y:0},{x:20,y:6}]});

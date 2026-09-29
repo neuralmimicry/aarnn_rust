@@ -12,6 +12,10 @@ const weightThresholdValue = document.getElementById("weight-threshold-value");
 const edgeCountEl = document.getElementById("edge-count");
 const networkView = document.querySelector(".network-view");
 const layoutButtons = document.querySelectorAll(".layout-toggle");
+const visualizationPolicy = window.AARNNVisualizationPolicy;
+const visualizationStageInput = document.getElementById("visualization-stage");
+const visualizationStageLabel = document.getElementById("visualization-stage-label");
+const visualizationAutoInput = document.getElementById("visualization-auto");
 const canvas = document.getElementById("network-canvas");
 const ctx = canvas ? canvas.getContext("2d") : null;
 const supportsCanvas2d = Boolean(canvas && ctx);
@@ -147,6 +151,10 @@ const fpvFrameRate = document.getElementById("fpv-frame-rate");
 const fpvFocusActive = document.getElementById("fpv-focus-active");
 const fpvZoom = document.getElementById("fpv-zoom");
 const fpvZoomValue = document.getElementById("fpv-zoom-value");
+const fpvStageInput = document.getElementById("fpv-stage");
+const fpvStageLabel = document.getElementById("fpv-stage-label");
+const fpvStageAutoInput = document.getElementById("fpv-stage-auto");
+const fpvWaypointSelect = document.getElementById("fpv-selected-waypoint");
 const placementSurface = document.getElementById("placement-surface");
 const placementCanvas = document.getElementById("placement-canvas");
 const placementCtx = placementCanvas ? placementCanvas.getContext("2d") : null;
@@ -210,6 +218,12 @@ const state = {
     rotation: 0
   },
   render: loadRenderSettings(),
+  visualization: {
+    latencySamples: [],
+    latencyMs: 16,
+    lastStageChangeAt: performance.now(),
+    lastMeasuredAt: 0
+  },
   lastModel: "",
   lastLearning: "",
   regionLabelStates: new Map(),
@@ -270,6 +284,8 @@ const state = {
     scene: null,
     activeNodeIds: [],
     waypoints: [],
+    waypointStages: [],
+    selectedWaypointIndex: -1,
     jobs: [],
     sourceKey: "",
     loadingProjection: false,
@@ -1022,12 +1038,17 @@ function loadRenderSettings() {
     const raw = localStorage.getItem("nm_render");
     if (!raw) throw new Error("missing");
     const parsed = JSON.parse(raw);
+    const savedStage = parsed.visualizationStage === undefined
+      ? (parsed.layout === "conventional" ? 1 : 4)
+      : Math.max(1, Math.min(9, Math.trunc(Number(parsed.visualizationStage) || 5)));
     return {
       fullTopology: Boolean(parsed.fullTopology),
       edgeLimit: Number(parsed.edgeLimit || 6000),
       weightThreshold: Number(parsed.weightThreshold || 0.0),
-      layout: parsed.layout === "conventional" ? "conventional" : "aarnn",
-      showRegionLabels: parsed.showRegionLabels !== undefined ? Boolean(parsed.showRegionLabels) : true
+      layout: savedStage <= 3 ? "conventional" : "aarnn",
+      showRegionLabels: parsed.showRegionLabels !== undefined ? Boolean(parsed.showRegionLabels) : true,
+      visualizationStage: savedStage,
+      visualizationAuto: parsed.visualizationAuto !== false
     };
   } catch (_) {
     return {
@@ -1035,7 +1056,9 @@ function loadRenderSettings() {
       edgeLimit: 6000,
       weightThreshold: 0.0,
       layout: "aarnn",
-      showRegionLabels: true
+      showRegionLabels: true,
+      visualizationStage: 5,
+      visualizationAuto: true
     };
   }
 }
@@ -2367,12 +2390,16 @@ async function loadFpvProjection() {
     state.fpv.scene = scene;
     state.fpv.activeNodeIds = fpvActiveNodeIds(scene);
     state.fpv.waypoints = [];
+    state.fpv.waypointStages = [];
+    state.fpv.selectedWaypointIndex = -1;
     state.fpv.sourceKey = sourceKey;
     fpvSourceStatus.textContent = `${source.networkId}: ${scene.nodes.length.toLocaleString()} sampled neurons${scene.coverage && scene.coverage.truncated ? " · overview is sampled" : " · projection complete"}`;
     drawFpvMap();
   } catch (error) {
     state.fpv.scene = null;
     state.fpv.waypoints = [];
+    state.fpv.waypointStages = [];
+    state.fpv.selectedWaypointIndex = -1;
     fpvSourceStatus.textContent = error && error.message ? error.message : "Could not load network overview.";
     drawFpvMap();
   } finally {
@@ -2430,6 +2457,13 @@ function addFpvWaypointFromPointer(event) {
   const id = displayIdKey(nearest.id);
   if (id) {
     state.fpv.waypoints.push(id);
+    state.fpv.waypointStages.push({
+      automatic: Boolean(fpvStageAutoInput && fpvStageAutoInput.checked),
+      stage: Math.max(1, Math.min(9, Number(fpvStageInput && fpvStageInput.value) || 5)),
+      zoom: Math.max(0.2, Math.min(4, Number(fpvZoom && fpvZoom.value) || 1))
+    });
+    state.fpv.selectedWaypointIndex = state.fpv.waypoints.length - 1;
+    syncFpvWaypointControls();
     if (fpvJobFeedback) fpvJobFeedback.textContent = `${state.fpv.waypoints.length} camera waypoint${state.fpv.waypoints.length === 1 ? "" : "s"} plotted.`;
     drawFpvMap();
   }
@@ -2632,7 +2666,9 @@ async function captureFpvRouteTiles(source, overview) {
     coverage: {
       ...overview.coverage,
       complete: tileScenes.every(tile => tile.coverage && tile.coverage.complete),
-      truncated: tileScenes.some(tile => !tile.coverage || tile.coverage.truncated)
+      truncated: tileScenes.some(tile => !tile.coverage || tile.coverage.truncated),
+      volumetric_clearance_verified: tileScenes.length > 0 && tileScenes.every(tile =>
+        tile.coverage && tile.coverage.volumetric_clearance_verified === true)
     }
   };
 }
@@ -2670,6 +2706,14 @@ async function submitFpvJob() {
         active_node_ids: fpvFocusActive && fpvFocusActive.checked ? state.fpv.activeNodeIds : [],
         width, height, frame_rate: frameRate, frame_count: frameCount,
         zoom: Number(fpvZoom && fpvZoom.value || 1),
+        auto_visualization_latency_ms: Number(state.visualization.latencyMs) || 16,
+        visualization_policy_version: visualizationPolicy.version,
+        visualization_keyframes: state.fpv.waypoints.map((waypointId, index) => ({
+          waypoint_id: renderScene.nodes.find(node => displayIdKey(node.id) === waypointId).id,
+          automatic: Boolean(state.fpv.waypointStages[index] && state.fpv.waypointStages[index].automatic),
+          stage: Number(state.fpv.waypointStages[index] && state.fpv.waypointStages[index].stage) || 5,
+          zoom: Number(state.fpv.waypointStages[index] && state.fpv.waypointStages[index].zoom) || 1
+        })),
         focus_active_regions: Boolean(fpvFocusActive && fpvFocusActive.checked)
       })
     });
@@ -3810,17 +3854,19 @@ function refreshControlButtons() {
   newBtn.title = "Replace the selected cluster network with a fresh single-neuron network";
   refreshControlNote();
 }
-function isAarnnNetwork(meta) {
-  const depth = Number((meta === null || meta === void 0 ? void 0 : meta.desired_aarnn_depth) || 0);
-  const model = typeof (meta === null || meta === void 0 ? void 0 : meta.neuron_model) === "string" ? meta.neuron_model.toLowerCase() : "";
-  return depth > 0 || model === "aarnn";
-}
 function setLayout(layout, {
   save = true,
   resetView = true
 } = {}) {
+  const requestedLayout = layout === "conventional" ? "conventional" : "aarnn";
+  const currentStage = Number(state.render.visualizationStage) || 5;
+  const stage = requestedLayout === "conventional"
+    ? Math.min(3, currentStage)
+    : Math.max(4, currentStage);
+  state.render.visualizationStage = stage;
+  state.render.visualizationAuto = false;
   const previousLayout = state.render.layout;
-  state.render.layout = layout === "conventional" ? "conventional" : "aarnn";
+  state.render.layout = requestedLayout;
   if (resetView && state.render.layout === "conventional") {
     state.view.rotation = 0;
   }
@@ -3828,29 +3874,14 @@ function setLayout(layout, {
     saveRenderSettings();
   }
   updateLayoutButtons();
+  syncVisualizationControls();
   updateNetworkViewLayout();
   rebuildGraph();
   if (previousLayout !== state.render.layout) refreshSnapshotForView();
 }
 function setLayoutForActiveNetwork() {
-  const meta = getActiveNetworkMeta();
-  if (!meta || typeof meta !== "object") return;
-  const hasModelSignal = typeof meta.neuron_model === "string" && meta.neuron_model.length > 0;
-  const hasDepthSignal = Number(meta.desired_aarnn_depth || 0) > 0;
-  if (!hasModelSignal && !hasDepthSignal) {
-    return;
-  }
-  const model = hasModelSignal ? meta.neuron_model.toLowerCase() : "";
-  let desired = state.render.layout;
-  if (isAarnnNetwork(meta)) {
-    desired = "aarnn";
-  } else if (model && model !== "aarnn" && state.render.layout !== "aarnn") {
-    desired = "conventional";
-  }
-  setLayout(desired, {
-    save: false,
-    resetView: true
-  });
+  // Network model metadata must not override a user's complexity preference.
+  syncVisualizationControls();
 }
 function updateLayoutButtons() {
   layoutButtons.forEach(btn => {
@@ -3865,7 +3896,105 @@ function updateNetworkViewLayout() {
   const contract = state.snapshot && state.snapshot.display_snapshots ? state.snapshot.display_snapshots[viewKey] : null;
   networkView.dataset.displayProvenance = contract && contract.provenance ? String(contract.provenance) : "legacy_fallback";
   networkView.dataset.displayCompleteness = contract && contract.coverage ? String(Boolean(contract.coverage.complete)) : "false";
+  networkView.dataset.visualizationStage = String(resolvedVisualizationStage());
   networkView.title = contract && contract.coverage && contract.coverage.unavailable_reason ? `Anatomical data unavailable: ${contract.coverage.unavailable_reason}` : contract && contract.provenance ? `Display provenance: ${contract.provenance}` : "Legacy display fallback";
+}
+
+function visualizationSnapshots() {
+  const views = state.snapshot && state.snapshot.display_snapshots;
+  return views && typeof views === "object" ? views : {};
+}
+
+function maximumVisualizationStage() {
+  const views = visualizationSnapshots();
+  return visualizationPolicy
+    ? visualizationPolicy.highestSupported(views.synthetic_columns, views.anatomical)
+    : 6;
+}
+
+function resolvedVisualizationStage() {
+  return Math.min(9, Number(state.render.visualizationStage) || 5, maximumVisualizationStage());
+}
+
+function syncVisualizationControls() {
+  const stage = Math.max(1, Math.min(9, Number(state.render.visualizationStage) || 5));
+  const resolved = resolvedVisualizationStage();
+  if (visualizationStageInput) visualizationStageInput.value = String(stage);
+  if (visualizationAutoInput) visualizationAutoInput.checked = Boolean(state.render.visualizationAuto);
+  if (visualizationStageLabel) {
+    const name = visualizationPolicy && visualizationPolicy.labels[resolved - 1];
+    const mode = state.render.visualizationAuto ? "Auto" : "Manual";
+    visualizationStageLabel.textContent = `${mode} · stage ${resolved} · ${name || "visual detail"}${resolved < stage ? ` · geometry available through stage ${maximumVisualizationStage()}` : ""}`;
+  }
+}
+
+function syncFpvVisualizationControl() {
+  if (!fpvStageInput || !fpvStageLabel) return;
+  const requested = Math.max(1, Math.min(9, Number(fpvStageInput.value) || 5));
+  const scene = fpvScene();
+  const available = scene
+    ? visualizationPolicy.highestSupported(null, scene)
+    : 6;
+  const target = fpvStageAutoInput && fpvStageAutoInput.checked
+    ? visualizationPolicy.update(requested, Number(fpvZoom && fpvZoom.value) || 1,
+      state.visualization.latencyMs, available, performance.now() - state.visualization.lastStageChangeAt)
+    : Math.min(requested, available);
+  const name = visualizationPolicy && visualizationPolicy.labels[target - 1];
+  fpvStageLabel.textContent = `${fpvStageAutoInput && fpvStageAutoInput.checked ? "Auto" : "Manual"} · stage ${target} · ${name || "Visual detail"}${target < requested ? ` · available through ${available}` : ""}`;
+}
+
+function syncFpvWaypointControls() {
+  if (fpvWaypointSelect) {
+    const previous = Number(fpvWaypointSelect.value);
+    fpvWaypointSelect.replaceChildren();
+    state.fpv.waypoints.forEach((identity, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `Waypoint ${index + 1} · ${identity.split(":")[0]}`;
+      fpvWaypointSelect.append(option);
+    });
+    const selected = state.fpv.selectedWaypointIndex >= 0
+      ? state.fpv.selectedWaypointIndex
+      : previous;
+    state.fpv.selectedWaypointIndex = state.fpv.waypoints.length
+      ? Math.max(0, Math.min(state.fpv.waypoints.length - 1, selected))
+      : -1;
+    if (state.fpv.selectedWaypointIndex >= 0) fpvWaypointSelect.value = String(state.fpv.selectedWaypointIndex);
+  }
+  const index = state.fpv.selectedWaypointIndex;
+  const setting = index >= 0 ? state.fpv.waypointStages[index] : null;
+  if (setting) {
+    if (fpvStageInput) fpvStageInput.value = String(setting.stage);
+    if (fpvStageAutoInput) fpvStageAutoInput.checked = setting.automatic;
+    if (fpvZoom) fpvZoom.value = String(setting.zoom);
+  }
+  syncFpvVisualizationControl();
+}
+
+function updateSelectedFpvWaypoint(patch) {
+  const index = state.fpv.selectedWaypointIndex;
+  if (index < 0 || index >= state.fpv.waypointStages.length) return;
+  state.fpv.waypointStages[index] = {
+    ...state.fpv.waypointStages[index],
+    ...patch
+  };
+  syncFpvWaypointControls();
+  drawFpvMap();
+}
+
+function applyVisualizationStage(stage, { automatic = false, save = true, redraw = true } = {}) {
+  const requested = Math.max(1, Math.min(9, Math.trunc(Number(stage) || 1)));
+  const previousLayout = state.render.layout;
+  state.render.visualizationStage = requested;
+  state.render.visualizationAuto = Boolean(automatic);
+  state.render.layout = requested <= 3 ? "conventional" : "aarnn";
+  if (previousLayout !== state.render.layout && state.render.layout === "conventional") state.view.rotation = 0;
+  state.visualization.lastStageChangeAt = performance.now();
+  if (save) saveRenderSettings();
+  syncVisualizationControls();
+  updateLayoutButtons();
+  updateNetworkViewLayout();
+  if (redraw) rebuildGraph();
 }
 async function pollTarget(addr) {
   try {
@@ -3977,8 +4106,7 @@ async function fetchSnapshotForActive() {
   if (!source) return;
   const requestKey = sourceRequestKey(source);
   const budget = snapshotDisplayBudget();
-  const displayMode = state.render.layout === "conventional" ? "synthetic_columns" : "anatomical";
-  const projectionKey = `${displayMode}:${budget.maxNodes}:${budget.maxEdges}`;
+  const projectionKey = `all:${budget.maxNodes}:${budget.maxEdges}`;
   const knownSnapshotMeta = state.snapshotMeta.sourceKey === requestKey ? state.snapshotMeta : null;
   if (source.kind === "workspace" && state.snapshot) {
     const savedAtMs = workspaceSnapshotSavedAtMs(source);
@@ -4000,14 +4128,13 @@ async function fetchSnapshotForActive() {
     const sameProjection = knownSnapshotMeta && knownSnapshotMeta.projectionKey === projectionKey;
     url = buildWorkspaceApiUrl(source.workspace, "/snapshot", {
       projection: "display",
-      display_mode: displayMode,
       max_nodes: budget.maxNodes,
       max_edges: budget.maxEdges,
       if_saved_after_ms: sameProjection && knownSnapshotMeta.savedAtMs > 0 ? knownSnapshotMeta.savedAtMs : undefined
     });
     fetcher = runtimeFetch;
   } else {
-    url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&display_mode=${encodeURIComponent(displayMode)}&max_nodes=${budget.maxNodes}&max_edges=${budget.maxEdges}`;
+    url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&max_nodes=${budget.maxNodes}&max_edges=${budget.maxEdges}`;
     if (source.nodeId) {
       url += `&node_id=${encodeURIComponent(source.nodeId)}`;
     }
@@ -4299,7 +4426,8 @@ function buildContractGraph(snapshot, layout) {
       layer: bucket === "hidden" ? layer : undefined,
       index,
       id: displayIdKey(node.id),
-      colourSlot: Number.isFinite(Number(node.colour_slot)) ? Number(node.colour_slot) : null
+      colourSlot: Number.isFinite(Number(node.colour_slot)) ? Number(node.colour_slot) : null,
+      somaRadiusMM: Number.isFinite(Number(node.soma_radius_mm)) ? Number(node.soma_radius_mm) : null
     };
     if (bucket === "hidden") {
       while (grouped.hidden.length <= layer) grouped.hidden.push([]);
@@ -4320,6 +4448,7 @@ function buildContractGraph(snapshot, layout) {
       to,
       weight: Number(edge.multiplicity || 1),
       kind: edge.kind || "connection",
+      geometry: "edge",
       points: Array.isArray(edge.points_mm) ? edge.points_mm.map(boundedPoint) : []
     });
   });
@@ -4334,6 +4463,7 @@ function buildContractGraph(snapshot, layout) {
       to: owner,
       weight: 1,
       kind: String(path.kind || "anatomical_path").toLowerCase(),
+      geometry: "path",
       radius: Number(path.radius_mm || 0),
       points: path.points_mm.map(boundedPoint)
     });
@@ -4621,6 +4751,30 @@ function cullScreenSpaceNodes(nodes, project, width, height, spacing) {
   return visible;
 }
 function drawNetwork() {
+  const frameStartedAt = performance.now();
+  const now = frameStartedAt;
+  if (state.render.visualizationAuto && visualizationPolicy && now - state.visualization.lastMeasuredAt >= 250) {
+    state.visualization.lastMeasuredAt = now;
+    const nextStage = visualizationPolicy.update(
+      state.render.visualizationStage,
+      state.view.zoom,
+      state.visualization.latencyMs,
+      maximumVisualizationStage(),
+      now - state.visualization.lastStageChangeAt
+    );
+    if (nextStage !== state.render.visualizationStage) {
+      const oldLayout = state.render.layout;
+      state.render.visualizationStage = nextStage;
+      state.render.layout = nextStage <= 3 ? "conventional" : "aarnn";
+      state.visualization.lastStageChangeAt = now;
+      saveRenderSettings();
+      syncVisualizationControls();
+      updateNetworkViewLayout();
+      if (state.snapshot) state.graph = buildGraph(state.snapshot, state.render.layout);
+      if (oldLayout !== state.render.layout && state.render.layout === "conventional") state.view.rotation = 0;
+    }
+  }
+  const visualStage = resolvedVisualizationStage();
   if (!supportsCanvas2d) {
     if (edgeCountEl) {
       edgeCountEl.textContent = "0";
@@ -4672,7 +4826,7 @@ function drawNetwork() {
     project,
     rect.width,
     rect.height,
-    state.render.layout === "aarnn" ? 12 : 5
+    visualStage >= 8 ? 12 : visualStage >= 4 ? 3 : 1
   );
   const membraneHull = anatomicalMembraneHull(state.graph, project);
   if (membraneHull) {
@@ -4691,13 +4845,28 @@ function drawNetwork() {
     ctx.closePath();
     ctx.clip();
   }
+  const usedStraightSources = new Set();
+  const usedStraightTargets = new Set();
   edges.forEach(edge => {
     if ((edge.from && !visibleScreenNodes.has(edge.from)) ||
         (edge.to && !visibleScreenNodes.has(edge.to))) return;
     const kind = String(edge.kind || "").toLowerCase();
     const anatomicalPath = kind.includes("axon") || kind.includes("dendrite");
-    if (state.render.layout === "aarnn" && !anatomicalPath) return;
-    const route = Array.isArray(edge.points) && edge.points.length >= 2 ? edge.points : [edge.from, edge.to];
+    const physicalPath = edge.geometry === "path";
+    if (visualStage === 1 || visualStage === 4) return;
+    if (visualStage <= 6 && physicalPath) return;
+    if (visualStage >= 7 && !physicalPath) return;
+    if (visualStage === 5) {
+      const sourceID = edge.from && edge.from.id;
+      const targetID = edge.to && edge.to.id;
+      if (!sourceID || !targetID || usedStraightSources.has(sourceID) || usedStraightTargets.has(targetID)) return;
+      usedStraightSources.add(sourceID);
+      usedStraightTargets.add(targetID);
+    }
+    if (visualStage >= 7 && !((state.graph.displayContract && state.graph.displayContract.coverage) || {}).volumetric_clearance_verified) return;
+    const route = visualStage <= 6
+      ? [edge.from, edge.to]
+      : Array.isArray(edge.points) && edge.points.length >= 2 ? edge.points : [edge.from, edge.to];
     const screen = route.map(point => {
       const rotated = rotate(point.x, point.y, cosR, sinR);
       return {
@@ -4708,7 +4877,7 @@ function drawNetwork() {
     const colour = anatomicalPath
       ? stableNeuronColour(edge.from && edge.from.id, kind.includes("axon") ? 0.055 : -0.055, edge.from && edge.from.colourSlot)
       : "rgba(25, 224, 115, 0.35)";
-    if (state.render.layout === "aarnn" && anatomicalPath && edge.radius > 0) {
+    if (visualStage >= 8 && anatomicalPath && edge.radius > 0) {
       const halfWidth = Math.max(1.8, Math.min(9, edge.radius * radius * 1.8));
       drawTubePolygon(screen, halfWidth, colour, 0.94);
       const activity = activityForNode(edge.from);
@@ -4726,7 +4895,8 @@ function drawNetwork() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   });
-  markers.forEach(marker => {
+  if (visualStage >= 9 && state.graph.displayContract &&
+      state.graph.displayContract.coverage && state.graph.displayContract.coverage.volumetric_clearance_verified) markers.forEach(marker => {
     const rotated = rotate(marker.position.x, marker.position.y, cosR, sinR);
     const x = centerX + state.view.offsetX + rotated.x * radius;
     const y = centerY + state.view.offsetY + rotated.y * radius;
@@ -4739,15 +4909,18 @@ function drawNetwork() {
     ctx.fill();
   });
   const active = state.activity || {};
+  const sensoryActive = active.sensory ? active.sensory.indices || [] : [];
   const hiddenActive = active.hidden || [];
   const outputActive = active.output ? active.output.indices || [] : [];
-  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", [], cosR, sinR, screenNodes, true, visibleScreenNodes);
+  const somaRadii = new Map((state.graph.displayContract && state.graph.displayContract.nodes || [])
+    .map(node => [displayIdKey(node.id), Number(node.soma_radius_mm)]));
+  drawNodes(nodes.sensory, centerX, centerY, radius, "#3b6fc4", sensoryActive, cosR, sinR, screenNodes, true, visibleScreenNodes, visualStage, somaRadii);
   nodes.hidden.forEach((layer, idx) => {
     const activeIdx = hiddenActive[idx] ? hiddenActive[idx].indices || [] : [];
-    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes, true, visibleScreenNodes);
+    drawNodes(layer, centerX, centerY, radius, "#ff9b3c", activeIdx, cosR, sinR, screenNodes, true, visibleScreenNodes, visualStage, somaRadii);
   });
   drawEarlyNodes(nodes.early || [], centerX, centerY, radius, cosR, sinR, screenNodes);
-  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes, true, visibleScreenNodes);
+  drawNodes(nodes.output, centerX, centerY, radius, "#ffd37a", outputActive, cosR, sinR, screenNodes, true, visibleScreenNodes, visualStage, somaRadii);
 
   if (membraneHull) ctx.restore();
   // Draw region labels if enabled
@@ -4803,6 +4976,12 @@ function drawNetwork() {
   edgeCountEl.textContent = edges.length.toString();
   state.instrumentation.screenNodes = screenNodes;
   renderInstrumentation();
+  const elapsed = Math.max(0, performance.now() - frameStartedAt);
+  state.visualization.latencySamples.push(elapsed);
+  if (state.visualization.latencySamples.length > 32) state.visualization.latencySamples.shift();
+  state.visualization.latencyMs = visualizationPolicy
+    ? visualizationPolicy.p95Milliseconds(state.visualization.latencySamples)
+    : elapsed;
 }
 function anatomicalMembraneHull(graph, project) {
   if (graph.membrane) {
@@ -4843,7 +5022,7 @@ function drawTubePolygon(points, halfWidth, colour, alpha = 1) {
   ctx.fill();
   ctx.globalAlpha = 1;
 }
-function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true, visibleNodes = null) {
+function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, screenNodes = [], includeInInstrumentation = true, visibleNodes = null, stage = resolvedVisualizationStage(), somaRadii = new Map()) {
   const activeSet = new Set(activeIndices);
   nodes.forEach((node, idx) => {
     if (visibleNodes && !visibleNodes.has(node)) return;
@@ -4854,12 +5033,25 @@ function drawNodes(nodes, cx, cy, radius, baseColor, activeIndices, cosR, sinR, 
     const selectedLayer = node.kind === "sensory" ? 0 : node.kind === "hidden" ? Number(node.layer || 0) + 1 : state.graph && state.graph.nodes && state.graph.nodes.hidden ? state.graph.nodes.hidden.length + 1 : -1;
     const selected = state.placement.selectedLayers.has(selectedLayer);
     const anatomicalColour = state.render.layout === "aarnn" && node.id ? stableNeuronColour(node.id, 0, node.colourSlot) : baseColor;
-    ctx.fillStyle = active ? "#ffffff" : anatomicalColour;
-    ctx.beginPath();
-    const somaRadius = state.render.layout === "aarnn" ? 6 : active ? 3.4 : 2.2;
-    ctx.arc(x, y, somaRadius, 0, Math.PI * 2);
-    ctx.fill();
-    if (selected) {
+    const pixelNeuron = stage <= 2 || (stage >= 4 && stage <= 7);
+    const physicalRadius = somaRadii.get(node.id);
+    const somaRadius = stage === 3
+      ? 1.5
+      : stage >= 8 && Number.isFinite(physicalRadius) && physicalRadius > 0
+        ? Math.max(0.5, physicalRadius * radius)
+        : 0.5;
+    ctx.globalAlpha = active ? 1 : 0.48;
+    if (pixelNeuron) {
+      ctx.fillStyle = active ? "#ffffff" : anatomicalColour;
+      ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
+    } else {
+      ctx.fillStyle = active ? "#ffffff" : anatomicalColour;
+      ctx.beginPath();
+      ctx.arc(x, y, somaRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (selected && !pixelNeuron) {
       ctx.beginPath();
       ctx.arc(x, y, active ? 6.4 : 5.2, 0, Math.PI * 2);
       ctx.strokeStyle = "#fff0a8";
@@ -6132,6 +6324,7 @@ function syncRenderControls() {
   weightThresholdInput.value = state.render.weightThreshold.toFixed(2);
   weightThresholdValue.textContent = state.render.weightThreshold.toFixed(2);
   updateLayoutButtons();
+  syncVisualizationControls();
   updateNetworkViewLayout();
   showRegionLabelsInput.checked = state.render.showRegionLabels;
 }
@@ -6823,6 +7016,7 @@ function attachCanvasControls() {
     e.preventDefault();
     const delta = Math.sign(e.deltaY);
     state.view.zoom = Math.min(2.5, Math.max(0.4, state.view.zoom - delta * 0.05));
+    state.visualization.lastStageChangeAt = performance.now();
     drawNetwork();
     refreshSnapshotForView();
   });
@@ -6939,6 +7133,7 @@ if (fpvDetail) {
     state.fpv.sourceKey = "";
     state.fpv.activeNodeIds = [];
     state.fpv.waypoints = [];
+    state.fpv.waypointStages = [];
     drawFpvMap();
     loadFpvProjection();
   });
@@ -6946,6 +7141,9 @@ if (fpvDetail) {
 if (document.getElementById("fpv-clear-route")) {
   document.getElementById("fpv-clear-route").addEventListener("click", () => {
     state.fpv.waypoints = [];
+    state.fpv.waypointStages = [];
+    state.fpv.selectedWaypointIndex = -1;
+    syncFpvWaypointControls();
     drawFpvMap();
   });
 }
@@ -6953,9 +7151,32 @@ if (document.getElementById("fpv-refresh-jobs")) {
   document.getElementById("fpv-refresh-jobs").addEventListener("click", loadFpvJobs);
 }
 if (fpvSubmitBtn) fpvSubmitBtn.addEventListener("click", submitFpvJob);
-if (fpvZoom && fpvZoomValue) {
-  fpvZoom.addEventListener("input", () => { fpvZoomValue.textContent = `${Number(fpvZoom.value).toFixed(1)}×`; });
-}
+if (fpvStageInput) fpvStageInput.addEventListener("input", () => {
+  updateSelectedFpvWaypoint({ automatic: false, stage: Math.max(1, Math.min(9, Number(fpvStageInput.value) || 1)) });
+});
+if (fpvStageAutoInput) fpvStageAutoInput.addEventListener("change", () => {
+  state.visualization.lastStageChangeAt = performance.now();
+  updateSelectedFpvWaypoint({ automatic: fpvStageAutoInput.checked });
+});
+if (fpvWaypointSelect) fpvWaypointSelect.addEventListener("change", () => {
+  state.fpv.selectedWaypointIndex = Number(fpvWaypointSelect.value);
+  syncFpvWaypointControls();
+});
+if (fpvZoom) fpvZoom.addEventListener("input", () => {
+  if (fpvZoomValue) fpvZoomValue.textContent = `${Number(fpvZoom.value).toFixed(1)}×`;
+  state.visualization.lastStageChangeAt = performance.now();
+  updateSelectedFpvWaypoint({ zoom: Math.max(0.2, Math.min(4, Number(fpvZoom.value) || 1)) });
+});
+if (visualizationStageInput) visualizationStageInput.addEventListener("input", () => {
+  applyVisualizationStage(visualizationStageInput.value, { automatic: false });
+});
+if (visualizationAutoInput) visualizationAutoInput.addEventListener("change", () => {
+  state.render.visualizationAuto = visualizationAutoInput.checked;
+  state.visualization.lastStageChangeAt = performance.now();
+  saveRenderSettings();
+  syncVisualizationControls();
+  drawNetwork();
+});
 if (fpvJobsEl) {
   fpvJobsEl.addEventListener("click", async event => {
     const button = event.target.closest("[data-fpv-action]");

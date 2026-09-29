@@ -10,7 +10,7 @@ aarnn_require_cmd ss
 
 IMAGE_REF="${IMAGE_NAME:-$(aarnn_default_workload_image orchestrator)}"
 GRPC_PORT="${GRPC_PORT:-$(aarnn_find_free_port 50051)}"
-BRAIN_ID="${BRAIN_ID:-orchestrator}"
+BRAIN_ID="${BRAIN_ID:-cluster_master}"
 CONFIG_PATH="${CONFIG_PATH:-${ROOT_DIR}/config.json}"
 NETWORK_PATH="${NETWORK_PATH:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/outputs}"
@@ -37,6 +37,7 @@ aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${CONFIG_PATH}" /app/runt
 aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${NETWORK_PATH}" /app/runtime-network.json --network
 
 echo "Running orchestrator workload from ${IMAGE_REF}"
+echo "Local cluster master / I/O ingress brain: ${BRAIN_ID}"
 echo "gRPC address: http://127.0.0.1:${GRPC_PORT}"
 echo "UDP discovery remains on container default port 50050."
 exec podman run "${PODMAN_ARGS[@]}" "${IMAGE_REF}" "${RUN_ARGS[@]}"

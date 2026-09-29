@@ -1,12 +1,12 @@
 id = "MORPH-VIS-001"
 version = 1
-title = "Stable anatomical projection, local tube meshes and membrane containment"
-requirements = ["CORE-03", "VIS-01", "VIS-09", "VIS-10", "UI-01", "UI-03", "QA-04"]
+title = "Stable anatomical projection, staged links, local tube meshes and membrane containment"
+requirements = ["CORE-03", "VIS-01", "VIS-09", "VIS-10", "VIS-12", "UI-01", "UI-03", "QA-04"]
 products = ["workstation", "web"]
 mode = "read-only mesh fixture; bounded procedural growth regression"
 seed = 0
-logical_stop = "fixed fixture; 98 unchanged native snapshots, 20 identical browser frames, eight growth intervals"
-oracle = "exact repeated meshes/pixels; no triangles bridging a bend; all rendered vertices inside the published membrane"
+logical_stop = "fixed fixture; 98 unchanged native snapshots, 20 identical browser frames, eight growth intervals and manual stages 4/6"
+oracle = "exact repeated meshes/pixels; stage 4 hides and stage 6 shows branching links; no triangles bridge a bend; rendered vertices remain inside the published membrane"
 required_artifacts = ["result.json", "run.log", "native-mesh.svg", "web-canvas.png when browser requested", "browser-result.txt when browser requested"]
 model_fixture_digest = "sha256:qa/fixtures/morphology/anatomical-stability.json; recorded per run"
 config_fixture_digest = "sha256:qa/scenarios/MORPH-VIS-001.toml; recorded per run"

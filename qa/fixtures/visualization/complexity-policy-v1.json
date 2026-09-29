@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "zoom_upper_bounds": [0.45, 0.65, 0.9, 1.2, 1.55, 1.95, 2.5, 3.2],
+  "latency_upper_bounds_ms": [5, 8, 12, 16, 24, 33, 50, 80],
+  "upshift_dwell_ms": 1500,
+  "p95_sample_ms": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+  "expected_p95_ms": 19,
+  "labels": [
+    "Synthetic pixels",
+    "Synthetic connections",
+    "Synthetic neurons",
+    "Anatomical pixels",
+    "Straight connections",
+    "Branching connections",
+    "Anatomical centre-lines",
+    "Anatomical volumes",
+    "Synapses and boutons"
+  ],
+  "stages": [
+    "synthetic_pixels",
+    "synthetic_connections",
+    "synthetic_neurons",
+    "anatomical_pixels",
+    "anatomical_straight_edges",
+    "anatomical_branching_edges",
+    "anatomical_centre_lines",
+    "anatomical_volumes",
+    "anatomical_contacts"
+  ]
+}

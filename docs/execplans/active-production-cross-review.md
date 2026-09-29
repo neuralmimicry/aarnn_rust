@@ -3462,3 +3462,98 @@ no native engine content hash is presented as biological or physics equivalence.
 - The physical camera remains unopened, so hardware preview is still
   unverified. If it remains blank, inspect the `[webcam]` startup error for
   the specific device/format failure.
+
+## Progress update — 2026-09-28 20:31Z: local cluster hierarchy and launcher identity
+
+- [x] Read the current Phase 5 and Phase 7 plans, the relevant normative
+  scheduler, independent-brain, federation, quorum, resource-scope and
+  authorisation sections, the active architecture decisions, and the local
+  launcher/test paths. `cargo metadata --locked --no-deps
+  --format-version 1` confirms one application workspace plus `tools/xtask`;
+  the full biological, stable-shard and management production gates remain
+  separately tracked.
+- [x] Cross-checked the supplied cluster screenshot against `run_examples.sh`,
+  `src/main.rs`, `src/distributed.rs` and `src/ui.rs`. The example passed
+  `node_1`/`node_2` as `--brain-id` and omitted stable `--node-id` values.
+  Worker startup therefore created locally preloaded networks named after
+  those node labels; Join/Heartbeat reports them as hosted network IDs and the
+  orchestrator intentionally auto-registers unknown reported IDs. This
+  explains the dashboard's extra `node_1`/`node_2` brain entries and obscures
+  the actual `cluster_master` membership/placement relation.
+- [x] Verified that `NM_UI_REMOTE_ORCHESTRATORS` only opens independent remote
+  endpoint connections. The current product has no delegated parent/child
+  orchestrator protocol or shared cross-cluster authority. The architecture
+  recommendation is therefore a local control cell: when no upstream
+  orchestrator is configured, the local orchestrator is also the cluster
+  master and workstation-facing I/O ingress; additional orchestrators remain
+  independent scopes until an explicitly authorised cross-cluster contract is
+  implemented after its production gates.
+- [x] Record that hierarchy as ADR-0006 and the architecture guide. Correct
+  worker identity in the host, web, container, desktop-container, Kubernetes
+  and GA-search launchers. Add a bounded status verifier that checks stable
+  node membership, the hosted brain ID and absence of worker-ID brain records;
+  add Python contract tests and Rust launcher tests. `bash -n`, ShellCheck,
+  `git diff --check`, Python compilation and four local hierarchy verifier
+  tests passed. The first live run detected stale workers retrying port 50051
+  and rejected their `node_1`/`node_2` brain records. Local examples now choose
+  an isolated high port by default. The subsequent `./run_examples.sh` run
+  passed and reported `cluster_master` hosted by `node_1` and `node_2`; only
+  this run's processes were stopped afterwards. The focused orchestrator to
+  sensory-worker forwarding test also passed.
+- [!] `multi_brain_scheduler` and `management_v1` remain gated. Existing
+  `combined_group`/`federation_group` values are compatibility placement
+  metadata; they do not provide tenant ownership, resource grants or a live
+  cross-brain FederationLink. Do not claim cross-user federation or production
+  multi-orchestrator management from local launcher evidence.
+
+### Decision Log — LOCAL-CLUSTER-IDENTITY
+
+- `2026-09-28 / LOCAL-CLUSTER-IDENTITY`: `BrainId` identifies the neural
+  workload, `NodeId` identifies a compute process, and the local orchestrator
+  owns the current cluster membership view. Local single-cell mode may use the
+  orchestrator as cluster master and I/O ingress, while each brain retains its
+  own identity and route. A multi-endpoint UI is not an orchestrator hierarchy;
+  cross-owner interaction requires explicit dual-owner federation authority.
+  Authority: Sections 11.6, 12.1–12.3, 15.1–15.2, 16.1–16.5 and
+  `INV-001`, `INV-010`, `INV-011`, `INV-015`–`INV-017`.
+
+## Progress update — 2026-09-28 21:04Z: verify isolated local cluster launch
+
+- [x] `./run_examples.sh` completed its locked all-feature release build and
+  live startup. The status probe confirmed target brain `cluster_master` and
+  hosted membership for `node_1` and `node_2`, with no extra brain IDs. The
+  launcher chose port 45000 for the orchestrator. That avoided old workers
+  retrying port 50051; the example processes it started were shut down cleanly
+  afterwards.
+- [x] `cargo test --locked --test run_examples_launcher --test
+  container_workload_profiles` passed (20 tests total). The launcher tests also
+  invoke the four Python status-contract cases.
+- [x] `cargo test --locked --lib
+  distributed::tests::orchestrator_sends_audio_directly_to_the_configured_sensory_bridge
+  -- --exact` passed, proving local orchestrator ingress forwards to the
+  designated, loaded sensory owner and duplicate frame retries remain
+  idempotent.
+- [x] `cargo fmt --all --check`, `git diff --check`, `bash -n` for all changed
+  launchers and ShellCheck (with existing repository-only informational rules
+  excluded) passed. The all-feature build still emits existing Rust warnings.
+
+## Verification update — 2026-09-28 21:09Z: hierarchy and I/O recheck
+
+- [x] Re-ran `cargo test --locked --test run_examples_launcher --test
+  container_workload_profiles`: 16 launcher tests and 4 container workload
+  tests passed. The Python local-cluster readiness and management-credential
+  contracts passed (6 tests total), as did the focused orchestrator-to-sensory
+  bridge forwarding test.
+- [x] Re-ran `cargo fmt --all -- --check`, `git diff --check`, `bash -n` for
+  root, `scripts/` and `tools/` shell launchers, and ShellCheck; all passed.
+  Existing compiler warnings remain outside this hierarchy change.
+- [x] A fresh headless `./run_examples.sh` smoke selected orchestrator port
+  44256 and dashboard port 8081. Its status probe confirmed `cluster_master`
+  hosted by `node_1` and `node_2` at their advertised endpoints, with no
+  worker IDs registered as extra brains. The orchestrator log records graceful
+  SIGINT shutdown and none of this run's ports remained listening afterwards.
+  Pre-existing workers retrying the conventional 50051 endpoint were observed
+  but left untouched.
+- [!] This is local compatibility-runtime evidence. Production multi-master
+  delegation, authenticated auto-enrolment, multi-brain fairness and live
+  cross-owner federation still require their Phase 5–8 gates.

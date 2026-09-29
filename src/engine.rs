@@ -568,6 +568,7 @@ impl RunnerEngine {
                     layer: matches!(role, DisplayRole::Hidden).then_some(layer.saturating_sub(1)),
                     position_mm: position,
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: None,
                     colour_slot: 0,
                 });
             }
@@ -987,6 +988,9 @@ fn live_morphology_display_snapshot(
                 layer: matches!(role, DisplayRole::Hidden).then_some(layer.saturating_sub(1)),
                 position_mm: position,
                 kind: AnatomicalKind::Soma,
+                // The legacy morphology model stores centre positions but
+                // no physical soma radius. Do not invent a volume measure.
+                soma_radius_mm: None,
                 colour_slot: 0,
             });
         }
@@ -1048,7 +1052,11 @@ fn live_morphology_display_snapshot(
                             z: f64::from(to.z),
                         },
                     ],
-                    radius_mm: 0.01,
+                    // Endpoints are the committed grown segment geometry, so
+                    // clients preserve its actual length and placement. The
+                    // legacy model has no stored radius; zero deliberately
+                    // keeps volumetric stages unavailable.
+                    radius_mm: 0.0,
                 });
             }
         }
@@ -2080,25 +2088,28 @@ mod tests {
                 length: 0.187,
                 ..Default::default()
             });
-        engine.runner.morph.dendrites = vec![vec![crate::morphology::Dendrite {
-            neuron_layer: 0,
-            neuron_id: 0,
-            tree: crate::morphology::DendriticTree {
-                branches: vec![crate::morphology::DendSeg {
-                    from: soma,
-                    to: crate::morphology::Point3 {
-                        x: soma.x - 0.12,
-                        y: soma.y + 0.04,
-                        z: soma.z + 0.08,
-                    },
-                    length: 0.15,
-                    ..Default::default()
-                }],
-            },
-            stimuli: 0.0,
-            atp: 1.0,
-            organelles: Vec::new(),
-        }]];
+        engine.runner.morph.dendrites = vec![
+            Vec::new(),
+            vec![crate::morphology::Dendrite {
+                neuron_layer: 0,
+                neuron_id: 0,
+                tree: crate::morphology::DendriticTree {
+                    branches: vec![crate::morphology::DendSeg {
+                        from: soma,
+                        to: crate::morphology::Point3 {
+                            x: soma.x - 0.12,
+                            y: soma.y + 0.04,
+                            z: soma.z + 0.08,
+                        },
+                        length: 0.15,
+                        ..Default::default()
+                    }],
+                },
+                stimuli: 0.0,
+                atp: 1.0,
+                organelles: Vec::new(),
+            }],
+        ];
         let anatomical = engine
             .display_snapshot(DisplayMode::Anatomical, 1, 64, 64)
             .expect("anatomical snapshot");
@@ -2131,6 +2142,70 @@ mod tests {
                 .iter()
                 .any(|path| path.kind == AnatomicalKind::Dendrite)
         );
+        let owner = legacy_display_id(DisplayRole::Hidden, 1, 0);
+        let committed_segments = [
+            (
+                AnatomicalKind::Axon,
+                engine.runner.morph.axons[0][0].segments[0].from,
+                engine.runner.morph.axons[0][0].segments[0].to,
+            ),
+            (
+                AnatomicalKind::Dendrite,
+                engine.runner.morph.dendrites[1][0].tree.branches[0].from,
+                engine.runner.morph.dendrites[1][0].tree.branches[0].to,
+            ),
+        ];
+        for (kind, from, to) in committed_segments {
+            // The legacy segment stores coordinates as f32. Compare the
+            // promoted endpoints exactly, then allow the expected f32 rounding
+            // when comparing f64 display length with Point3::dist. Match by
+            // stable owner and anatomical kind because other population
+            // arbors may be present in the same bounded snapshot.
+            let expected_from = Vec3 {
+                x: f64::from(from.x),
+                y: f64::from(from.y),
+                z: f64::from(from.z),
+            };
+            let expected_to = Vec3 {
+                x: f64::from(to.x),
+                y: f64::from(to.y),
+                z: f64::from(to.z),
+            };
+            let path = anatomical
+                .paths
+                .iter()
+                .find(|path| {
+                    path.owner == owner
+                        && path.kind == kind
+                        && path.points_mm.len() == 2
+                        && path.points_mm[0] == expected_from
+                        && path.points_mm[1] == expected_to
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "committed segment missing for {owner:?} {kind:?} {expected_from:?}->{expected_to:?}; available={:?}",
+                        anatomical
+                            .paths
+                            .iter()
+                            .map(|path| (path.owner, path.kind, &path.points_mm))
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let measured_length = path.points_mm[0].distance(path.points_mm[1]);
+            let committed_length = f64::from(from.dist(to));
+            assert!((measured_length - committed_length).abs() < 1.0e-6);
+            assert_eq!(
+                path.radius_mm, 0.0,
+                "legacy radii are unavailable, not guessed"
+            );
+        }
+        assert!(
+            anatomical
+                .nodes
+                .iter()
+                .all(|node| node.soma_radius_mm.is_none())
+        );
+        assert!(!anatomical.coverage.volumetric_clearance_verified);
         assert!(
             anatomical
                 .markers

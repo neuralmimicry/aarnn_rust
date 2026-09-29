@@ -8,9 +8,9 @@ cd "$SCRIPT_DIR"
 
 export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 
-# Script to start two example networks:
-# 1. A standalone network running in a single process.
-# 2. A distributed network (orchestrator + node) with autodiscovery.
+# Start one local distributed brain with a web dashboard. The orchestrator is
+# the local cluster master and workstation I/O ingress; workers retain stable
+# node IDs separate from the brain ID they host.
 
 # Initialise before installing traps so an early prerequisite failure can
 # still run the cleanup handler safely under `set -u`.
@@ -90,7 +90,8 @@ find_free_port() {
 }
 
 # Select ports
-ORCH_PORT="$(find_free_port 50051)"; reserve_port "$ORCH_PORT"
+ORCH_PORT_START="${AARNN_ORCH_PORT_START:-$((30000 + RANDOM % 20000))}"
+ORCH_PORT="$(find_free_port "$ORCH_PORT_START")"; reserve_port "$ORCH_PORT"
 NODE1_PORT="$(find_free_port 50075)"; reserve_port "$NODE1_PORT"
 NODE2_PORT="$(find_free_port 50087)"; reserve_port "$NODE2_PORT"
 WEB_UI_PORT="$(find_free_port 8080)"; reserve_port "$WEB_UI_PORT"
@@ -143,11 +144,20 @@ fi
 #PIDS=("$!")
 
 export NMD_TFLITE_ALLOW_LARGE=1
+CLUSTER_BRAIN_ID="cluster_master"
+NODE1_ID="node_1"
+NODE2_ID="node_2"
+EXECUTION_ARGS=(
+    --execution-mode "distributed,sharded"
+    --execution-scope cluster
+    --execution-desired-shards 2
+)
 
-echo "Starting Distributed Orchestrator (Brain ID: cluster_master)..."
-"$BIN_DIR/aarnn_rust" --orchestrator --brain-id cluster_master \
+echo "Starting local cluster master and I/O ingress (Brain ID: $CLUSTER_BRAIN_ID)..."
+NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 NM_DISTRIBUTED_AUTOSTART=1 \
+"$BIN_DIR/aarnn_rust" --orchestrator --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$ORCH_PORT" --advertise-addr "127.0.0.1:$ORCH_PORT" \
-    "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" > orchestrator.log 2>&1 &
+    "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" "${EXECUTION_ARGS[@]}" > orchestrator.log 2>&1 &
 PIDS=("$!")
 
 # Wait a bit for orchestrator to start broadcasting
@@ -157,19 +167,19 @@ if ! kill -0 "${PIDS[0]}" 2>/dev/null; then
     exit 1
 fi
 
-echo "Starting Distributed Nodes (Brain IDs: node_1, node_2) connecting to orchestrator at http://127.0.0.1:$ORCH_PORT ..."
-"$BIN_DIR/aarnn_rust" --node --brain-id node_1 \
+echo "Starting worker nodes $NODE1_ID and $NODE2_ID for brain $CLUSTER_BRAIN_ID at http://127.0.0.1:$ORCH_PORT ..."
+"$BIN_DIR/aarnn_rust" --node --node-id "$NODE1_ID" --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$NODE1_PORT" --advertise-addr "127.0.0.1:$NODE1_PORT" \
-    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_1.log 2>&1 &
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_1.log 2>&1 &
 PIDS+=("$!")
 sleep 1
 if ! kill -0 "${PIDS[1]}" 2>/dev/null; then
     echo "Node node_1 exited during startup; see node_1.log" >&2
     exit 1
 fi
-"$BIN_DIR/aarnn_rust" --node --brain-id node_2 \
+"$BIN_DIR/aarnn_rust" --node --node-id "$NODE2_ID" --brain-id "$CLUSTER_BRAIN_ID" \
     --grpc-addr "0.0.0.0:$NODE2_PORT" --advertise-addr "127.0.0.1:$NODE2_PORT" \
-    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" > node_2.log 2>&1 &
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" "${EXECUTION_ARGS[@]}" > node_2.log 2>&1 &
 PIDS+=("$!")
 sleep 1
 if ! kill -0 "${PIDS[2]}" 2>/dev/null; then
@@ -204,11 +214,22 @@ if ! curl --fail --silent --show-error --max-time 1 "$WEB_UI_URL/api/config" >/d
     exit 1
 fi
 
+if ! CLUSTER_WORKERS="$(python3 "$SCRIPT_DIR/scripts/qa/wait_for_local_cluster.py" \
+    --base-url "$WEB_UI_URL" \
+    --orchestrator "http://127.0.0.1:$ORCH_PORT" \
+    --brain-id "$CLUSTER_BRAIN_ID" \
+    --worker "$NODE1_ID=127.0.0.1:$NODE1_PORT" --pid "$NODE1_ID=${PIDS[1]}" \
+    --worker "$NODE2_ID=127.0.0.1:$NODE2_PORT" --pid "$NODE2_ID=${PIDS[2]}" \
+    --timeout "${AARNN_CLUSTER_READY_TIMEOUT_S:-45}")"; then
+    echo "Local cluster did not become ready; recent service logs follow:" >&2
+    tail -n 60 orchestrator.log node_1.log node_2.log webui.log >&2
+    exit 1
+fi
+
 echo "----------------------------------------------------------------"
 echo "Both networks are now running!"
-echo "Network 1 (Standalone): see standalone.log"
-echo "Network 2 (Distributed): see node_1.log"
-echo "The Orchestrator is now active."
+echo "Local cluster master / I/O ingress brain: $CLUSTER_BRAIN_ID"
+echo "Joined workers: $CLUSTER_WORKERS"
 echo "Orchestrator gRPC: http://127.0.0.1:$ORCH_PORT"
 echo "Web dashboard URL (port $WEB_UI_PORT): $WEB_UI_URL"
 echo "Check the 'Cluster Dashboard' section in the UI (right panel)."

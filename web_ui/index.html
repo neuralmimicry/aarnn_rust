@@ -102,13 +102,17 @@
               </label>
               <label class="fpv-select" for="fpv-zoom">Camera zoom <input id="fpv-zoom" type="range" min="0.2" max="4" step="0.1" value="1" /></label>
               <span id="fpv-zoom-value" class="fpv-job-meta">1.0×</span>
+              <label class="fpv-select" for="fpv-selected-waypoint">Selected waypoint <select id="fpv-selected-waypoint" aria-label="Choose a waypoint to edit its visual detail"></select></label>
+              <label class="fpv-select" for="fpv-stage">Waypoint detail <input id="fpv-stage" type="range" min="1" max="9" step="1" value="5" /></label>
+              <span id="fpv-stage-label" class="fpv-job-meta">Auto · stage 5</span>
+              <label class="check"><input id="fpv-stage-auto" type="checkbox" checked /> Auto at this waypoint</label>
               <button class="btn primary" id="fpv-submit" type="button">Submit render</button>
             </div>
             <div class="fpv-map-wrap">
               <canvas id="fpv-map" width="1200" height="540" aria-label="Minimal sampled neural network map for camera route planning"></canvas>
               <div id="fpv-map-empty" class="panel-empty muted">Load an active network projection, then click at least two neurons to plot the flight route.</div>
             </div>
-            <div class="fpv-route-help">Click neurons in order to add camera waypoints. Up to 4,096 sampled neurons are shown; hidden/occluded neurons stay active in the network and are not transferred to this planner view. Activity focus is captured at submission; media/AER replay is not enabled, and renders never stimulate the live network.</div>
+            <div class="fpv-route-help">Click neurons in order to add camera waypoints, then choose a waypoint to edit its manual or automatic visual detail. Up to 4,096 sampled neurons are shown; hidden/occluded neurons stay active in the network and are not transferred to this planner view. Activity focus is captured at submission; media/AER replay is not enabled, and renders never stimulate the live network.</div>
             <div class="fpv-jobs-header">
               <div class="panel-title">Render jobs</div>
               <button class="secondary-btn" id="fpv-refresh-jobs" type="button">Refresh jobs</button>
@@ -140,12 +144,11 @@
                 <input type="checkbox" id="full-topology" />
                 Full topology
               </label>
-              <div class="control-group layout-group">
-                <span>Layout</span>
-                <div class="segmented compact">
-                  <button class="seg layout-toggle" data-layout="conventional" type="button" title="Display the recurrent graph in deterministic synthetic columns">Synthetic columns</button>
-                  <button class="seg layout-toggle" data-layout="aarnn" type="button" title="Display stored 3D topology where available, with explicit fallback status">Anatomical</button>
-                </div>
+              <div class="control-group visualization-group">
+                <label for="visualization-stage">Visual detail</label>
+                <input id="visualization-stage" type="range" min="1" max="9" step="1" value="5" aria-label="Visualisation complexity from synthetic pixels to anatomical synapses" />
+                <span id="visualization-stage-label" class="control-value" aria-live="polite">Stage 5 · Straight connections</span>
+                <label class="check"><input id="visualization-auto" type="checkbox" checked /> Auto</label>
               </div>
               <div class="control-group">
                 <span>Edge limit</span>
@@ -554,6 +557,7 @@
     <script src="/service-access.js?v=20260926-aarnn-observe"></script>
     <script src="/management-client.generated.js?v=20260926-aarnn-observe"></script>
     <script src="/aer-transport.js?v=20260926-aarnn-observe"></script>
+    <script src="/visualization-policy.js?v=20260928-stage-policy"></script>
     <script src="/app.js?v=20260926-aarnn-observe"></script>
   </body>
 </html>

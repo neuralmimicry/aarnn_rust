@@ -106,7 +106,12 @@ class RemoteConnectionController : AutoCloseable {
         }
     }
 
-    fun submitFpvJob(waypointIds: List<String>) {
+    fun submitFpvJob(
+        waypointIds: List<String>,
+        visualizationKeyframes: List<FpvVisualizationKeyframe>,
+        cameraZoom: Double,
+        autoVisualizationLatencyMs: Double,
+    ) {
         val snapshot = uiState.snapshot
         val scene = snapshot?.displayViews?.anatomical
         if (snapshot == null || scene == null) {
@@ -118,7 +123,14 @@ class RemoteConnectionController : AutoCloseable {
             val result = runCatching {
                 val activeClient = client ?: error("Connect to AARNN first")
                 val response = activeClient
-                    .submitFpvJob(snapshot.summary.networkId, scene, waypointIds)
+                    .submitFpvJob(
+                        snapshot.summary.networkId,
+                        scene,
+                        waypointIds,
+                        visualizationKeyframes,
+                        cameraZoom,
+                        autoVisualizationLatencyMs,
+                    )
                 val jobs = activeClient.listFpvJobs()
                 response to jobs
             }

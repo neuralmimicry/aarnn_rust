@@ -62,6 +62,7 @@ FEATURES="${AARNN_CLUSTER_FEATURES:-all-features}"
 NO_WEB="${AARNN_CLUSTER_NO_WEB:-0}"
 NO_BUILD="${AARNN_CLUSTER_NO_BUILD:-0}"
 ORCH_PORT="${AARNN_CLUSTER_ORCHESTRATOR_PORT:-}"
+ORCH_PORT_START="${AARNN_CLUSTER_ORCHESTRATOR_PORT_START:-$((30000 + RANDOM % 20000))}"
 NODE_PORT_START="${AARNN_CLUSTER_NODE_PORT_START:-50075}"
 WEB_PORT="${AARNN_CLUSTER_WEB_PORT:-}"
 
@@ -202,7 +203,7 @@ fi
 
 FOUND_PORT=""
 if [[ -z "$ORCH_PORT" ]]; then
-    find_free_port 50051
+    find_free_port "$ORCH_PORT_START"
     ORCH_PORT="$FOUND_PORT"
 else
     reserve_explicit_port "$ORCH_PORT" "--orchestrator-port"
@@ -222,6 +223,8 @@ fi
 
 mkdir -p "$LOG_DIR" "$RUNTIME_ROOT"
 PIDS=()
+WORKER_IDS=()
+WORKER_PORTS=()
 CLEANUP_DONE=0
 cleanup() {
     if (( CLEANUP_DONE == 1 )); then return; fi
@@ -246,7 +249,7 @@ CONFIG_ARGS=()
 NETWORK_ARGS=()
 [[ -n "$NETWORK_PATH" ]] && NETWORK_ARGS=(--network "$NETWORK_PATH")
 EXECUTION_ARGS=(
-    --execution-mode distributed,sharded
+    --execution-mode "distributed,sharded"
     --execution-scope cluster
     --execution-desired-shards "$NODE_COUNT"
 )
@@ -278,14 +281,17 @@ fi
 
 for ((index=1; index<=NODE_COUNT; index++)); do
     node_port="${NODE_PORTS[index]}"
-    echo "Starting node_${index} on 127.0.0.1:$node_port"
-    "$AARNN_BIN" --node --brain-id "node_${index}" \
+    node_id="node_${index}"
+    echo "Starting worker $node_id for brain $BRAIN_ID on 127.0.0.1:$node_port"
+    "$AARNN_BIN" --node --node-id "$node_id" --brain-id "$BRAIN_ID" \
         --grpc-addr "0.0.0.0:$node_port" --advertise-addr "127.0.0.1:$node_port" \
         --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" \
         "${EXECUTION_ARGS[@]}" \
         >"$LOG_DIR/node_${index}.log" 2>&1 &
     node_pid="$!"
     PIDS+=("$node_pid")
+    WORKER_IDS+=("$node_id")
+    WORKER_PORTS+=("$node_port")
     if ! wait_for_port "$node_port" "$node_pid"; then
         echo "node_${index} did not listen on port $node_port; see $LOG_DIR/node_${index}.log" >&2
         exit 1
@@ -317,10 +323,33 @@ if [[ "$NO_WEB" != "1" ]]; then
         echo "web UI did not become ready; see $LOG_DIR/web_ui.log" >&2
         exit 1
     fi
+
+    cluster_check_args=(
+        --base-url "http://127.0.0.1:$WEB_PORT"
+        --orchestrator "http://127.0.0.1:$ORCH_PORT"
+        --brain-id "$BRAIN_ID"
+        --timeout "${AARNN_CLUSTER_READY_TIMEOUT_S:-45}"
+    )
+    for index in "${!WORKER_IDS[@]}"; do
+        cluster_check_args+=(
+            --worker "${WORKER_IDS[index]}=127.0.0.1:${WORKER_PORTS[index]}"
+            --pid "${WORKER_IDS[index]}=${PIDS[index + 1]}"
+        )
+    done
+    if ! CLUSTER_WORKERS="$(python3 "$ROOT_DIR/scripts/qa/wait_for_local_cluster.py" "${cluster_check_args[@]}")"; then
+        echo "Local cluster did not become ready; recent service logs follow:" >&2
+        for index in "${!WORKER_IDS[@]}"; do
+            tail -n 40 "$LOG_DIR/node_${index + 1}.log" >&2 || true
+        done
+        tail -n 60 "$LOG_DIR/orchestrator.log" "$LOG_DIR/web_ui.log" >&2
+        exit 1
+    fi
 fi
 
 echo "----------------------------------------------------------------"
 echo "Local AARNN cluster is running with $NODE_COUNT worker(s)."
+echo "Local cluster master / I/O ingress brain: $BRAIN_ID"
+if [[ "$NO_WEB" != "1" ]]; then echo "Joined workers: $CLUSTER_WORKERS"; fi
 echo "Orchestrator: http://127.0.0.1:$ORCH_PORT"
 if [[ "$NO_WEB" != "1" ]]; then echo "Web UI:       http://127.0.0.1:$WEB_PORT"; fi
 echo "Logs:         $LOG_DIR"

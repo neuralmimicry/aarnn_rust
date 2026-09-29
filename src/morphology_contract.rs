@@ -1083,6 +1083,11 @@ pub struct PointOnlyReconstruction {
     pub schema_version: SchemaVersion,
     pub source: String,
     pub seed: u64,
+    /// Physical soma radius retained from the reconstruction admission
+    /// policy. Older imports do not carry this witness and therefore cannot
+    /// request multi-pixel anatomical soma rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soma_radius_mm: Option<f64>,
     pub connectome: PointOnlyConnectome,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub soma_position_repairs: Vec<SomaPositionRepair>,
@@ -1096,7 +1101,7 @@ pub struct PointOnlyReconstruction {
 }
 
 impl PointOnlyReconstruction {
-    pub const SCHEMA_VERSION: u16 = 3;
+    pub const SCHEMA_VERSION: u16 = 4;
 
     pub fn display_snapshot(
         &self,
@@ -1142,6 +1147,7 @@ impl PointOnlyReconstruction {
                     .copied()
                     .unwrap_or(neuron.position_mm),
                 kind: AnatomicalKind::Soma,
+                soma_radius_mm: self.soma_radius_mm,
                 colour_slot: 0,
             });
         }
@@ -1149,56 +1155,79 @@ impl PointOnlyReconstruction {
             |id: AnatomicalId| self.state.elements.get(&id).map(|element| element.owner);
         let mut edges = Vec::with_capacity(max_edges.min(4096));
         let mut omitted_edges = false;
-        let sampled_connections = evenly_spaced_indices(self.connections.len(), max_edges.max(1));
-        omitted_edges |= sampled_connections.len() < self.connections.len();
+        let sampled_connections =
+            evenly_spaced_indices(self.connectome.connections.len(), max_edges.max(1));
+        omitted_edges |= sampled_connections.len() < self.connectome.connections.len();
+        let reconstruction_by_id = self
+            .connections
+            .iter()
+            .map(|result| (result.connection_id, result))
+            .collect::<BTreeMap<_, _>>();
         for connection_index in sampled_connections {
-            let result = &self.connections[connection_index];
-            let ReconstructionConnectionStatus::Reconstructed { synapse_id, .. } = result.status
-            else {
+            let Some(connection) = self.connectome.connections.get(connection_index) else {
                 continue;
             };
-            let Some(synapse) = self.state.synapses.get(&synapse_id) else {
+            let Some(source) = self.soma_ids.get(&connection.pre).copied() else {
                 continue;
             };
-            let Some(source) = self.soma_ids.get(&result.pre).copied() else {
+            let Some(target) = self.soma_ids.get(&connection.post).copied() else {
                 continue;
             };
-            let Some(target) = self.soma_ids.get(&result.post).copied() else {
-                continue;
-            };
-            if !visible_neurons.contains(&result.pre) || !visible_neurons.contains(&result.post) {
+            if !visible_neurons.contains(&connection.pre)
+                || !visible_neurons.contains(&connection.post)
+            {
                 omitted_edges = true;
                 continue;
             }
-            let mut points =
-                sampled_path_positions(&synapse.route.axon.samples, MAX_DISPLAY_PATH_POINTS / 2);
-            omitted_edges |= synapse.route.axon.samples.len() > MAX_DISPLAY_PATH_POINTS / 2;
-            if let Some(dendrite) = &synapse.route.dendrite {
-                omitted_edges |= dendrite.samples.len() > MAX_DISPLAY_PATH_POINTS - points.len();
-                points.extend(
-                    sampled_path_positions(
-                        &dendrite.samples,
-                        MAX_DISPLAY_PATH_POINTS - points.len(),
-                    )
-                    .into_iter()
-                    .rev(),
-                );
+            if edges.len() >= max_edges.max(1) {
+                omitted_edges = true;
+                continue;
             }
-            if owner_for_site(synapse.pre_site) == Some(result.pre)
-                && owner_for_site(synapse.post_site) == Some(result.post)
+
+            // Keep the logical connectome edge visible even when physical
+            // route reconstruction was rejected. Stages 5–6 draw these
+            // source-to-target links; stages 7–9 draw only the separately
+            // admitted physical paths and contacts below.
+            let mut points = Vec::new();
+            let mut kind = "connectome";
+            if let Some(ReconstructionConnectionResult {
+                pre,
+                post,
+                status: ReconstructionConnectionStatus::Reconstructed { synapse_id, .. },
+                ..
+            }) = reconstruction_by_id.get(&connection.id).copied()
+                && *pre == connection.pre
+                && *post == connection.post
+                && let Some(synapse) = self.state.synapses.get(synapse_id)
+                && owner_for_site(synapse.pre_site) == Some(connection.pre)
+                && owner_for_site(synapse.post_site) == Some(connection.post)
             {
-                if edges.len() >= max_edges.max(1) {
-                    omitted_edges = true;
-                    continue;
+                points = sampled_path_positions(
+                    &synapse.route.axon.samples,
+                    MAX_DISPLAY_PATH_POINTS / 2,
+                );
+                omitted_edges |= synapse.route.axon.samples.len() > MAX_DISPLAY_PATH_POINTS / 2;
+                if let Some(dendrite) = &synapse.route.dendrite {
+                    omitted_edges |=
+                        dendrite.samples.len() > MAX_DISPLAY_PATH_POINTS - points.len();
+                    points.extend(
+                        sampled_path_positions(
+                            &dendrite.samples,
+                            MAX_DISPLAY_PATH_POINTS - points.len(),
+                        )
+                        .into_iter()
+                        .rev(),
+                    );
                 }
-                edges.push(DisplayEdge {
-                    source,
-                    target,
-                    points_mm: points,
-                    multiplicity: 1,
-                    kind: "procedural_route".to_owned(),
-                });
+                kind = "procedural_route";
             }
+            edges.push(DisplayEdge {
+                source,
+                target,
+                points_mm: points,
+                multiplicity: 1,
+                kind: kind.to_owned(),
+            });
         }
         // Preserve each committed physical neurite as first-class display
         // geometry.  The combined route edge above is useful for tracing a
@@ -1350,6 +1379,14 @@ impl PointOnlyReconstruction {
             snapshot.coverage.truncated = true;
             snapshot.coverage.complete = false;
         }
+        // Reconstruction admits paired routes against a shared finite 3D
+        // reservation set before this read-only projection is made.
+        snapshot.coverage.volumetric_clearance_verified = self.soma_radius_mm.is_some()
+            && snapshot
+                .nodes
+                .iter()
+                .all(|node| node.soma_radius_mm.is_some())
+            && snapshot.paths.iter().all(|path| path.radius_mm > 0.0);
         Ok(snapshot)
     }
 
@@ -1434,6 +1471,7 @@ impl PointOnlyReconstruction {
                     .then_some(layer.saturating_sub(1)),
                 position_mm: Vec3 { x, y, z: 0.0 },
                 kind: AnatomicalKind::Soma,
+                soma_radius_mm: None,
                 colour_slot: 0,
             });
         }
@@ -1654,6 +1692,7 @@ pub fn reconstruct_point_only_connectome(
         schema_version: SchemaVersion::new(PointOnlyReconstruction::SCHEMA_VERSION)?,
         source: "point_only_connectome_procedural_reconstruction".to_owned(),
         seed: config.seed,
+        soma_radius_mm: Some(config.soma_radius_mm),
         connectome: canonical_connectome,
         soma_position_repairs,
         environment,
@@ -2508,6 +2547,11 @@ pub struct DisplayCoverage {
     /// a coverage box and must not be mistaken for the tissue boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membrane: Option<DisplayMembrane>,
+    /// True only when the authoritative geometry admission path proved that
+    /// distinct volumetric structures have clearance. Older snapshots decode
+    /// as false and cannot enable the detailed volume stages.
+    #[serde(default)]
+    pub volumetric_clearance_verified: bool,
     pub complete: bool,
     pub truncated: bool,
     pub unavailable_reason: Option<String>,
@@ -2548,6 +2592,11 @@ pub struct DisplayNode {
     pub layer: Option<usize>,
     pub position_mm: Vec3,
     pub kind: AnatomicalKind,
+    /// Physical soma radius in millimetres when it was retained by the
+    /// authoritative geometry producer. Missing legacy metadata is never
+    /// replaced with a renderer-chosen size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soma_radius_mm: Option<f64>,
     /// Deterministic presentation slot. Adjacent nodes in this snapshot are
     /// assigned different slots; renderers derive their hue from this value.
     #[serde(default)]
@@ -2692,6 +2741,7 @@ impl DisplaySnapshot {
             coverage: DisplayCoverage {
                 region: coverage_region,
                 membrane: None,
+                volumetric_clearance_verified: false,
                 complete,
                 truncated,
                 unavailable_reason,
@@ -3532,6 +3582,43 @@ mod tests {
     }
 
     #[test]
+    fn anatomical_display_keeps_logical_edges_when_route_reconstruction_is_rejected() {
+        let mut environment = reconstruction_environment();
+        // This wall separates the sample connectome's soma groups. Its
+        // clearance is a physical-route concern and must not erase the
+        // source graph from the lower anatomical connection stages.
+        environment.forbidden.push(AxisAlignedBox {
+            min: Vec3 {
+                x: 0.35,
+                y: -2.0,
+                z: -2.0,
+            },
+            max: Vec3 {
+                x: 0.45,
+                y: 2.0,
+                z: 2.0,
+            },
+        });
+        let reconstruction = reconstruct_point_only_connectome(
+            point_connectome(false),
+            environment,
+            ReconstructionConfig::default(),
+        )
+        .unwrap();
+        assert!(reconstruction.connections.iter().any(|connection| matches!(
+            connection.status,
+            ReconstructionConnectionStatus::Rejected { .. }
+        )));
+
+        let snapshot = reconstruction.display_snapshot(1, 64, 128).unwrap();
+        assert_eq!(
+            snapshot.edges.len(),
+            reconstruction.connectome.connections.len()
+        );
+        assert!(snapshot.edges.iter().any(|edge| edge.kind == "connectome"));
+    }
+
+    #[test]
     fn display_colour_slots_separate_adjacent_neurons() {
         let a = AnatomicalId::new(1, 1).unwrap();
         let b = AnatomicalId::new(2, 1).unwrap();
@@ -3555,6 +3642,7 @@ mod tests {
                         z: 0.0,
                     },
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: Some(0.04),
                     colour_slot: 0,
                 },
                 DisplayNode {
@@ -3567,6 +3655,7 @@ mod tests {
                         z: 0.0,
                     },
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: Some(0.04),
                     colour_slot: 0,
                 },
                 DisplayNode {
@@ -3579,6 +3668,7 @@ mod tests {
                         z: 0.0,
                     },
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: Some(0.04),
                     colour_slot: 0,
                 },
             ],

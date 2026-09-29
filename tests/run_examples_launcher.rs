@@ -24,10 +24,11 @@ fn example_launcher_uses_the_complete_feature_profile() {
         "local nodes must advertise reachable loopback endpoints rather than wildcard bind addresses"
     );
     assert!(source.contains("scripts/local_management_env.py"));
-    assert!(source.contains("--execution-mode distributed,sharded"));
+    assert!(source.contains("--execution-mode \"distributed,sharded\""));
     assert!(source.contains("--execution-scope cluster"));
     assert!(source.contains("--execution-desired-shards 2"));
     assert!(source.contains("NM_DISTRIBUTED_AUTOSTART=1"));
+    assert!(source.contains("export NM_DISTRIBUTED_AUTOSTART=1"));
 }
 
 #[test]
@@ -39,8 +40,105 @@ fn example_launcher_reports_a_ready_dashboard_url() {
         "the launcher must verify the dashboard before reporting its URL"
     );
     assert!(
+        source.contains("scripts/qa/wait_for_local_cluster.py")
+            && source.contains("Cluster worker readiness verified"),
+        "the launcher must wait for its worker endpoints to join before reporting a running cluster"
+    );
+    assert!(
         source.contains("echo \"Web dashboard URL (port $WEB_UI_PORT): $WEB_UI_URL\""),
         "the launcher must print the exact dashboard URL and port users can open"
+    );
+}
+
+#[test]
+fn example_launcher_prepares_sensory_capacity_before_optional_audio_playback() {
+    let source = launcher();
+    let audio_branch = source
+        .find("if [ -n \"${AARNN_AUDIO_FILE:-}\" ]")
+        .expect("audio playback remains optional");
+    let sensory_contract = source
+        .find("scripts/qa/prepare_audio_io_contract.py")
+        .expect("the launcher must prepare its run-local sensory contract");
+
+    assert!(source.contains("AARNN_AUDIO_SENSORY_NEURONS=\"${AARNN_AUDIO_SENSORY_NEURONS:-64}\""));
+    assert!(
+        sensory_contract > audio_branch,
+        "the sensory contract is prepared after the optional source check, including when no file is set"
+    );
+    assert!(source.contains("Prepared managed sensory I/O contract"));
+}
+
+#[test]
+fn example_workers_wait_for_the_authoritative_startup_snapshot() {
+    let source = launcher();
+    assert!(source.contains("NM_DISTRIBUTE_STARTUP_SNAPSHOT=1"));
+    for node_id in ["NODE1_ID", "NODE2_ID"] {
+        let expected = format!(
+            "NM_PRELOAD_NODE_NETWORK=0 \\\n\"$BIN_DIR/aarnn_rust\" --node --node-id \"${node_id}\""
+        );
+        assert!(
+            source.contains(&expected),
+            "{node_id} must not run a local placeholder before the orchestrator loads the aligned snapshot"
+        );
+    }
+}
+
+#[test]
+fn local_cluster_launchers_separate_brain_and_worker_identity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let examples = fs::read_to_string(root.join("run_examples.sh")).unwrap();
+    assert!(examples.contains("--node --node-id \"$NODE1_ID\" --brain-id \"$CLUSTER_BRAIN_ID\""));
+    assert!(examples.contains("--node --node-id \"$NODE2_ID\" --brain-id \"$CLUSTER_BRAIN_ID\""));
+    assert!(examples.contains("scripts/qa/wait_for_local_cluster.py"));
+    assert!(examples.contains("--worker \"$NODE1_ID=127.0.0.1:$NODE1_PORT\""));
+    assert!(examples.contains("30000 + RANDOM % 20000"));
+
+    let webcluster = fs::read_to_string(root.join("run_webcluster.sh")).unwrap();
+    assert!(webcluster.contains("--node --node-id \"$NODE1_ID\" --brain-id \"$CLUSTER_BRAIN_ID\""));
+    assert!(webcluster.contains("--node --node-id \"$NODE2_ID\" --brain-id \"$CLUSTER_BRAIN_ID\""));
+    assert!(webcluster.contains("scripts/qa/wait_for_local_cluster.py"));
+
+    let search = fs::read_to_string(root.join("run_search.sh")).unwrap();
+    assert!(search.contains("--node-id node_1 --brain-id \"$CLUSTER_BRAIN_ID\""));
+    assert!(search.contains("--node-id node_2 --brain-id \"$CLUSTER_BRAIN_ID\""));
+
+    let process_cluster = fs::read_to_string(root.join("scripts/run_cluster.sh")).unwrap();
+    assert!(process_cluster.contains("--node --node-id \"$node_id\" --brain-id \"$BRAIN_ID\""));
+    assert!(process_cluster.contains("wait_for_local_cluster.py"));
+
+    let container_cluster = fs::read_to_string(root.join("run_container_cluster.sh")).unwrap();
+    assert!(container_cluster.contains("--node-id \"${NODE_ID}\""));
+    assert!(container_cluster.contains("--brain-id \"${BRAIN_ID_ORCH}\""));
+    assert!(container_cluster.contains("wait_for_local_cluster.py"));
+
+    let desktop_cluster =
+        fs::read_to_string(root.join("tools/run_ui_cluster_containers.sh")).unwrap();
+    assert!(
+        desktop_cluster.contains("--node --node-id \"$NODE_ID\" --brain-id \"$BRAIN_ID_ORCH\"")
+    );
+
+    let mixed_deployment =
+        fs::read_to_string(root.join("scripts/deploy_mixed_cluster.sh")).unwrap();
+    assert!(mixed_deployment.contains("--orchestrator --brain-id cluster_master"));
+    assert!(mixed_deployment.contains("--node-id \"\\${NODE_ID}\""));
+    assert!(mixed_deployment.contains("--brain-id cluster_master"));
+}
+
+#[test]
+fn local_cluster_readiness_probe_passes_its_python_contract_tests() {
+    let qa_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/qa");
+    let output = Command::new("python3")
+        .args(["-m", "unittest", "-v", "test_local_cluster_readiness"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("PYTHONPATH", &qa_dir)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("python3 must run local cluster readiness contract tests");
+    assert!(
+        output.status.success(),
+        "local cluster readiness tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -68,7 +166,8 @@ fn example_launcher_validates_and_forwards_explicit_audio_input() {
     assert!(source.contains("AARNN_AUDIO_FILE"));
     assert!(source.contains("AARNN_AUDIO_SENSORY_NEURONS"));
     assert!(source.contains("not a readable regular file"));
-    assert!(source.contains("export AARNN_AUDIO_FILE AARNN_AUDIO_SENSORY_NEURONS"));
+    assert!(source.contains("export AARNN_AUDIO_FILE"));
+    assert!(source.contains("export AARNN_AUDIO_SENSORY_NEURONS"));
     assert!(source.contains("must be at most 65536"));
 }
 
@@ -131,7 +230,7 @@ fn parameterized_cluster_launcher_supports_standalone_single_and_multi_worker_mo
     assert!(source.contains("if ! kill -0 \"$pid\""));
     assert!(source.contains("reserve_explicit_port"));
     assert!(source.contains("--orchestrator-addr \"http://127.0.0.1:$ORCH_PORT\""));
-    assert!(source.contains("--execution-mode distributed,sharded"));
+    assert!(source.contains("--execution-mode \"distributed,sharded\""));
     assert!(source.contains("--execution-scope cluster"));
     assert!(source.contains("--execution-desired-shards"));
     assert!(source.contains("NM_DISTRIBUTE_STARTUP_SNAPSHOT=1"));
@@ -391,7 +490,7 @@ fn robot_combo_launchers_and_container_workers_select_cluster_sharding() {
         "/scripts/container_entrypoint.sh"
     ))
     .expect("container entrypoint must be present");
-    assert!(entrypoint.contains("--execution-mode distributed,sharded"));
+    assert!(entrypoint.contains("--execution-mode \"distributed,sharded\""));
     assert!(entrypoint.contains("--execution-scope cluster"));
     assert!(entrypoint.contains("AARNN_EXECUTION_DESIRED_SHARDS"));
 }

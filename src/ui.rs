@@ -38,8 +38,9 @@ use crate::distributed::{
     DistributedNode, ManagedNetwork,
     proto::{
         ClusterNetworkSnapshotRequest, ClusterNetworkSnapshotResponse, ControlUpdate,
-        NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest, NodeStatus, StatusRequest,
-        control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+        NetworkActivityRequest, NetworkSnapshotRequest, NetworkStatus, NetworkUpdateRequest,
+        NodeStatus, StatusRequest, control_update,
+        distributed_neuromorphic_client::DistributedNeuromorphicClient,
         distributed_neuromorphic_server::DistributedNeuromorphic, network_update_request,
     },
 };
@@ -101,6 +102,15 @@ const CONTROL_STATUS_ROW_HEIGHT: f32 = 18.0;
 
 #[cfg(feature = "ui")]
 const LAYOUT_SIZE_QUANTUM: f32 = 4.0;
+
+/// Presentation polling has a separate, short deadline and never gates the
+/// authoritative neural traversal or the workstation's render loop.
+#[cfg(feature = "ui")]
+const CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+#[cfg(feature = "ui")]
+const CLUSTER_DISPLAY_ACTIVITY_RPC_TIMEOUT: Duration = Duration::from_millis(700);
+#[cfg(feature = "ui")]
+const CLUSTER_DISPLAY_ACTIVITY_MAX_TARGETS: usize = 16;
 
 #[cfg(feature = "ui")]
 fn add_fixed_control_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
@@ -1140,6 +1150,172 @@ fn network_config_from_payload(payload: &str) -> Option<NetworkConfig> {
         })
 }
 
+/// Resolve the sensory-vector width for the brain shown by the workstation.
+/// Managed views require an authoritative target width; only a standalone
+/// view may use the workstation's local configuration or configured fallback.
+fn resolve_view_input_sensory_count(
+    standalone_view: bool,
+    managed_count: Option<usize>,
+    local_count: usize,
+    configured_fallback: usize,
+) -> Option<usize> {
+    if standalone_view {
+        Some(if local_count > 0 {
+            local_count
+        } else {
+            configured_fallback.max(1)
+        })
+    } else {
+        managed_count.filter(|count| *count > 0)
+    }
+}
+
+/// Select a bounded width for decoding an audio source independently of
+/// whether the currently selected managed brain can accept sensory frames.
+/// A local provider remains useful while managed topology is unavailable, but
+/// only `resolve_view_input_sensory_count` may establish a managed route.
+fn resolve_audio_provider_sensory_count(
+    standalone_view: bool,
+    managed_count: Option<usize>,
+    local_count: usize,
+    configured_fallback: usize,
+) -> usize {
+    resolve_view_input_sensory_count(
+        standalone_view,
+        managed_count,
+        local_count,
+        configured_fallback,
+    )
+    .filter(|count| (1..=MAX_AUDIO_SENSORY_NEURONS).contains(count))
+    .or_else(|| {
+        (1..=MAX_AUDIO_SENSORY_NEURONS)
+            .contains(&local_count)
+            .then_some(local_count)
+    })
+    .unwrap_or(configured_fallback)
+    .clamp(1, MAX_AUDIO_SENSORY_NEURONS)
+}
+
+/// Explain why a selected sensory source is not currently mapped into a
+/// managed network. A paused network must not consume file frames in the
+/// background, so the user needs to start it before the route becomes active.
+fn managed_input_inactive_message(
+    audio_file: bool,
+    playing: Option<bool>,
+    local_ingress_available: bool,
+    sensory_width: Option<usize>,
+) -> String {
+    if !local_ingress_available {
+        return "Managed input is waiting for a connected worker to host and load the selected network's sensory ingress layer".into();
+    }
+    if playing == Some(false) {
+        let source = if audio_file {
+            "Audio file"
+        } else {
+            "Sensory source"
+        };
+        return format!("{source} ready; press Start to activate managed input mapping");
+    }
+    if playing.is_none() {
+        return "Managed input is waiting for the selected network's run state".into();
+    }
+    let Some(width) = sensory_width.filter(|width| *width > 0) else {
+        return "Managed input is waiting for an available sensory input on the selected brain"
+            .into();
+    };
+    if audio_file && width > MAX_AUDIO_SENSORY_NEURONS {
+        return format!(
+            "Audio input cannot be mapped: network sensory width {width} exceeds the supported maximum {MAX_AUDIO_SENSORY_NEURONS}"
+        );
+    }
+    "Managed input route is being activated".into()
+}
+
+/// Keep provider shape changes ordered with the managed-input route control.
+/// If the target width is temporarily unavailable, keep the provider usable
+/// for standalone work while leaving the managed route disabled.
+fn distributed_input_provider_width(
+    provider_ready: bool,
+    route_enabled: bool,
+    target_count: Option<usize>,
+    local_count: usize,
+) -> Option<usize> {
+    if !provider_ready {
+        return None;
+    }
+    if route_enabled {
+        Some(
+            target_count
+                .filter(|count| *count > 0)
+                .unwrap_or(local_count.max(1)),
+        )
+    } else {
+        Some(local_count.max(1))
+    }
+}
+
+/// Prefer the freshest local execution state when the network registry is
+/// behind. Registry snapshots can lag a running managed network and must not
+/// suppress activation of its sensory input route.
+fn resolve_managed_playing_state(
+    live_state: Option<bool>,
+    local_cache: Option<bool>,
+    registry_state: Option<bool>,
+) -> Option<bool> {
+    live_state.or(local_cache).or(registry_state)
+}
+
+/// Decide whether an audio/microphone provider may target a managed brain.
+/// A managed route only exists after the selected brain is known to be playing
+/// and both its input width and local ingress capability are available.
+fn resolve_distributed_input_route_target(
+    network_id: Option<&str>,
+    playing: Option<bool>,
+    provider_ready: bool,
+    local_ingress_available: bool,
+    sensory_width: Option<usize>,
+    audio_file: bool,
+) -> Option<(String, usize)> {
+    if playing != Some(true) || !provider_ready || !local_ingress_available {
+        return None;
+    }
+    let network_id = network_id.filter(|id| !id.trim().is_empty())?;
+    let width = sensory_width.filter(|width| {
+        *width > 0 && (!audio_file || (1..=MAX_AUDIO_SENSORY_NEURONS).contains(width))
+    })?;
+    Some((network_id.to_owned(), width))
+}
+
+/// Retry transient bridge backpressure without advancing the audio provider.
+/// A sensory frame keeps the same identity until the bridge acknowledges it,
+/// so replaying this request is safe and preserves source order.
+fn managed_sensory_delivery_error_is_retryable(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("timed out")
+        || error.contains("timeout expired")
+        || error.contains("deadline exceeded")
+        || error.contains("resource exhausted")
+        || error.contains("temporarily unavailable")
+        || error.contains("operation was cancelled")
+        || error.contains("operation was canceled")
+}
+
+/// Bound transient bridge retries; expiry closes this input generation visibly.
+const MANAGED_SENSORY_BACKPRESSURE_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(120);
+const MANAGED_SENSORY_BACKPRESSURE_RETRY_DELAY: std::time::Duration =
+    std::time::Duration::from_millis(50);
+
+/// A selected managed view owns provider progress. While its sensory bridge
+/// is unavailable, the workstation must wait without advancing its unrelated
+/// standalone Runner or consuming recorded input.
+fn managed_input_waits_without_local_simulation(
+    managed_view_active: bool,
+    route_active: bool,
+) -> bool {
+    managed_view_active && !route_active
+}
+
 #[cfg(all(feature = "ui", feature = "morpho", feature = "growth3d"))]
 use crate::morphology::SynKind;
 
@@ -1505,7 +1681,16 @@ enum SimControl {
     /// Route provider frames into a managed distributed network. The local
     /// Runner remains untouched while this target is active; the distributed
     /// executor owns the biological step.
-    SetDistributedInput(Option<String>),
+    SetDistributedInput {
+        target: Option<String>,
+        /// Resize only the sensory provider before admitting its next frame.
+        /// Managed brains can have a different input width from the UI's local
+        /// preview Runner, so resizing the Runner here would mutate the wrong
+        /// execution context.
+        provider_sensory_count: Option<usize>,
+        /// Pause local simulation while a managed provider awaits its bridge.
+        managed_view_active: Option<bool>,
+    },
     SetProvider(Box<dyn SensoryProvider + Send>),
     ApplyConfig(crate::config::NetworkConfig),
     SetModel(NeuronModel),
@@ -1534,7 +1719,21 @@ enum SimControl {
 #[cfg(feature = "ui")]
 struct DistributedSensoryFrame {
     network_id: String,
+    session_id: String,
+    frame_sequence: u64,
     step_index: i64,
+    spikes: Vec<i8>,
+}
+
+/// Latest bridge-acknowledged sensory sample for the visualisation path.
+/// Keeping its source identity beside the values prevents pending provider
+/// frames or a previously selected brain from being displayed as live input.
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ManagedSensoryDisplayFrame {
+    network_id: String,
+    session_id: String,
+    frame_sequence: u64,
     spikes: Vec<i8>,
 }
 
@@ -1615,11 +1814,185 @@ enum ClusterSnapshotMsg {
         /// placement metadata is being repaired or rebalanced.
         topology_witness: bool,
     },
+    EdgesReady {
+        network_id: String,
+        assignment_digest: u64,
+        snapshot_step: usize,
+        request_generation: u64,
+        density: usize,
+        edges: Vec<CachedEdge>,
+        sizes: Vec<usize>,
+        counts: Vec<usize>,
+        output_count: usize,
+    },
+    EdgesFailed {
+        network_id: String,
+        request_generation: u64,
+    },
+    #[cfg(feature = "growth3d")]
+    DisplayReady {
+        network_id: String,
+        snapshot_step: usize,
+        morphology_revision: u64,
+        topology_epoch: u64,
+        request_generation: u64,
+        contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
+    },
+    #[cfg(feature = "growth3d")]
+    DisplayFailed {
+        network_id: String,
+        request_generation: u64,
+        error: String,
+    },
     Err {
         network_id: String,
         node_id: String,
         error: String,
     },
+}
+
+#[cfg(feature = "ui")]
+struct ClusterActivityRpcTarget {
+    node_id: String,
+    address: String,
+    owned_layers: Vec<u32>,
+    cached_client: Option<DistributedNeuromorphicClient<tonic::transport::Channel>>,
+    bearer_token: Option<String>,
+}
+
+#[cfg(feature = "ui")]
+struct ClusterDisplayActivitySample {
+    node_id: String,
+    owned_layers: Vec<u32>,
+    sim_step: u64,
+    sensory_indices: Vec<u32>,
+    hidden_indices: Vec<Vec<u32>>,
+    output_indices: Vec<u32>,
+    /// Recent worker output history, oldest first, for the dashboard raster.
+    output_history: Vec<(u64, Vec<u32>)>,
+}
+
+#[cfg(feature = "ui")]
+struct ClusterDisplayActivityPoll {
+    network_id: String,
+    assignment_digest: u64,
+    samples: Vec<ClusterDisplayActivitySample>,
+}
+
+#[cfg(feature = "ui")]
+fn cluster_activity_poll_is_current(
+    poll: &ClusterDisplayActivityPoll,
+    selected_network_id: &str,
+    current_assignment_digest: u64,
+) -> bool {
+    poll.network_id == selected_network_id && poll.assignment_digest == current_assignment_digest
+}
+
+/// Query every assigned layer owner concurrently with a strict aggregate
+/// deadline. A display timeout drops only this projection request; it cannot
+/// delay or alter committed neural work.
+#[cfg(feature = "ui")]
+async fn poll_cluster_display_activity(
+    network_id: String,
+    assignment_digest: u64,
+    targets: Vec<ClusterActivityRpcTarget>,
+) -> ClusterDisplayActivityPoll {
+    let mut requests = tokio::task::JoinSet::new();
+    for target in targets
+        .into_iter()
+        .take(CLUSTER_DISPLAY_ACTIVITY_MAX_TARGETS)
+    {
+        let network_id = network_id.clone();
+        requests.spawn(async move {
+            let node_id = target.node_id;
+            let owned_layers = target.owned_layers;
+            let mut client = match target.cached_client {
+                Some(client) => client,
+                None => match tokio::time::timeout(
+                    CLUSTER_DISPLAY_ACTIVITY_RPC_TIMEOUT,
+                    connect_cluster_client(target.address),
+                )
+                .await
+                {
+                    Ok(Ok(client)) => client,
+                    _ => return None,
+                },
+            };
+            let request = authenticated_grpc_request(
+                NetworkActivityRequest {
+                    network_id: network_id.clone(),
+                },
+                target.bearer_token.as_deref(),
+            )
+            .ok()?;
+            let response = tokio::time::timeout(
+                CLUSTER_DISPLAY_ACTIVITY_RPC_TIMEOUT,
+                client.get_network_activity(request),
+            )
+            .await
+            .ok()?
+            .ok()?
+            .into_inner();
+            if response.network_id != network_id {
+                return None;
+            }
+            let sim_step = response.sim_step;
+            let output_indices = response
+                .output
+                .map(|activity| activity.indices)
+                .unwrap_or_default();
+            let mut output_history = response
+                .output_history
+                .into_iter()
+                .enumerate()
+                .filter_map(|(offset, activity)| {
+                    sim_step
+                        .checked_sub(offset as u64)
+                        .map(|step| (step, activity.indices))
+                })
+                .collect::<Vec<_>>();
+            output_history.reverse();
+            if output_history.last().map(|(step, _)| *step) != Some(sim_step) {
+                output_history.push((sim_step, output_indices.clone()));
+            }
+            Some(ClusterDisplayActivitySample {
+                node_id,
+                owned_layers,
+                sim_step,
+                sensory_indices: response
+                    .sensory
+                    .map(|activity| activity.indices)
+                    .unwrap_or_default(),
+                hidden_indices: response
+                    .hidden
+                    .into_iter()
+                    .map(|activity| activity.indices)
+                    .collect(),
+                output_indices,
+                output_history,
+            })
+        });
+    }
+
+    let mut samples = Vec::new();
+    while let Some(result) = requests.join_next().await {
+        if let Ok(Some(sample)) = result {
+            samples.push(sample);
+        }
+    }
+    ClusterDisplayActivityPoll {
+        network_id,
+        assignment_digest,
+        samples,
+    }
+}
+
+#[cfg(feature = "ui")]
+struct ClusterControlResult {
+    network_id: String,
+    playing_after: bool,
+    status: String,
+    result: Result<(), String>,
 }
 
 #[cfg(feature = "ui")]
@@ -1746,6 +2119,17 @@ fn decode_cluster_snapshot_projection(
     ))
 }
 
+/// Aggregate cluster snapshots are owned by the orchestrator and contain
+/// authoritative worker shards, not necessarily a shard named after the
+/// orchestrator itself. Worker callers retain the strict local-shard check.
+#[cfg(feature = "ui")]
+fn local_cluster_snapshot_preferred_shard<'a>(
+    is_orchestrator: bool,
+    local_node_id: &'a str,
+) -> Option<&'a str> {
+    (!is_orchestrator).then_some(local_node_id)
+}
+
 #[cfg(feature = "ui")]
 fn validate_cluster_snapshot_assignment(
     layer_owners: &BTreeMap<u32, String>,
@@ -1779,6 +2163,23 @@ fn cluster_snapshot_assignment_digest(shards: &[(String, Vec<u32>)]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     canonical.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Keep a completed presentation projection when only a newer cut of the
+/// same active layer assignment arrives. A layer move, network switch or
+/// logical-time rewind invalidates it and requires a fresh worker result.
+#[cfg(feature = "ui")]
+fn cluster_edge_projection_can_be_reused(
+    cached_network_id: Option<&str>,
+    cached_assignment_digest: Option<u64>,
+    cached_snapshot_step: Option<usize>,
+    incoming_network_id: &str,
+    incoming_assignment_digest: u64,
+    incoming_snapshot_step: usize,
+) -> bool {
+    cached_network_id == Some(incoming_network_id)
+        && cached_assignment_digest == Some(incoming_assignment_digest)
+        && cached_snapshot_step.is_some_and(|step| incoming_snapshot_step >= step)
 }
 
 #[cfg(feature = "ui")]
@@ -1867,6 +2268,30 @@ fn merge_cluster_snapshot_projection(
 
     #[cfg(feature = "growth3d")]
     {
+        // Procedural geometry is brain-level display data rather than a
+        // placement-owned matrix. A worker may hold the richest copy even
+        // when another shard supplied the canonical matrix snapshot, so
+        // carry forward the most developed immutable reconstruction.
+        if let Some(reconstruction) = parsed
+            .iter()
+            .filter_map(|(_, _, snapshot)| snapshot.procedural_reconstruction.as_ref())
+            .max_by_key(|reconstruction| {
+                (
+                    reconstruction.state.topology_epoch,
+                    reconstruction.state.revision,
+                    reconstruction.state.paths.len(),
+                    reconstruction.connections.len(),
+                )
+            })
+        {
+            merged.procedural_reconstruction = Some(reconstruction.clone());
+            merged.procedural_reconstruction_error = None;
+        } else if merged.procedural_reconstruction.is_none() {
+            merged.procedural_reconstruction_error = parsed
+                .iter()
+                .find_map(|(_, _, snapshot)| snapshot.procedural_reconstruction_error.clone());
+        }
+
         let topology_source = parsed
             .iter()
             .find(|(_, _, snapshot)| {
@@ -1943,6 +2368,7 @@ fn merge_cluster_snapshot_projection(
 
 #[cfg(feature = "ui")]
 struct EdgeCacheResult {
+    request_generation: u64,
     edges: Vec<CachedEdge>,
     sizes: Vec<usize>,
     counts: Vec<usize>,
@@ -2103,6 +2529,9 @@ struct App {
     http_aer_base: u32,
     http_aer_status: Arc<RwLock<HttpAerInputStatus>>,
     audio_file_path: Option<String>,
+    /// True only while the selected provider instance is an active audio-file
+    /// source; a remembered path alone does not mean file stimuli are running.
+    audio_file_provider_active: bool,
     audio_file_sample_rate: Option<u32>,
     audio_file_sample_count: Option<usize>,
     video_preview: VideoPreviewStore,
@@ -2180,10 +2609,28 @@ struct App {
     early_positions: Vec<egui::Pos2>,
     network_layout: NetworkLayout,
     layout_auto: bool,
+    /// User-selected display complexity; presentation state never changes the
+    /// neural executor or its committed stimuli.
+    visualization_stage: u8,
+    visualization_auto: bool,
+    visualization_latency_ms: f64,
+    visualization_latency_samples: std::collections::VecDeque<f64>,
+    visualization_stage_changed_at: Instant,
     // Activity buffers (0..1, exponential decay)
     sensory_activity: Vec<f32>,
     hidden_activity: Vec<Vec<f32>>, // per layer
     output_activity: Vec<f32>,
+    /// Non-blocking, display-only activity fan-out for worker-owned cluster
+    /// layers. Each reply is fenced to the network's active assignment digest.
+    cluster_activity_tx: std::sync::mpsc::Sender<ClusterDisplayActivityPoll>,
+    cluster_activity_rx: std::sync::mpsc::Receiver<ClusterDisplayActivityPoll>,
+    cluster_activity_poll_inflight: bool,
+    cluster_activity_poll_next: Instant,
+    cluster_activity_network_id: Option<String>,
+    cluster_activity_assignment_digest: Option<u64>,
+    cluster_activity_last_steps: HashMap<String, u64>,
+    cluster_activity_last_success: Option<Instant>,
+    cluster_activity_last_active_count: usize,
     // Raster inset (recent output spikes)
     raster_cols: usize,
     raster_outputs: std::collections::VecDeque<Vec<i8>>, // time-major columns, each length = num_output_neurons
@@ -2340,6 +2787,10 @@ struct App {
     /// display contract used by the web FPV Studio.
     fpv_planner: bool,
     fpv_waypoints: Vec<crate::morphology_contract::AnatomicalId>,
+    fpv_waypoint_visualizations: Vec<crate::fpv_render_jobs::FpvVisualizationKeyframe>,
+    fpv_selected_waypoint: usize,
+    fpv_stage_selection: u8,
+    fpv_stage_auto_selection: bool,
     fpv_render_jobs: Vec<serde_json::Value>,
     fpv_jobs_refresh_inflight: bool,
     fpv_job_submit_inflight: bool,
@@ -2366,6 +2817,14 @@ struct App {
     ui_capture_close: bool,
     #[cfg(feature = "ui_screenshot")]
     ui_capture_requested: bool,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_wait_for_stage_three_activity: bool,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_readiness_timeout: Duration,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_readiness_started_at: Option<Instant>,
+    #[cfg(feature = "ui_screenshot")]
+    ui_capture_readiness_reported: bool,
     // Pop-out window state
     show_neuron_detail: bool,
     selected_neuron_pick: Option<ContextPick>,
@@ -2397,8 +2856,11 @@ struct App {
     // UI rate control
     #[allow(dead_code)]
     last_ui_render_time: std::time::Instant,
-    // Latest sensory spikes captured by sim thread (avoids read-lock contention).
-    sensory_spikes_snapshot: Arc<RwLock<Vec<i8>>>,
+    /// Latest sensory frame acknowledged by the I/O bridge. This display-only
+    /// cache is separate from the provider/simulation snapshot so pending
+    /// samples never affect the neural activity shown by a cluster view.
+    managed_sensory_display_frame: Arc<RwLock<Option<ManagedSensoryDisplayFrame>>>,
+    last_managed_sensory_display_frame: Option<(String, String, u64)>,
     // Full UI snapshot to avoid runner lock contention.
     ui_snapshot: Arc<RwLock<UiSnapshot>>,
     // Sim diagnostics for input flow.
@@ -2424,12 +2886,16 @@ struct App {
     remote_connections: Vec<RemoteConnection>,
     remote_status_tx: std::sync::mpsc::Sender<RemoteStatusMsg>,
     remote_status_rx: std::sync::mpsc::Receiver<RemoteStatusMsg>,
+    cluster_control_tx: std::sync::mpsc::Sender<ClusterControlResult>,
+    cluster_control_rx: std::sync::mpsc::Receiver<ClusterControlResult>,
+    pending_cluster_controls: HashSet<String>,
     remote_statuses: HashMap<String, RemoteStatusSnapshot>,
     tool_task_tx: std::sync::mpsc::Sender<ToolTaskResult>,
     tool_task_rx: std::sync::mpsc::Receiver<ToolTaskResult>,
     edge_cache_rx: std::sync::mpsc::Receiver<EdgeCacheResult>,
     edge_cache_res_tx: std::sync::mpsc::Sender<EdgeCacheResult>,
     edge_cache_inflight: bool,
+    edge_cache_generation: u64,
     pending_import: Option<PendingImport>,
     last_import_report: Option<String>,
     tflite_import_mode: TfliteImportMode,
@@ -2465,7 +2931,19 @@ struct App {
     cluster_snapshot_network_id: Option<String>,
     cluster_snapshot_node_id: Option<String>,
     cluster_snapshot_assignment_digest: Option<u64>,
-    cluster_snapshot_cache: Option<Box<crate::runner::Snapshot>>,
+    cluster_snapshot_cache: Option<Arc<crate::runner::Snapshot>>,
+    #[cfg(feature = "growth3d")]
+    cluster_display_projection: Option<ClusterDisplayProjection>,
+    #[cfg(feature = "growth3d")]
+    cluster_display_projection_generation: u64,
+    #[cfg(feature = "growth3d")]
+    cluster_display_projection_inflight_generation: Option<u64>,
+    #[cfg(feature = "growth3d")]
+    cluster_display_projection_error: Option<String>,
+    cluster_edge_cache_generation: u64,
+    cluster_edge_cache_inflight: bool,
+    cluster_edge_cache_inflight_generation: Option<u64>,
+    cluster_edge_cache_reported_generation: Option<u64>,
     #[cfg(feature = "growth3d")]
     cluster_topo_cache: Option<crate::topology::Topology3D>,
     #[cfg(feature = "growth3d")]
@@ -2477,6 +2955,14 @@ struct App {
     dist_network_registry: HashMap<String, NetworkStatus>,
     dist_local_playing_cache: HashMap<String, bool>,
     dist_initial_view_selected: bool,
+    /// Last managed sensory route submitted to the simulation controller.
+    /// Tracking target and width lets view-state reconciliation detect remote
+    /// starts/stops and managed-network growth without duplicate messages.
+    distributed_input_route: Option<(String, usize)>,
+    /// Last bounded sensory frame delivery result. Provider generation is
+    /// reported separately because only the worker acknowledgement proves
+    /// managed admission.
+    distributed_input_delivery_status: Arc<RwLock<String>>,
     // hull cache for UI rendering
     #[cfg(feature = "growth3d")]
     cached_skull_hull: Vec<egui::Pos2>,
@@ -2598,6 +3084,9 @@ impl App {
             "frame_rate": 30,
             "frame_count": 300,
             "zoom": 1.0,
+            "auto_visualization_latency_ms": self.visualization_latency_ms,
+            "visualization_policy_version": crate::visualization::VISUALIZATION_POLICY_VERSION,
+            "visualization_keyframes": self.fpv_waypoint_visualizations,
             "focus_active_regions": true,
         });
         let tx = self.tool_task_tx.clone();
@@ -2631,6 +3120,8 @@ impl App {
             ui.label("Click neurons in order to add camera waypoints.");
             if ui.button("Clear route").clicked() {
                 self.fpv_waypoints.clear();
+                self.fpv_waypoint_visualizations.clear();
+                self.fpv_selected_waypoint = 0;
             }
             if ui.button("Export route").clicked() && self.fpv_waypoints.len() >= 2 {
                 let scene = self
@@ -2681,6 +3172,56 @@ impl App {
             }
             ui.label(format!("{} waypoints", self.fpv_waypoints.len()));
         });
+        ui.separator();
+        let route_len = self.fpv_waypoints.len();
+        if route_len > 0 {
+            self.fpv_selected_waypoint = self.fpv_selected_waypoint.min(route_len - 1);
+        }
+        let current_keyframe = self
+            .fpv_waypoint_visualizations
+            .get(self.fpv_selected_waypoint)
+            .copied();
+        let mut selected_waypoint = self.fpv_selected_waypoint;
+        let mut selected_stage = current_keyframe
+            .map(|keyframe| keyframe.stage)
+            .unwrap_or(self.fpv_stage_selection)
+            .clamp(1, 9);
+        let mut selected_automatic = current_keyframe
+            .map(|keyframe| keyframe.automatic)
+            .unwrap_or(self.fpv_stage_auto_selection);
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(route_len > 0, |ui| {
+                egui::ComboBox::from_label("Waypoint")
+                    .selected_text(if route_len > 0 {
+                        format!("{} of {}", selected_waypoint + 1, route_len)
+                    } else {
+                        "Add waypoints".to_owned()
+                    })
+                    .show_ui(ui, |ui| {
+                        for index in 0..route_len {
+                            ui.selectable_value(
+                                &mut selected_waypoint,
+                                index,
+                                format!("Waypoint {}", index + 1),
+                            );
+                        }
+                    });
+            });
+            ui.add(egui::Slider::new(&mut selected_stage, 1..=9).text("Visual detail"));
+            ui.checkbox(&mut selected_automatic, "Auto at waypoint");
+        });
+        self.fpv_selected_waypoint = selected_waypoint;
+        self.fpv_stage_selection = selected_stage;
+        self.fpv_stage_auto_selection = selected_automatic;
+        if let Some(keyframe) = self
+            .fpv_waypoint_visualizations
+            .get_mut(self.fpv_selected_waypoint)
+        {
+            keyframe.stage = selected_stage;
+            keyframe.automatic = selected_automatic;
+            keyframe.zoom = f64::from(self.camera_zoom).clamp(0.2, 4.0);
+        }
+        ui.label("Each camera waypoint captures its own manual stage or Auto setting.");
         ui.separator();
 
         let scene = self
@@ -2797,6 +3338,15 @@ impl App {
                     .min_by(|left, right| left.1.total_cmp(&right.1));
                 if let Some((node, _)) = nearest {
                     self.fpv_waypoints.push(node.id);
+                    self.fpv_waypoint_visualizations.push(
+                        crate::fpv_render_jobs::FpvVisualizationKeyframe {
+                            waypoint_id: node.id,
+                            automatic: self.fpv_stage_auto_selection,
+                            stage: self.fpv_stage_selection,
+                            zoom: f64::from(self.camera_zoom).clamp(0.2, 4.0),
+                        },
+                    );
+                    self.fpv_selected_waypoint = self.fpv_waypoints.len() - 1;
                 }
             }
         }
@@ -2988,7 +3538,7 @@ impl App {
         source: ViewSource,
         runner: Arc<RwLock<Runner>>,
         distributed_node: Option<DistributedNode>,
-        cluster_snapshot_cache: Option<Box<crate::runner::Snapshot>>,
+        cluster_snapshot_cache: Option<Arc<crate::runner::Snapshot>>,
     ) -> Result<String, String> {
         match source {
             ViewSource::Standalone => {
@@ -3174,12 +3724,25 @@ impl App {
     }
 
     fn invalidate_cluster_projection(&mut self) {
+        self.cluster_snapshot_inflight = false;
+        self.cluster_edge_cache_generation = self.cluster_edge_cache_generation.wrapping_add(1);
+        self.edge_cache_generation = self.edge_cache_generation.wrapping_add(1);
+        self.pending_edge_cache = false;
+        self.edge_cache_inflight = false;
         self.cluster_snapshot_cache = None;
         self.cluster_snapshot_assignment_digest = None;
         self.cluster_snapshot_last_fetch = None;
         self.cluster_snapshot_next_retry = None;
         self.cluster_snapshot_failure_count = 0;
         self.cluster_snapshot_node_id = None;
+        #[cfg(feature = "growth3d")]
+        {
+            self.cluster_display_projection = None;
+            self.cluster_display_projection_generation =
+                self.cluster_display_projection_generation.wrapping_add(1);
+            self.cluster_display_projection_inflight_generation = None;
+            self.cluster_display_projection_error = None;
+        }
         self.cached_edges.clear();
         self.cached_layer_sizes.clear();
         self.cached_conn_counts.clear();
@@ -3559,45 +4122,139 @@ impl App {
         let (sim_tx, sim_rx) = std::sync::mpsc::channel::<SimControl>();
         let (distributed_input_tx, mut distributed_input_rx) =
             tokio::sync::mpsc::channel::<DistributedSensoryFrame>(32);
+        let sensory_spikes_snapshot = Arc::new(RwLock::new(Vec::new()));
+        let managed_sensory_display_frame =
+            Arc::new(RwLock::new(None::<ManagedSensoryDisplayFrame>));
+        let distributed_input_delivery_status = Arc::new(RwLock::new(
+            "No managed sensory frame admitted yet".to_owned(),
+        ));
+        let admitted_sensory_display = managed_sensory_display_frame.clone();
         if let Some(node) = distributed_node.clone() {
+            let delivery_status = distributed_input_delivery_status.clone();
+            let admitted_display = admitted_sensory_display.clone();
+            let sim_control = sim_tx.clone();
             runtime_handle.spawn(async move {
+                let mut uncertain_session: Option<String> = None;
+                let mut last_error: Option<String> = None;
                 while let Some(frame) = distributed_input_rx.recv().await {
-                    if let Err(error) = node
-                        .inject_external_sensory_spikes(
-                            &frame.network_id,
-                            frame.step_index,
-                            &frame.spikes,
-                        )
-                        .await
-                    {
-                        // A frame observed while a cluster network is being
-                        // stopped/reset is an unadmitted peripheral sample;
-                        // report it and allow the next frame after Start to be
-                        // admitted at the new boundary.
-                        nm_err!(
-                            "[distributed-input] {} frame at step {} was not admitted: {}",
-                            frame.network_id,
-                            frame.step_index,
-                            error
-                        );
+                    if uncertain_session.as_deref() == Some(frame.session_id.as_str()) {
+                        continue;
+                    }
+                    // Keep the provider cursor behind this frame until the
+                    // bridge acknowledges it. A slow biological step is
+                    // backpressure, not permission to skip an audio frame.
+                    // The bounded producer channel then naturally pauses the
+                    // provider without holding a Runner or UI lock.
+                    let retry_started = tokio::time::Instant::now();
+                    let admission = loop {
+                        match node
+                            .inject_external_sensory_frame(
+                                &frame.network_id,
+                                &frame.session_id,
+                                frame.frame_sequence,
+                                frame.step_index,
+                                &frame.spikes,
+                            )
+                            .await
+                        {
+                            Ok(()) => break Ok(()),
+                            Err(error)
+                                if managed_sensory_delivery_error_is_retryable(&error)
+                                    && retry_started.elapsed()
+                                        < MANAGED_SENSORY_BACKPRESSURE_WINDOW =>
+                            {
+                                let waiting = format!(
+                                    "Waiting for the cluster to consume sensory input; retrying frame {}",
+                                    frame.frame_sequence
+                                );
+                                if let Ok(mut status) = delivery_status.try_write() {
+                                    *status = waiting;
+                                }
+                                if last_error.as_deref() != Some(error.as_str()) {
+                                    nm_log!(
+                                        "[distributed-input] applying bounded backpressure for frame {}: {}",
+                                        frame.frame_sequence,
+                                        error
+                                    );
+                                }
+                                last_error = Some(error);
+                                tokio::time::sleep(MANAGED_SENSORY_BACKPRESSURE_RETRY_DELAY).await;
+                            }
+                            Err(error) => break Err(error),
+                        }
+                    };
+                    match admission {
+                        Ok(()) => {
+                            last_error = None;
+                            // Publish only acknowledged samples to the display
+                            // fallback. A generated frame waiting behind
+                            // backpressure is not neural input yet.
+                            if let Ok(mut latest) = admitted_display.try_write() {
+                                *latest = Some(ManagedSensoryDisplayFrame {
+                                    network_id: frame.network_id.clone(),
+                                    session_id: frame.session_id.clone(),
+                                    frame_sequence: frame.frame_sequence,
+                                    spikes: frame.spikes.clone(),
+                                });
+                            }
+                            if frame.frame_sequence == 0 {
+                                nm_log!(
+                                    "[distributed-input] first managed sensory frame acknowledged: network={} width={}",
+                                    frame.network_id,
+                                    frame.spikes.len()
+                                );
+                            }
+                            if let Ok(mut status) = delivery_status.try_write() {
+                                *status = format!(
+                                    "I/O bridge accepted audio/sensory frame {} for {}",
+                                    frame.frame_sequence, frame.network_id
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            let message = format!(
+                                "Frame {} was not admitted to {}: {}",
+                                frame.frame_sequence, frame.network_id, error
+                            );
+                            if let Ok(mut status) = delivery_status.try_write() {
+                                *status = message.clone();
+                            }
+                            if last_error.as_deref() != Some(error.as_str()) {
+                                nm_err!("[distributed-input] {message}");
+                            }
+                            last_error = Some(error.clone());
+                            // Do not send later frames after a permanent
+                            // failure: their source sequence would otherwise
+                            // conceal a gap. Require a fresh Start after the
+                            // displayed error so the bridge gets a new session.
+                            uncertain_session = Some(frame.session_id.clone());
+                            let _ = sim_control.send(SimControl::SetDistributedInput {
+                                target: None,
+                                provider_sensory_count: None,
+                                managed_view_active: None,
+                            });
+                        }
                     }
                 }
             });
         }
         let playing_atomic = Arc::new(AtomicBool::new(false));
         let spectral_bands = Arc::new(RwLock::new(Vec::new()));
-        let sensory_spikes_snapshot = Arc::new(RwLock::new(Vec::new()));
         let ui_snapshot = Arc::new(RwLock::new(UiSnapshot::default()));
         let sim_step_counter = Arc::new(AtomicU64::new(0));
         let sim_last_spike_count = Arc::new(AtomicU64::new(0));
         let sim_last_spike_len = Arc::new(AtomicU64::new(0));
         let sim_t_ms_bits = Arc::new(AtomicU64::new(0u64.to_le()));
         let (remote_status_tx, remote_status_rx) = std::sync::mpsc::channel::<RemoteStatusMsg>();
+        let (cluster_control_tx, cluster_control_rx) =
+            std::sync::mpsc::channel::<ClusterControlResult>();
         let sim_throttle_ms = Arc::new(AtomicU32::new(0));
         let (tool_task_tx, tool_task_rx) = std::sync::mpsc::channel::<ToolTaskResult>();
         let (edge_cache_res_tx, edge_cache_rx) = std::sync::mpsc::channel::<EdgeCacheResult>();
         let (cluster_snapshot_tx, cluster_snapshot_rx) =
             std::sync::mpsc::channel::<ClusterSnapshotMsg>();
+        let (cluster_activity_tx, cluster_activity_rx) =
+            std::sync::mpsc::channel::<ClusterDisplayActivityPoll>();
         let ipc_stats = Arc::new(RwLock::new(IpcStats {
             connected: false,
             frame_count: 0,
@@ -3920,7 +4577,13 @@ impl App {
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut pending_ipc_output: Option<Vec<f32>> = None;
                 let mut distributed_input_target: Option<String> = None;
+                // Managed input belongs to the selected cluster, so leave a
+                // recorded provider untouched while its I/O bridge is paused,
+                // loading or disconnected. The standalone Runner is unrelated.
+                let mut managed_view_active = false;
                 let mut distributed_input_step: i64 = 0;
+                let mut distributed_input_session =
+                    format!("{:016x}", rand::random::<u64>());
                 loop {
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
@@ -3928,9 +4591,21 @@ impl App {
                             SimControl::SetPlaying(p) => {
                                 sim_playing.store(p, Ordering::SeqCst);
                             }
-                            SimControl::SetDistributedInput(target) => {
+                            SimControl::SetDistributedInput {
+                                target,
+                                provider_sensory_count,
+                                managed_view_active: managed_view_update,
+                            } => {
+                                if let Some(count) = provider_sensory_count {
+                                    sim_provider.set_num_sensory_neurons(count);
+                                }
                                 distributed_input_target = target;
+                                if let Some(managed_view) = managed_view_update {
+                                    managed_view_active = managed_view;
+                                }
                                 distributed_input_step = 0;
+                                distributed_input_session =
+                                    format!("{:016x}", rand::random::<u64>());
                             }
                             SimControl::SetProvider(p) => {
                                 sim_provider.stop();
@@ -4041,6 +4716,19 @@ impl App {
                         continue;
                     }
 
+                    if managed_input_waits_without_local_simulation(
+                        managed_view_active,
+                        distributed_input_target.is_some(),
+                    ) {
+                        // The app update loop continues route reconciliation;
+                        // this bounded idle keeps both neural stepping and
+                        // provider advancement out of the wrong brain.
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            sim_remote_idle_sleep_ms,
+                        ));
+                        continue;
+                    }
+
                     // A cluster view has its own managed Runner and logical
                     // clock. Consume the selected provider here only to emit
                     // governed sensory frames; never step the local Runner a
@@ -4055,9 +4743,6 @@ impl App {
                         );
                         sim_last_spike_len_thread
                             .store(spikes.len() as u64, Ordering::Relaxed);
-                        if let Ok(mut snap) = sim_sensory_snapshot.try_write() {
-                            *snap = spikes.clone();
-                        }
                         if let Some(bands) = sim_provider.last_bands() {
                             if let Ok(mut b) = sim_spectral.try_write() {
                                 *b = bands.to_vec();
@@ -4065,6 +4750,8 @@ impl App {
                         }
                         let frame = DistributedSensoryFrame {
                             network_id: network_id.clone(),
+                            session_id: distributed_input_session.clone(),
+                            frame_sequence: distributed_input_step as u64,
                             step_index: distributed_input_step,
                             spikes,
                         };
@@ -5175,6 +5862,19 @@ impl App {
             startup_input_source = InputSource::ExternalIpc;
         }
 
+        // The stage and automatic/manual mode can be pinned by a local
+        // workstation profile or UI capture run. Without either variable the
+        // existing automatic stage-five launch defaults are unchanged.
+        let visualization_stage =
+            initial_visualization_stage(std::env::var("NM_UI_VISUALIZATION_STAGE").ok().as_deref());
+        let visualization_auto =
+            initial_visualization_auto(std::env::var("NM_UI_VISUALIZATION_AUTO").ok().as_deref());
+        let network_layout = if visualization_stage <= 3 {
+            NetworkLayout::Conventional
+        } else {
+            NetworkLayout::Aarnn
+        };
+
         let mut app = Self {
             brain_id: brain_id.clone(),
             playing: false,
@@ -5184,6 +5884,7 @@ impl App {
             http_aer_base,
             http_aer_status,
             audio_file_path: startup_audio_path,
+            audio_file_provider_active: startup_audio_loaded,
             audio_file_sample_rate: startup_audio_sample_rate,
             audio_file_sample_count: startup_audio_sample_count,
             video_preview,
@@ -5259,11 +5960,25 @@ impl App {
             output_positions: Vec::new(),
             #[cfg(feature = "growth3d")]
             early_positions: Vec::new(),
-            network_layout: NetworkLayout::Aarnn,
-            layout_auto: true,
+            network_layout,
+            layout_auto: visualization_auto,
+            visualization_stage,
+            visualization_auto,
+            visualization_latency_ms: 16.0,
+            visualization_latency_samples: std::collections::VecDeque::with_capacity(32),
+            visualization_stage_changed_at: Instant::now(),
             sensory_activity: vec![0.0; n_s],
             hidden_activity: act_h,
             output_activity: vec![0.0; o],
+            cluster_activity_tx,
+            cluster_activity_rx,
+            cluster_activity_poll_inflight: false,
+            cluster_activity_poll_next: Instant::now(),
+            cluster_activity_network_id: None,
+            cluster_activity_assignment_digest: None,
+            cluster_activity_last_steps: HashMap::new(),
+            cluster_activity_last_success: None,
+            cluster_activity_last_active_count: 0,
             raster_cols: 240,
             raster_outputs: std::collections::VecDeque::new(),
             last_activity_rendered_step: None,
@@ -5369,6 +6084,10 @@ impl App {
                 .unwrap_or(false),
             fpv_planner: false,
             fpv_waypoints: Vec::new(),
+            fpv_waypoint_visualizations: Vec::new(),
+            fpv_selected_waypoint: 0,
+            fpv_stage_selection: 5,
+            fpv_stage_auto_selection: true,
             fpv_render_jobs: Vec::new(),
             fpv_jobs_refresh_inflight: false,
             fpv_job_submit_inflight: false,
@@ -5405,6 +6124,30 @@ impl App {
                 .unwrap_or(true),
             #[cfg(feature = "ui_screenshot")]
             ui_capture_requested: false,
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_wait_for_stage_three_activity: std::env::var(
+                "NM_UI_CAPTURE_WAIT_FOR_STAGE3_ACTIVITY",
+            )
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_readiness_timeout: Duration::from_secs(
+                std::env::var("NM_UI_CAPTURE_READINESS_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(90)
+                    .clamp(1, 300),
+            ),
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_readiness_started_at: None,
+            #[cfg(feature = "ui_screenshot")]
+            ui_capture_readiness_reported: false,
             show_neuron_detail: false,
             selected_neuron_pick: None,
             detail_camera_zoom: 1.0,
@@ -5491,6 +6234,7 @@ impl App {
             edge_cache_rx,
             edge_cache_res_tx,
             edge_cache_inflight: false,
+            edge_cache_generation: 0,
             pending_import: None,
             last_import_report: None,
             tflite_import_mode: TfliteImportMode::Mlp,
@@ -5532,6 +6276,18 @@ impl App {
             cluster_snapshot_assignment_digest: None,
             cluster_snapshot_cache: None,
             #[cfg(feature = "growth3d")]
+            cluster_display_projection: None,
+            #[cfg(feature = "growth3d")]
+            cluster_display_projection_generation: 0,
+            #[cfg(feature = "growth3d")]
+            cluster_display_projection_inflight_generation: None,
+            #[cfg(feature = "growth3d")]
+            cluster_display_projection_error: None,
+            cluster_edge_cache_generation: 0,
+            cluster_edge_cache_inflight: false,
+            cluster_edge_cache_inflight_generation: None,
+            cluster_edge_cache_reported_generation: None,
+            #[cfg(feature = "growth3d")]
             cluster_topo_cache: None,
             #[cfg(feature = "growth3d")]
             cluster_topology_is_witness: false,
@@ -5541,7 +6297,10 @@ impl App {
             dist_network_registry: HashMap::new(),
             dist_local_playing_cache: HashMap::new(),
             dist_initial_view_selected: false,
-            sensory_spikes_snapshot,
+            distributed_input_route: None,
+            distributed_input_delivery_status,
+            managed_sensory_display_frame,
+            last_managed_sensory_display_frame: None,
             ui_snapshot,
             sim_step_counter,
             sim_last_spike_count,
@@ -5559,6 +6318,9 @@ impl App {
             initial_stdp,
             initial_model,
             initial_learning,
+            cluster_control_tx,
+            cluster_control_rx,
+            pending_cluster_controls: HashSet::new(),
         };
 
         if startup_audio_loaded {
@@ -5752,10 +6514,7 @@ impl App {
                         }
                         if matches!(self.view_source, ViewSource::Standalone) {
                             if let Some(network_id) = first_network {
-                                self.view_source = ViewSource::ClusterGlobal(network_id);
-                                self.dist_initial_view_selected = true;
-                                self.cluster_snapshot_cache = None;
-                                self.cluster_snapshot_last_fetch = None;
+                                self.set_view_source(ViewSource::ClusterGlobal(network_id));
                                 nm_log!("[remote-ui] selected remote network view from {}", addr);
                                 self.status = format!(
                                     "Connection accepted; remote inventory received from {}",
@@ -6652,15 +7411,7 @@ impl App {
         let mut edges = Vec::new();
 
         let count_nonzero = |m: &crate::runner::Matrix2| -> usize {
-            #[cfg(feature = "parallel")]
-            {
-                use rayon::prelude::*;
-                m.data.par_iter().filter(|&&x| x.abs() > 1e-8).count()
-            }
-            #[cfg(not(feature = "parallel"))]
-            {
-                m.data.iter().filter(|&&x| x.abs() > 1e-8).count()
-            }
+            m.data.iter().filter(|&&x| x.abs() > 1e-8).count()
         };
 
         let mut max_presence = 0u32;
@@ -6712,127 +7463,60 @@ impl App {
                 return Vec::new();
             }
 
-            #[cfg(feature = "parallel")]
-            {
-                use rayon::prelude::*;
-                let rows: Vec<Vec<CachedEdge>> = (0..nr)
-                    .into_par_iter()
-                    .map(|r| {
-                        let mut best: Vec<(usize, f32)> = Vec::new();
-                        let row_base = r.saturating_mul(nc);
-                        for i in 0..nc {
-                            let idx = row_base + i;
-                            let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
-                            if w.abs() <= 1e-8 {
-                                continue;
-                            }
-                            if best.len() < k {
-                                best.push((i, w));
-                            } else {
-                                let mut min_idx = 0usize;
-                                let mut min_w = best[0].1.abs();
-                                for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
-                                    if bw.abs() < min_w {
-                                        min_w = bw.abs();
-                                        min_idx = bi;
-                                    }
-                                }
-                                if w.abs() > min_w {
-                                    best[min_idx] = (i, w);
-                                }
-                            }
-                        }
-                        best.into_iter()
-                            .map(|(i, w)| CachedEdge {
-                                from_layer,
-                                to_layer,
-                                from_idx: i,
-                                to_idx: r,
-                                weight: w,
-                                kind,
-                                is_longterm: {
-                                    if longterm_min_presence == Some(0) {
-                                        true
-                                    } else if let Some(min_presence) = longterm_min_presence {
-                                        if let Some(p) = presence {
-                                            if p.rows == nr && p.cols == nc {
-                                                let p_idx = row_base + i;
-                                                p.data.get(p_idx).copied().unwrap_or(0)
-                                                    >= min_presence
-                                            } else {
-                                                false
-                                            }
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
-                                },
-                            })
-                            .collect()
-                    })
-                    .collect();
-                rows.into_iter().flatten().collect()
-            }
-            #[cfg(not(feature = "parallel"))]
-            {
-                let mut out = Vec::new();
-                for r in 0..nr {
-                    let mut best: Vec<(usize, f32)> = Vec::new();
-                    let row_base = r.saturating_mul(nc);
-                    for i in 0..nc {
-                        let idx = row_base + i;
-                        let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
-                        if w.abs() <= 1e-8 {
-                            continue;
-                        }
-                        if best.len() < k {
-                            best.push((i, w));
-                        } else {
-                            let mut min_idx = 0usize;
-                            let mut min_w = best[0].1.abs();
-                            for (bi, &(_, bw)) in best.iter().enumerate().skip(1) {
-                                if bw.abs() < min_w {
-                                    min_w = bw.abs();
-                                    min_idx = bi;
-                                }
-                            }
-                            if w.abs() > min_w {
-                                best[min_idx] = (i, w);
-                            }
-                        }
+            // This method runs on its own visualisation worker and consumes
+            // an immutable cluster cut. Keep its scan off Rayon’s process-wide
+            // pool: biological workers use that pool for neural traversal.
+            let mut out = Vec::new();
+            for r in 0..nr {
+                let mut best: Vec<(usize, f32)> = Vec::new();
+                let row_base = r.saturating_mul(nc);
+                for i in 0..nc {
+                    let idx = row_base.saturating_add(i);
+                    let w = *m.data.get(idx).unwrap_or(&0.0) as f32;
+                    if w.abs() <= 1e-8 {
+                        continue;
                     }
-                    for (i, w) in best.into_iter() {
-                        let is_longterm = if longterm_min_presence == Some(0) {
-                            true
-                        } else if let Some(min_presence) = longterm_min_presence {
-                            if let Some(p) = presence {
-                                if p.rows == nr && p.cols == nc {
-                                    let p_idx = row_base + i;
-                                    p.data.get(p_idx).copied().unwrap_or(0) >= min_presence
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
+                    if best.len() < k {
+                        best.push((i, w));
+                    } else {
+                        let mut min_idx = 0usize;
+                        let mut min_w = best[0].1.abs();
+                        for (best_idx, &(_, best_weight)) in best.iter().enumerate().skip(1) {
+                            if best_weight.abs() < min_w {
+                                min_w = best_weight.abs();
+                                min_idx = best_idx;
                             }
-                        } else {
-                            false
-                        };
-                        out.push(CachedEdge {
-                            from_layer,
-                            to_layer,
-                            from_idx: i,
-                            to_idx: r,
-                            weight: w,
-                            kind,
-                            is_longterm,
-                        });
+                        }
+                        if w.abs() > min_w {
+                            best[min_idx] = (i, w);
+                        }
                     }
                 }
-                out
+                for (i, w) in best {
+                    let is_longterm = if longterm_min_presence == Some(0) {
+                        true
+                    } else if let Some(min_presence) = longterm_min_presence {
+                        presence.is_some_and(|p| {
+                            p.rows == nr
+                                && p.cols == nc
+                                && p.data.get(row_base.saturating_add(i)).copied().unwrap_or(0)
+                                    >= min_presence
+                        })
+                    } else {
+                        false
+                    };
+                    out.push(CachedEdge {
+                        from_layer,
+                        to_layer,
+                        from_idx: i,
+                        to_idx: r,
+                        weight: w,
+                        kind,
+                        is_longterm,
+                    });
+                }
             }
+            out
         };
 
         if snap.net.num_sensory_neurons > 0 && snap.net.num_hidden_layers > 0 {
@@ -7422,12 +8106,255 @@ impl App {
         }
     }
 
+    #[cfg(feature = "growth3d")]
+    fn cluster_display_contracts_for(
+        &self,
+        network_id: &str,
+    ) -> Option<&BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>> {
+        let snapshot_step = self
+            .cluster_snapshot_cache
+            .as_ref()
+            .filter(|_| self.cluster_snapshot_network_id.as_deref() == Some(network_id))?
+            .t;
+        let projection = self.cluster_display_projection.as_ref()?;
+        (projection.network_id == network_id && projection.snapshot_step <= snapshot_step)
+            .then_some(&projection.contracts)
+    }
+
+    /// Queue a bounded immutable display projection for the latest aggregate
+    /// cut. A single in-flight worker prevents rapid cluster polling from
+    /// multiplying geometry work; its result handler retries the newest cut.
+    #[cfg(feature = "growth3d")]
+    fn request_cluster_display_projection(&mut self) {
+        let ViewSource::ClusterGlobal(network_id) = &self.view_source else {
+            return;
+        };
+        let Some(snapshot) = self
+            .cluster_snapshot_cache
+            .as_ref()
+            .filter(|_| self.cluster_snapshot_network_id.as_deref() == Some(network_id))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(reconstruction) = snapshot.procedural_reconstruction.as_ref() else {
+            return;
+        };
+        let morphology_revision = reconstruction.state.revision;
+        let topology_epoch = reconstruction.state.topology_epoch;
+        let snapshot_step = snapshot.t;
+
+        if let Some(projection) = self.cluster_display_projection.as_mut()
+            && projection.network_id == *network_id
+            && projection.morphology_revision == morphology_revision
+            && projection.topology_epoch == topology_epoch
+        {
+            // Point-only geometry is independent of the neural step. Advance
+            // its presentation watermark without rebuilding identical paths.
+            projection.snapshot_step = snapshot_step;
+            self.cluster_display_projection_error = None;
+            return;
+        }
+        if self
+            .cluster_display_projection_inflight_generation
+            .is_some()
+        {
+            return;
+        }
+
+        let request_generation = self.cluster_display_projection_generation.wrapping_add(1);
+        self.cluster_display_projection_generation = request_generation;
+        self.cluster_display_projection_inflight_generation = Some(request_generation);
+        self.cluster_display_projection_error = None;
+        let network_id = network_id.clone();
+        let tx = self.cluster_snapshot_tx.clone();
+        let worker = std::thread::Builder::new()
+            .name("cluster-visualisation-display".to_owned())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    build_cluster_display_contracts(&snapshot)
+                }))
+                .unwrap_or_else(|_| Err("display projection worker panicked".to_owned()));
+                match result {
+                    Ok(contracts) => {
+                        let _ = tx.send(ClusterSnapshotMsg::DisplayReady {
+                            network_id,
+                            snapshot_step,
+                            morphology_revision,
+                            topology_epoch,
+                            request_generation,
+                            contracts,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(ClusterSnapshotMsg::DisplayFailed {
+                            network_id,
+                            request_generation,
+                            error,
+                        });
+                    }
+                }
+            });
+        if let Err(error) = worker {
+            self.cluster_display_projection_inflight_generation = None;
+            self.cluster_display_projection_error = Some(format!(
+                "could not start anatomical projection worker: {error}"
+            ));
+        }
+    }
+
+    /// Resolve the strongest stage justified by the current immutable display
+    /// snapshots. Missing physical radii or a clearance witness keep the
+    /// volumetric stages unavailable.
+    fn highest_visualization_stage(&self) -> crate::visualization::VisualizationStage {
+        let legacy_anatomical_arrangement = {
+            #[cfg(feature = "growth3d")]
+            {
+                match &self.view_source {
+                    ViewSource::ClusterGlobal(network_id) => {
+                        self.cluster_snapshot_network_id.as_deref() == Some(network_id.as_str())
+                            && self.cluster_snapshot_cache.is_some()
+                            && self.cluster_topo_cache.as_ref().is_some_and(|topology| {
+                                let complete_layers = !topology.layers.is_empty()
+                                    && topology.layers.iter().all(|layer| !layer.is_empty());
+                                if self.cluster_topology_is_witness {
+                                    complete_layers
+                                } else {
+                                    complete_layers
+                                        && self.cluster_snapshot_cache.as_ref().is_some_and(
+                                            |snapshot| {
+                                                topology.layers.len()
+                                                    == snapshot.net.num_hidden_layers
+                                            },
+                                        )
+                                }
+                            })
+                    }
+                    ViewSource::LocalManaged(_) => self
+                        .cached_edge_topo
+                        .as_ref()
+                        .is_some_and(|topology| !topology.layers.is_empty()),
+                    ViewSource::Standalone => {
+                        self.cached_ui_topology.as_ref().is_some_and(|snapshot| {
+                            !snapshot.topo_hidden.is_empty()
+                                && snapshot.topo_hidden.iter().all(|layer| !layer.is_empty())
+                        })
+                    }
+                }
+            }
+            #[cfg(not(feature = "growth3d"))]
+            {
+                false
+            }
+        };
+        let legacy_stage = crate::visualization::highest_legacy_stage(
+            legacy_anatomical_arrangement,
+            !self.cached_edges.is_empty(),
+        );
+
+        #[cfg(feature = "growth3d")]
+        if let ViewSource::ClusterGlobal(network_id) = &self.view_source {
+            let contracts = self.cluster_display_contracts_for(network_id);
+            let cluster_stage = crate::visualization::highest_supported_stage(
+                contracts
+                    .and_then(|contracts| contracts.get("synthetic_columns"))
+                    .map(Arc::as_ref),
+                contracts
+                    .and_then(|contracts| contracts.get("anatomical"))
+                    .map(Arc::as_ref),
+            );
+            return cluster_stage.map_or(legacy_stage, |stage| stage.max(legacy_stage));
+        }
+
+        // Local managed views currently expose only the legacy projection;
+        // never use the workstation's unrelated standalone contract as a
+        // capability witness for a remotely managed brain.
+        if !matches!(self.view_source, ViewSource::Standalone) {
+            return legacy_stage;
+        }
+
+        self.ui_snapshot
+            .try_read()
+            .ok()
+            .and_then(|snapshot| {
+                crate::visualization::highest_supported_stage(
+                    snapshot
+                        .display_contracts
+                        .get("synthetic_columns")
+                        .map(Arc::as_ref),
+                    snapshot
+                        .display_contracts
+                        .get("anatomical")
+                        .map(Arc::as_ref),
+                )
+            })
+            .map_or(legacy_stage, |stage| stage.max(legacy_stage))
+    }
+
+    fn resolved_visualization_stage(&self) -> u8 {
+        self.visualization_stage
+            .clamp(1, 9)
+            .min(self.highest_visualization_stage().number())
+    }
+
+    /// Apply a display-only selection and keep the compatibility layout cache
+    /// aligned with the selected synthetic or anatomical arrangement.
+    fn set_visualization_stage(&mut self, stage: u8, automatic: bool) {
+        let stage = stage.clamp(1, 9);
+        let requested_layout = if stage <= 3 {
+            NetworkLayout::Conventional
+        } else {
+            NetworkLayout::Aarnn
+        };
+        self.visualization_stage = stage;
+        self.visualization_auto = automatic;
+        self.visualization_stage_changed_at = Instant::now();
+        if self.network_layout != requested_layout || self.layout_auto {
+            self.set_network_layout(requested_layout, false);
+        }
+        // Detail-dependent edge lists are presentation caches. Scheduling
+        // them here never reads from or pauses neural traversal.
+        let edge_worker_busy = match &self.view_source {
+            ViewSource::ClusterGlobal(_) => self.cluster_edge_cache_inflight,
+            ViewSource::Standalone | ViewSource::LocalManaged(_) => self.edge_cache_inflight,
+        };
+        if matches!(stage, 2 | 3 | 5 | 6)
+            && self.cached_edges.is_empty()
+            && !self.pending_edge_cache
+            && !edge_worker_busy
+        {
+            self.request_edge_cache_refresh();
+        }
+    }
+
+    fn request_edge_cache_refresh(&mut self) {
+        self.edge_cache_generation = self.edge_cache_generation.wrapping_add(1);
+        if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
+            // A late worker result from the previous density/view must not
+            // replace the cache requested by the current dashboard state.
+            self.cluster_edge_cache_generation = self.cluster_edge_cache_generation.wrapping_add(1);
+        } else {
+            self.edge_cache_inflight = false;
+        }
+        self.pending_edge_cache = true;
+        self.last_edge_cache_refresh = std::time::Instant::now();
+    }
+
     fn set_view_source(&mut self, source: ViewSource) {
         if self.view_source != source {
+            // Stop the previous managed feed before changing brain identity,
+            // restoring the provider to the local width in the same ordered
+            // simulation-control stream.
+            self.set_distributed_input("", false);
             self.view_source = source;
+            // Publish the new ownership mode even when the managed route is
+            // not ready yet. The simulation thread then holds a recorded
+            // provider instead of advancing the unrelated local Runner.
+            self.set_distributed_input("", false);
             self.dist_initial_view_selected = true;
             self.view_node_filter = None;
             self.layout_auto = true;
+            self.visualization_auto = true;
             // A biological projection belongs to one selected brain. Clear
             // it on every view change so a witness from a previous cluster
             // cannot be displayed for the newly selected network.
@@ -7451,6 +8378,23 @@ impl App {
                 }
             }
             self.refresh_ui_buffers();
+
+            // A file or microphone may already be running when the user opens
+            // a managed brain. Start its input route immediately when that
+            // brain is already playing; waiting for another Start click would
+            // leave the local preview stimulated while the selected brain is
+            // receiving nothing.
+            let active_network = match &self.view_source {
+                ViewSource::LocalManaged(network_id) | ViewSource::ClusterGlobal(network_id) => {
+                    Some(network_id.clone())
+                }
+                ViewSource::Standalone => None,
+            };
+            if let Some(network_id) = active_network
+                && self.resolve_view_playing(None) == Some(true)
+            {
+                self.set_distributed_input(&network_id, true);
+            }
         }
     }
 
@@ -7469,11 +8413,20 @@ impl App {
         state_arc: Option<&Arc<RwLock<crate::distributed::NodeState>>>,
     ) -> Option<bool> {
         let resolve_managed = |network_id: &str| {
-            self.dist_network_registry
-                .get(network_id)
-                .map(|net| net.playing)
-                .or_else(|| self.dist_local_playing_cache.get(network_id).copied())
-                .or_else(|| Self::managed_playing_from_state(state_arc, network_id))
+            let live_state = state_arc
+                .and_then(|state| Self::managed_playing_from_state(Some(state), network_id))
+                .or_else(|| {
+                    self.distributed_node.as_ref().and_then(|node| {
+                        Self::managed_playing_from_state(Some(&node.state), network_id)
+                    })
+                });
+            resolve_managed_playing_state(
+                live_state,
+                self.dist_local_playing_cache.get(network_id).copied(),
+                self.dist_network_registry
+                    .get(network_id)
+                    .map(|network| network.playing),
+            )
         };
         match &self.view_source {
             ViewSource::Standalone => Some(self.playing),
@@ -7584,6 +8537,17 @@ impl App {
                 ViewSource::ClusterGlobal(_) => "cluster",
             };
             self.set_view_source(source);
+            // `set_view_source` normally returns an interactive workstation to
+            // Auto detail. An explicit launch profile/capture override is a
+            // deliberate manual selection, so reapply it after the automatic
+            // cluster view is chosen and align the synthetic/anatomical layout
+            // before requesting the first display projection.
+            if let Some((stage, automatic)) = initial_visualization_override(
+                std::env::var("NM_UI_VISUALIZATION_STAGE").ok().as_deref(),
+                std::env::var("NM_UI_VISUALIZATION_AUTO").ok().as_deref(),
+            ) {
+                self.set_visualization_stage(stage, automatic);
+            }
             self.status = format!(
                 "Auto-selected {} view so Start/Stop tracks active network state",
                 source_label
@@ -7601,6 +8565,7 @@ impl App {
         learning: Learning,
         status: &str,
     ) {
+        self.set_distributed_input("", false);
         self.set_standalone_playing(false);
         let _ = self.sim_tx.send(SimControl::RecreateRunner(
             lif.clone(),
@@ -7630,8 +8595,12 @@ impl App {
             Learning::Aarnn => LearningSel::Aarnn,
         };
         self.input_source = InputSource::Random;
+        self.audio_file_provider_active = false;
         self.loop_feedback = false;
         self.view_source = ViewSource::Standalone;
+        // Publish standalone ownership after leaving the managed view so the
+        // simulation controller may resume the local Runner on a later start.
+        self.set_distributed_input("", false);
         self.view_node_filter = None;
         self.pending_import = None;
         self.last_import_report = None;
@@ -7830,14 +8799,249 @@ impl App {
         self.set_standalone_playing(true);
     }
 
-    fn set_distributed_input(&self, network_id: &str, enabled: bool) {
-        let provider_ready = match self.input_source {
-            InputSource::AudioFile => self.audio_file_path.is_some(),
+    /// Return the sensory width used by the managed brain, preferring the
+    /// bridge's cached live contract and falling back to the versioned
+    /// registry configuration only when local metadata is unavailable. A
+    /// readable zero-width contract stays unavailable rather than borrowing
+    /// a stale configured size.
+    /// The workstation's local Runner is only a preview in managed views and
+    /// is not authoritative for input-frame shape.
+    fn managed_sensory_input_count(&self, network_id: &str) -> Option<usize> {
+        let live_count = self
+            .distributed_node
+            .as_ref()
+            .and_then(|node| node.external_sensory_input_count(network_id));
+        if let Some(count) = live_count {
+            // A readable zero-width Runner is authoritative. Falling through
+            // to a stale registry config and coercing zero to one would emit
+            // frames that the actual managed Runner must reject.
+            return (count > 0).then_some(count);
+        }
+
+        self.dist_network_registry
+            .get(network_id)
+            .and_then(|status| network_config_from_payload(&status.config_json))
+            .map(|config| config.num_sensory_neurons)
+            .filter(|count| *count > 0)
+    }
+
+    fn standalone_sensory_input_count(&self) -> usize {
+        self.runner
+            .try_read()
+            .map(|runner| runner.net.num_sensory_neurons)
+            .unwrap_or(self.local_net.num_sensory_neurons)
+            .max(1)
+    }
+
+    fn configured_audio_sensory_input_count() -> usize {
+        std::env::var("AARNN_AUDIO_SENSORY_NEURONS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|&value| (1..=MAX_AUDIO_SENSORY_NEURONS).contains(&value))
+            .unwrap_or(64)
+    }
+
+    fn distributed_input_provider_ready(&self) -> bool {
+        match self.input_source {
+            InputSource::AudioFile => self.audio_file_provider_active,
             InputSource::Microphone => self.mic_running,
             _ => false,
+        }
+    }
+
+    /// Resolve a safe local provider width for the brain shown in the UI.
+    /// Managed-route eligibility is checked separately so an unavailable
+    /// managed width cannot prevent selecting or decoding an audio file.
+    fn audio_provider_sensory_count_for_view(&self, local_count: usize) -> usize {
+        let (standalone_view, managed_count) = match &self.view_source {
+            ViewSource::Standalone => (true, None),
+            ViewSource::LocalManaged(network_id) | ViewSource::ClusterGlobal(network_id) => {
+                (false, self.managed_sensory_input_count(network_id))
+            }
         };
-        let target = (enabled && provider_ready).then(|| network_id.to_owned());
-        let _ = self.sim_tx.send(SimControl::SetDistributedInput(target));
+        resolve_audio_provider_sensory_count(
+            standalone_view,
+            managed_count,
+            local_count,
+            Self::configured_audio_sensory_input_count(),
+        )
+    }
+
+    fn set_distributed_input(&mut self, network_id: &str, enabled: bool) {
+        let provider_ready = self.distributed_input_provider_ready();
+        let target_count = enabled
+            .then(|| self.managed_sensory_input_count(network_id))
+            .flatten();
+        let ingress_available = self
+            .distributed_node
+            .as_ref()
+            .and_then(|node| node.has_external_sensory_ingress(network_id))
+            == Some(true);
+        let local_count = self.standalone_sensory_input_count();
+        let target = if enabled && provider_ready {
+            if self.distributed_node.is_none() {
+                self.status = format!(
+                    "Sensory input not routed: this remote-only workstation has no local ingress for {}",
+                    network_id
+                );
+                None
+            } else if !ingress_available {
+                self.status = format!(
+                    "Sensory input waiting: no ready worker owns the sensory layer for {}",
+                    network_id
+                );
+                None
+            } else {
+                match target_count {
+                    Some(count)
+                        if self.input_source != InputSource::AudioFile
+                            || (1..=MAX_AUDIO_SENSORY_NEURONS).contains(&count) =>
+                    {
+                        self.status = format!(
+                            "{} input mapped to {} sensory input(s) on {}",
+                            if self.input_source == InputSource::AudioFile {
+                                "Audio"
+                            } else {
+                                "Microphone"
+                            },
+                            count,
+                            network_id
+                        );
+                        Some(network_id.to_owned())
+                    }
+                    Some(count) => {
+                        self.status = format!(
+                            "Audio input not routed: target sensory width {} exceeds the supported maximum {}",
+                            count, MAX_AUDIO_SENSORY_NEURONS
+                        );
+                        None
+                    }
+                    None => {
+                        self.status = format!(
+                            "Sensory input not routed: sensory width for {} is unavailable",
+                            network_id
+                        );
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let provider_sensory_count = distributed_input_provider_width(
+            provider_ready,
+            target.is_some(),
+            target_count,
+            local_count,
+        );
+        if self
+            .sim_tx
+            .send(SimControl::SetDistributedInput {
+                target: target.clone(),
+                provider_sensory_count,
+                managed_view_active: Some(!matches!(self.view_source, ViewSource::Standalone)),
+            })
+            .is_err()
+        {
+            self.status = "Sensory input route could not reach the simulation controller".into();
+            self.distributed_input_route = None;
+            return;
+        }
+        self.distributed_input_route = target.zip(target_count);
+        if let Some((network_id, width)) = self.distributed_input_route.as_ref() {
+            let bridge = self
+                .distributed_node
+                .as_ref()
+                .and_then(|node| node.external_sensory_ingress_node(network_id))
+                .unwrap_or_else(|| "unknown".to_owned());
+            nm_log!(
+                "[distributed-input] route active: network={} sensory_inputs={} bridge={}",
+                network_id,
+                width,
+                bridge
+            );
+        }
+        if let Ok(mut status) = self.distributed_input_delivery_status.try_write() {
+            *status = if self.distributed_input_route.is_some() {
+                "Waiting for worker sensory-input acknowledgement".to_owned()
+            } else {
+                "Managed sensory input mapping inactive".to_owned()
+            };
+        }
+    }
+
+    /// Keep the route aligned with the selected managed network even when a
+    /// different client starts/stops it. This also refreshes provider width
+    /// after the managed sensory layer grows.
+    fn reconcile_distributed_input_route(&mut self, playing: Option<bool>) {
+        if self.distributed_node.is_none() {
+            return;
+        }
+        let network_id = match &self.view_source {
+            ViewSource::Standalone => None,
+            ViewSource::LocalManaged(network_id) | ViewSource::ClusterGlobal(network_id) => {
+                Some(network_id.clone())
+            }
+        };
+        // Avoid stopping a healthy route during a transient status read
+        // failure; a later frame will reconcile it.
+        if network_id.is_some() && playing.is_none() && self.distributed_input_provider_ready() {
+            return;
+        }
+        let sensory_width = network_id
+            .as_deref()
+            .and_then(|id| self.managed_sensory_input_count(id));
+        let local_ingress_available = match network_id.as_deref() {
+            Some(id) => match self
+                .distributed_node
+                .as_ref()
+                .and_then(|node| node.has_external_sensory_ingress(id))
+            {
+                Some(available) => available,
+                None => return,
+            },
+            None => false,
+        };
+        let desired_route = resolve_distributed_input_route_target(
+            network_id.as_deref(),
+            playing,
+            self.distributed_input_provider_ready(),
+            local_ingress_available,
+            sensory_width,
+            self.input_source == InputSource::AudioFile,
+        );
+
+        if desired_route.is_none()
+            && let (Some(network_id), true) = (
+                network_id.as_deref(),
+                self.distributed_input_provider_ready(),
+            )
+        {
+            let reason = managed_input_inactive_message(
+                self.input_source == InputSource::AudioFile,
+                playing,
+                local_ingress_available,
+                sensory_width,
+            );
+            if let Ok(mut delivery) = self.distributed_input_delivery_status.try_write()
+                && *delivery != reason
+            {
+                *delivery = reason.clone();
+                nm_log!(
+                    "[distributed-input] waiting: network={} reason={}",
+                    network_id,
+                    reason
+                );
+            }
+        }
+
+        if desired_route != self.distributed_input_route {
+            if let Some((network_id, _)) = desired_route {
+                self.set_distributed_input(&network_id, true);
+            } else {
+                self.set_distributed_input("", false);
+            }
+        }
     }
 
     fn apply_cluster_control(
@@ -7846,6 +9050,11 @@ impl App {
         action: control_update::Action,
         status: &str,
     ) {
+        if self.pending_cluster_controls.contains(network_id) {
+            self.status = format!("A cluster control command is already pending for {network_id}");
+            return;
+        }
+
         let view_scope = match &self.view_source {
             ViewSource::LocalManaged(_) => "Local network",
             ViewSource::ClusterGlobal(_) => "Cluster network",
@@ -7859,11 +9068,43 @@ impl App {
 
         if let Some(node) = &self.distributed_node {
             let queue_result = node.apply_network_control(network_id, action);
-            // "Cluster state busy" means the write lock was contended — the
-            // direct gRPC path below will still deliver the command immediately,
-            // so treat it as a soft failure and still update the UI optimistically.
+            // Do not report a start or enable the sensory route when the
+            // non-blocking enqueue could not acquire cluster state. Retry that
+            // short contention off the UI thread and let normal state
+            // reconciliation activate audio after the command is queued.
+            if queue_result
+                .as_ref()
+                .is_err_and(|error| error == "Cluster state busy")
+            {
+                if self.pending_cluster_controls.insert(network_id.to_owned()) {
+                    let retry_node = node.clone();
+                    let result_sender = self.cluster_control_tx.clone();
+                    let retry_network_id = network_id.to_owned();
+                    let retry_status = status.to_owned();
+                    self.runtime_handle.spawn(async move {
+                        let result = retry_node
+                            .apply_network_control_with_retry(
+                                &retry_network_id,
+                                action,
+                                std::time::Duration::from_secs(2),
+                            )
+                            .await;
+                        let _ = result_sender.send(ClusterControlResult {
+                            network_id: retry_network_id,
+                            playing_after,
+                            status: retry_status,
+                            result,
+                        });
+                    });
+                }
+                self.status = format!(
+                    "{} {} queued; waiting for cluster state",
+                    view_scope, status
+                );
+                return;
+            }
+
             let fatal = match &queue_result {
-                Err(e) if e.contains("Cluster state busy") => false,
                 Err(_) => true,
                 Ok(()) => false,
             };
@@ -7907,6 +9148,36 @@ impl App {
                 | control_update::Action::New
         ) {
             self.refresh_ui_buffers();
+        }
+    }
+
+    /// Apply results from lock-contention retries without blocking rendering.
+    /// The authoritative network registry/live Runner remains the source of
+    /// run state; this cache only keeps the controls responsive between polls.
+    fn poll_cluster_control_results(&mut self) {
+        while let Ok(completion) = self.cluster_control_rx.try_recv() {
+            self.pending_cluster_controls.remove(&completion.network_id);
+            match completion.result {
+                Ok(()) => {
+                    self.dist_local_playing_cache
+                        .insert(completion.network_id.clone(), completion.playing_after);
+                    if let Some(network) =
+                        self.dist_network_registry.get_mut(&completion.network_id)
+                    {
+                        network.playing = completion.playing_after;
+                    }
+                    self.status = format!(
+                        "Cluster network {} ({})",
+                        completion.status, completion.network_id
+                    );
+                }
+                Err(error) => {
+                    self.status = format!(
+                        "Cluster control {} failed for {}: {}",
+                        completion.status, completion.network_id, error
+                    );
+                }
+            }
         }
     }
 
@@ -7987,7 +9258,8 @@ impl App {
             ViewSource::ClusterGlobal(id) => {
                 if let Some(snap) = &self.cluster_snapshot_cache {
                     if self.cluster_snapshot_network_id.as_deref() == Some(id) {
-                        return serde_json::to_string_pretty(snap).map_err(|e| e.to_string());
+                        return serde_json::to_string_pretty(snap.as_ref())
+                            .map_err(|e| e.to_string());
                     }
                 }
                 Err("Cluster snapshot not available yet".to_string())
@@ -8212,6 +9484,191 @@ impl App {
         Ok(())
     }
 
+    /// Build the read-only activity fan-out from the currently committed
+    /// placement projection. Only active layer owners are queried; warm
+    /// backups and stale nodes cannot contribute display activity.
+    fn cluster_display_activity_context(
+        &self,
+        network_id: &str,
+    ) -> Option<(u64, Vec<ClusterActivityRpcTarget>)> {
+        let mut network_status = self.dist_network_registry.get(network_id).cloned();
+        let mut node_statuses = self.dist_nodes.clone();
+        let mut peer_addresses = HashMap::new();
+        let mut cached_clients = HashMap::new();
+        if let Some(node) = &self.distributed_node
+            && let Ok(state) = node.state.try_read()
+        {
+            peer_addresses = state.peers.clone();
+            cached_clients = state.clients.clone();
+        }
+
+        let mut bearer_token = None;
+        if self.remote_only || network_status.is_none() {
+            if let Some((address, remote)) = self
+                .remote_statuses
+                .iter()
+                .find(|(_, status)| status.connected && status.networks.contains_key(network_id))
+            {
+                network_status = remote.networks.get(network_id).cloned();
+                node_statuses = remote.nodes.clone();
+                bearer_token = self
+                    .remote_connections
+                    .iter()
+                    .find(|connection| &connection.addr == address)
+                    .and_then(|connection| connection.bearer_token.clone());
+            }
+        }
+
+        let network_status = network_status?;
+        let assignments = network_status
+            .distribution
+            .iter()
+            .filter(|(_, range)| !range.layers.is_empty())
+            .map(|(node_id, range)| (node_id.clone(), range.layers.clone()))
+            .collect::<Vec<_>>();
+        let assignment_digest = cluster_snapshot_assignment_digest(&assignments);
+        let mut targets = Vec::with_capacity(assignments.len());
+        for (node_id, mut owned_layers) in assignments {
+            owned_layers.sort_unstable();
+            owned_layers.dedup();
+            let address = node_statuses
+                .get(&node_id)
+                .map(|status| status.address.trim())
+                .filter(|address| !address.is_empty())
+                .map(str::to_owned)
+                .or_else(|| peer_addresses.get(&node_id).cloned())
+                .unwrap_or_default();
+            let cached_client = cached_clients.get(&node_id).cloned();
+            if address.is_empty() && cached_client.is_none() {
+                continue;
+            }
+            targets.push(ClusterActivityRpcTarget {
+                node_id: node_id.clone(),
+                address,
+                owned_layers,
+                cached_client,
+                bearer_token: bearer_token.clone(),
+            });
+        }
+        targets.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        targets.truncate(CLUSTER_DISPLAY_ACTIVITY_MAX_TARGETS);
+        Some((assignment_digest, targets))
+    }
+
+    /// Drain completed worker samples and schedule the next bounded fan-out.
+    /// Replies are accepted only for the selected network and current active
+    /// assignment, so a late response cannot colour a reassigned shard.
+    fn poll_cluster_display_activity(&mut self, network_id: &str) {
+        let context = self.cluster_display_activity_context(network_id);
+        let assignment_digest = context.as_ref().map(|(digest, _)| *digest);
+        if self.cluster_activity_network_id.as_deref() != Some(network_id)
+            || self.cluster_activity_assignment_digest != assignment_digest
+        {
+            self.cluster_activity_network_id = Some(network_id.to_owned());
+            self.cluster_activity_assignment_digest = assignment_digest;
+            self.cluster_activity_last_steps.clear();
+            self.cluster_activity_last_success = None;
+            self.cluster_activity_last_active_count = 0;
+            self.cluster_activity_poll_next = Instant::now();
+        }
+
+        while let Ok(poll) = self.cluster_activity_rx.try_recv() {
+            self.cluster_activity_poll_inflight = false;
+            if !assignment_digest
+                .is_some_and(|digest| cluster_activity_poll_is_current(&poll, network_id, digest))
+            {
+                continue;
+            }
+            let mut accepted_any = false;
+            let mut active_count = 0usize;
+            let mut accepted_samples = Vec::new();
+            for sample in &poll.samples {
+                if let Some(previous_step) = self.cluster_activity_last_steps.get(&sample.node_id) {
+                    if sample.sim_step == *previous_step {
+                        continue;
+                    }
+                    if sample.sim_step < *previous_step {
+                        // A same-assignment reset starts a new display trace.
+                        self.cluster_activity_last_steps.clear();
+                        self.raster_outputs.clear();
+                        self.last_activity_rendered_step = None;
+                        for value in &mut self.sensory_activity {
+                            *value = 0.0;
+                        }
+                        for layer in &mut self.hidden_activity {
+                            layer.fill(0.0);
+                        }
+                        for value in &mut self.output_activity {
+                            *value = 0.0;
+                        }
+                    }
+                }
+                self.cluster_activity_last_steps
+                    .insert(sample.node_id.clone(), sample.sim_step);
+                let sample_active = sample.sensory_indices.len()
+                    + sample.hidden_indices.iter().map(Vec::len).sum::<usize>()
+                    + sample.output_indices.len();
+                active_count = active_count.saturating_add(sample_active);
+                merge_cluster_display_activity_sample(
+                    &mut self.sensory_activity,
+                    &mut self.hidden_activity,
+                    &mut self.output_activity,
+                    sample,
+                );
+                accepted_samples.push(sample);
+                accepted_any = true;
+            }
+            if accepted_any {
+                let output_count = self
+                    .output_activity
+                    .len()
+                    .max(self.output_count)
+                    .max(self.local_net.num_output_neurons)
+                    .max(1);
+                // A worker poll can lag an aggregate snapshot already shown in
+                // this view. Do not rewind the shared raster cursor for that
+                // stale read; actual simulation resets are handled above.
+                let last_rendered_step = self.last_activity_rendered_step;
+                let raster_frames =
+                    cluster_activity_output_raster_frames(accepted_samples, output_count)
+                        .into_iter()
+                        .filter(|(step, _)| last_rendered_step.is_none_or(|last| *step > last))
+                        .collect();
+                self.append_output_raster_step_frames(raster_frames);
+                let first_sample = self.cluster_activity_last_success.is_none();
+                self.cluster_activity_last_success = Some(Instant::now());
+                self.cluster_activity_last_active_count = active_count;
+                if first_sample {
+                    nm_log!(
+                        "[ui.visualisation] live cluster activity ready (network={}, owner_samples={}, reported_spikes={})",
+                        network_id,
+                        poll.samples.len(),
+                        active_count
+                    );
+                }
+            }
+        }
+
+        let Some((assignment_digest, targets)) = context else {
+            return;
+        };
+        if targets.is_empty()
+            || self.cluster_activity_poll_inflight
+            || Instant::now() < self.cluster_activity_poll_next
+        {
+            return;
+        }
+
+        self.cluster_activity_poll_inflight = true;
+        self.cluster_activity_poll_next = Instant::now() + CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL;
+        let network_id = network_id.to_owned();
+        let tx = self.cluster_activity_tx.clone();
+        self.runtime_handle.spawn(async move {
+            let poll = poll_cluster_display_activity(network_id, assignment_digest, targets).await;
+            let _ = tx.send(poll);
+        });
+    }
+
     fn pull_activity(&mut self) {
         let node_opt = self.distributed_node.clone();
         let _runner_arc = self.runner.clone();
@@ -8241,25 +9698,37 @@ impl App {
             ViewSource::Standalone => return,
         };
 
-        let mut synced_from_source = false;
-        if let Some(node) = node_opt {
-            if let Ok(state) = node.state.try_read() {
-                if let Some(net_arc) = state.networks.get(&id) {
-                    if let Ok(net) = net_arc.try_read() {
-                        self.sync_activity_from_runner(&net.runner);
-                        synced_from_source = true;
+        // ClusterGlobal is a merged remote projection. The orchestrator may
+        // also hold a local compatibility Runner for the same brain, but it
+        // is not authoritative for worker-owned activity and can remain idle
+        // while remote shards are processing admitted input. Always prefer
+        // the aggregate snapshot in this view; acknowledged provider frames
+        // below remain a display-only sensory fallback while it is busy.
+        let synced_from_source = match activity_projection_source(&self.view_source) {
+            ActivityProjectionSource::AggregateClusterSnapshot => {
+                self.sync_activity_from_cluster_snapshot(&id)
+            }
+            ActivityProjectionSource::LocalManagedRunner => {
+                if let Some(node) = node_opt {
+                    if let Ok(state) = node.state.try_read() {
+                        if let Some(net_arc) = state.networks.get(&id) {
+                            if let Ok(net) = net_arc.try_read() {
+                                self.sync_activity_from_runner(&net.runner);
+                                true
+                            } else {
+                                self.sync_activity_from_cluster_snapshot(&id)
+                            }
+                        } else {
+                            self.sync_activity_from_cluster_snapshot(&id)
+                        }
                     } else {
-                        synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
+                        self.sync_activity_from_cluster_snapshot(&id)
                     }
                 } else {
-                    synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
+                    self.sync_activity_from_cluster_snapshot(&id)
                 }
-            } else {
-                synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
             }
-        } else {
-            synced_from_source = self.sync_activity_from_cluster_snapshot(&id);
-        }
+        };
 
         if !synced_from_source {
             // Decay if no data
@@ -8278,6 +9747,44 @@ impl App {
             if cluster_mode {
                 self.status = "Watching Cluster".into();
             }
+        }
+
+        // The complete cluster snapshot is an asynchronous display source and
+        // may be busy while a remote shard is committing a simulation step.
+        // Keep acknowledged sensory activity visible in the meantime without
+        // waiting on either the Runner or the snapshot lock.
+        if cluster_mode {
+            self.sync_activity_from_admitted_provider(&id);
+            self.poll_cluster_display_activity(&id);
+        }
+    }
+
+    fn sync_activity_from_admitted_provider(&mut self, network_id: &str) {
+        let Some((routed_network, width)) = self.distributed_input_route.as_ref() else {
+            return;
+        };
+        if routed_network != network_id || *width == 0 {
+            return;
+        }
+        let Some(frame) = self
+            .managed_sensory_display_frame
+            .try_read()
+            .ok()
+            .map(|snapshot| snapshot.clone())
+        else {
+            return;
+        };
+        let Some(frame) = frame else {
+            return;
+        };
+        if apply_managed_sensory_display_frame(
+            &mut self.sensory_activity,
+            &mut self.last_managed_sensory_display_frame,
+            &frame,
+            network_id,
+            *width,
+        ) {
+            self.last_sensory_spikes = frame.spikes;
         }
     }
 
@@ -9318,11 +10825,264 @@ fn snap_pid_vec3(state: &mut UiPid3State, target: [f32; 3]) -> [f32; 3] {
 mod topology_presentation_tests {
     use super::*;
 
+    fn small_cluster_reconstruction() -> crate::morphology_contract::PointOnlyReconstruction {
+        use crate::morphology_contract::{
+            AxisAlignedBox, ConnectomeRole, CoordinateFrame, GrowthEnvironment,
+            PointOnlyConnection, PointOnlyConnectome, PointOnlyNeuron, ReconstructionConfig, Vec3,
+        };
+
+        let neurons = vec![
+            PointOnlyNeuron {
+                id: crate::deterministic::NeuronId::new(1).unwrap(),
+                position_mm: Vec3 {
+                    x: -0.6,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                role: ConnectomeRole::Sensory,
+                layer: None,
+                cell_type: "sensory".to_owned(),
+                formation_order: 0,
+            },
+            PointOnlyNeuron {
+                id: crate::deterministic::NeuronId::new(2).unwrap(),
+                position_mm: Vec3 {
+                    x: 0.6,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                role: ConnectomeRole::Output,
+                layer: None,
+                cell_type: "motor".to_owned(),
+                formation_order: 1,
+            },
+        ];
+        let connectome = PointOnlyConnectome {
+            neurons,
+            connections: vec![PointOnlyConnection {
+                id: 1,
+                pre: crate::deterministic::NeuronId::new(1).unwrap(),
+                post: crate::deterministic::NeuronId::new(2).unwrap(),
+                kind: "sensory-output".to_owned(),
+            }],
+        };
+        let environment = GrowthEnvironment {
+            revision: 1,
+            frame: CoordinateFrame::default(),
+            volume: AxisAlignedBox {
+                min: Vec3 {
+                    x: -2.0,
+                    y: -2.0,
+                    z: -2.0,
+                },
+                max: Vec3 {
+                    x: 2.0,
+                    y: 2.0,
+                    z: 2.0,
+                },
+            },
+            forbidden: Vec::new(),
+            clearance_mm: 0.002,
+        };
+        crate::morphology_contract::reconstruct_point_only_connectome(
+            connectome,
+            environment,
+            ReconstructionConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cluster_snapshot_contract_exposes_synthetic_and_anatomical_views() {
+        let mut snapshot = crate::runner::Snapshot::default();
+        snapshot.t = 42;
+        snapshot.procedural_reconstruction = Some(small_cluster_reconstruction());
+        let contracts = build_cluster_display_contracts(&snapshot).unwrap();
+        let synthetic = contracts.get("synthetic_columns").unwrap();
+        let anatomical = contracts.get("anatomical").unwrap();
+        assert_eq!(synthetic.sequence, 43);
+        assert_eq!(
+            synthetic.mode,
+            crate::morphology_contract::DisplayMode::SyntheticColumns
+        );
+        assert_eq!(
+            anatomical.mode,
+            crate::morphology_contract::DisplayMode::Anatomical
+        );
+        assert_eq!(synthetic.nodes.len(), anatomical.nodes.len());
+        assert_eq!(synthetic.edges.len(), 1);
+        assert_eq!(anatomical.edges.len(), 1);
+        assert!(anatomical.edges[0].points_mm.len() > 2);
+    }
+
+    #[test]
+    fn cluster_activity_prefers_the_aggregate_shard_snapshot() {
+        assert_eq!(
+            activity_projection_source(&ViewSource::ClusterGlobal("brain-a".to_owned())),
+            ActivityProjectionSource::AggregateClusterSnapshot,
+            "the orchestrator's local compatibility Runner may be idle while worker shards are active"
+        );
+        assert_eq!(
+            activity_projection_source(&ViewSource::LocalManaged("brain-a".to_owned())),
+            ActivityProjectionSource::LocalManagedRunner
+        );
+    }
+
     #[test]
     fn cluster_dashboard_layer_count_excludes_output_boundary() {
         assert_eq!(cluster_hidden_layer_count(Some(6), 6, 7), 6);
         assert_eq!(cluster_hidden_layer_count(None, 6, 7), 6);
         assert_eq!(cluster_hidden_layer_count(None, 0, 7), 6);
+    }
+
+    #[test]
+    fn cluster_edge_worker_results_are_fenced_to_the_current_projection() {
+        let is_current = |network, cached_network, step, assignment, generation| {
+            cluster_edge_result_is_current(
+                Some(network),
+                Some(cached_network),
+                Some(step),
+                Some(assignment),
+                7,
+                network,
+                12,
+                42,
+                generation,
+            )
+        };
+
+        assert!(is_current("brain-a", "brain-a", 12, 42, 7));
+        assert!(!is_current("brain-b", "brain-a", 12, 42, 7));
+        assert!(
+            cluster_edge_result_is_current(
+                Some("brain-a"),
+                Some("brain-a"),
+                Some(13),
+                Some(42),
+                7,
+                "brain-a",
+                12,
+                42,
+                7,
+            ),
+            "a same-assignment visual result may lag the latest neural cut"
+        );
+        assert!(
+            !cluster_edge_result_is_current(
+                Some("brain-a"),
+                Some("brain-a"),
+                Some(11),
+                Some(42),
+                7,
+                "brain-a",
+                12,
+                42,
+                7,
+            ),
+            "a visual result from a future cut must be rejected"
+        );
+        assert!(!is_current("brain-a", "brain-a", 12, 43, 7));
+        assert!(!is_current("brain-a", "brain-a", 12, 42, 6));
+    }
+
+    #[test]
+    fn cluster_edge_projection_survives_new_cuts_but_not_reassignment_or_rewind() {
+        assert!(cluster_edge_projection_can_be_reused(
+            Some("brain-a"),
+            Some(42),
+            Some(12),
+            "brain-a",
+            42,
+            13,
+        ));
+        assert!(!cluster_edge_projection_can_be_reused(
+            Some("brain-a"),
+            Some(42),
+            Some(12),
+            "brain-a",
+            43,
+            13,
+        ));
+        assert!(!cluster_edge_projection_can_be_reused(
+            Some("brain-a"),
+            Some(42),
+            Some(12),
+            "brain-b",
+            42,
+            13,
+        ));
+        assert!(
+            !cluster_edge_projection_can_be_reused(
+                Some("brain-a"),
+                Some(42),
+                Some(12),
+                "brain-a",
+                42,
+                3,
+            ),
+            "a reset/time rewind invalidates indices projected from the later cut"
+        );
+    }
+
+    #[test]
+    fn cluster_display_projection_results_are_fenced_by_brain_step_and_request() {
+        assert!(cluster_display_projection_is_current(
+            Some("brain-a"),
+            "brain-a",
+            12,
+            Some(13),
+            7,
+            7,
+        ));
+        assert!(!cluster_display_projection_is_current(
+            Some("brain-b"),
+            "brain-a",
+            12,
+            Some(13),
+            7,
+            7,
+        ));
+        assert!(!cluster_display_projection_is_current(
+            Some("brain-a"),
+            "brain-a",
+            14,
+            Some(13),
+            7,
+            7,
+        ));
+        assert!(!cluster_display_projection_is_current(
+            Some("brain-a"),
+            "brain-a",
+            12,
+            Some(13),
+            8,
+            7,
+        ));
+    }
+
+    #[test]
+    fn cluster_snapshot_edge_projection_produces_stage_three_connections() {
+        let mut snapshot = crate::runner::Snapshot::default();
+        snapshot.net.num_sensory_neurons = 2;
+        snapshot.net.num_hidden_layers = 1;
+        snapshot.net.num_output_neurons = 1;
+        snapshot.w_in = crate::runner::Matrix2 {
+            rows: 1,
+            cols: 2,
+            data: vec![0.5, 0.0],
+        };
+        snapshot.w_out = crate::runner::Matrix2 {
+            rows: 1,
+            cols: 1,
+            data: vec![0.75],
+        };
+
+        let (edges, _, layer_counts, output_count) = App::compute_edges_from_snapshot(1, &snapshot);
+        assert_eq!(edges.len(), 2);
+        assert_eq!(layer_counts, vec![1]);
+        assert_eq!(output_count, 1);
+        assert!(!visualization_stage_hides_connections(3));
+        assert!(should_draw_connection_overlays(true, false));
     }
 
     #[test]
@@ -9352,6 +11112,470 @@ mod topology_presentation_tests {
         assert!(!legacy_overlay_allowed(false, true, true));
         assert!(!legacy_overlay_allowed(false, false, false));
         assert!(legacy_overlay_allowed(false, false, true));
+    }
+
+    #[test]
+    fn pixel_only_stages_hide_graph_connections() {
+        assert!(visualization_stage_hides_connections(1));
+        assert!(visualization_stage_hides_connections(4));
+        for stage in [2, 3, 5, 6] {
+            assert!(!visualization_stage_hides_connections(stage));
+        }
+    }
+
+    #[test]
+    fn requested_synthetic_connections_are_not_hidden_by_a_cached_anatomy() {
+        // A stage-three request turns on the cached synthetic connection
+        // overlay even while a biological projection is cached for stage 4+.
+        assert!(should_draw_connection_overlays(true, false));
+        assert!(should_draw_connection_overlays(false, true));
+        assert!(!should_draw_connection_overlays(false, false));
+        assert!(!visualization_stage_hides_connections(3));
+    }
+
+    #[test]
+    fn cluster_synthetic_connections_report_loading_until_snapshot_edges_arrive() {
+        assert_eq!(
+            connection_projection_status(true, false, true, false, false, 0, 0),
+            "waiting for cluster snapshot"
+        );
+        assert_eq!(
+            connection_projection_status(true, true, false, true, false, 0, 0),
+            "connections building"
+        );
+        assert_eq!(
+            connection_projection_status(true, true, false, false, true, 0, 12),
+            "connection projection incomplete"
+        );
+        assert_eq!(
+            connection_projection_status(true, true, false, false, true, 0, 0),
+            "no connections in cluster snapshot"
+        );
+        assert_eq!(
+            connection_projection_status(true, true, false, false, true, 3, 12),
+            "3 connections"
+        );
+    }
+
+    #[test]
+    fn stage_three_activity_brightness_is_contrasty_and_finite() {
+        let resting = visualization_activity_brightness(3, 0.0, false);
+        let low_activity = visualization_activity_brightness(3, 0.1, false);
+        let active = visualization_activity_brightness(3, 1.0, false);
+        assert!(low_activity - resting > 0.2);
+        assert!(active - resting > 0.7);
+        assert_eq!(
+            visualization_activity_brightness(3, f32::NAN, false),
+            resting
+        );
+        assert_eq!(visualization_activity_brightness(3, 2.0, false), active);
+    }
+
+    #[test]
+    fn pixel_activity_colour_is_opaque_and_encodes_activity() {
+        let resting =
+            visualization_activity_colour(egui::Color32::from_rgb(60, 140, 255), 3, 0.0, false);
+        let active =
+            visualization_activity_colour(egui::Color32::from_rgb(60, 140, 255), 3, 1.0, false);
+
+        assert_eq!(
+            resting.a(),
+            255,
+            "edge colours must not bleed through a neuron pixel"
+        );
+        assert_eq!(active.a(), 255);
+        assert!(active.b() > resting.b());
+        assert!(active.g() > resting.g());
+    }
+
+    #[test]
+    fn cluster_live_activity_only_updates_assigned_layers_and_valid_indices() {
+        let sample = ClusterDisplayActivitySample {
+            node_id: "node-2".to_owned(),
+            owned_layers: vec![1],
+            sim_step: 17,
+            sensory_indices: vec![1, 99],
+            hidden_indices: vec![vec![0], vec![2, 99]],
+            output_indices: vec![0],
+            output_history: vec![(17, vec![0])],
+        };
+        let mut sensory = vec![0.0; 2];
+        let mut hidden = vec![vec![0.0; 3], vec![0.0; 3], vec![0.0; 3]];
+        let mut output = vec![0.0; 2];
+
+        let updated =
+            merge_cluster_display_activity_sample(&mut sensory, &mut hidden, &mut output, &sample);
+
+        assert_eq!(updated, 3);
+        assert_eq!(sensory, vec![0.0, 1.0]);
+        assert_eq!(hidden[0], vec![0.0, 0.0, 0.0]);
+        assert_eq!(hidden[1], vec![0.0, 0.0, 1.0]);
+        assert_eq!(hidden[2], vec![0.0, 0.0, 0.0]);
+        assert_eq!(output, vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn worker_output_histories_advance_raster_and_merge_shared_steps() {
+        let first_owner = ClusterDisplayActivitySample {
+            node_id: "node-1".to_owned(),
+            owned_layers: vec![0],
+            sim_step: 12,
+            sensory_indices: Vec::new(),
+            hidden_indices: Vec::new(),
+            output_indices: vec![2],
+            output_history: vec![(10, vec![0]), (11, Vec::new()), (12, vec![2])],
+        };
+        let second_owner = ClusterDisplayActivitySample {
+            node_id: "node-2".to_owned(),
+            owned_layers: vec![1],
+            sim_step: 12,
+            sensory_indices: Vec::new(),
+            hidden_indices: Vec::new(),
+            output_indices: vec![3],
+            output_history: vec![(11, vec![1]), (12, vec![3])],
+        };
+
+        let frames = cluster_activity_output_raster_frames([&first_owner, &second_owner], 4);
+
+        assert_eq!(
+            frames,
+            vec![
+                (10, vec![1, 0, 0, 0]),
+                (11, vec![0, 1, 0, 0]),
+                (12, vec![0, 0, 1, 1]),
+            ],
+            "quiet steps still add raster columns, while worker outputs at the same step merge"
+        );
+    }
+
+    #[test]
+    fn cluster_activity_polls_reject_old_network_and_assignment_replies() {
+        let poll = ClusterDisplayActivityPoll {
+            network_id: "brain-a".to_owned(),
+            assignment_digest: 42,
+            samples: Vec::new(),
+        };
+        assert!(cluster_activity_poll_is_current(&poll, "brain-a", 42));
+        assert!(!cluster_activity_poll_is_current(&poll, "brain-b", 42));
+        assert!(!cluster_activity_poll_is_current(&poll, "brain-a", 43));
+    }
+
+    #[test]
+    fn requested_pixel_stages_use_one_framebuffer_pixel_and_waiting_capture_is_bounded() {
+        assert_eq!(single_pixel_neuron_size(3, 1.0), Some(1.0));
+        assert_eq!(single_pixel_neuron_size(3, 2.0), Some(0.5));
+        assert_eq!(single_pixel_neuron_size(7, 1.0), Some(1.0));
+        assert_eq!(single_pixel_neuron_size(8, 1.0), None);
+        assert!(!stage_three_capture_ready(false, true, true, 2));
+        assert!(!stage_three_capture_ready(true, false, true, 2));
+        // A worker can be active elsewhere in the network while an audio
+        // route has not delivered a sensory sample yet.
+        assert!(!stage_three_capture_ready(true, true, false, 2));
+        assert!(!stage_three_capture_ready(true, true, true, 0));
+        assert!(stage_three_capture_ready(true, true, true, 2));
+    }
+
+    #[test]
+    fn single_pixel_neuron_rect_covers_one_aligned_framebuffer_pixel() {
+        for pixels_per_point in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let rect = single_pixel_neuron_rect(egui::pos2(123.25, 87.625), pixels_per_point);
+            let tolerance = 0.001;
+            assert!(
+                (rect.width() * pixels_per_point - 1.0).abs() < tolerance,
+                "width must cover one device pixel at scale {pixels_per_point}"
+            );
+            assert!(
+                (rect.height() * pixels_per_point - 1.0).abs() < tolerance,
+                "height must cover one device pixel at scale {pixels_per_point}"
+            );
+            assert!(
+                (rect.left() * pixels_per_point - (rect.left() * pixels_per_point).round()).abs()
+                    < tolerance,
+                "left edge must align to the framebuffer grid at scale {pixels_per_point}"
+            );
+            assert!(
+                (rect.top() * pixels_per_point - (rect.top() * pixels_per_point).round()).abs()
+                    < tolerance,
+                "top edge must align to the framebuffer grid at scale {pixels_per_point}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_pixel_neurons_are_emitted_as_visible_coloured_mesh_quads() {
+        let base = egui::Color32::from_rgb(60, 140, 255);
+        let resting = visualization_activity_colour(base, 3, 0.0, false);
+        let active = visualization_activity_colour(base, 1, 1.0, false);
+        let mut mesh = egui::Mesh::default();
+
+        append_single_pixel_neuron(&mut mesh, egui::pos2(5.7, 7.9), 1.0, resting);
+        append_single_pixel_neuron(&mut mesh, egui::pos2(12.2, 3.4), 2.0, active);
+
+        assert!(mesh.is_valid());
+        assert_eq!(mesh.vertices.len(), 8);
+        assert_eq!(mesh.indices.len(), 12);
+        assert_eq!(mesh.vertices[0].pos, egui::pos2(5.0, 7.0));
+        assert_eq!(mesh.vertices[3].pos, egui::pos2(6.0, 8.0));
+        assert_eq!(mesh.vertices[0].color, resting);
+        assert_eq!(mesh.vertices[4].color, active);
+        assert!(active.b() > resting.b());
+    }
+
+    #[test]
+    fn native_visualisation_launch_overrides_are_bounded_and_manual_is_supported() {
+        assert_eq!(initial_visualization_stage(Some("3")), 3);
+        assert_eq!(initial_visualization_stage(Some("9")), 9);
+        assert_eq!(initial_visualization_stage(Some("0")), 5);
+        assert_eq!(initial_visualization_stage(Some("invalid")), 5);
+        assert_eq!(initial_visualization_auto(Some("off")), false);
+        assert_eq!(initial_visualization_auto(Some("0")), false);
+        assert_eq!(initial_visualization_auto(Some("true")), true);
+        assert_eq!(initial_visualization_auto(None), true);
+        assert_eq!(initial_visualization_auto(Some("invalid")), true);
+        assert_eq!(initial_visualization_override(None, None), None);
+        assert_eq!(
+            initial_visualization_override(Some("3"), Some("off")),
+            Some((3, false)),
+            "the launch profile must be reapplied after the distributed view auto-selects"
+        );
+    }
+
+    #[test]
+    fn cluster_synthetic_edge_projection_keeps_nonzero_input_and_output_lines() {
+        let mut config = NetworkConfig::default();
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 1;
+        config.num_sensory_neurons = 1;
+        config.num_output_neurons = 1;
+        config.io_channels_are_biological = false;
+        let mut runner = Runner::new(
+            Default::default(),
+            Default::default(),
+            config,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        runner.w_in[(0, 0)] = 0.75;
+        runner.w_out[(0, 0)] = 0.5;
+
+        let (edges, layer_sizes, layer_counts, output_count) =
+            App::compute_edges_from_snapshot(1, &runner.snapshot());
+
+        assert_eq!(layer_sizes, vec![1]);
+        assert_eq!(layer_counts, vec![1]);
+        assert_eq!(output_count, 1);
+        assert!(
+            edges
+                .iter()
+                .any(|edge| edge.from_layer == -1 && edge.to_layer == 0)
+        );
+        assert!(
+            edges
+                .iter()
+                .any(|edge| edge.from_layer == 0 && edge.to_layer == -2)
+        );
+    }
+
+    #[test]
+    fn acknowledged_provider_frames_update_only_display_activity() {
+        let mut activity = vec![0.5, f32::NAN, 0.2];
+        assert!(merge_sensory_spike_activity(
+            &mut activity,
+            &[0, 1, -1],
+            0.90,
+        ));
+        assert_eq!(activity, vec![0.45, 1.0, 1.0]);
+        assert!(!merge_sensory_spike_activity(&mut activity, &[], 0.90));
+        assert_eq!(activity, vec![0.45, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn acknowledged_cluster_frames_are_applied_once_for_the_selected_brain() {
+        let mut activity = vec![0.0, 0.0];
+        let mut last_frame = None;
+        let active = ManagedSensoryDisplayFrame {
+            network_id: "cluster_master".to_owned(),
+            session_id: "audio-session-a".to_owned(),
+            frame_sequence: 12,
+            spikes: vec![0, 1],
+        };
+
+        assert!(apply_managed_sensory_display_frame(
+            &mut activity,
+            &mut last_frame,
+            &active,
+            "cluster_master",
+            2,
+        ));
+        assert_eq!(activity, vec![0.0, 1.0]);
+        assert!(!apply_managed_sensory_display_frame(
+            &mut activity,
+            &mut last_frame,
+            &active,
+            "cluster_master",
+            2,
+        ));
+        assert_eq!(activity, vec![0.0, 1.0]);
+
+        let quiet = ManagedSensoryDisplayFrame {
+            frame_sequence: 13,
+            spikes: vec![0, 0],
+            ..active.clone()
+        };
+        assert!(apply_managed_sensory_display_frame(
+            &mut activity,
+            &mut last_frame,
+            &quiet,
+            "cluster_master",
+            2,
+        ));
+        assert_eq!(activity, vec![0.0, 0.9]);
+
+        let other_network = ManagedSensoryDisplayFrame {
+            network_id: "other_brain".to_owned(),
+            frame_sequence: 14,
+            spikes: vec![1, 1],
+            ..active.clone()
+        };
+        assert!(!apply_managed_sensory_display_frame(
+            &mut activity,
+            &mut last_frame,
+            &other_network,
+            "cluster_master",
+            2,
+        ));
+        let wrong_width = ManagedSensoryDisplayFrame {
+            frame_sequence: 15,
+            spikes: vec![1],
+            ..active
+        };
+        assert!(!apply_managed_sensory_display_frame(
+            &mut activity,
+            &mut last_frame,
+            &wrong_width,
+            "cluster_master",
+            2,
+        ));
+        assert_eq!(activity, vec![0.0, 0.9]);
+    }
+
+    #[test]
+    fn orchestrator_decodes_aggregate_snapshot_without_a_local_shard() {
+        let network_id = "cluster_master";
+        let mut config = NetworkConfig::default();
+        config.num_hidden_layers = 1;
+        config.io_channels_are_biological = false;
+        let mut worker = Runner::new(
+            Default::default(),
+            Default::default(),
+            config,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        worker.layer_range = Some(0..1);
+        let worker_snapshot = worker.export_network_json().expect("worker snapshot");
+        let assignment = BTreeMap::from([("node_1".to_owned(), vec![0])]);
+        let aggregate = crate::cluster_snapshot::assemble(
+            network_id,
+            &assignment,
+            vec![crate::cluster_snapshot::ShardSnapshotInput {
+                node_id: "node_1".to_owned(),
+                layers: vec![0],
+                snapshot_json: worker_snapshot,
+                channel_state_json: "{}".to_owned(),
+                authoritative_state_json: String::new(),
+            }],
+        )
+        .expect("assembled worker-only snapshot");
+        let response = ClusterNetworkSnapshotResponse {
+            network_id: aggregate.network_id,
+            schema_version: aggregate.schema_version,
+            cut_tick: aggregate.cut_tag.tick,
+            cut_microstep: aggregate.cut_tag.microstep,
+            cluster_digest: aggregate.cluster_digest.to_string(),
+            shards: aggregate
+                .shards
+                .into_iter()
+                .map(|shard| crate::distributed::proto::ClusterShardSnapshot {
+                    node_id: shard.node_id,
+                    layers: shard.layers,
+                    snapshot_json: shard.snapshot_json,
+                    step: shard.step,
+                    sim_time_ms_bits: shard.sim_time_ms_bits,
+                    state_digest: shard.state_digest.to_string(),
+                    channel_state_json: shard.channel_state_json,
+                    channel_state_digest: shard.channel_state_digest.to_string(),
+                    authoritative_state_json: shard.authoritative_state_json,
+                    authoritative_state_digest: shard
+                        .authoritative_state_digest
+                        .map_or_else(String::new, |digest| digest.to_string()),
+                })
+                .collect(),
+            consistent_cut_json: String::new(),
+        };
+
+        let local_orchestrator_id = "cluster_master_123";
+        let preferred_shard = local_cluster_snapshot_preferred_shard(true, local_orchestrator_id);
+        assert_eq!(preferred_shard, None);
+        assert!(
+            decode_cluster_snapshot_projection(response.clone(), network_id, preferred_shard,)
+                .is_ok()
+        );
+        assert!(
+            decode_cluster_snapshot_projection(
+                response,
+                network_id,
+                local_cluster_snapshot_preferred_shard(false, local_orchestrator_id),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_anatomical_stages_distinguish_straight_and_branching_edges() {
+        let edges = vec![
+            CachedEdge {
+                from_layer: -1,
+                from_idx: 0,
+                to_layer: 0,
+                to_idx: 0,
+                weight: 0.8,
+                kind: "in",
+                is_longterm: false,
+            },
+            CachedEdge {
+                from_layer: -1,
+                from_idx: 0,
+                to_layer: 0,
+                to_idx: 1,
+                weight: 0.7,
+                kind: "in",
+                is_longterm: false,
+            },
+            CachedEdge {
+                from_layer: -1,
+                from_idx: 1,
+                to_layer: 0,
+                to_idx: 1,
+                weight: 0.6,
+                kind: "in",
+                is_longterm: false,
+            },
+        ];
+
+        let straight = legacy_anatomical_edge_indices(5, &edges);
+        assert_eq!(straight.len(), 2);
+        assert_eq!(legacy_anatomical_edge_indices(6, &edges), vec![0, 1, 2]);
+        assert!(legacy_anatomical_edge_indices(4, &edges).is_empty());
+    }
+
+    #[test]
+    fn cluster_equalizer_uses_the_master_input_spectrum() {
+        let mut smoothed = vec![0.0; 2];
+        update_equalizer_values(&mut smoothed, Some(&[1.0, 0.5]));
+
+        assert_eq!(smoothed, vec![0.3, 0.15]);
+        assert_eq!(equalizer_caption(true), "Graphic EQ • master audio input");
     }
 
     #[test]
@@ -9431,10 +11655,12 @@ mod topology_presentation_tests {
         second.topo.layers[1][0].x = 20.0;
         first.layer_range = Some(0..1);
         second.layer_range = Some(1..2);
+        let mut second_snapshot = second.snapshot();
+        second_snapshot.procedural_reconstruction = Some(small_cluster_reconstruction());
 
         let parsed = vec![
             ("worker-a".to_owned(), vec![0], first.snapshot()),
-            ("worker-b".to_owned(), vec![1], second.snapshot()),
+            ("worker-b".to_owned(), vec![1], second_snapshot),
         ];
         let owners = BTreeMap::from([(0, "worker-a".to_owned()), (1, "worker-b".to_owned())]);
         let merged = merge_cluster_snapshot_projection(&parsed, &owners, None)
@@ -9447,6 +11673,10 @@ mod topology_presentation_tests {
         assert_eq!(topo.layers[0][0].x, -10.0);
         assert_eq!(topo.layers[1][0].x, 20.0);
         assert!(merged.layer_range.is_none());
+        assert!(
+            merged.procedural_reconstruction.is_some(),
+            "cluster merge keeps a geometry contract carried by any shard"
+        );
     }
 
     #[test]
@@ -9621,6 +11851,19 @@ struct UiTopologySnapshot {
     display_contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
 }
 
+/// Immutable anatomical and synthetic views derived from one aggregate
+/// cluster snapshot. The source revisions let the UI retain this projection
+/// through a refresh while rejecting results from another brain or rewind.
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+#[derive(Clone)]
+struct ClusterDisplayProjection {
+    network_id: String,
+    snapshot_step: usize,
+    morphology_revision: u64,
+    topology_epoch: u64,
+    contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
+}
+
 #[cfg(all(feature = "ui", feature = "growth3d"))]
 impl From<&UiSnapshot> for UiTopologySnapshot {
     fn from(snapshot: &UiSnapshot) -> Self {
@@ -9687,6 +11930,48 @@ fn extract_display_contracts(
         }
     }
     updates
+}
+
+/// Build both dashboard modes from the selected cluster snapshot's committed
+/// procedural geometry. This runs on a bounded display worker and never reads
+/// or locks a live Runner, so projection cost cannot enter neural traversal.
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn build_cluster_display_contracts(
+    snapshot: &crate::runner::Snapshot,
+) -> Result<BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>, String> {
+    const MAX_DISPLAY_NODES: usize = 512;
+    const MAX_DISPLAY_EDGES: usize = 4096;
+
+    let reconstruction = snapshot
+        .procedural_reconstruction
+        .as_ref()
+        .ok_or_else(|| "cluster snapshot has no procedural anatomy contract".to_owned())?;
+    let sequence = (snapshot.t as u64).saturating_add(1).max(1);
+    let anatomical = reconstruction
+        .display_snapshot(sequence, MAX_DISPLAY_NODES, MAX_DISPLAY_EDGES)
+        .map_err(|error| format!("anatomical display projection failed: {error}"))?;
+    let synthetic = reconstruction
+        .synthetic_display_snapshot(sequence, MAX_DISPLAY_NODES, MAX_DISPLAY_EDGES)
+        .map_err(|error| format!("synthetic display projection failed: {error}"))?;
+
+    let mut contracts = BTreeMap::new();
+    contracts.insert("anatomical".to_owned(), Arc::new(anatomical));
+    contracts.insert("synthetic_columns".to_owned(), Arc::new(synthetic));
+    Ok(contracts)
+}
+
+#[cfg(all(feature = "ui", feature = "growth3d"))]
+fn cluster_display_projection_is_current(
+    selected_network_id: Option<&str>,
+    cached_network_id: &str,
+    cached_snapshot_step: usize,
+    current_snapshot_step: Option<usize>,
+    current_generation: u64,
+    result_generation: u64,
+) -> bool {
+    selected_network_id == Some(cached_network_id)
+        && current_snapshot_step.is_some_and(|step| cached_snapshot_step <= step)
+        && current_generation == result_generation
 }
 
 #[cfg(feature = "ui")]
@@ -10229,6 +12514,385 @@ fn legacy_overlay_allowed(
     overlay_requested && !anatomical_contract_geometry && !anatomical_layout_selected
 }
 
+#[cfg(feature = "ui")]
+fn visualization_stage_hides_connections(stage: u8) -> bool {
+    matches!(stage, 1 | 4)
+}
+
+#[cfg(feature = "ui")]
+fn connection_projection_status(
+    is_cluster_view: bool,
+    cluster_snapshot_available: bool,
+    cluster_snapshot_inflight: bool,
+    projection_building: bool,
+    counts_ready: bool,
+    cached_edges: usize,
+    known_connections: usize,
+) -> String {
+    if cached_edges > 0 {
+        return format!("{cached_edges} connections");
+    }
+    if is_cluster_view {
+        if !cluster_snapshot_available {
+            return if cluster_snapshot_inflight {
+                "waiting for cluster snapshot".to_owned()
+            } else {
+                "cluster snapshot not ready".to_owned()
+            };
+        }
+        if projection_building || !counts_ready {
+            return "connections building".to_owned();
+        }
+        if known_connections > 0 {
+            return "connection projection incomplete".to_owned();
+        }
+        return "no connections in cluster snapshot".to_owned();
+    }
+    if projection_building {
+        "connections building".to_owned()
+    } else if counts_ready && known_connections == 0 {
+        "no connections in current network".to_owned()
+    } else {
+        "connections unavailable".to_owned()
+    }
+}
+
+/// Parse optional launch-time visualisation defaults for repeatable native
+/// QA and workstation launch profiles. Invalid values retain the established
+/// automatic stage-five default.
+#[cfg(feature = "ui")]
+fn initial_visualization_stage(value: Option<&str>) -> u8 {
+    value
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|stage| (1..=9).contains(stage))
+        .unwrap_or(5)
+}
+
+/// Parse common shell boolean spellings; unknown values safely keep automatic
+/// detail enabled.
+#[cfg(feature = "ui")]
+fn initial_visualization_auto(value: Option<&str>) -> bool {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("0" | "false" | "no" | "off") => false,
+        Some("1" | "true" | "yes" | "on") | None => true,
+        Some(_) => true,
+    }
+}
+
+/// Reapply only an explicit launch profile after distributed view selection.
+/// This keeps ordinary view changes on their established Auto default.
+#[cfg(feature = "ui")]
+fn initial_visualization_override(
+    stage: Option<&str>,
+    automatic: Option<&str>,
+) -> Option<(u8, bool)> {
+    (stage.is_some() || automatic.is_some()).then(|| {
+        (
+            initial_visualization_stage(stage),
+            initial_visualization_auto(automatic),
+        )
+    })
+}
+
+/// True when the current display request needs a matrix-edge overlay. A
+/// complete biological projection may be cached for the anatomical view at
+/// the same time; that cache must not hide lines in the selected synthetic
+/// arrangement.
+#[cfg(feature = "ui")]
+fn should_draw_connection_overlays(
+    show_static_overlays: bool,
+    stage_requires_legacy_anatomical_links: bool,
+) -> bool {
+    show_static_overlays || stage_requires_legacy_anatomical_links
+}
+
+/// Merge an acknowledged sensory frame into the display-only activity buffer.
+/// A frame is kept separate from neural traversal and cannot change model
+/// state; non-spiking inputs simply let the prior activity fade.
+#[cfg(feature = "ui")]
+fn merge_sensory_spike_activity(activity: &mut Vec<f32>, spikes: &[i8], decay: f32) -> bool {
+    if spikes.is_empty() {
+        return false;
+    }
+    let decay = if decay.is_finite() {
+        decay.clamp(0.0, 1.0)
+    } else {
+        0.90
+    };
+    if activity.len() != spikes.len() {
+        activity.resize(spikes.len(), 0.0);
+    }
+    for value in activity.iter_mut() {
+        *value = if value.is_finite() {
+            (*value * decay).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+    for (value, &spike) in activity.iter_mut().zip(spikes) {
+        if spike != 0 {
+            *value = 1.0;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "ui")]
+fn merge_spike_indices_into_activity(activity: &mut [f32], indices: &[u32]) -> usize {
+    let mut updated = 0;
+    for &index in indices {
+        if let Some(value) = activity.get_mut(index as usize) {
+            if *value < 1.0 {
+                *value = 1.0;
+                updated += 1;
+            }
+        }
+    }
+    updated
+}
+
+/// Merge a worker's sparse spike sample into display buffers using only the
+/// layers assigned to that worker. Activity stays a read-only projection; it
+/// never writes back to a Runner or changes admitted stimuli.
+#[cfg(feature = "ui")]
+fn merge_cluster_display_activity_sample(
+    sensory: &mut [f32],
+    hidden: &mut [Vec<f32>],
+    output: &mut [f32],
+    sample: &ClusterDisplayActivitySample,
+) -> usize {
+    let mut updated = merge_spike_indices_into_activity(sensory, &sample.sensory_indices);
+    let response_covers_global_layers = sample
+        .owned_layers
+        .iter()
+        .max()
+        .is_some_and(|max_layer| sample.hidden_indices.len() > *max_layer as usize);
+    for (offset, &layer) in sample.owned_layers.iter().enumerate() {
+        let layer_index = layer as usize;
+        let response_index = if response_covers_global_layers {
+            layer_index
+        } else {
+            offset
+        };
+        let (Some(display_layer), Some(spikes)) = (
+            hidden.get_mut(layer_index),
+            sample.hidden_indices.get(response_index),
+        ) else {
+            continue;
+        };
+        updated += merge_spike_indices_into_activity(display_layer, spikes);
+    }
+    updated += merge_spike_indices_into_activity(output, &sample.output_indices);
+    updated
+}
+
+/// Reconstruct display-only output raster columns from fresh worker activity
+/// histories. Multiple owners are merged by simulation step so the dashboard
+/// advances when aggregate snapshots are delayed, without duplicating a
+/// column for every worker.
+#[cfg(feature = "ui")]
+fn cluster_activity_output_raster_frames<'a>(
+    samples: impl IntoIterator<Item = &'a ClusterDisplayActivitySample>,
+    output_count: usize,
+) -> Vec<(u64, Vec<i8>)> {
+    let output_count = output_count.max(1);
+    let mut frames_by_step = BTreeMap::<u64, Vec<i8>>::new();
+    for sample in samples {
+        for (step, indices) in &sample.output_history {
+            let frame = frames_by_step
+                .entry(*step)
+                .or_insert_with(|| vec![0; output_count]);
+            for &index in indices {
+                if let Some(spike) = frame.get_mut(index as usize) {
+                    *spike = 1;
+                }
+            }
+        }
+    }
+    frames_by_step.into_iter().collect()
+}
+
+#[cfg(feature = "ui")]
+fn single_pixel_neuron_size(stage: u8, pixels_per_point: f32) -> Option<f32> {
+    let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+        pixels_per_point
+    } else {
+        1.0
+    };
+    (stage <= 7).then(|| 1.0 / scale)
+}
+
+/// Return a rectangle aligned to exactly one framebuffer pixel. Snapping the
+/// origin before drawing prevents fractional coverage from dimming the tiny
+/// activity markers at common display scales.
+#[cfg(feature = "ui")]
+fn single_pixel_neuron_rect(center: egui::Pos2, pixels_per_point: f32) -> egui::Rect {
+    let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+        pixels_per_point
+    } else {
+        1.0
+    };
+    let pixel_origin = |coordinate: f32| {
+        let device_coordinate = coordinate * scale;
+        if device_coordinate.is_finite() {
+            device_coordinate.floor() / scale
+        } else {
+            0.0
+        }
+    };
+    egui::Rect::from_min_size(
+        egui::pos2(pixel_origin(center.x), pixel_origin(center.y)),
+        egui::vec2(1.0 / scale, 1.0 / scale),
+    )
+}
+
+/// Add one framebuffer-aligned neuron pixel to a batched mesh.
+///
+/// Tiny `rect_filled` shapes are simplified to feathered line segments by
+/// egui's rectangle tessellator; at exactly one device pixel this can produce
+/// no covered fragments. A coloured mesh rectangle bypasses that heuristic
+/// and keeps the marker crisp at the requested one-pixel size.
+#[cfg(feature = "ui")]
+fn append_single_pixel_neuron(
+    mesh: &mut egui::Mesh,
+    position: egui::Pos2,
+    pixels_per_point: f32,
+    colour: egui::Color32,
+) {
+    mesh.add_colored_rect(single_pixel_neuron_rect(position, pixels_per_point), colour);
+}
+
+#[cfg(feature = "ui")]
+fn stage_three_capture_ready(
+    has_edges: bool,
+    has_recent_activity: bool,
+    has_acknowledged_sensory_frame: bool,
+    active_sensory_neurons: usize,
+) -> bool {
+    has_edges && has_recent_activity && has_acknowledged_sensory_frame && active_sensory_neurons > 0
+}
+
+/// Apply each acknowledged cluster input frame once, and only to the selected
+/// network with the matching sensory width. Replaying the same last frame on
+/// every UI redraw would otherwise keep its active pixels bright indefinitely.
+#[cfg(feature = "ui")]
+fn apply_managed_sensory_display_frame(
+    activity: &mut Vec<f32>,
+    last_frame: &mut Option<(String, String, u64)>,
+    frame: &ManagedSensoryDisplayFrame,
+    selected_network_id: &str,
+    expected_width: usize,
+) -> bool {
+    if frame.network_id != selected_network_id || frame.spikes.len() != expected_width {
+        return false;
+    }
+    let frame_key = (
+        frame.network_id.clone(),
+        frame.session_id.clone(),
+        frame.frame_sequence,
+    );
+    if last_frame.as_ref() == Some(&frame_key) {
+        return false;
+    }
+    if !merge_sensory_spike_activity(activity, &frame.spikes, 0.90) {
+        return false;
+    }
+    *last_frame = Some(frame_key);
+    true
+}
+
+/// Convert recent activity to bounded display brightness. The square-root
+/// response makes low but genuine activity visible in a one-pixel marker while
+/// keeping a resting neuron visibly dimmer than an active one.
+#[cfg(feature = "ui")]
+fn visualization_activity_brightness(
+    stage: u8,
+    activity: f32,
+    contract_anatomical_geometry: bool,
+) -> f32 {
+    let activity = if activity.is_finite() {
+        activity.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if stage <= 3 || (4..=7).contains(&stage) {
+        0.25 + 0.75 * activity.sqrt()
+    } else if contract_anatomical_geometry {
+        0.85 + 0.15 * activity
+    } else {
+        0.30 + 0.70 * activity
+    }
+}
+
+/// Shade a pixel-stage marker without using alpha as a brightness control.
+/// `Color32::gamma_multiply` scales premultiplied RGB and alpha together, so
+/// an edge beneath a one-pixel neuron can bleed through and hide its activity
+/// colour. Opaque RGB keeps the marker legible while its channel intensity
+/// still reflects the bounded activity value.
+#[cfg(feature = "ui")]
+fn visualization_activity_colour(
+    base_colour: egui::Color32,
+    stage: u8,
+    activity: f32,
+    contract_anatomical_geometry: bool,
+) -> egui::Color32 {
+    let brightness =
+        visualization_activity_brightness(stage, activity, contract_anatomical_geometry);
+    let [red, green, blue, _] = base_colour.to_array();
+    let scale = |channel: u8| (f32::from(channel) * brightness).round().clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgb(scale(red), scale(green), scale(blue))
+}
+
+/// Pick cached matrix edges for the two legacy anatomical graph stages.
+/// Stage five removes branch points; stage six keeps every cached edge.
+#[cfg(feature = "ui")]
+fn legacy_anatomical_edge_indices(stage: u8, edges: &[CachedEdge]) -> Vec<usize> {
+    if stage == 6 {
+        return (0..edges.len()).collect();
+    }
+    if stage != 5 {
+        return Vec::new();
+    }
+
+    let mut used_sources = HashSet::new();
+    let mut used_targets = HashSet::new();
+    edges
+        .iter()
+        .enumerate()
+        .filter_map(|(index, edge)| {
+            (used_sources.insert((edge.from_layer, edge.from_idx))
+                && used_targets.insert((edge.to_layer, edge.to_idx)))
+            .then_some(index)
+        })
+        .collect()
+}
+
+#[cfg(feature = "ui")]
+fn equalizer_caption(is_cluster_projection: bool) -> &'static str {
+    if is_cluster_projection {
+        "Graphic EQ • master audio input"
+    } else {
+        "Graphic EQ • audio FFT"
+    }
+}
+
+/// Smooth the sampled input spectrum without retaining a simulation lock.
+#[cfg(feature = "ui")]
+fn update_equalizer_values(values: &mut Vec<f32>, bands: Option<&[f32]>) {
+    if let Some(bands) = bands {
+        if values.len() != bands.len() {
+            values.resize(bands.len(), 0.0);
+        }
+        for (value, band) in values.iter_mut().zip(bands.iter().copied()) {
+            *value = 0.7 * *value + 0.3 * band.clamp(0.0, 1.0);
+        }
+    } else {
+        for value in values {
+            *value *= 0.9;
+        }
+    }
+}
+
 #[cfg(all(feature = "ui", feature = "growth3d"))]
 fn display_slot_colour(slot: u32, hue_offset: f32) -> egui::Color32 {
     // Match CSS/Compose HSL(72%, 55%) and the Swift adapter in sRGB.
@@ -10274,6 +12938,28 @@ fn cluster_hidden_layer_count(
 }
 
 #[cfg(feature = "ui")]
+fn cluster_edge_result_is_current(
+    selected_network_id: Option<&str>,
+    cached_network_id: Option<&str>,
+    cached_snapshot_step: Option<usize>,
+    cached_assignment_digest: Option<u64>,
+    current_generation: u64,
+    result_network_id: &str,
+    result_snapshot_step: usize,
+    result_assignment_digest: u64,
+    result_generation: u64,
+) -> bool {
+    selected_network_id == Some(result_network_id)
+        && cached_network_id == Some(result_network_id)
+        // The visual edge projection is allowed to lag a newer neural cut.
+        // It remains valid for the same assignment until its replacement is
+        // ready; rejecting it on exact tick equality can starve the display.
+        && cached_snapshot_step.is_some_and(|step| result_snapshot_step <= step)
+        && cached_assignment_digest == Some(result_assignment_digest)
+        && current_generation == result_generation
+}
+
+#[cfg(feature = "ui")]
 #[derive(Clone, Copy, PartialEq)]
 enum TfliteImportMode {
     Mlp,
@@ -10286,6 +12972,26 @@ enum ViewSource {
     Standalone,
     LocalManaged(String),
     ClusterGlobal(String),
+}
+
+#[cfg(feature = "ui")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityProjectionSource {
+    LocalManagedRunner,
+    AggregateClusterSnapshot,
+}
+
+/// Select activity from the authority that owns the displayed neural state.
+/// A cluster master's local compatibility Runner is not a substitute for the
+/// worker-owned shards represented by its aggregate snapshot.
+#[cfg(feature = "ui")]
+fn activity_projection_source(view: &ViewSource) -> ActivityProjectionSource {
+    match view {
+        ViewSource::ClusterGlobal(_) => ActivityProjectionSource::AggregateClusterSnapshot,
+        ViewSource::Standalone | ViewSource::LocalManaged(_) => {
+            ActivityProjectionSource::LocalManagedRunner
+        }
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -11592,10 +14298,65 @@ impl eframe::App for App {
             } else if self.ui_capture_path.is_some() && !self.ui_capture_requested {
                 self.ui_capture_frame = self.ui_capture_frame.saturating_add(1);
                 if self.ui_capture_frame >= self.ui_capture_delay_frames {
-                    self.ui_capture_requested = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                        egui::UserData::default(),
-                    ));
+                    let wait_for_stage_three = self.ui_capture_wait_for_stage_three_activity
+                        && self.resolved_visualization_stage() == 3;
+                    let now = Instant::now();
+                    let recent_worker_activity = self
+                        .cluster_activity_last_success
+                        .is_some_and(|last| now.duration_since(last) <= Duration::from_secs(3));
+                    let visible_activity = self
+                        .sensory_activity
+                        .iter()
+                        .chain(self.hidden_activity.iter().flatten())
+                        .chain(self.output_activity.iter())
+                        .filter(|activity| activity.is_finite() && **activity > 0.08)
+                        .count();
+                    let active_sensory_neurons = self
+                        .sensory_activity
+                        .iter()
+                        .filter(|activity| activity.is_finite() && **activity > 0.08)
+                        .count();
+                    let has_acknowledged_sensory_frame = self
+                        .last_managed_sensory_display_frame
+                        .as_ref()
+                        .is_some_and(|(network_id, _, _)| network_id == &self.brain_id);
+                    let ready = !wait_for_stage_three
+                        || stage_three_capture_ready(
+                            !self.cached_edges.is_empty(),
+                            recent_worker_activity && self.cluster_activity_last_active_count > 0,
+                            has_acknowledged_sensory_frame,
+                            active_sensory_neurons,
+                        );
+                    let wait_started = self.ui_capture_readiness_started_at.get_or_insert(now);
+                    let readiness_timed_out =
+                        now.duration_since(*wait_started) >= self.ui_capture_readiness_timeout;
+                    if wait_for_stage_three && !ready && !self.ui_capture_readiness_reported {
+                        nm_log!(
+                            "[ui.visualisation] stage-three capture waiting for edges, fresh worker activity, acknowledged sensory input and visible sensory activity (edges={}, visible_active={}, sensory_active={}, acknowledged_input={}, timeout={}s)",
+                            self.cached_edges.len(),
+                            visible_activity,
+                            active_sensory_neurons,
+                            has_acknowledged_sensory_frame,
+                            self.ui_capture_readiness_timeout.as_secs()
+                        );
+                        self.ui_capture_readiness_reported = true;
+                    }
+                    if ready || readiness_timed_out {
+                        if wait_for_stage_three && !ready {
+                            nm_log!(
+                                "[ui.visualisation] stage-three capture readiness timed out (edges={}, visible_active={}, sensory_active={}, acknowledged_input={}, fresh_worker_activity={})",
+                                self.cached_edges.len(),
+                                visible_activity,
+                                active_sensory_neurons,
+                                has_acknowledged_sensory_frame,
+                                recent_worker_activity
+                            );
+                        }
+                        self.ui_capture_requested = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                            egui::UserData::default(),
+                        ));
+                    }
                 }
             }
         }
@@ -11804,6 +14565,7 @@ impl eframe::App for App {
                 }
             }
         }
+        self.poll_cluster_control_results();
         self.invalidate_stale_cluster_projection();
         self.maybe_select_initial_distributed_view();
 
@@ -11818,6 +14580,18 @@ impl eframe::App for App {
                     assignment_digest,
                     topology_witness,
                 } => {
+                    if !matches!(&self.view_source, ViewSource::ClusterGlobal(selected) if selected == &network_id)
+                    {
+                        continue;
+                    }
+                    let retain_edge_projection = cluster_edge_projection_can_be_reused(
+                        self.cluster_snapshot_network_id.as_deref(),
+                        self.cluster_snapshot_assignment_digest,
+                        self.cluster_snapshot_cache.as_ref().map(|cached| cached.t),
+                        &network_id,
+                        assignment_digest,
+                        snap.t,
+                    );
                     self.cluster_snapshot_inflight = false;
                     self.cluster_snapshot_last_fetch = Some(std::time::Instant::now());
                     self.cluster_snapshot_next_retry = None;
@@ -11857,14 +14631,28 @@ impl eframe::App for App {
                         }
                     }
 
-                    // Re-calculate edges from the remote snapshot
-                    let density = self.overlay_density;
-                    let (edges, sizes, counts, output_count) =
-                        Self::compute_edges_from_snapshot(density, &snap);
-                    self.cached_edges = edges;
-                    self.cached_layer_sizes = sizes;
-                    self.cached_conn_counts = counts;
-                    self.cached_output_conn_count = Some(output_count);
+                    // Matrix projection is display-only work. Publish the
+                    // immutable snapshot immediately, then build its bounded
+                    // edge cache on a worker so a large cluster cut cannot
+                    // stall this UI frame. A fresh cut for the same placement
+                    // must not blank the last good projection while that work
+                    // runs; only an assignment change or time rewind makes
+                    // its neuron indices unsafe to reuse.
+                    if !retain_edge_projection {
+                        self.cluster_edge_cache_generation =
+                            self.cluster_edge_cache_generation.wrapping_add(1);
+                        self.edge_cache_generation = self.edge_cache_generation.wrapping_add(1);
+                        self.cached_edges.clear();
+                        self.cached_layer_sizes.clear();
+                        self.cached_conn_counts.clear();
+                        self.cached_output_conn_count = None;
+                        self.pending_edge_cache = true;
+                    } else if self.cached_edges.is_empty() {
+                        // Keep an initial projection request pending while an
+                        // older worker finishes; its result may still be used
+                        // for this unchanged layer assignment.
+                        self.pending_edge_cache = true;
+                    }
                     #[cfg(feature = "growth3d")]
                     {
                         if let Some(topo) = snap.topo.as_ref().filter(|topo| {
@@ -11881,9 +14669,8 @@ impl eframe::App for App {
                         self.cached_skull_membrane = snap.skull_membrane;
                     }
                     self.last_conn_stats_refresh = std::time::Instant::now();
-                    self.pending_edge_cache = false;
 
-                    self.cluster_snapshot_cache = Some(snap);
+                    self.cluster_snapshot_cache = Some(Arc::from(snap));
                     if self.remote_only {
                         if let Some(snapshot) = self
                             .remote_statuses
@@ -11908,6 +14695,180 @@ impl eframe::App for App {
 
                     // Trigger a soft layout recompute without clearing cached positions.
                     self.last_rendered_panel_size = egui::Vec2::ZERO;
+                    #[cfg(feature = "growth3d")]
+                    self.request_cluster_display_projection();
+                }
+                #[cfg(feature = "growth3d")]
+                ClusterSnapshotMsg::DisplayReady {
+                    network_id,
+                    snapshot_step,
+                    morphology_revision,
+                    topology_epoch,
+                    request_generation,
+                    contracts,
+                } => {
+                    if self.cluster_display_projection_inflight_generation
+                        == Some(request_generation)
+                    {
+                        self.cluster_display_projection_inflight_generation = None;
+                    }
+                    let selected_network_id = match &self.view_source {
+                        ViewSource::ClusterGlobal(selected) => Some(selected.as_str()),
+                        _ => None,
+                    };
+                    let source_is_current = self
+                        .cluster_snapshot_cache
+                        .as_ref()
+                        .filter(|snapshot| snapshot.t >= snapshot_step)
+                        .and_then(|snapshot| snapshot.procedural_reconstruction.as_ref())
+                        .is_some_and(|reconstruction| {
+                            reconstruction.state.revision == morphology_revision
+                                && reconstruction.state.topology_epoch == topology_epoch
+                        });
+                    if source_is_current
+                        && cluster_display_projection_is_current(
+                            selected_network_id,
+                            &network_id,
+                            snapshot_step,
+                            self.cluster_snapshot_cache
+                                .as_ref()
+                                .map(|snapshot| snapshot.t),
+                            self.cluster_display_projection_generation,
+                            request_generation,
+                        )
+                    {
+                        self.cluster_display_projection = Some(ClusterDisplayProjection {
+                            network_id: network_id.clone(),
+                            snapshot_step,
+                            morphology_revision,
+                            topology_epoch,
+                            contracts,
+                        });
+                        self.cluster_display_projection_error = None;
+                        self.last_rendered_panel_size = egui::Vec2::ZERO;
+                        nm_log!(
+                            "[ui.visualisation] cluster display projection ready (network={}, step={}, morphology_revision={}, topology_epoch={})",
+                            network_id,
+                            snapshot_step,
+                            morphology_revision,
+                            topology_epoch
+                        );
+                    }
+                    // If a newer morphology revision arrived during the
+                    // worker job, immediately queue that latest immutable cut.
+                    self.request_cluster_display_projection();
+                }
+                #[cfg(feature = "growth3d")]
+                ClusterSnapshotMsg::DisplayFailed {
+                    network_id,
+                    request_generation,
+                    error,
+                } => {
+                    if self.cluster_display_projection_inflight_generation
+                        == Some(request_generation)
+                    {
+                        self.cluster_display_projection_inflight_generation = None;
+                    }
+                    if self.cluster_display_projection_generation == request_generation
+                        && matches!(&self.view_source, ViewSource::ClusterGlobal(selected) if selected == &network_id)
+                    {
+                        nm_log!(
+                            "[ui.visualisation] cluster display projection failed (network={}): {}",
+                            network_id,
+                            error
+                        );
+                        self.cluster_display_projection_error = Some(error);
+                    } else {
+                        self.request_cluster_display_projection();
+                    }
+                }
+                ClusterSnapshotMsg::EdgesReady {
+                    network_id,
+                    assignment_digest,
+                    snapshot_step,
+                    request_generation,
+                    density,
+                    edges,
+                    sizes,
+                    counts,
+                    output_count,
+                } => {
+                    if self.cluster_edge_cache_inflight_generation == Some(request_generation) {
+                        self.cluster_edge_cache_inflight = false;
+                        self.cluster_edge_cache_inflight_generation = None;
+                    }
+                    let selected_network_id = match &self.view_source {
+                        ViewSource::ClusterGlobal(selected) => Some(selected.as_str()),
+                        _ => None,
+                    };
+                    let projection_is_current = cluster_edge_result_is_current(
+                        selected_network_id,
+                        self.cluster_snapshot_network_id.as_deref(),
+                        self.cluster_snapshot_cache
+                            .as_ref()
+                            .map(|snapshot| snapshot.t),
+                        self.cluster_snapshot_assignment_digest,
+                        self.cluster_edge_cache_generation,
+                        &network_id,
+                        snapshot_step,
+                        assignment_digest,
+                        request_generation,
+                    );
+                    if !projection_is_current {
+                        continue;
+                    }
+                    if density != self.overlay_density {
+                        self.pending_edge_cache = true;
+                        continue;
+                    }
+                    self.cached_edges = edges;
+                    self.cached_layer_sizes = sizes;
+                    self.cached_conn_counts = counts;
+                    self.cached_output_conn_count = Some(output_count);
+                    if self.cluster_edge_cache_reported_generation != Some(request_generation) {
+                        nm_log!(
+                            "[ui.visualisation] cluster edge projection ready (network={}, generation={}, step={}, edges={}, layers={}, output_edges={})",
+                            network_id,
+                            request_generation,
+                            snapshot_step,
+                            self.cached_edges.len(),
+                            self.cached_layer_sizes.len(),
+                            output_count
+                        );
+                        self.cluster_edge_cache_reported_generation = Some(request_generation);
+                    }
+                    self.last_conn_stats_refresh = std::time::Instant::now();
+                    // If the neural cut advanced while this worker projected
+                    // edges, keep the projection visible now and queue one
+                    // refresh on the next frame. The renderer is display-only
+                    // and may safely trail the authoritative simulation cut.
+                    self.pending_edge_cache = self
+                        .cluster_snapshot_cache
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.t > snapshot_step);
+                    self.last_edge_cache_refresh = std::time::Instant::now();
+                }
+                ClusterSnapshotMsg::EdgesFailed {
+                    network_id,
+                    request_generation,
+                } => {
+                    if self.cluster_edge_cache_inflight_generation == Some(request_generation) {
+                        self.cluster_edge_cache_inflight = false;
+                        self.cluster_edge_cache_inflight_generation = None;
+                    }
+                    if self.cluster_edge_cache_generation == request_generation
+                        && matches!(&self.view_source, ViewSource::ClusterGlobal(selected) if selected == &network_id)
+                    {
+                        nm_log!(
+                            "[ui.visualisation] cluster edge projection failed (network={}, generation={})",
+                            network_id,
+                            request_generation
+                        );
+                        self.pending_edge_cache = false;
+                        self.status =
+                            "Cluster connection projection failed; the neural view remains live"
+                                .to_owned();
+                    }
                 }
                 ClusterSnapshotMsg::Err {
                     network_id,
@@ -12249,14 +15210,14 @@ impl eframe::App for App {
                         }
                     }
                 } else if let Some(node) = self.distributed_node.clone() {
-                    let local_node_id = {
+                    let local_identity = {
                         if let Ok(state) = node.state.try_read() {
-                            Some(state.node_id.clone())
+                            Some((state.node_id.clone(), state.is_orchestrator))
                         } else {
                             None
                         }
                     };
-                    if let Some(local_node_id) = local_node_id {
+                    if let Some((local_node_id, is_orchestrator)) = local_identity {
                         let now = std::time::Instant::now();
                         let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
                             now.duration_since(t) > std::time::Duration::from_secs(2)
@@ -12278,6 +15239,11 @@ impl eframe::App for App {
                             let tx = self.cluster_snapshot_tx.clone();
                             let net_id_clone = net_id.clone();
                             let node_id_clone = local_node_id.clone();
+                            let preferred_shard_id = local_cluster_snapshot_preferred_shard(
+                                is_orchestrator,
+                                &node_id_clone,
+                            )
+                            .map(str::to_owned);
                             let node_clone = node.clone();
                             let rt = self.runtime_handle.clone();
                             rt.spawn(async move {
@@ -12292,7 +15258,7 @@ impl eframe::App for App {
                                     Ok(response) => match decode_cluster_snapshot_projection(
                                         response.into_inner(),
                                         &net_id_clone,
-                                        Some(&node_id_clone),
+                                        preferred_shard_id.as_deref(),
                                     ) {
                                         Ok((
                                             snap,
@@ -13166,7 +16132,12 @@ impl eframe::App for App {
                 self.pending_import = Some(pending);
             }
         }
-        if self.pending_edge_cache && !self.edge_cache_inflight {
+        let edge_cache_worker_busy = match &self.view_source {
+            ViewSource::ClusterGlobal(_) => self.cluster_edge_cache_inflight,
+            ViewSource::Standalone | ViewSource::LocalManaged(_) => self.edge_cache_inflight,
+        };
+        if self.pending_edge_cache && !edge_cache_worker_busy {
+            let request_generation = self.edge_cache_generation;
             match self.view_source {
                 ViewSource::Standalone => {
                     self.edge_cache_inflight = true;
@@ -13182,6 +16153,7 @@ impl eframe::App for App {
                         let skull_membrane = r.morph.skull_membrane;
                         std::thread::spawn(move || {
                             let _ = tx.send(EdgeCacheResult {
+                                request_generation,
                                 edges,
                                 sizes,
                                 counts,
@@ -13211,6 +16183,7 @@ impl eframe::App for App {
                                 r.morph.skull_membrane
                             };
                             let _ = tx.send(EdgeCacheResult {
+                                request_generation,
                                 edges,
                                 sizes,
                                 counts,
@@ -13252,6 +16225,7 @@ impl eframe::App for App {
                                 net.runner.morph.skull_membrane
                             };
                             let _ = tx.send(EdgeCacheResult {
+                                request_generation,
                                 edges,
                                 sizes,
                                 counts,
@@ -13269,39 +16243,67 @@ impl eframe::App for App {
                         self.last_edge_cache_refresh = std::time::Instant::now();
                     }
                 }
-                ViewSource::ClusterGlobal(_) => {
-                    if let Some(snap) = &self.cluster_snapshot_cache {
-                        let density = self.overlay_density;
-                        let (edges, sizes, counts, output_count) =
-                            Self::compute_edges_from_snapshot(density, snap);
-                        self.cached_edges = edges;
-                        self.cached_layer_sizes = sizes;
-                        self.cached_conn_counts = counts;
-                        self.cached_output_conn_count = Some(output_count);
-                        #[cfg(feature = "growth3d")]
-                        {
-                            if let Some(topo) = snap.topo.as_ref().filter(|topo| {
-                                !topo.layers.is_empty()
-                                    || !topo.sensory_nodes.is_empty()
-                                    || !topo.output_nodes.is_empty()
-                                    || !topo.early_cells.is_empty()
-                            }) {
-                                self.cached_edge_topo = Some(topo.clone());
-                            }
-                        }
-                        #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                        {
-                            self.cached_skull_membrane = snap.skull_membrane;
-                        }
-                        self.last_conn_stats_refresh = std::time::Instant::now();
+                ViewSource::ClusterGlobal(ref network_id) => {
+                    if let Some(snap) = self.cluster_snapshot_cache.clone().filter(|_| {
+                        self.cluster_snapshot_network_id.as_deref() == Some(network_id.as_str())
+                    }) {
                         self.pending_edge_cache = false;
-                        self.last_edge_cache_refresh = std::time::Instant::now();
+                        let density = self.overlay_density;
+                        let snapshot_step = snap.t;
+                        let assignment_digest =
+                            self.cluster_snapshot_assignment_digest.unwrap_or_default();
+                        let request_generation = self.cluster_edge_cache_generation;
+                        self.cluster_edge_cache_inflight = true;
+                        self.cluster_edge_cache_inflight_generation = Some(request_generation);
+                        let network_id = network_id.clone();
+                        let tx = self.cluster_snapshot_tx.clone();
+                        let worker = std::thread::Builder::new()
+                            .name("cluster-visualisation-edges".to_owned())
+                            .spawn(move || {
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        App::compute_edges_from_snapshot(density, &snap)
+                                    }));
+                                match result {
+                                    Ok((edges, sizes, counts, output_count)) => {
+                                        let _ = tx.send(ClusterSnapshotMsg::EdgesReady {
+                                            network_id,
+                                            assignment_digest,
+                                            snapshot_step,
+                                            request_generation,
+                                            density,
+                                            edges,
+                                            sizes,
+                                            counts,
+                                            output_count,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        let _ = tx.send(ClusterSnapshotMsg::EdgesFailed {
+                                            network_id,
+                                            request_generation,
+                                        });
+                                    }
+                                }
+                            });
+                        if let Err(error) = worker {
+                            self.cluster_edge_cache_inflight = false;
+                            self.cluster_edge_cache_inflight_generation = None;
+                            self.pending_edge_cache = false;
+                            self.status =
+                                format!("Cluster connection projection could not start: {error}");
+                        }
+                    } else {
+                        self.pending_edge_cache = false;
                     }
                 }
             }
         }
 
         while let Ok(msg) = self.edge_cache_rx.try_recv() {
+            if msg.request_generation != self.edge_cache_generation {
+                continue;
+            }
             let incoming_edges_empty = msg.edges.is_empty();
             let incoming_has_connections =
                 msg.output_count > 0 || msg.counts.iter().any(|&v| v > 0);
@@ -13338,33 +16340,8 @@ impl eframe::App for App {
         }
 
         if self.cached_edges.is_empty() {
-            if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
-                if let Some(snap) = &self.cluster_snapshot_cache {
-                    let density = self.overlay_density;
-                    let (edges, sizes, counts, output_count) =
-                        Self::compute_edges_from_snapshot(density, snap);
-                    self.cached_edges = edges;
-                    self.cached_layer_sizes = sizes;
-                    self.cached_conn_counts = counts;
-                    self.cached_output_conn_count = Some(output_count);
-                    #[cfg(feature = "growth3d")]
-                    {
-                        if let Some(topo) = snap.topo.as_ref().filter(|topo| {
-                            !topo.layers.is_empty()
-                                || !topo.sensory_nodes.is_empty()
-                                || !topo.output_nodes.is_empty()
-                                || !topo.early_cells.is_empty()
-                        }) {
-                            self.cached_edge_topo = Some(topo.clone());
-                        }
-                    }
-                    #[cfg(all(feature = "morpho", feature = "growth3d"))]
-                    {
-                        self.cached_skull_membrane = snap.skull_membrane;
-                    }
-                    self.last_conn_stats_refresh = std::time::Instant::now();
-                }
-            } else if (self.show_static_overlays || self.force_show_connections)
+            if !matches!(self.view_source, ViewSource::ClusterGlobal(_))
+                && (self.show_static_overlays || self.force_show_connections)
                 && self.overlay_density > 0
                 && !self.pending_edge_cache
                 && !self.edge_cache_inflight
@@ -13379,7 +16356,22 @@ impl eframe::App for App {
         let connected_nodes = self.dist_nodes.clone();
         let network_registry = self.dist_network_registry.clone();
 
-        if self.layout_auto {
+        if self.visualization_auto {
+            let highest = self.highest_visualization_stage();
+            let current =
+                crate::visualization::VisualizationStage::from_number(self.visualization_stage)
+                    .unwrap_or(crate::visualization::VisualizationStage::SyntheticPixels);
+            let next = crate::visualization::update_auto_stage(
+                current,
+                f64::from(self.camera_zoom),
+                self.visualization_latency_ms,
+                highest,
+                self.visualization_stage_changed_at.elapsed().as_millis() as u64,
+            );
+            if next != current {
+                self.set_visualization_stage(next.number(), true);
+            }
+        } else if self.layout_auto {
             let desired = self.preferred_layout_for_view(&model_cloned, &network_registry);
             if desired != self.network_layout {
                 self.set_network_layout(desired, true);
@@ -13645,6 +16637,8 @@ impl eframe::App for App {
         let dist_node_arc = self.distributed_node.clone();
         let state_arc = dist_node_arc.as_ref().map(|n| n.state.clone());
         let state_arc_for_controls = state_arc.clone();
+        let selected_view_playing = self.resolve_view_playing(state_arc_for_controls.as_ref());
+        self.reconcile_distributed_input_route(selected_view_playing);
 
         // --- 2. Panels and Controls ---
         {
@@ -13915,15 +16909,32 @@ impl eframe::App for App {
                     }
 
                     let view_is_standalone = matches!(self.view_source, ViewSource::Standalone);
+                    let view_network_id = match &self.view_source {
+                        ViewSource::Standalone => None,
+                        ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => {
+                            Some(id.clone())
+                        }
+                    };
+                    let cluster_control_pending = view_network_id
+                        .as_ref()
+                        .is_some_and(|network_id| {
+                            self.pending_cluster_controls.contains(network_id)
+                        });
                     let view_playing_state =
                         self.resolve_view_playing(state_arc_for_controls.as_ref());
                     let view_playing = view_playing_state.unwrap_or(false);
-                    let play_button_label = match view_playing_state {
-                        Some(true) => "Stop",
-                        Some(false) => "Start",
-                        None => "Syncing...",
+                    let play_button_label = if cluster_control_pending {
+                        "Applying..."
+                    } else {
+                        match view_playing_state {
+                            Some(true) => "Stop",
+                            Some(false) => "Start",
+                            None => "Syncing...",
+                        }
                     };
-                    let play_button_hover = if view_playing_state.is_some() {
+                    let play_button_hover = if cluster_control_pending {
+                        "Waiting for the cluster to accept the control command"
+                    } else if view_playing_state.is_some() {
                         "Start/stop simulation stepping"
                     } else {
                         "Waiting for simulation state sync"
@@ -13946,14 +16957,10 @@ impl eframe::App for App {
                                 "Orchestrator Start/Stop/Repeat/Reset affects the selected cluster network instead. Switch View Selection to a local managed or cluster network to control the distributed run.",
                             );
                         }
-                        let view_network_id = match &self.view_source {
-                            ViewSource::Standalone => None,
-                            ViewSource::LocalManaged(id) | ViewSource::ClusterGlobal(id) => Some(id.clone()),
-                        };
                         ui.horizontal(|ui| {
                             let play_clicked = ui
                                 .add_enabled(
-                                    view_playing_state.is_some(),
+                                    view_playing_state.is_some() && !cluster_control_pending,
                                     egui::Button::new(play_button_label),
                                 )
                                 .on_hover_text(play_button_hover)
@@ -16206,6 +19213,11 @@ impl eframe::App for App {
                     InputSource::ExternalIpc => "External IPC",
                 })).small().weak());
                 if self.input_source != prev_input_source {
+                    if prev_input_source == InputSource::AudioFile {
+                        // The path is retained as recent-file context, but its
+                        // provider is replaced when another source is chosen.
+                        self.audio_file_provider_active = false;
+                    }
                     if Self::is_video_input_source(prev_input_source)
                         || Self::is_video_input_source(self.input_source)
                     {
@@ -16302,18 +19314,13 @@ impl eframe::App for App {
                     InputSource::AudioFile => {
                         if ui.button("Choose File...").on_hover_text("Open an audio file (wav, flac, ogg, mp3)").clicked() {
                             if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["wav","flac","ogg","mp3"]).pick_file() {
-                                let audio_sensory_count = if net_cloned.num_sensory_neurons > 0 {
-                                    net_cloned.num_sensory_neurons
-                                } else {
-                                    std::env::var("AARNN_AUDIO_SENSORY_NEURONS")
-                                        .ok()
-                                        .and_then(|value| value.trim().parse::<usize>().ok())
-                                        .filter(|&value| (1..=MAX_AUDIO_SENSORY_NEURONS).contains(&value))
-                                        .unwrap_or(64)
-                                };
+                                let audio_sensory_count = self
+                                    .audio_provider_sensory_count_for_view(net_cloned.num_sensory_neurons);
                                 match AudioFileProvider::from_path(&path, audio_sensory_count) {
                                     Ok(p) => {
-                                        if net_cloned.num_sensory_neurons == 0 {
+                                        if matches!(self.view_source, ViewSource::Standalone)
+                                            && net_cloned.num_sensory_neurons == 0
+                                        {
                                             self.sensory_count = audio_sensory_count;
                                             self.local_net.num_sensory_neurons = audio_sensory_count;
                                             let _ = self
@@ -16323,31 +19330,40 @@ impl eframe::App for App {
                                         self.audio_file_path = Some(path.display().to_string());
                                         self.audio_file_sample_rate = Some(p.sample_rate());
                                         self.audio_file_sample_count = Some(p.sample_count());
+                                        let mapped_band_count = p.band_count();
                                         let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(p)));
+                                        self.audio_file_provider_active = true;
                                         self.mic_running = false;
                                         #[cfg(feature = "webcam_input")]
                                         { self.cam_running = false; }
-                                        self.status = format!("Loaded file: {}", path.display());
+                                        self.status = format!(
+                                            "Loaded file: {} · {} audio bands mapped to {} sensory input(s)",
+                                            path.display(), mapped_band_count, audio_sensory_count
+                                        );
                                         self.smoothed_equalizer_values.clear();
                                         self.show_equalizer = true;
                                         if let ViewSource::LocalManaged(network_id)
-                                        | ViewSource::ClusterGlobal(network_id) = &self.view_source
+                                        | ViewSource::ClusterGlobal(network_id) = self.view_source.clone()
                                         {
                                             if self.resolve_view_playing(None) == Some(true) {
-                                                self.set_distributed_input(network_id, true);
+                                                self.set_distributed_input(&network_id, true);
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         self.status = format!("Failed to load audio: {}", e);
                                         self.input_source = InputSource::Random;
-                                        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(net_cloned.num_sensory_neurons, self.random_spike_probability))));
+                                        self.audio_file_provider_active = false;
+                                        let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(audio_sensory_count, self.random_spike_probability))));
                                     }
                                 }
                             }
                         }
                         if let Some(path) = self.audio_file_path.as_deref() {
                             ui.label(format!("File: {}", path));
+                            if !self.audio_file_provider_active {
+                                ui.label("Choose the file again to activate its sensory provider.");
+                            }
                         }
                         if let (Some(rate), Some(samples)) =
                             (self.audio_file_sample_rate, self.audio_file_sample_count)
@@ -16357,7 +19373,65 @@ impl eframe::App for App {
                         let steps = self.sim_step_counter.load(Ordering::Relaxed);
                         let spikes = self.sim_last_spike_count.load(Ordering::Relaxed);
                         let total = self.sim_last_spike_len.load(Ordering::Relaxed);
-                        ui.label(format!("Sim steps: {}  last sensory spikes: {}/{}", steps, spikes, total));
+                        ui.label(format!("Provider frames: {}  latest provider spikes: {}/{}", steps, spikes, total));
+                        if !matches!(self.view_source, ViewSource::Standalone)
+                            && let Ok(delivery) = self.distributed_input_delivery_status.try_read()
+                        {
+                            let delivery_colour = if delivery.starts_with("Frame ")
+                                && delivery.contains("was not admitted")
+                            {
+                                egui::Color32::RED
+                            } else {
+                                egui::Color32::LIGHT_BLUE
+                            };
+                            ui.colored_label(delivery_colour, delivery.as_str());
+                        }
+                        if !matches!(self.view_source, ViewSource::Standalone) {
+                            if let Some((network_id, width)) = &self.distributed_input_route {
+                                ui.label(format!(
+                                    "Managed input mapping: {} sensory input(s) → {}",
+                                    width, network_id
+                                ));
+                                if let Some(bridge_node) = self
+                                    .distributed_node
+                                    .as_ref()
+                                    .and_then(|node| {
+                                        node.external_sensory_ingress_node(network_id)
+                                    })
+                                {
+                                    ui.small(format!(
+                                        "Audio frames connect directly to I/O bridge {bridge_node}"
+                                    ));
+                                }
+                            } else if self.distributed_input_provider_ready() {
+                                let managed_sensory_width = match &self.view_source {
+                                    ViewSource::Standalone => None,
+                                    ViewSource::LocalManaged(network_id)
+                                    | ViewSource::ClusterGlobal(network_id) => {
+                                        self.managed_sensory_input_count(network_id)
+                                    }
+                                };
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    managed_input_inactive_message(
+                                        self.input_source == InputSource::AudioFile,
+                                        selected_view_playing,
+                                        self.distributed_node
+                                            .as_ref()
+                                            .and_then(|node| match &self.view_source {
+                                                ViewSource::LocalManaged(network_id)
+                                                | ViewSource::ClusterGlobal(network_id) => {
+                                                    node.has_external_sensory_ingress(network_id)
+                                                }
+                                                ViewSource::Standalone => Some(false),
+                                            })
+                                            .unwrap_or(false)
+                                            && !self.remote_only,
+                                        managed_sensory_width,
+                                    ),
+                                );
+                            }
+                        }
                     }
                     #[cfg(feature = "robot_io")]
                     InputSource::ExternalIpc => {
@@ -16657,9 +19731,10 @@ impl eframe::App for App {
                         let label = if self.mic_running { "Stop Mic" } else { "Start Mic" };
                         if ui.button(label).clicked() {
                             if self.mic_running {
+                                self.mic_running = false;
+                                self.set_distributed_input("", false);
                                 let n = net_cloned.num_sensory_neurons;
                                 let _ = self.sim_tx.send(SimControl::SetProvider(Box::new(RandomProvider::new(n, self.random_spike_probability))));
-                                self.mic_running = false;
                                 self.status = "Microphone stopped (Random fallback)".to_string();
                             } else {
                                 let n = net_cloned.num_sensory_neurons;
@@ -16678,10 +19753,10 @@ impl eframe::App for App {
                                         self.smoothed_equalizer_values.clear();
                                         self.show_equalizer = true;
                                         if let ViewSource::LocalManaged(network_id)
-                                        | ViewSource::ClusterGlobal(network_id) = &self.view_source
+                                        | ViewSource::ClusterGlobal(network_id) = self.view_source.clone()
                                         {
                                             if self.resolve_view_playing(None) == Some(true) {
-                                                self.set_distributed_input(network_id, true);
+                                                self.set_distributed_input(&network_id, true);
                                             }
                                         }
                                     }
@@ -17244,12 +20319,19 @@ impl eframe::App for App {
                             if self.overlay_density == 0 {
                                 self.overlay_density = 4;
                             }
-                            self.pending_edge_cache = true;
-                            self.last_edge_cache_refresh = std::time::Instant::now();
+                            self.request_edge_cache_refresh();
                             self.status = "Preparing live connection cache...".to_string();
+                        } else if matches!(self.resolved_visualization_stage(), 2 | 3 | 5 | 6) {
+                            // Required stage links remain available even when
+                            // optional live overlays are disabled.
+                            self.request_edge_cache_refresh();
                         } else {
                             self.pending_edge_cache = false;
                             self.edge_cache_inflight = false;
+                            self.edge_cache_generation =
+                                self.edge_cache_generation.wrapping_add(1);
+                            self.cluster_edge_cache_generation =
+                                self.cluster_edge_cache_generation.wrapping_add(1);
                             self.cached_edges.clear();
                             #[cfg(feature = "growth3d")]
                             {
@@ -17299,18 +20381,38 @@ impl eframe::App for App {
                     } else {
                         Some(self.cached_conn_counts.clone())
                     };
+                    let cluster_snapshot_available = match &self.view_source {
+                        ViewSource::ClusterGlobal(network_id) => {
+                            self.cluster_snapshot_network_id.as_deref() == Some(network_id)
+                                && self.cluster_snapshot_cache.is_some()
+                        }
+                        _ => false,
+                    };
+                    let known_connections = self.cached_conn_counts.iter().sum::<usize>()
+                        .saturating_add(self.cached_output_conn_count.unwrap_or_default());
+                    let connection_status = connection_projection_status(
+                        matches!(self.view_source, ViewSource::ClusterGlobal(_)),
+                        cluster_snapshot_available,
+                        self.cluster_snapshot_inflight,
+                        self.pending_edge_cache
+                            || self.edge_cache_inflight
+                            || self.cluster_edge_cache_inflight,
+                        self.cached_output_conn_count.is_some(),
+                        self.cached_edges.len(),
+                        known_connections,
+                    );
                     if let Some(conn_counts) = conn_counts {
                         ui.label(format!(
                             "Per-layer connections: {}",
                             Self::compact_usize_list(&conn_counts)
                         ));
                     } else {
-                        ui.label("Per-layer connections: (busy)");
+                        ui.label(format!("Per-layer connections: ({connection_status})"));
                     }
                     if let Some(out_conn) = self.cached_output_conn_count {
                         ui.label(format!("Output connections: {}", out_conn));
                     } else {
-                        ui.label("Output connections: (busy)");
+                        ui.label(format!("Output connections: ({connection_status})"));
                     }
                     ui.separator();
                     ui.collapsing("Oscilloscope", |ui| {
@@ -17380,19 +20482,62 @@ impl eframe::App for App {
                     });
                     ui.collapsing("View", |ui| {
                         ui.label("Pan / Zoom / Rotate");
-                        let mut layout = self.network_layout;
-                        ui.horizontal(|ui| {
-                            ui.label("Layout");
-                            ui.selectable_value(&mut layout, NetworkLayout::Conventional, "Synthetic columns");
-                            ui.selectable_value(&mut layout, NetworkLayout::Aarnn, "Anatomical").on_hover_text("Use stored 3D topology and morphology where available; procedural geometry is labelled by its source.");
-                            let auto_changed = ui.checkbox(&mut self.layout_auto, "Auto").changed();
-                            if auto_changed && self.layout_auto {
-                                let desired = self.preferred_layout_for_view(&model_cloned, &network_registry);
-                                self.set_network_layout(desired, true);
+                        let mut requested_stage = self.visualization_stage;
+                        if ui.add(egui::Slider::new(&mut requested_stage, 1..=9).text("Visual detail"))
+                            .on_hover_text("Stages progress from synthetic single pixels to physical anatomical contacts.")
+                            .changed()
+                        {
+                            self.set_visualization_stage(requested_stage, false);
+                        }
+                        if ui.checkbox(&mut self.visualization_auto, "Auto detail")
+                            .on_hover_text("Adapt detail to camera zoom and measured visualisation latency.")
+                            .changed()
+                        {
+                            self.visualization_stage_changed_at = Instant::now();
+                        }
+                        let available_stage = self.highest_visualization_stage().number();
+                        let active_stage = self.resolved_visualization_stage();
+                        let label = crate::visualization::VisualizationStage::from_number(active_stage)
+                            .map_or("Visual detail", crate::visualization::VisualizationStage::label);
+                        ui.label(format!(
+                            "{} · stage {} · {}{}",
+                            if self.visualization_auto { "Auto" } else { "Manual" },
+                            active_stage,
+                            label,
+                            if active_stage < requested_stage { format!(" · available through {available_stage}") } else { String::new() },
+                        ));
+                        if active_stage < requested_stage {
+                            if let ViewSource::ClusterGlobal(network_id) = &self.view_source {
+                                let reason = if let Some(error) =
+                                    self.cluster_display_projection_error.as_deref()
+                                {
+                                    Some(format!("Anatomical projection unavailable: {error}"))
+                                } else if self
+                                    .cluster_display_projection_inflight_generation
+                                    .is_some()
+                                {
+                                    Some("Building the cluster anatomical projection.".to_owned())
+                                } else if self.cluster_snapshot_cache.is_none()
+                                    || self.cluster_snapshot_network_id.as_deref()
+                                        != Some(network_id.as_str())
+                                {
+                                    Some("Waiting for the aggregate cluster snapshot.".to_owned())
+                                } else if self.cluster_display_contracts_for(network_id).is_none()
+                                    && self.cluster_topo_cache.as_ref().is_none_or(|topology| {
+                                        topology.layers.is_empty()
+                                            || topology.layers.iter().any(Vec::is_empty)
+                                    })
+                                {
+                                    Some("The cluster snapshot has not supplied anatomical coordinates.".to_owned())
+                                } else if requested_stage >= 7 && available_stage <= 6 {
+                                    Some("Physical neurite detail requires measured radii and a verified clear 3D volume.".to_owned())
+                                } else {
+                                    None
+                                };
+                                if let Some(reason) = reason {
+                                    ui.small(reason);
+                                }
                             }
-                        });
-                        if layout != self.network_layout {
-                            self.set_network_layout(layout, false);
                         }
                         let mut changed = false;
                         changed |= ui.add(egui::Slider::new(&mut self.camera_zoom, 0.25..=4.0).text("Zoom")).changed();
@@ -17424,14 +20569,12 @@ impl eframe::App for App {
                         ui.separator();
                         if ui.checkbox(&mut self.show_static_overlays, "Show static connection overlays")
                             .on_hover_text("Always show faint strongest connections").changed() && self.show_static_overlays {
-                            self.pending_edge_cache = true;
-                            self.last_edge_cache_refresh = std::time::Instant::now();
+                            self.request_edge_cache_refresh();
                         }
                         ui.add_enabled_ui(self.show_static_overlays, |ui| {
                             if ui.add(egui::Slider::new(&mut self.overlay_density, 0..=20).text("Overlay density"))
                                 .on_hover_text("Top-k incoming links per receiver to render in overlays").changed() {
-                                self.pending_edge_cache = true;
-                                self.last_edge_cache_refresh = std::time::Instant::now();
+                                self.request_edge_cache_refresh();
                             }
                             ui.add(egui::Slider::new(&mut self.overlay_opacity, 0.05..=1.0).text("Overlay opacity")).on_hover_text("Opacity multiplier for overlay edges");
                         });
@@ -18348,6 +21491,7 @@ impl eframe::App for App {
                         self.cam_pan = (focal_point.to_vec2() - offset) * (1.0 - f) + self.cam_pan * f;
 
                         self.camera_zoom = new_zoom;
+                        self.visualization_stage_changed_at = Instant::now();
                         cam_changed = true;
                     }
                 }
@@ -18384,6 +21528,7 @@ impl eframe::App for App {
             // Double-click to reset view
             if response.double_clicked() {
                 self.camera_zoom = 1.0; self.camera_yaw_degrees = 0.0; self.camera_pitch_degrees = 0.0; self.cam_pan = egui::vec2(0.0, 0.0);
+                self.visualization_stage_changed_at = Instant::now();
                 cam_changed = true;
             }
             if cam_changed { self.status = "View updated".into(); }
@@ -18629,20 +21774,23 @@ impl eframe::App for App {
                 topology
             };
             #[cfg(feature = "growth3d")]
-            let snapshot_topology_allowed = matches!(self.view_source, ViewSource::Standalone);
+            let selected_display_contracts = match &self.view_source {
+                ViewSource::Standalone => ui_snapshot_opt
+                    .as_ref()
+                    .map(|snapshot| snapshot.display_contracts.clone())
+                    .unwrap_or_default(),
+                ViewSource::ClusterGlobal(network_id) => self
+                    .cluster_display_contracts_for(network_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                ViewSource::LocalManaged(_) => BTreeMap::new(),
+            };
             #[cfg(feature = "growth3d")]
-            let snapshot_topology_available = ui_snapshot_opt
-                .as_ref()
-                .map(|snap| {
-                    snapshot_topology_allowed
-                        && use_aarnn_layout
-                        && snap.display_contracts.contains_key("anatomical")
-                        && (!snap.topo_hidden.is_empty()
-                            || !snap.topo_sensory.is_empty()
-                            || !snap.topo_output.is_empty()
-                            || !snap.topo_early.is_empty())
-                })
-                .unwrap_or(false);
+            let snapshot_topology_allowed = !selected_display_contracts.is_empty();
+            #[cfg(feature = "growth3d")]
+            let snapshot_topology_available = snapshot_topology_allowed
+                && use_aarnn_layout
+                && selected_display_contracts.contains_key("anatomical");
             // A complete anatomical contract and its topology must be read as
             // one presentation snapshot.  Pairing a live runner topology
             // with an older contract changes the projection basis while a
@@ -18651,14 +21799,12 @@ impl eframe::App for App {
             // the legacy topology fallback so the two modes cannot mix.
             #[cfg(feature = "growth3d")]
             let anatomical_contract_snapshot_available = snapshot_topology_allowed && use_aarnn_layout
-                && ui_snapshot_opt.as_ref().is_some_and(|snap| {
-                    snap.display_contracts
-                        .get("anatomical")
-                        .is_some_and(|contract| {
-                            matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
-                                && contract.coverage.unavailable_reason.is_none()
-                                && !contract.nodes.is_empty()
-                        })
+                && selected_display_contracts
+                    .get("anatomical")
+                    .is_some_and(|contract| {
+                        matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
+                            && contract.coverage.unavailable_reason.is_none()
+                            && !contract.nodes.is_empty()
                 });
             #[cfg(feature = "growth3d")]
             let cluster_topology_authoritative = matches!(self.view_source, ViewSource::ClusterGlobal(_))
@@ -18678,14 +21824,14 @@ impl eframe::App for App {
             #[cfg(feature = "growth3d")]
             let snapshot_topology_authoritative = snapshot_topology_allowed
                 && use_aarnn_layout
-                && ui_snapshot_opt.as_ref().is_some_and(|snap| {
-                    (anatomical_contract_snapshot_available
-                        && snap.display_contracts.contains_key("anatomical"))
-                        || (snap.topo_hidden.len() == layout_layers
-                            && snap.topo_hidden.iter().all(|layer| !layer.is_empty())
-                            && (layout_ns == 0 || snap.topo_sensory.len() == layout_ns)
-                            && (layout_o == 0 || snap.topo_output.len() == layout_o))
-                });
+                && (anatomical_contract_snapshot_available
+                    || (matches!(self.view_source, ViewSource::Standalone)
+                        && ui_snapshot_opt.as_ref().is_some_and(|snap| {
+                            snap.topo_hidden.len() == layout_layers
+                                && snap.topo_hidden.iter().all(|layer| !layer.is_empty())
+                                && (layout_ns == 0 || snap.topo_sensory.len() == layout_ns)
+                                && (layout_o == 0 || snap.topo_output.len() == layout_o)
+                        })));
             #[cfg(feature = "growth3d")]
             let cached_topology_authoritative = use_aarnn_layout
                 && !cluster_topology_authoritative
@@ -19612,15 +22758,12 @@ impl eframe::App for App {
             let allow_cached_edges = !self.cached_edges.is_empty();
             #[cfg(feature = "growth3d")]
             let contract_anatomical_geometry = snapshot_topology_allowed && use_aarnn_layout
-                && ui_snapshot_opt.as_ref().is_some_and(|snapshot| {
-                    snapshot
-                        .display_contracts
-                        .get("anatomical")
-                        .is_some_and(|contract| {
-                            matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
-                                && contract.coverage.unavailable_reason.is_none()
-                                && !contract.nodes.is_empty()
-                        })
+                && selected_display_contracts
+                    .get("anatomical")
+                    .is_some_and(|contract| {
+                        matches!(contract.mode, crate::morphology_contract::DisplayMode::Anatomical)
+                            && contract.coverage.unavailable_reason.is_none()
+                            && !contract.nodes.is_empty()
                 });
             #[cfg(not(feature = "growth3d"))]
             let contract_anatomical_geometry = false;
@@ -19628,16 +22771,25 @@ impl eframe::App for App {
             let anatomical_layout_selected = use_aarnn_layout;
             #[cfg(not(feature = "growth3d"))]
             let anatomical_layout_selected = false;
+            let selected_visualization_stage = self.resolved_visualization_stage();
+            let stage_hides_connections =
+                visualization_stage_hides_connections(selected_visualization_stage);
             // Once physical paths are available, matrix overlays would draw
             // misleading soma-to-soma lines over them. The contract renderer
             // below owns anatomical geometry; synthetic mode keeps the normal
             // matrix edge path.
             let allow_edges = (!large_model || self.force_show_connections || allow_cached_edges)
                 && !contract_anatomical_geometry
-                && !anatomical_layout_selected;
+                && !anatomical_layout_selected
+                && !stage_hides_connections;
             let show_highlights: bool = self.show_highlights && allow_edges && !camera_interacting;
             let show_backward_highlights: bool = self.show_backward_highlights && allow_edges && !camera_interacting;
-            let show_static_overlays: bool = self.show_static_overlays && allow_edges;
+            let stage_requires_synthetic_links = matches!(selected_visualization_stage, 2 | 3);
+            let stage_requires_legacy_anatomical_links =
+                matches!(selected_visualization_stage, 5 | 6)
+                    && anatomical_layout_selected
+                    && !contract_anatomical_geometry;
+            let show_static_overlays: bool = (self.show_static_overlays || stage_requires_synthetic_links) && allow_edges;
             // `force_show_connections` is a synthetic-view control. It must
             // never override the anatomical contract gate, otherwise a stale
             // matrix cache is composited over physical paths.
@@ -19700,7 +22852,7 @@ impl eframe::App for App {
 
             #[cfg(feature = "growth3d")]
             let anatomical_contract = if snapshot_topology_allowed && use_aarnn_layout {
-                ui_snapshot_opt.as_ref().and_then(|s| s.display_contracts.get("anatomical"))
+                selected_display_contracts.get("anatomical")
                     .filter(|c| c.provenance != crate::morphology_contract::DisplayProvenance::Unavailable
                         && c.coverage.unavailable_reason.is_none() && !c.nodes.is_empty())
             } else { None };
@@ -19756,14 +22908,20 @@ impl eframe::App for App {
             let mut smoothed_equalizer_values = self.smoothed_equalizer_values.clone();
 
             // Draw network
+            let visualization_render_started = Instant::now();
             let painter = ui.painter_at(panel_rect);
             // reset edge cache for this frame
             let mut edge_shapes_vec = Vec::new();
             // Collect hover tooltip lines to consolidate into a single selectable tooltip
             let mut tooltip_lines: Vec<String> = Vec::new();
-            let radius_s = 4.0f32;
-            let radius_h = 6.0f32;
-            let radius_o = 7.0f32;
+            let neuron_pixel_size =
+                single_pixel_neuron_size(selected_visualization_stage, ui.ctx().pixels_per_point());
+            let simple_neuron_radius = neuron_pixel_size
+                .map(|size| size * 0.5)
+                .unwrap_or(4.0);
+            let radius_s = simple_neuron_radius;
+            let radius_h: f32 = simple_neuron_radius;
+            let radius_o = simple_neuron_radius;
             // labels
             painter.text(
                 egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 6.0),
@@ -19772,6 +22930,49 @@ impl eframe::App for App {
                 egui::FontId::proportional(16.0),
                 egui::Color32::LIGHT_GRAY,
             );
+            if matches!(selected_visualization_stage, 2 | 3) {
+                let active_neurons = self
+                    .sensory_activity
+                    .iter()
+                    .chain(self.hidden_activity.iter().flatten())
+                    .chain(self.output_activity.iter())
+                    .filter(|activity| activity.is_finite() && **activity > 0.08)
+                    .count();
+                let cluster_snapshot_available = match &self.view_source {
+                    ViewSource::ClusterGlobal(network_id) => {
+                        self.cluster_snapshot_network_id.as_deref() == Some(network_id)
+                            && self.cluster_snapshot_cache.is_some()
+                    }
+                    _ => false,
+                };
+                let known_connections = self.cached_conn_counts.iter().sum::<usize>()
+                    .saturating_add(self.cached_output_conn_count.unwrap_or_default());
+                let connection_state = connection_projection_status(
+                    matches!(self.view_source, ViewSource::ClusterGlobal(_)),
+                    cluster_snapshot_available,
+                    self.cluster_snapshot_inflight,
+                    self.pending_edge_cache
+                        || self.edge_cache_inflight
+                        || self.cluster_edge_cache_inflight,
+                    self.cached_output_conn_count.is_some(),
+                    self.cached_edges.len(),
+                    known_connections,
+                );
+                painter.text(
+                    egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 25.0),
+                    egui::Align2::LEFT_TOP,
+                    format!(
+                        "Stage {} · {} · {} active",
+                        selected_visualization_stage, connection_state, active_neurons
+                    ),
+                    egui::FontId::proportional(11.0),
+                    if active_neurons > 0 {
+                        egui::Color32::from_rgb(130, 220, 170)
+                    } else {
+                        egui::Color32::from_gray(165)
+                    },
+                );
+            }
 
             #[cfg(feature = "growth3d")]
             if self.show_region_labels {
@@ -20175,7 +23376,27 @@ impl eframe::App for App {
                     };
                     owners.insert(node.id, (node.colour_slot, activity.clamp(0.0, 1.0)));
                 }
-                for path in &contract.paths {
+                if matches!(selected_visualization_stage, 5 | 6) {
+                    let positions = contract.nodes.iter().map(|node| (node.id, node.position_mm))
+                        .collect::<BTreeMap<_, _>>();
+                    let mut used_sources = HashSet::new();
+                    let mut used_targets = HashSet::new();
+                    for edge in &contract.edges {
+                        if selected_visualization_stage == 5
+                            && (!used_sources.insert(edge.source) || !used_targets.insert(edge.target))
+                        {
+                            continue;
+                        }
+                        let (Some(from), Some(to)) = (positions.get(&edge.source), positions.get(&edge.target)) else { continue; };
+                        painter.line_segment(
+                            [frame.project(*from), frame.project(*to)],
+                            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(70, 205, 145, 170)),
+                        );
+                    }
+                }
+                for path in contract.paths.iter().filter(|_| {
+                    selected_visualization_stage >= 7 && contract.coverage.volumetric_clearance_verified
+                }) {
                     let Some(&(slot, activity)) = owners.get(&path.owner) else { continue; };
                     let variant = match path.kind {
                         crate::morphology_contract::AnatomicalKind::Axon | crate::morphology_contract::AnatomicalKind::AxonHillock => 0.055,
@@ -20185,10 +23406,21 @@ impl eframe::App for App {
                     let base = display_slot_colour(slot, variant);
                     let lighten = |v: u8| (v as f32 + (255 - v) as f32 * activity * 0.38) as u8;
                     let colour = egui::Color32::from_rgb(lighten(base.r()), lighten(base.g()), lighten(base.b()));
-                    painter.add(egui::Shape::mesh(frame.tube(&path.points_mm, path.radius_mm, colour)));
+                    if selected_visualization_stage >= 8 {
+                        painter.add(egui::Shape::mesh(frame.tube(&path.points_mm, path.radius_mm, colour)));
+                    } else {
+                        for segment in path.points_mm.windows(2) {
+                            painter.line_segment(
+                                [frame.project(segment[0]), frame.project(segment[1])],
+                                egui::Stroke::new(1.0, colour),
+                            );
+                        }
+                    }
                 }
                 let mut contacts = egui::epaint::Mesh::default();
-                for marker in &contract.markers {
+                for marker in contract.markers.iter().filter(|_| {
+                    selected_visualization_stage >= 9 && contract.coverage.volumetric_clearance_verified
+                }) {
                     let (colour, radius) = match marker.kind {
                         crate::morphology_contract::AnatomicalKind::Bouton => (egui::Color32::from_rgb(255, 184, 74), 3.0),
                         crate::morphology_contract::AnatomicalKind::PostsynapticSite => (egui::Color32::from_rgb(143, 216, 255), 2.5),
@@ -20214,10 +23446,7 @@ impl eframe::App for App {
                     let mut sensory = Vec::new();
                     let mut hidden: Vec<Vec<egui::Color32>> = Vec::new();
                     let mut output = Vec::new();
-                    if let Some(contract) = ui_snapshot_opt
-                        .as_ref()
-                        .and_then(|snapshot| snapshot.display_contracts.get("anatomical"))
-                    {
+                    if let Some(contract) = selected_display_contracts.get("anatomical") {
                         for node in &contract.nodes {
                             let colour = display_slot_colour(node.colour_slot, 0.0);
                             match node.role {
@@ -20246,33 +23475,77 @@ impl eframe::App for App {
             let (contract_sensory_colours, contract_hidden_colours, contract_output_colours) =
                 (Vec::new(), Vec::new(), Vec::new());
 
+            #[cfg(feature = "growth3d")]
+            let (contract_sensory_radii, contract_hidden_radii, contract_output_radii) = {
+                let mut sensory = Vec::new();
+                let mut hidden = Vec::<Vec<f32>>::new();
+                let mut output = Vec::new();
+                if selected_visualization_stage >= 8
+                    && anatomical_contract.is_some_and(|contract| contract.coverage.volumetric_clearance_verified)
+                {
+                    if let (Some(contract), Some(frame)) = (anatomical_contract, anatomical_frame.as_ref()) {
+                        for node in &contract.nodes {
+                            let radius = node.soma_radius_mm
+                                .map(|radius| frame.screen_radius(radius).max(0.5))
+                                .unwrap_or(simple_neuron_radius);
+                            match node.role {
+                                crate::morphology_contract::DisplayRole::Sensory => sensory.push(radius),
+                                crate::morphology_contract::DisplayRole::Output => output.push(radius),
+                                crate::morphology_contract::DisplayRole::Hidden => {
+                                    let layer = node.layer.unwrap_or(0);
+                                    hidden.resize_with(hidden.len().max(layer + 1), Vec::new);
+                                    hidden[layer].push(radius);
+                                }
+                                crate::morphology_contract::DisplayRole::Unassigned => {}
+                            }
+                        }
+                    }
+                }
+                (sensory, hidden, output)
+            };
+            #[cfg(not(feature = "growth3d"))]
+            let (contract_sensory_radii, contract_hidden_radii, contract_output_radii) =
+                (Vec::new(), Vec::new(), Vec::new());
+
             // draw sensory (use cached screen-space positions directly; NO extra camera transform here)
             let (col_s_base, vis_s) = Self::get_layer_visuals(&view_source, &brain_id, &view_node_filter, -1, egui::Color32::from_rgb(60, 140, 255), &network_registry);
             if vis_s || view_node_filter.is_none() {
                 for (i, &p0) in sensory_positions.iter().enumerate() {
+                    let soma_radius = contract_sensory_radii.get(i).copied().unwrap_or(radius_s);
                     let a = sensory_activity.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
                     let soma_base = contract_sensory_colours
                         .get(i)
                         .copied()
                         .unwrap_or(col_s_base);
-                    let col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.35 + 0.65 * a });
-                    #[cfg(feature = "growth3d")]
-                    if let Some(frame) = anatomical_frame.as_ref() {
-                        let mut soma_mesh = egui::epaint::Mesh::default();
-                        frame.disc(&mut soma_mesh, p0, radius_s, col);
-                        painter.add(egui::Shape::mesh(soma_mesh));
-                    } else { painter.circle_filled(p0, radius_s, col); }
-                    #[cfg(not(feature = "growth3d"))]
-                    painter.circle_filled(p0, radius_s, col);
-                    if self.placement_selected_layers.contains(&0) {
+                    let brightness = visualization_activity_brightness(
+                        selected_visualization_stage,
+                        a,
+                        contract_anatomical_geometry,
+                    );
+                    let col = soma_base.gamma_multiply(brightness);
+                    if neuron_pixel_size.is_none() {
+                        #[cfg(feature = "growth3d")]
+                        if let Some(frame) = anatomical_frame.as_ref() {
+                            let mut soma_mesh = egui::epaint::Mesh::default();
+                            frame.disc(&mut soma_mesh, p0, soma_radius, col);
+                            painter.add(egui::Shape::mesh(soma_mesh));
+                        } else {
+                            painter.circle_filled(p0, soma_radius, col);
+                        }
+                        #[cfg(not(feature = "growth3d"))]
+                        painter.circle_filled(p0, soma_radius, col);
+                    }
+                    if neuron_pixel_size.is_none()
+                        && self.placement_selected_layers.contains(&0)
+                    {
                         painter.circle_stroke(
                             p0,
-                            radius_s + 3.0,
+                            soma_radius + 3.0,
                             egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
                         );
                     }
                     // tooltip area
-                    let r = egui::Rect::from_center_size(p0, egui::vec2(radius_s*2.0, radius_s*2.0));
+                    let r = egui::Rect::from_center_size(p0, egui::vec2(soma_radius*2.0, soma_radius*2.0));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
                         hovered_target = Some(ContextPick::Sensory(i));
                         #[cfg_attr(not(all(feature = "robot_io", unix)), allow(unused_mut))]
@@ -20337,21 +23610,32 @@ impl eframe::App for App {
                 if !vis_h && view_node_filter.is_some() { continue; }
 
                 for (j, &p) in layer.iter().enumerate() {
-                    // In ClusterGlobal mode activity data is only available for the local
-                    // node; remote neurons have no entry in hidden_activity.  Use a 0.5
-                    // baseline so all cluster neurons render at a visible brightness rather
-                    // than the near-invisible 30% that a 0.0 default produces.
-                    let activity_default = if matches!(view_source, ViewSource::ClusterGlobal(_)) { 0.5 } else { 0.0 };
-                    let a = hidden_activity.get(li).and_then(|v| v.get(j)).copied().unwrap_or(activity_default).clamp(0.0, 1.0);
+                    // Missing worker telemetry means resting for display
+                    // purposes; do not invent a half-active cluster baseline.
+                    let a = hidden_activity
+                        .get(li)
+                        .and_then(|v| v.get(j))
+                        .copied()
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
                     let soma_base = contract_hidden_colours
                         .get(li)
                         .and_then(|colours| colours.get(j))
                         .copied()
                         .unwrap_or(col_h_base);
-                    let mut col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.30 + 0.70 * a });
+                    let brightness = visualization_activity_brightness(
+                        selected_visualization_stage,
+                        a,
+                        contract_anatomical_geometry,
+                    );
+                    let mut col = soma_base.gamma_multiply(brightness);
                     #[cfg_attr(not(feature = "growth3d"), allow(unused_mut))]
-                    let mut r_h = radius_h;
+                    let mut r_h = contract_hidden_radii
+                        .get(li)
+                        .and_then(|radii| radii.get(j))
+                        .copied()
+                        .unwrap_or(radius_h);
                     #[cfg(feature = "growth3d")]
                     if growth_enabled && use_aarnn_layout && !contract_anatomical_geometry {
                         let depth_node_opt: Option<&crate::topology::Node3D> = if cache_topology_active {
@@ -20379,22 +23663,28 @@ impl eframe::App for App {
                             col = col.gamma_multiply(0.85 + 0.30 * (1.0 - depth));
                         }
                     }
-                    #[cfg(feature = "growth3d")]
-                    if let Some(frame) = anatomical_frame.as_ref() {
-                        let mut soma_mesh = egui::epaint::Mesh::default();
-                        frame.disc(&mut soma_mesh, p, r_h, col);
-                        painter.add(egui::Shape::mesh(soma_mesh));
-                    } else { painter.circle_filled(p, r_h, col); }
-                    #[cfg(not(feature = "growth3d"))]
-                    painter.circle_filled(p, r_h, col);
-                    if self.placement_selected_layers.contains(&(li as u32 + 1)) {
+                    if neuron_pixel_size.is_none() {
+                        #[cfg(feature = "growth3d")]
+                        if let Some(frame) = anatomical_frame.as_ref() {
+                            let mut soma_mesh = egui::epaint::Mesh::default();
+                            frame.disc(&mut soma_mesh, p, r_h, col);
+                            painter.add(egui::Shape::mesh(soma_mesh));
+                        } else {
+                            painter.circle_filled(p, r_h, col);
+                        }
+                        #[cfg(not(feature = "growth3d"))]
+                        painter.circle_filled(p, r_h, col);
+                    }
+                    if neuron_pixel_size.is_none()
+                        && self.placement_selected_layers.contains(&(li as u32 + 1))
+                    {
                         painter.circle_stroke(
                             p,
                             r_h + 3.0,
                             egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
                         );
                     }
-                    let r = egui::Rect::from_center_size(p, egui::vec2(radius_h*2.0, radius_h*2.0));
+                    let r = egui::Rect::from_center_size(p, egui::vec2(r_h*2.0, r_h*2.0));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
                         hovered_target = Some(ContextPick::Hidden(li, j));
                         #[cfg(all(feature = "growth3d"))]
@@ -20784,23 +24074,37 @@ impl eframe::App for App {
                         .get(k)
                         .copied()
                         .unwrap_or(col_o_base);
-                    let col = soma_base.gamma_multiply(if contract_anatomical_geometry { 0.85 + 0.15 * a } else { 0.30 + 0.70 * a });
-                    #[cfg(feature = "growth3d")]
-                    if let Some(frame) = anatomical_frame.as_ref() {
-                        let mut soma_mesh = egui::epaint::Mesh::default();
-                        frame.disc(&mut soma_mesh, p, radius_o, col);
-                        painter.add(egui::Shape::mesh(soma_mesh));
-                    } else { painter.circle_filled(p, radius_o, col); }
-                    #[cfg(not(feature = "growth3d"))]
-                    painter.circle_filled(p, radius_o, col);
-                    if self.placement_selected_layers.contains(&(hidden_positions.len() as u32 + 1)) {
+                    let brightness = visualization_activity_brightness(
+                        selected_visualization_stage,
+                        a,
+                        contract_anatomical_geometry,
+                    );
+                    let col = soma_base.gamma_multiply(brightness);
+                    let soma_radius = contract_output_radii.get(k).copied().unwrap_or(radius_o);
+                    if neuron_pixel_size.is_none() {
+                        #[cfg(feature = "growth3d")]
+                        if let Some(frame) = anatomical_frame.as_ref() {
+                            let mut soma_mesh = egui::epaint::Mesh::default();
+                            frame.disc(&mut soma_mesh, p, soma_radius, col);
+                            painter.add(egui::Shape::mesh(soma_mesh));
+                        } else {
+                            painter.circle_filled(p, soma_radius, col);
+                        }
+                        #[cfg(not(feature = "growth3d"))]
+                        painter.circle_filled(p, soma_radius, col);
+                    }
+                    if neuron_pixel_size.is_none()
+                        && self
+                            .placement_selected_layers
+                            .contains(&(hidden_positions.len() as u32 + 1))
+                    {
                         painter.circle_stroke(
                             p,
-                            radius_o + 3.0,
+                            soma_radius + 3.0,
                             egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 240, 168)),
                         );
                     }
-                    let r = egui::Rect::from_center_size(p, egui::vec2(radius_o*2.4, radius_o*2.4));
+                    let r = egui::Rect::from_center_size(p, egui::vec2(soma_radius*2.4, soma_radius*2.4));
                     if response.hovered() && r.contains(ui.ctx().pointer_hover_pos().unwrap_or(egui::pos2(-1.0,-1.0))) {
                         hovered_target = Some(ContextPick::Output(k));
                         #[cfg_attr(not(all(feature = "robot_io", unix)), allow(unused_mut))]
@@ -21016,9 +24320,13 @@ impl eframe::App for App {
 
             // Static connection overlays (faint network skeleton) under nodes.
             // Prefer cached edges so rendering remains stable while simulation threads mutate weights.
-            // Cached/live weight overlays are also a synthetic layer graph. A
-            // biological topology view must have one visible topology source.
-            if show_static_overlays && !biological_topology_authoritative {
+            // The anatomical layout already disables these matrix overlays in
+            // `allow_edges`; a cached biological topology must not suppress
+            // the explicit synthetic stage-two/three connection projection.
+            if should_draw_connection_overlays(
+                show_static_overlays,
+                stage_requires_legacy_anatomical_links,
+            ) {
                 let alpha = overlay_opacity.clamp(0.05, 1.0);
                 let get_pos = |layer: i32, idx: usize, sensory: &Vec<egui::Pos2>, hidden: &Vec<Vec<egui::Pos2>>, output: &Vec<egui::Pos2>| -> Option<egui::Pos2> {
                     if layer == -1 {
@@ -21043,23 +24351,67 @@ impl eframe::App for App {
                     // a large network. Cached edges are ordered with the
                     // readout path first, so the cap preserves the most useful
                     // projection while preventing a full-frame stall.
+                    let legacy_anatomical_indices = if stage_requires_legacy_anatomical_links {
+                        legacy_anatomical_edge_indices(
+                            selected_visualization_stage,
+                            &self.cached_edges,
+                        )
+                    } else {
+                        Vec::new()
+                    };
                     let static_draw_cap = Self::static_edge_draw_cap(
                         self.cached_edges.len(),
                         overlay_density,
                         layout_total_neurons,
                         self.force_show_connections,
                     );
-                    for edge in self.cached_edges.iter().take(static_draw_cap) {
+                    let edge_indices: Vec<usize> = if stage_requires_legacy_anatomical_links {
+                        legacy_anatomical_indices
+                    } else {
+                        (0..static_draw_cap).collect()
+                    };
+                    for edge_index in edge_indices {
+                        let Some(edge) = self.cached_edges.get(edge_index) else {
+                            continue;
+                        };
                         let Some(p0) = get_pos(edge.from_layer, edge.from_idx, sensory_positions, hidden_positions, output_positions) else { continue; };
                         let Some(p1) = get_pos(edge.to_layer, edge.to_idx, sensory_positions, hidden_positions, output_positions) else { continue; };
+                        if stage_requires_legacy_anatomical_links {
+                            let alpha = (150.0 + 90.0 * edge.weight.abs().min(1.0)) as u8;
+                            let colour = egui::Color32::from_rgba_unmultiplied(70, 205, 145, alpha);
+                            painter.line_segment(
+                                [p0, p1],
+                                egui::Stroke::new(1.0, colour),
+                            );
+                            edge_shapes_vec.push(EdgeVisual {
+                                p0,
+                                p1,
+                                from_label: format!("{}:{}", edge.from_layer, edge.from_idx),
+                                to_label: format!("{}:{}", edge.to_layer, edge.to_idx),
+                                weight: Some(edge.weight),
+                                kind: edge.kind,
+                                is_longterm: edge.is_longterm,
+                            });
+                            continue;
+                        }
                         let abs_w = edge.weight.abs();
-                        let ww = (0.5 + 1.5 * abs_w).clamp(0.3, 1.8) * (if edge.is_longterm { 1.3 } else { 1.0 });
+                        let ww = if stage_requires_synthetic_links {
+                            1.0
+                        } else {
+                            (0.5 + 1.5 * abs_w).clamp(0.3, 1.8)
+                                * (if edge.is_longterm { 1.3 } else { 1.0 })
+                        };
                         let base_col = if edge.is_longterm {
                             egui::Color32::from_rgb(0, 255, 128)
                         } else {
                             egui::Color32::from_rgb(255, 128, 0)
                         };
-                        let col = base_col.gamma_multiply(alpha * (0.3 + 0.7 * abs_w.min(1.0)));
+                        let overlay_strength = if stage_requires_synthetic_links {
+                            alpha.max(0.65) * (0.7 + 0.3 * abs_w.min(1.0))
+                        } else {
+                            alpha * (0.3 + 0.7 * abs_w.min(1.0))
+                        };
+                        let col = base_col.gamma_multiply(overlay_strength);
                         painter.line_segment([p0, p1], egui::Stroke { width: ww, color: col });
                         let from_label = match edge.from_layer {
                             -1 => format!("S{}", edge.from_idx),
@@ -21193,6 +24545,100 @@ impl eframe::App for App {
                         }
                     }
                 }
+                }
+            }
+
+            // Keep pixel-stage neurons legible over the graph strokes. Add
+            // them after every connection to the same registered panel paint
+            // list; an ad-hoc context layer is not part of egui's area order.
+            // Opaque, framebuffer-aligned pixels keep edge colours from
+            // washing out activity. This display-only pass never waits for a
+            // worker response.
+            if neuron_pixel_size.is_some() {
+                let pixels_per_point = ui.ctx().pixels_per_point();
+                let pixel_painter = painter.with_clip_rect(panel_rect);
+                let neuron_count = sensory_positions
+                    .len()
+                    .saturating_add(hidden_positions.iter().map(Vec::len).sum::<usize>())
+                    .saturating_add(output_positions.len());
+                let mut pixel_mesh = egui::Mesh::default();
+                pixel_mesh.reserve_triangles(neuron_count.saturating_mul(2));
+                let mut paint_pixel_neuron = |position: egui::Pos2,
+                                              base_colour: egui::Color32,
+                                              activity: f32| {
+                    let colour = visualization_activity_colour(
+                        base_colour,
+                        selected_visualization_stage,
+                        activity,
+                        contract_anatomical_geometry,
+                    );
+                    append_single_pixel_neuron(
+                        &mut pixel_mesh,
+                        position,
+                        pixels_per_point,
+                        colour,
+                    );
+                };
+
+                if vis_s || view_node_filter.is_none() {
+                    for (index, &position) in sensory_positions.iter().enumerate() {
+                        paint_pixel_neuron(
+                            position,
+                            contract_sensory_colours
+                                .get(index)
+                                .copied()
+                                .unwrap_or(col_s_base),
+                            sensory_activity.get(index).copied().unwrap_or(0.0),
+                        );
+                    }
+                }
+
+                for (layer_index, layer) in hidden_positions.iter().enumerate() {
+                    let (base_colour, visible) = Self::get_layer_visuals(
+                        &view_source,
+                        &brain_id,
+                        &view_node_filter,
+                        layer_index as isize,
+                        egui::Color32::from_rgb(255, 160, 60),
+                        &network_registry,
+                    );
+                    if !visible && view_node_filter.is_some() {
+                        continue;
+                    }
+                    for (neuron_index, &position) in layer.iter().enumerate() {
+                        paint_pixel_neuron(
+                            position,
+                            contract_hidden_colours
+                                .get(layer_index)
+                                .and_then(|colours| colours.get(neuron_index))
+                                .copied()
+                                .unwrap_or(base_colour),
+                            hidden_activity
+                                .get(layer_index)
+                                .and_then(|activity| activity.get(neuron_index))
+                                .copied()
+                                .unwrap_or(0.0),
+                        );
+                    }
+                }
+
+                if vis_o || view_node_filter.is_none() {
+                    for (index, &position) in output_positions.iter().enumerate() {
+                        paint_pixel_neuron(
+                            position,
+                            contract_output_colours
+                                .get(index)
+                                .copied()
+                                .unwrap_or(col_o_base),
+                            output_activity.get(index).copied().unwrap_or(0.0),
+                        );
+                    }
+                }
+
+                // Keep markers above graph strokes while batching every pixel
+                // into one raster-safe mesh for this frame.
+                if !pixel_mesh.indices.is_empty() {
+                    pixel_painter.add(egui::Shape::mesh(pixel_mesh));
                 }
             }
 
@@ -21473,6 +24919,22 @@ impl eframe::App for App {
                 );
             }
 
+            // Record presentation cost independently from simulation step
+            // timing. The bounded p95 window drives only visual detail policy.
+            let visualisation_elapsed_ms = visualization_render_started.elapsed().as_secs_f64() * 1_000.0;
+            self.visualization_latency_samples.push_back(visualisation_elapsed_ms);
+            if self.visualization_latency_samples.len() > 32 {
+                self.visualization_latency_samples.pop_front();
+            }
+            let visualisation_costs = self
+                .visualization_latency_samples
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            if let Some(p95) = crate::visualization::latency_p95_ms(&visualisation_costs) {
+                self.visualization_latency_ms = p95;
+            }
+
             // Draw Graphic EQ in lower-left corner of panel_rect (existing feature)
             if self.show_equalizer {
                 let eq_width = 260.0;
@@ -21485,24 +24947,15 @@ impl eframe::App for App {
                 painter.rect_filled(rect, 6.0, egui::Color32::from_gray(20));
                 painter.rect_stroke(rect, 6.0, egui::Stroke { width: 1.0, color: egui::Color32::from_gray(80) }, egui::StrokeKind::Outside);
                 let cluster_projection = matches!(&view_source, ViewSource::ClusterGlobal(_));
-                let title = if cluster_projection {
-                    "Graphic EQ • unavailable for cluster projection"
-                } else {
-                    "Graphic EQ • audio FFT"
-                };
+                let title = equalizer_caption(cluster_projection);
                 painter.text(rect.left_top() + egui::vec2(8.0, 4.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(12.0), egui::Color32::WHITE);
 
-                // Fetch bands and smooth
-                if !cluster_projection {
-                    if let Some(b) = bands_snapshot.as_deref() {
-                    if smoothed_equalizer_values.len() != b.len() { smoothed_equalizer_values = vec![0.0f32; b.len()]; }
-                    for i in 0..b.len() { smoothed_equalizer_values[i] = 0.7*smoothed_equalizer_values[i] + 0.3*b[i].clamp(0.0, 1.0); }
-                    } else {
-                        for v in &mut smoothed_equalizer_values { *v *= 0.9; }
-                    }
-                } else {
-                    for v in &mut smoothed_equalizer_values { *v *= 0.9; }
-                }
+                // The spectrum is captured at the master input and remains
+                // meaningful while the selected neural projection is remote.
+                update_equalizer_values(
+                    &mut smoothed_equalizer_values,
+                    bands_snapshot.as_deref(),
+                );
                 // Draw bars
                 let n = smoothed_equalizer_values.len().max(8);
                 if smoothed_equalizer_values.len() != n { smoothed_equalizer_values.resize(n, 0.0); }
@@ -22382,5 +25835,261 @@ impl eframe::App for App {
             self.detail_waiting_for_activation = detail_waiting_for_activation;
             self.show_neuron_detail = open;
         }
+    }
+}
+
+#[cfg(all(test, feature = "ui"))]
+mod sensory_input_route_tests {
+    use super::{
+        distributed_input_provider_width, managed_input_inactive_message,
+        managed_input_waits_without_local_simulation, managed_sensory_delivery_error_is_retryable,
+        resolve_audio_provider_sensory_count, resolve_distributed_input_route_target,
+        resolve_managed_playing_state, resolve_view_input_sensory_count,
+    };
+
+    #[test]
+    fn managed_audio_uses_the_target_brain_width() {
+        let width = resolve_view_input_sensory_count(false, Some(1), 64, 64);
+        assert_eq!(width, Some(1));
+        assert_eq!(
+            distributed_input_provider_width(true, true, width, 64),
+            Some(1),
+            "the provider must emit the target network's sensory width"
+        );
+    }
+
+    #[test]
+    fn managed_audio_does_not_guess_when_target_width_is_unavailable() {
+        assert_eq!(
+            resolve_view_input_sensory_count(false, None, 64, 64),
+            None,
+            "a local preview width must not be mistaken for a remote contract"
+        );
+    }
+
+    #[test]
+    fn audio_file_can_load_with_a_local_width_while_managed_route_waits() {
+        let provider_width = resolve_audio_provider_sensory_count(false, None, 1, 64);
+        assert_eq!(provider_width, 1);
+        assert_eq!(
+            resolve_view_input_sensory_count(false, None, 1, 64),
+            None,
+            "a local provider width must not make an unknown managed route eligible"
+        );
+    }
+
+    #[test]
+    fn audio_file_uses_a_configured_fallback_when_local_width_is_unavailable() {
+        assert_eq!(
+            resolve_audio_provider_sensory_count(false, None, 0, 64),
+            64,
+            "the file provider requires a positive width even before managed topology is ready"
+        );
+    }
+
+    #[test]
+    fn audio_file_width_prefers_a_valid_managed_target_when_available() {
+        assert_eq!(
+            resolve_audio_provider_sensory_count(false, Some(1), 64, 32),
+            1,
+            "known managed topology remains the provider's mapping target"
+        );
+    }
+
+    #[test]
+    fn paused_managed_network_explains_that_start_activates_audio_mapping() {
+        assert_eq!(
+            managed_input_inactive_message(true, Some(false), true, Some(1)),
+            "Audio file ready; press Start to activate managed input mapping"
+        );
+    }
+
+    #[test]
+    fn managed_input_wait_message_identifies_missing_ingress_or_sensory_width() {
+        assert!(
+            managed_input_inactive_message(true, Some(true), false, Some(1))
+                .contains("connected worker")
+        );
+        assert!(
+            managed_input_inactive_message(true, Some(true), true, None)
+                .contains("available sensory input")
+        );
+    }
+
+    #[test]
+    fn managed_view_waits_without_consuming_audio_in_the_local_runner() {
+        assert!(managed_input_waits_without_local_simulation(true, false));
+        assert!(
+            !managed_input_waits_without_local_simulation(true, true),
+            "an active direct route owns provider advancement"
+        );
+        assert!(
+            !managed_input_waits_without_local_simulation(false, false),
+            "standalone simulation keeps its normal provider path"
+        );
+    }
+
+    #[test]
+    fn zero_managed_sensory_width_is_unavailable_not_one() {
+        assert_eq!(
+            resolve_view_input_sensory_count(false, Some(0), 64, 64),
+            None,
+            "a zero-width managed Runner must not be coerced into a one-wide route"
+        );
+        assert_eq!(
+            resolve_audio_provider_sensory_count(false, Some(0), 64, 64),
+            64,
+            "an unavailable managed target must not prevent local file decoding"
+        );
+    }
+
+    #[test]
+    fn stopping_managed_input_restores_the_local_provider_width() {
+        assert_eq!(
+            distributed_input_provider_width(true, false, Some(1), 64),
+            Some(64)
+        );
+        assert_eq!(
+            distributed_input_provider_width(false, false, None, 64),
+            None,
+            "an inactive source must not resize the provider"
+        );
+    }
+
+    #[test]
+    fn standalone_audio_keeps_the_network_width_or_uses_its_fallback() {
+        assert_eq!(resolve_view_input_sensory_count(true, None, 1, 64), Some(1));
+        assert_eq!(
+            resolve_view_input_sensory_count(true, None, 0, 64),
+            Some(64)
+        );
+    }
+
+    #[test]
+    fn a_stale_registry_snapshot_does_not_hide_a_running_managed_brain() {
+        assert_eq!(
+            resolve_managed_playing_state(Some(true), Some(false), Some(false)),
+            Some(true),
+            "the live managed runner must start the sensory route even when registry state lags"
+        );
+    }
+
+    #[test]
+    fn live_paused_state_overrides_optimistic_or_stale_playing_flags() {
+        assert_eq!(
+            resolve_managed_playing_state(Some(false), Some(true), Some(true)),
+            Some(false),
+            "a live pause must take precedence over cached and registry state"
+        );
+    }
+
+    #[test]
+    fn remote_registry_state_is_used_when_no_local_runner_is_available() {
+        assert_eq!(
+            resolve_managed_playing_state(None, None, Some(true)),
+            Some(true)
+        );
+        assert_eq!(
+            resolve_managed_playing_state(None, Some(false), Some(true)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn managed_route_starts_only_for_a_playing_brain_and_ready_local_source() {
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(true),
+                true,
+                true,
+                Some(1),
+                true,
+            ),
+            Some(("brain-a".to_owned(), 1)),
+            "a playing one-input network must be a valid audio route target"
+        );
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(false),
+                true,
+                true,
+                Some(1),
+                true,
+            ),
+            None,
+            "paused networks must not consume provider frames"
+        );
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(true),
+                false,
+                true,
+                Some(1),
+                true,
+            ),
+            None,
+            "a remembered file path is not an active provider after source replacement"
+        );
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(true),
+                true,
+                false,
+                Some(1),
+                true,
+            ),
+            None,
+            "remote-only clients without a local ingress must fail closed"
+        );
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(true),
+                true,
+                true,
+                None,
+                true,
+            ),
+            None,
+            "unknown sensory width must not create an unshapeable frame"
+        );
+        assert_eq!(
+            resolve_distributed_input_route_target(
+                Some("brain-a"),
+                Some(true),
+                true,
+                true,
+                Some(0),
+                true,
+            ),
+            None,
+            "zero-width networks must not be represented as a one-wide input"
+        );
+    }
+
+    #[test]
+    fn managed_audio_retries_backpressure_but_stops_on_permanent_route_errors() {
+        assert!(managed_sensory_delivery_error_is_retryable(
+            "timed out waiting for the preceding sensory frame to be consumed"
+        ));
+        assert!(managed_sensory_delivery_error_is_retryable(
+            "prepare request to node_1 timed out"
+        ));
+        assert!(managed_sensory_delivery_error_is_retryable(
+            "resource exhausted: sensory bridge is busy"
+        ));
+        assert!(managed_sensory_delivery_error_is_retryable(
+            "The operation was cancelled: Timeout expired"
+        ));
+        assert!(!managed_sensory_delivery_error_is_retryable(
+            "external sensory width 64 does not match network width 1"
+        ));
+        assert!(!managed_sensory_delivery_error_is_retryable(
+            "managed network is paused"
+        ));
     }
 }
