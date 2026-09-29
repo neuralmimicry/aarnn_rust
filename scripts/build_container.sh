@@ -279,7 +279,11 @@ assemble_podman_manifest() {
     local arch_tag="$(arch_tag_for "$workload")"
     local manifest_ref="${IMAGE_NAME}:${role_tag}"
     if [[ "$(container_variant)" == "arm64-64k-hwe" ]]; then
-        manifest_ref="${IMAGE_NAME}:${role_tag}-arm64-64k-hwe"
+        # The 64K HWE variant's canonical tag is already the native image tag.
+        # Creating a manifest under that same tag collides with the image that
+        # was just built; this profile is a single-architecture deployment.
+        echo "Using native 64K HWE image ${IMAGE_NAME}:${arch_tag}; no manifest alias is needed."
+        return 0
     fi
     local native_ref="${IMAGE_NAME}:${arch_tag}"
     local -A added_arches=()
@@ -331,6 +335,9 @@ push_workload_with_podman() {
 
     echo "Pushing ${native_ref}"
     podman push "${native_ref}" "docker://${native_ref}"
+    if [[ "$(container_variant)" == "arm64-64k-hwe" ]]; then
+        return 0
+    fi
     assemble_podman_manifest "$workload"
     echo "Pushing ${manifest_ref}"
     podman manifest push "${manifest_ref}" "docker://${manifest_ref}"
@@ -429,7 +436,9 @@ if { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "podman" ]; } && command -v podma
             assemble_podman_manifest "$workload"
             echo "To push ${workload}:"
             echo "  podman push ${IMAGE_NAME}:${arch_tag} docker://${IMAGE_NAME}:${arch_tag}"
-            echo "  podman manifest push ${IMAGE_NAME}:${role_tag} docker://${IMAGE_NAME}:${role_tag}"
+            if [[ "$(container_variant)" != "arm64-64k-hwe" ]]; then
+                echo "  podman manifest push ${IMAGE_NAME}:${role_tag} docker://${IMAGE_NAME}:${role_tag}"
+            fi
         done
     fi
 elif { [ -z "$BUILD_TOOL" ] || [ "$BUILD_TOOL" = "docker-buildx" ]; } && docker buildx version >/dev/null 2>&1; then
