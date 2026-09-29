@@ -19,64 +19,204 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    env:
+      AARNN_MIN_FREE_GIB: "5"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner_labels: '["self-hosted","Linux","X64"]'
+          - arch: arm64
+            runner_labels: '["self-hosted","Linux","ARM64"]'
+    runs-on: ${{ fromJSON(matrix.runner_labels) }}
     permissions:
       contents: read
       packages: write
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Prepare self-hosted container runner disk
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.X_GITHUB_USERNAME }}
-          password: ${{ secrets.X_GITHUB_TOKEN }}
-
-      - name: Build and publish immutable and latest images
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./webots_service/Containerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/neuralmimicry/webots:sha-${{ github.sha }}
-            ghcr.io/neuralmimicry/webots:latest
-          build-args: |
-            BUILD_NUMBER=${{ github.run_number }}
-            GIT_COMMIT=${{ github.sha }}
-            TARGET_PAGE_SIZE=4k
-          labels: |
-            org.opencontainers.image.source=https://github.com/neuralmimicry/aarnn_rust
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=webots-container
-          cache-to: type=gha,scope=webots-container,mode=max
-
-      - name: Verify published image platforms
-        env:
-          IMAGE: ghcr.io/neuralmimicry/webots:latest
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+      - name: Install and verify Podman publishing tools
+        shell: bash
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect --raw "${IMAGE}" \
-            > /tmp/webots-manifest.json
-          jq -e '
-            [.manifests[].platform
-              | select(
-                  .os == "linux"
-                  and (.architecture == "amd64" or .architecture == "arm64")
-                )
-              | .architecture]
-            | unique | length == 2
-          ' /tmp/webots-manifest.json
-          printf 'Published %s@%s\n' "${IMAGE}" "${IMAGE_DIGEST}"
+          if ! PATH="/usr/bin:/bin:${PATH}" podman --version >/dev/null 2>&1 \
+            || ! PATH="/usr/bin:/bin:${PATH}" skopeo --version >/dev/null 2>&1 \
+            || ! PATH="/usr/bin:/bin:${PATH}" runc --version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman skopeo runc
+          fi
+          echo "/usr/bin" >> "${GITHUB_PATH}"
+          export PATH="/usr/bin:/bin:${PATH}"
+          podman --version
+          skopeo --version
+          runc --version
+
+      - name: Configure isolated rootless Podman storage
+        shell: bash
+        run: bash .github/scripts/configure-rootless-podman.sh
+
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) host_arch=amd64 ;;
+            aarch64|arm64) host_arch=arm64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          if [[ "${host_arch}" != "${{ matrix.arch }}" ]]; then
+            echo "Runner architecture mismatch: expected ${{ matrix.arch }}, got ${host_arch}" >&2
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        env:
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          authfile="${RUNNER_TEMP}/webots-container-auth.json"
+          printf '%s' "${GHCR_TOKEN}" | podman login \
+            --authfile "${authfile}" \
+            ghcr.io \
+            --username "${GHCR_USERNAME}" \
+            --password-stdin
+          echo "REGISTRY_AUTH_FILE=${authfile}" >> "${GITHUB_ENV}"
+
+      - name: Build native architecture image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/neuralmimicry/webots"
+          arch_tag="${image}:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+          podman build \
+            --file ./webots_service/Containerfile \
+            --build-arg "BUILD_NUMBER=${GITHUB_RUN_NUMBER}" \
+            --build-arg "GIT_COMMIT=${GITHUB_SHA}" \
+            --build-arg TARGET_PAGE_SIZE=4k \
+            --label org.opencontainers.image.source=https://github.com/neuralmimicry/aarnn_rust \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${arch_tag}" \
+            .
+
+          built_arch="$(podman image inspect --format '{{.Architecture}}' "${arch_tag}")"
+          if [[ "${built_arch}" != "${{ matrix.arch }}" ]]; then
+            echo "Built image architecture mismatch: expected ${{ matrix.arch }}, got ${built_arch}" >&2
+            exit 1
+          fi
+      - name: Push native architecture image
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch_tag="ghcr.io/neuralmimicry/webots:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+          podman push "${arch_tag}" "docker://${arch_tag}"
+
+      - name: Clean self-hosted container artifacts
+        if: always()
+        shell: bash
+        run: |
+          rm -f "${RUNNER_TEMP}/webots-container-auth.json"
+          bash .github/scripts/runner-disk-cleanup.sh finish
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      AARNN_MIN_FREE_GIB: "5"
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Prepare self-hosted container runner disk
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
+
+      - name: Install and verify Podman publishing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! PATH="/usr/bin:/bin:${PATH}" podman --version >/dev/null 2>&1 \
+            || ! PATH="/usr/bin:/bin:${PATH}" skopeo --version >/dev/null 2>&1 \
+            || ! PATH="/usr/bin:/bin:${PATH}" runc --version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman skopeo runc
+          fi
+          echo "/usr/bin" >> "${GITHUB_PATH}"
+          export PATH="/usr/bin:/bin:${PATH}"
+          podman --version
+          skopeo --version
+          runc --version
+
+      - name: Configure isolated rootless Podman storage
+        shell: bash
+        run: bash .github/scripts/configure-rootless-podman.sh
+
+      - name: Log in to GHCR
+        env:
+          GHCR_USERNAME: ${{ secrets.X_GITHUB_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          authfile="${RUNNER_TEMP}/webots-container-auth.json"
+          printf '%s' "${GHCR_TOKEN}" | podman login \
+            --authfile "${authfile}" \
+            ghcr.io \
+            --username "${GHCR_USERNAME}" \
+            --password-stdin
+          echo "REGISTRY_AUTH_FILE=${authfile}" >> "${GITHUB_ENV}"
+
+      - name: Assemble and publish immutable and latest manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/neuralmimicry/webots"
+          manifest="${image}:sha-${GITHUB_SHA}"
+          podman manifest rm "${manifest}" >/dev/null 2>&1 || true
+          podman manifest create "${manifest}"
+          podman manifest add "${manifest}" "docker://${image}:sha-${GITHUB_SHA}-amd64"
+          podman manifest add "${manifest}" "docker://${image}:sha-${GITHUB_SHA}-arm64"
+          podman manifest push --all "${manifest}" "docker://${manifest}"
+          podman manifest push --all "${manifest}" "docker://${image}:latest"
+
+      - name: Verify published image platforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/neuralmimicry/webots"
+          for tag in "sha-${GITHUB_SHA}" latest; do
+            manifest_file="${RUNNER_TEMP}/webots-${tag//[^a-zA-Z0-9_.-]/_}.json"
+            skopeo inspect --raw --authfile "${REGISTRY_AUTH_FILE}" \
+              "docker://${image}:${tag}" > "${manifest_file}"
+            jq -e '
+              [.manifests[]?.platform
+                | select(
+                    .os == "linux"
+                    and (.architecture == "amd64" or .architecture == "arm64")
+                  )
+                | .architecture]
+              | unique == ["amd64", "arm64"]
+            ' "${manifest_file}" >/dev/null
+            printf 'Verified %s:%s contains linux/amd64 and linux/arm64\n' "${image}" "${tag}"
+          done
+
+      - name: Clean self-hosted container artifacts
+        if: always()
+        shell: bash
+        run: |
+          rm -f "${RUNNER_TEMP}/webots-container-auth.json"
+          bash .github/scripts/runner-disk-cleanup.sh finish
