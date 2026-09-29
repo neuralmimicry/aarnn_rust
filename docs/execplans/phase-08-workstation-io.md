@@ -881,7 +881,23 @@ projection across monotonic cuts for the same assignment, accepts safely
 lagging results, and refreshes if the cut advanced during computation. A
 network/layer reassignment or time rewind still rejects that projection.
 
+The candidate `codex/webots-api-ingress-20260929` branch was reviewed on
+2026-09-30. Its new external sensory gRPC method accepts requests without a
+credential when neither shared bearer variable is configured, and the HTTP
+route grants only general `aarnn:use` access (with `AuthMode::None` also
+bypassing session authentication). This does not establish the separate,
+scoped peripheral-input authorisation required by Section 16.5 and `INV-017`.
+The hosted Webots path is also unverified. Keep that ingress unmerged until a
+revocable peripheral-input grant and hosted acceptance evidence exist.
+
 ## Decision Log
+
+- `2026-09-30 / DEC-0085U`: keep the candidate Webots ingress unmerged until
+  external sensory injection enforces a dedicated, scoped and revocable
+  peripheral-input grant. An optional shared bearer plus general `aarnn:use`
+  does not satisfy Section 16.5 or `INV-017`; hosted Webots acceptance is also
+  unverified. The unrelated 64K HWE image-manifest fix may be consolidated
+  independently. Authority: Section 16.5 and `INV-017`.
 
 - `2026-09-29 / DEC-0085R`: populate the cluster output raster from the same
   bounded worker activity responses that drive cluster neuron brightness.
