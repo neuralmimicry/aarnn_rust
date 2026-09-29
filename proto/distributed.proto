@@ -11,6 +11,13 @@ service DistributedNeuromorphic {
   
   // Bi-directional stream for spikes between nodes
   rpc StreamSpikes(stream SpikeBatch) returns (stream SpikeBatch);
+
+  // Bounded, acknowledged admission of external sensory frames to a managed
+  // network. Prepare reserves a single worker slot, Commit makes that frame
+  // visible to the next neural step, and Abort releases an unused reservation.
+  rpc PrepareSensoryInput(SensoryInputFrame) returns (SensoryInputFrameAck);
+  rpc CommitSensoryInput(SensoryInputFrameId) returns (SensoryInputFrameAck);
+  rpc AbortSensoryInput(SensoryInputFrameId) returns (SensoryInputFrameAck);
   
   // Control and growth updates
   rpc UpdateNetwork(NetworkUpdateRequest) returns (NetworkUpdateResponse);
@@ -374,6 +381,9 @@ message HeartbeatResponse {
 
 message NetworkPeerList {
   repeated string node_ids = 1;
+  // Direct sensory-I/O bridge for this network. The workstation resolves this
+  // route through the orchestrator, then sends frame payloads to this node.
+  string sensory_ingress_node_id = 2;
 }
 
 message NetworkCommand {
@@ -429,6 +439,32 @@ message SpikeBatch {
   bytes aer_payload = 6;
   // Base address for decoding (0 means addresses are relative)
   uint32 aer_base = 7;
+}
+
+message SensoryInputFrame {
+  uint32 schema_version = 1;
+  string network_id = 2;
+  string source_node_id = 3;
+  string session_id = 4;
+  uint64 frame_sequence = 5;
+  int64 step_index = 6;
+  // Signed spike values encoded as their i8 byte representation.
+  bytes spikes = 7;
+}
+
+message SensoryInputFrameId {
+  uint32 schema_version = 1;
+  string network_id = 2;
+  string source_node_id = 3;
+  string session_id = 4;
+  uint64 frame_sequence = 5;
+}
+
+message SensoryInputFrameAck {
+  uint32 schema_version = 1;
+  bool accepted = 2;
+  bool already_applied = 3;
+  uint64 frame_sequence = 4;
 }
 
 // Additive Phase 4 reference envelope. Legacy SpikeBatch remains available

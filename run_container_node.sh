@@ -11,7 +11,9 @@ aarnn_require_cmd ss
 IMAGE_REF="${IMAGE_NAME:-$(aarnn_default_workload_image node)}"
 ORCHESTRATOR_ADDR="${ORCHESTRATOR_ADDR:-http://127.0.0.1:50051}"
 GRPC_PORT="${GRPC_PORT:-$(aarnn_find_free_port 50075)}"
-BRAIN_ID="${BRAIN_ID:-node_1}"
+BRAIN_ID="${BRAIN_ID:-cluster_master}"
+NODE_ID="${NODE_ID:-node_1}"
+ADVERTISE_ADDR="${ADVERTISE_ADDR:-127.0.0.1:${GRPC_PORT}}"
 CONFIG_PATH="${CONFIG_PATH:-}"
 NETWORK_PATH="${NETWORK_PATH:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/outputs}"
@@ -21,8 +23,10 @@ mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
 
 RUN_ARGS=(
     --node
+    --node-id "${NODE_ID}"
     --brain-id "${BRAIN_ID}"
     --grpc-addr "0.0.0.0:${GRPC_PORT}"
+    --advertise-addr "${ADVERTISE_ADDR}"
     --orchestrator-addr "${ORCHESTRATOR_ADDR}"
 )
 PODMAN_ARGS=(
@@ -39,6 +43,7 @@ aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${CONFIG_PATH}" /app/runt
 aarnn_append_optional_file_mount PODMAN_ARGS RUN_ARGS "${NETWORK_PATH}" /app/runtime-network.json --network
 
 echo "Running node workload from ${IMAGE_REF}"
+echo "Node ID: ${NODE_ID}; hosted brain: ${BRAIN_ID}"
 echo "Node gRPC address: http://127.0.0.1:${GRPC_PORT}"
 echo "Connecting to orchestrator: ${ORCHESTRATOR_ADDR}"
 exec podman run "${PODMAN_ARGS[@]}" "${IMAGE_REF}" "${RUN_ARGS[@]}"

@@ -35,7 +35,7 @@ def main():
                   cargo=capture(['cargo', '--version']), node=capture(['node', '--version']),
                   browser_requested=args.browser, native_evidence='CPU mesh builder',
                   mobile='not exercised by this fixture lane; device evidence required separately', commands=[], fixture_digests={})
-    for name in ['qa/scenarios/MORPH-VIS-001.toml', 'qa/scenarios/MORPH-VIS-002.toml', 'config.json', 'qa/fixtures/morphology/anatomical-stability.json', 'scripts/qa/test_anatomical_render.cjs', 'src/engine.rs', 'src/runner.rs', 'src/ui.rs', 'src/ui/anatomy.rs', 'src/morphology.rs', 'src/morphology_contract.rs', 'web_ui/app.js']:
+    for name in ['qa/scenarios/MORPH-VIS-001.toml', 'qa/scenarios/MORPH-VIS-002.toml', 'qa/fixtures/visualization/complexity-policy-v1.json', 'config.json', 'qa/fixtures/morphology/anatomical-stability.json', 'scripts/qa/test_anatomical_render.cjs', 'src/engine.rs', 'src/runner.rs', 'src/ui.rs', 'src/ui/anatomy.rs', 'src/morphology.rs', 'src/morphology_contract.rs', 'src/visualization.rs', 'web_ui/app.js', 'web_ui/visualization-policy.js']:
         result['fixture_digests'][name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     commands = [(['cargo', 'test', '--locked', '--features', 'ui,engine_runtime,morpho', 'anatomy_', '--lib'], 300)]
     if args.sustained:

@@ -7617,6 +7617,20 @@ impl Runner {
     /// Increasing S appends new columns to `w_in` sparsely (subset of H_target),
     /// maintains histories, and rebuilds morphology maps if active.
     pub fn resize_sensory(&mut self, n_s_new: usize) {
+        self.resize_sensory_with_seed(n_s_new, None);
+    }
+
+    /// Resize sensory inputs with repeatable initial connections.
+    ///
+    /// Startup snapshot alignment uses this variant so every worker receives
+    /// the same appended input weights without changing the thread-local random
+    /// stream used by the running simulation.
+    pub fn resize_sensory_seeded(&mut self, n_s_new: usize, seed: u64) {
+        self.resize_sensory_with_seed(n_s_new, Some(seed));
+    }
+
+    fn resize_sensory_with_seed(&mut self, n_s_new: usize, seed: Option<u64>) {
+        let mut seeded_rng = seed.map(fastrand::Rng::with_seed);
         let (target_layer, _) = self.get_io_layers();
         // Ensure layer exists
         if target_layer >= self.net.num_hidden_layers {
@@ -7657,14 +7671,22 @@ impl Runner {
                 // Draw k positions
                 for s in 0..k_targets {
                     // random index in [s, h)
-                    let r = s + (fastrand::usize(..(h - s)));
+                    let offset = match seeded_rng.as_mut() {
+                        Some(rng) => rng.usize(..(h - s)),
+                        None => fastrand::usize(..(h - s)),
+                    };
+                    let r = s + offset;
                     idxs.swap(s, r);
                 }
                 // Initialize weights for the selected targets
                 for s in 0..k_targets {
                     let j = idxs[s];
                     if let Some(val) = new_cols.get_mut((j, i_add)) {
-                        *val = fastrand::f64() * 0.3 + 0.1;
+                        let sample = match seeded_rng.as_mut() {
+                            Some(rng) => rng.f64(),
+                            None => fastrand::f64(),
+                        };
+                        *val = sample * 0.3 + 0.1;
                     } else {
                         nm_log!("[warn] new_cols init out of bounds: ({}, {})", j, i_add);
                     }
@@ -7789,6 +7811,16 @@ impl Runner {
 
     /// Resize the number of output neurons at runtime.
     pub fn resize_output(&mut self, n_o_new: usize) {
+        self.resize_output_with_seed(n_o_new, None);
+    }
+
+    /// Resize output neurons with repeatable initial connections.
+    pub fn resize_output_seeded(&mut self, n_o_new: usize, seed: u64) {
+        self.resize_output_with_seed(n_o_new, Some(seed));
+    }
+
+    fn resize_output_with_seed(&mut self, n_o_new: usize, seed: Option<u64>) {
+        let mut seeded_rng = seed.map(fastrand::Rng::with_seed);
         let (_, target_layer) = self.get_io_layers();
         // Ensure layer exists
         if target_layer >= self.net.num_hidden_layers {
@@ -7820,12 +7852,20 @@ impl Runner {
                 }
                 let mut idxs: Vec<usize> = (0..h).collect();
                 for s in 0..k_targets {
-                    let r = s + (fastrand::usize(..(h - s)));
+                    let offset = match seeded_rng.as_mut() {
+                        Some(rng) => rng.usize(..(h - s)),
+                        None => fastrand::usize(..(h - s)),
+                    };
+                    let r = s + offset;
                     idxs.swap(s, r);
                 }
                 for s in 0..k_targets {
                     let j = idxs[s];
-                    new_rows[(i_add, j)] = fastrand::f64() * 0.3 + 0.1;
+                    let sample = match seeded_rng.as_mut() {
+                        Some(rng) => rng.f64(),
+                        None => fastrand::f64(),
+                    };
+                    new_rows[(i_add, j)] = sample * 0.3 + 0.1;
                     if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
                         nm_log!(
                             "[trace] synapse made: hidden {}:{} -> output {} - initialized on output resize",

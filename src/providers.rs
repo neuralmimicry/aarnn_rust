@@ -324,7 +324,10 @@ impl SensoryProvider for ThetaProvider {
 #[cfg(feature = "ui")]
 pub struct BandMapper {
     bands: usize,
-    // mapping: for each band b, a range (start,end) of sensory indices [start, end)
+    sensory_neurons: usize,
+    // For each source band b, the selected sensory range [start, end).
+    // Multiple bands deliberately share a sensory neuron when input capacity
+    // is narrower than the audio feature vector.
     ranges: Vec<(usize, usize)>,
 }
 
@@ -333,26 +336,58 @@ impl BandMapper {
     pub fn new(num_sensory_neurons_target: usize, bands: usize) -> Self {
         let bands = bands.max(1);
         let mut ranges = Vec::with_capacity(bands);
-        let per = (num_sensory_neurons_target as f32) / (bands as f32);
-        let mut start = 0usize;
         for b in 0..bands {
-            let mut end = (((b + 1) as f32) * per).round() as usize;
-            if b == bands - 1 {
-                end = num_sensory_neurons_target;
+            if num_sensory_neurons_target == 0 {
+                ranges.push((0, 0));
+                continue;
             }
-            if end < start {
-                end = start;
+
+            // Integer partitioning avoids empty source-band ranges when a
+            // deliberately small network has fewer sensory neurons than
+            // audio features. In that case adjacent bands select the same
+            // available neuron; the rate encoder combines them without
+            // resizing the network or changing its synaptic topology.
+            let start = ((b as u128 * num_sensory_neurons_target as u128) / bands as u128) as usize;
+            let mut end =
+                (((b + 1) as u128 * num_sensory_neurons_target as u128) / bands as u128) as usize;
+            if end == start {
+                end = start.saturating_add(1).min(num_sensory_neurons_target);
             }
             ranges.push((start, end));
-            start = end;
         }
-        Self { bands, ranges }
+        Self {
+            bands,
+            sensory_neurons: num_sensory_neurons_target,
+            ranges,
+        }
     }
     pub fn set_n_s(&mut self, n_s: usize) {
         *self = Self::new(n_s, self.bands);
     }
     pub fn ranges(&self) -> &[(usize, usize)] {
         &self.ranges
+    }
+
+    /// Select the strongest mapped source-band activity for each available
+    /// sensory input. When there are fewer inputs than source bands, this
+    /// deterministic projection preserves a useful signal without inventing
+    /// neurons or leaving any source band unmapped.
+    fn selected_activity_into(&self, band_activity: &[f32], sensory_activity: &mut [f32]) {
+        sensory_activity.fill(0.0);
+        let sensory_neurons = self.sensory_neurons.min(sensory_activity.len());
+        for (band, &(start, end)) in self.ranges.iter().enumerate() {
+            let activity = band_activity
+                .get(band)
+                .copied()
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            let start = start.min(sensory_neurons);
+            let end = end.min(sensory_neurons);
+            for target in &mut sensory_activity[start..end] {
+                *target = target.max(activity);
+            }
+        }
     }
 }
 
@@ -371,6 +406,7 @@ pub struct AudioFileProvider {
     bands: usize,
     last_bands: Vec<f32>,
     mapper: BandMapper,
+    sensory_activity: Vec<f32>,
 }
 
 #[cfg(feature = "ui")]
@@ -490,6 +526,7 @@ impl AudioFileProvider {
         let bands = (num_sensory_neurons as f32).sqrt().round().max(8.0) as usize; // heuristic
         let last_bands = vec![0.0f32; bands];
         let mapper = BandMapper::new(num_sensory_neurons, bands);
+        let sensory_activity = vec![0.0f32; num_sensory_neurons];
 
         Ok(Self {
             num_sensory_neurons,
@@ -505,6 +542,7 @@ impl AudioFileProvider {
             bands,
             last_bands,
             mapper,
+            sensory_activity,
         })
     }
 
@@ -588,14 +626,16 @@ impl SensoryProvider for AudioFileProvider {
         self.compute_bands(&win);
         let frame_index = self.frame_index;
         self.frame_index = self.frame_index.wrapping_add(1);
-        // Convert bands to spikes across sensory ranges
+        // Select from the source features available to each sensory neuron.
+        // A small network may map several bands to one neuron; the strongest
+        // mapped band keeps that one input informative enough to bootstrap.
+        self.mapper
+            .selected_activity_into(&self.last_bands, &mut self.sensory_activity);
         let mut out = vec![0i8; self.num_sensory_neurons];
-        for (b, &(start, end)) in self.mapper.ranges().iter().enumerate() {
-            let p = (self.last_bands[b] * 0.8).min(0.95);
-            for i in start..end {
-                if deterministic_unit(frame_index, i) < p {
-                    out[i] = 1;
-                }
+        for (index, &activity) in self.sensory_activity.iter().enumerate() {
+            let probability = (activity * 0.8).min(0.95);
+            if deterministic_unit(frame_index, index) < probability {
+                out[index] = 1;
             }
         }
         out
@@ -612,6 +652,7 @@ impl SensoryProvider for AudioFileProvider {
         }
         self.num_sensory_neurons = n_s;
         self.mapper.set_n_s(n_s);
+        self.sensory_activity.resize(n_s, 0.0);
     }
 }
 
@@ -700,6 +741,7 @@ pub struct MicrophoneProvider {
     bands: usize,
     last_bands: Vec<f32>,
     mapper: BandMapper,
+    sensory_activity: Vec<f32>,
 }
 
 #[cfg(feature = "ui")]
@@ -781,6 +823,7 @@ impl MicrophoneProvider {
         let bands = (num_sensory_neurons as f32).sqrt().round().max(8.0) as usize;
         let last_bands = vec![0.0f32; bands];
         let mapper = BandMapper::new(num_sensory_neurons, bands);
+        let sensory_activity = vec![0.0f32; num_sensory_neurons];
 
         let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(win * 8)));
         let cap_limit = win * 8;
@@ -971,6 +1014,7 @@ impl MicrophoneProvider {
             bands,
             last_bands,
             mapper,
+            sensory_activity,
         })
     }
 
@@ -1050,13 +1094,13 @@ impl SensoryProvider for MicrophoneProvider {
             return vec![0i8; self.num_sensory_neurons];
         }
         self.compute_bands(&win);
+        self.mapper
+            .selected_activity_into(&self.last_bands, &mut self.sensory_activity);
         let mut out = vec![0i8; self.num_sensory_neurons];
-        for (b, &(start, end)) in self.mapper.ranges().iter().enumerate() {
-            let p = (self.last_bands[b] * 0.8).min(0.95);
-            for i in start..end {
-                if fastrand::f32() < p {
-                    out[i] = 1;
-                }
+        for (index, &activity) in self.sensory_activity.iter().enumerate() {
+            let probability = (activity * 0.8).min(0.95);
+            if fastrand::f32() < probability {
+                out[index] = 1;
             }
         }
         out
@@ -1070,6 +1114,7 @@ impl SensoryProvider for MicrophoneProvider {
     fn set_num_sensory_neurons(&mut self, n_s: usize) {
         self.num_sensory_neurons = n_s;
         self.mapper.set_n_s(n_s);
+        self.sensory_activity.resize(n_s, 0.0);
     }
 }
 
@@ -1902,8 +1947,8 @@ mod tests {
     #[cfg(feature = "webcam_input")]
     use super::decode_webcam_rgb_frame;
     use super::{
-        AudioFileProvider, CombinedVideoAudioProvider, SensoryProvider, list_microphone_devices,
-        new_video_preview_store, publish_video_preview,
+        AudioFileProvider, BandMapper, CombinedVideoAudioProvider, SensoryProvider,
+        list_microphone_devices, new_video_preview_store, publish_video_preview,
     };
     use std::io::Write;
     use std::path::PathBuf;
@@ -2049,6 +2094,94 @@ mod tests {
         );
         assert!(saw_spike, "non-silent audio must drive sensory spikes");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn audio_band_mapper_covers_all_features_with_a_small_sensory_layer() {
+        for sensory_count in [1, 2, 3, 4, 7, 8, 9, 64] {
+            let mapper = BandMapper::new(sensory_count, 8);
+            let mut sensory_coverage = vec![0usize; sensory_count];
+            assert_eq!(mapper.ranges().len(), 8);
+            for &(start, end) in mapper.ranges() {
+                assert!(start < end, "a source band must reach a sensory neuron");
+                assert!(end <= sensory_count);
+                for coverage in &mut sensory_coverage[start..end] {
+                    *coverage += 1;
+                }
+            }
+            assert!(
+                sensory_coverage.iter().all(|count| *count > 0),
+                "all {sensory_count} available sensory neurons must receive source features"
+            );
+        }
+
+        assert_eq!(BandMapper::new(1, 8).ranges(), &[(0, 1); 8]);
+        assert_eq!(
+            BandMapper::new(3, 8).ranges(),
+            &[
+                (0, 1),
+                (0, 1),
+                (0, 1),
+                (1, 2),
+                (1, 2),
+                (1, 2),
+                (2, 3),
+                (2, 3)
+            ]
+        );
+
+        let single_input = BandMapper::new(1, 8);
+        for active_band in 0..8 {
+            let mut source_activity = [0.0f32; 8];
+            let mut selected_activity = [0.0f32; 1];
+            source_activity[active_band] = 1.0;
+            single_input.selected_activity_into(&source_activity, &mut selected_activity);
+            assert_eq!(selected_activity, [1.0]);
+        }
+        let mut selected_activity = [0.0f32; 1];
+        single_input.selected_activity_into(&[f32::NAN; 8], &mut selected_activity);
+        assert_eq!(
+            selected_activity,
+            [0.0],
+            "non-finite source activity must not enter the sensory vector"
+        );
+    }
+
+    #[test]
+    fn one_sensory_neuron_receives_audio_activity_across_the_spectrum() {
+        for (name, frequency_hz) in [("low-tone", 100.0f32), ("high-tone", 3_500.0f32)] {
+            let samples: Vec<i16> = (0..8_192)
+                .map(|index| {
+                    let phase = index as f32 * std::f32::consts::TAU * frequency_hz / 8_000.0;
+                    (phase.sin() * i16::MAX as f32 * 0.7) as i16
+                })
+                .collect();
+            let path = temp_wav(name, &samples);
+            // Exercise the same remapping performed when a managed route is
+            // activated after the provider has already been loaded locally.
+            let mut first = AudioFileProvider::from_path(&path, 64).expect("decode audio source");
+            let mut replay = AudioFileProvider::from_path(&path, 64).expect("reopen audio source");
+            first.set_num_sensory_neurons(1);
+            replay.set_num_sensory_neurons(1);
+            let mut saw_activity = false;
+
+            for _ in 0..32 {
+                let spikes = first.next_spikes();
+                assert_eq!(
+                    spikes,
+                    replay.next_spikes(),
+                    "file input must remain repeatable"
+                );
+                assert_eq!(spikes.len(), 1);
+                saw_activity |= spikes[0] != 0;
+            }
+
+            assert!(
+                saw_activity,
+                "the single available input must receive the {name} feature"
+            );
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

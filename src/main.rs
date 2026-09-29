@@ -39,6 +39,11 @@ mod engine;
 mod federation;
 mod field_events;
 mod fpaa;
+// The executable and library both compile the shared UI source under their own
+// crate roots. Keep its presentation and FPV modules available here as well as
+// in `lib.rs` so desktop UI types resolve in the example launcher build.
+#[cfg(feature = "ui")]
+mod fpv_render_jobs;
 mod ga;
 mod generated_management;
 #[cfg(feature = "opencl")]
@@ -103,6 +108,8 @@ mod topology;
 mod topology_model;
 #[cfg(feature = "ui")]
 mod ui;
+#[cfg(feature = "ui")]
+mod visualization;
 #[cfg(feature = "viz")]
 mod viz;
 
@@ -1270,6 +1277,88 @@ fn apply_io_contract(target: &mut NetworkConfig, contract: &NetworkConfig) -> bo
         changed = true;
     }
     changed
+}
+
+/// Resize an imported startup snapshot so its matrices and runtime state match
+/// the already-validated I/O contract before the orchestrator distributes it.
+/// The returned payload is byte-for-byte unchanged when no I/O alignment is
+/// needed, which avoids needless snapshot churn on ordinary launches.
+fn align_startup_snapshot_io(
+    snapshot_json: &str,
+    target_config: &NetworkConfig,
+    neuron_model: sim::NeuronModel,
+    learning: sim::Learning,
+) -> anyhow::Result<String> {
+    let decoded = crate::runner::decode_snapshot_with_profile_backfill(snapshot_json)?;
+    let original_sensory = decoded.net.num_sensory_neurons;
+    let original_output = decoded.net.num_output_neurons;
+    let requested_sensory = target_config.num_sensory_neurons;
+    let requested_output = target_config.num_output_neurons;
+    let io_metadata_matches = decoded.net.sensory_target_layer
+        == target_config.sensory_target_layer
+        && decoded.net.output_source_layer == target_config.output_source_layer
+        && decoded.net.spike_io == target_config.spike_io;
+    if decoded.net.num_sensory_neurons == requested_sensory
+        && decoded.net.num_output_neurons == requested_output
+        && io_metadata_matches
+    {
+        return Ok(snapshot_json.to_owned());
+    }
+
+    // Snapshot seeds are stable across workers. Older snapshots may not carry
+    // one, so derive a deterministic fallback from their bytes rather than
+    // consuming or reseeding the process-wide random stream.
+    let snapshot_seed = decoded.rng_seed;
+    let seed = snapshot_seed.unwrap_or_else(|| stable_snapshot_seed(snapshot_json));
+    let mut runner = crate::runner::Runner::new(
+        LIFParams::default(),
+        STDPParams::default(),
+        decoded.net,
+        neuron_model,
+        learning,
+    );
+    if snapshot_seed.is_none() {
+        // Import may reset runtime arrays before restoring the optional seed.
+        // Seed first so even a legacy snapshot without `rng_seed` stays stable.
+        runner.rng.seed(seed);
+    }
+    runner.import_network_json(snapshot_json)?;
+
+    // Apply the routing metadata first. The resize methods then use the
+    // selected biological I/O layers while retaining the snapshot's topology.
+    let mut aligned_config = runner.net.clone();
+    aligned_config.sensory_target_layer = target_config.sensory_target_layer;
+    aligned_config.output_source_layer = target_config.output_source_layer;
+    aligned_config.spike_io = target_config.spike_io.clone();
+    runner.apply_config(aligned_config);
+
+    if runner.net.num_sensory_neurons != requested_sensory {
+        runner.resize_sensory_seeded(requested_sensory, seed ^ 0x5345_4E53_4F52_5901);
+    }
+    if runner.net.num_output_neurons != requested_output {
+        runner.resize_output_seeded(requested_output, seed ^ 0x4F55_5450_5554_0001);
+    }
+
+    anyhow::ensure!(
+        runner.net.num_sensory_neurons == requested_sensory
+            && runner.net.num_output_neurons == requested_output,
+        "startup snapshot I/O resize did not reach configured dimensions (sensory {}->{}, output {}->{})",
+        original_sensory,
+        requested_sensory,
+        original_output,
+        requested_output
+    );
+    runner.export_network_json()
+}
+
+/// Stable non-cryptographic fallback for legacy snapshots without `rng_seed`.
+fn stable_snapshot_seed(snapshot_json: &str) -> u64 {
+    snapshot_json
+        .as_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
 }
 
 fn build_orchestrator_startup_networks(
@@ -3007,6 +3096,34 @@ fn main() -> anyhow::Result<()> {
         remote_workspace_binding = Some(binding);
     }
 
+    // A positive I/O contract can change the in-memory config after a snapshot
+    // has been loaded. Align the actual matrices and persisted runtime arrays
+    // before either the orchestrator advertises or workers import that payload.
+    if let Some(snapshot_json) = startup_snapshot_json.as_deref() {
+        let neuron_model = match args.neuron_model {
+            NeuronModel::Lif => sim::NeuronModel::Lif,
+            NeuronModel::Izh => {
+                sim::NeuronModel::Izh(IzhikevichParams::from_preset(&args.izh_type, 1.0))
+            }
+            NeuronModel::Aarnn => sim::NeuronModel::Aarnn,
+        };
+        let learning = match args.learning {
+            LearningRule::Stdp => sim::Learning::Stdp,
+            LearningRule::Hebb => sim::Learning::Hebb,
+            LearningRule::Oja => sim::Learning::Oja,
+            LearningRule::Aarnn => sim::Learning::Aarnn,
+        };
+        let aligned = align_startup_snapshot_io(snapshot_json, &net_cfg, neuron_model, learning)?;
+        if aligned != snapshot_json {
+            nm_log!(
+                "[info] Startup snapshot I/O aligned before distribution: sensory={} output={}",
+                net_cfg.num_sensory_neurons,
+                net_cfg.num_output_neurons
+            );
+            startup_snapshot_json = Some(aligned);
+        }
+    }
+
     let fpaa_status = crate::fpaa::startup_probe(&net_cfg.fpaa);
     if args.fpaa_print_status || args.fpaa_status_only {
         print_json_pretty(&fpaa_status)?;
@@ -4336,53 +4453,41 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         "NM_DURABLE_SHARD_ROOT requires the replicated_durability feature"
                     ));
                 }
-                let mut managed_network = ManagedNetwork {
-                    id: args.brain_id.clone(),
+                let autostart_enabled = distributed_autostart_enabled();
+                let mut managed_network = ManagedNetwork::new(
+                    args.brain_id.clone(),
                     runner,
-                    shard_runtime: None,
-                    #[cfg(feature = "stable_executor_live")]
-                    stable_executor: None,
-                    #[cfg(feature = "replicated_durability")]
-                    durable_owner,
-                    #[cfg(feature = "superdense_executor")]
-                    superdense: superdense::SuperdenseController::new(),
-                    assigned_layers,
-                    redundant_layers: Vec::new(),
-                    remote_spikes_fwd: std::collections::HashMap::new(),
-                    remote_spikes_bwd: std::collections::HashMap::new(),
-                    remote_spike_steps_fwd: std::collections::HashMap::new(),
-                    remote_spike_steps_bwd: std::collections::HashMap::new(),
-                    external_sensory_spikes: None,
-                    avg_step_time_ms: 0.0,
-                    desired_aarnn_depth: desired_depth,
-                    playing: false,
-                    initial_config,
-                    initial_model: model,
-                    initial_learning: learning,
-                    initial_lif: lif,
-                    initial_stdp: stdp,
-                    last_config_fingerprint: preload_config_fingerprint,
-                    workspace_binding,
-                };
+                    initial_config.clone(),
+                    model,
+                    learning,
+                    lif.clone(),
+                    stdp.clone(),
+                );
+                managed_network.assigned_layers = assigned_layers;
+                managed_network.desired_aarnn_depth = desired_depth;
+                managed_network.playing = initial_managed_network_playing(autostart_enabled, false);
+                managed_network.initial_config = initial_config;
+                managed_network.initial_lif = lif;
+                managed_network.initial_stdp = stdp;
+                managed_network.last_config_fingerprint = preload_config_fingerprint;
+                managed_network.workspace_binding = workspace_binding;
+                #[cfg(feature = "replicated_durability")]
+                {
+                    managed_network.durable_owner = durable_owner;
+                }
                 #[cfg(feature = "stable_executor_live")]
                 if let Some(runtime) = stable_runtime.take() {
                     managed_network
                         .register_stable_executor(runtime)
                         .map_err(|error| anyhow::anyhow!(error))?;
-                    managed_network.playing = true;
+                    managed_network.playing =
+                        initial_managed_network_playing(autostart_enabled, true);
                     nm_log!(
                         "[startup] stable runtime bootstrapped for local network {}; legacy Runner is projection-only",
                         args.brain_id
                     );
                 }
-                #[cfg(not(feature = "stable_executor_live"))]
-                {
-                    managed_network.playing = crate::distributed::distributed_autostart_enabled();
-                }
-                state.networks.insert(
-                    args.brain_id.clone(),
-                    std::sync::Arc::new(tokio::sync::RwLock::new(managed_network)),
-                );
+                state.insert_managed_network(args.brain_id.clone(), managed_network);
             }
         }
     }
@@ -4980,17 +5085,28 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                         state.peer_last_seen.insert(node_id, now);
                                     }
                                 }
-                                if !resp.network_peers.is_empty() {
-                                    state.network_peers = resp
-                                        .network_peers
-                                        .drain()
-                                        .map(|(k, v)| (k, v.node_ids))
-                                        .collect();
+                                let mut network_peers = std::collections::HashMap::new();
+                                let mut network_sensory_ingress_node =
+                                    std::collections::HashMap::new();
+                                for (network_id, route) in resp.network_peers.drain() {
+                                    if !route.sensory_ingress_node_id.is_empty() {
+                                        network_sensory_ingress_node.insert(
+                                            network_id.clone(),
+                                            route.sensory_ingress_node_id,
+                                        );
+                                    }
+                                    network_peers.insert(network_id, route.node_ids);
                                 }
+                                state.network_peers = network_peers;
+                                state.network_sensory_ingress_node = network_sensory_ingress_node;
                                 state.prune_peer_maps(
                                     std::time::Instant::now(),
                                     crate::distributed::PEER_STALE_AFTER,
                                 );
+                            } else {
+                                let mut state = node_inner.state.write().await;
+                                state.network_peers.clear();
+                                state.network_sensory_ingress_node.clear();
                             }
                             let commands = resp.commands;
                             for cmd in commands {
@@ -5107,6 +5223,13 @@ fn management_enabled_from_env(value: Option<&str>) -> bool {
     }
 }
 
+/// Resolve a worker's initial run state independently of its Cargo feature
+/// profile. A registered stable runtime is ready to run; otherwise the normal
+/// distributed autostart policy applies to the compatibility Runner.
+fn initial_managed_network_playing(autostart_enabled: bool, stable_runtime_ready: bool) -> bool {
+    autostart_enabled || stable_runtime_ready
+}
+
 #[cfg(any(feature = "management_v1", test))]
 fn exposes_management_service(is_orchestrator: bool) -> bool {
     is_orchestrator
@@ -5116,8 +5239,8 @@ fn exposes_management_service(is_orchestrator: bool) -> bool {
 #[cfg(test)]
 mod management_startup_tests {
     use super::{
-        Cli, apply_io_contract, exposes_management_service, management_enabled_from_env,
-        normalize_ui_mode,
+        Cli, apply_io_contract, exposes_management_service, initial_managed_network_playing,
+        management_enabled_from_env, normalize_ui_mode,
     };
     use crate::config::NetworkConfig;
     use clap::Parser;
@@ -5160,6 +5283,13 @@ mod management_startup_tests {
     }
 
     #[test]
+    fn worker_autostart_is_independent_of_stable_executor_feature_presence() {
+        assert!(initial_managed_network_playing(true, false));
+        assert!(!initial_managed_network_playing(false, false));
+        assert!(initial_managed_network_playing(false, true));
+    }
+
+    #[test]
     fn zero_io_contract_dimensions_do_not_resize_an_explicit_snapshot() {
         let mut snapshot_cfg = NetworkConfig {
             num_sensory_neurons: 8,
@@ -5189,6 +5319,126 @@ mod management_startup_tests {
         assert!(apply_io_contract(&mut snapshot_cfg, &contract));
         assert_eq!(snapshot_cfg.num_sensory_neurons, 4);
         assert_eq!(snapshot_cfg.num_output_neurons, 12);
+    }
+}
+
+#[cfg(test)]
+mod startup_snapshot_io_tests {
+    use super::{align_startup_snapshot_io, stable_snapshot_seed};
+    use crate::config::{LIFParams, NetworkConfig, STDPParams};
+    use crate::runner::{Runner, decode_snapshot_with_profile_backfill};
+    use crate::sim;
+
+    fn zero_width_snapshot() -> String {
+        let config = NetworkConfig {
+            num_sensory_neurons: 0,
+            num_hidden_layers: 1,
+            num_hidden_per_layer_initial: 8,
+            num_output_neurons: 2,
+            growth_enabled: false,
+            use_morphology: false,
+            ..NetworkConfig::default()
+        };
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            config,
+            sim::NeuronModel::Lif,
+            sim::Learning::Stdp,
+        );
+        runner.rng.seed(0xA0D1_0C0F_2026);
+        runner.export_network_json().expect("export test snapshot")
+    }
+
+    #[test]
+    fn startup_snapshot_dimensions_and_runtime_state_match_io_contract() {
+        let source = zero_width_snapshot();
+        let target = NetworkConfig {
+            num_sensory_neurons: 4,
+            num_output_neurons: 3,
+            ..NetworkConfig::default()
+        };
+
+        let first =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .expect("align first copy");
+        let second =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .expect("align second copy");
+        assert_eq!(first, second, "resized snapshots must be reproducible");
+
+        let snapshot = decode_snapshot_with_profile_backfill(&first).expect("decode aligned data");
+        assert_eq!(snapshot.net.num_sensory_neurons, 4);
+        assert_eq!(snapshot.net.num_output_neurons, 3);
+        assert_eq!((snapshot.w_in.rows, snapshot.w_in.cols), (8, 4));
+        assert_eq!((snapshot.w_out.rows, snapshot.w_out.cols), (3, 8));
+        let input_presence = snapshot.p_in.expect("input presence matrix is retained");
+        assert_eq!((input_presence.rows, input_presence.cols), (8, 4));
+
+        let runtime = snapshot.runtime_state.expect("runtime state is retained");
+        assert_eq!(runtime.x_pre_in.len(), 4);
+        assert_eq!(runtime.pred_s.len(), 4);
+        assert!(runtime.spk_hist_s.iter().all(|frame| frame.len() == 4));
+        assert_eq!(runtime.v_o.len(), 3);
+    }
+
+    #[test]
+    fn aligned_positive_snapshot_is_returned_without_rewriting() {
+        let source_runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            NetworkConfig {
+                num_sensory_neurons: 2,
+                num_hidden_layers: 1,
+                num_hidden_per_layer_initial: 8,
+                num_output_neurons: 2,
+                growth_enabled: false,
+                use_morphology: false,
+                ..NetworkConfig::default()
+            },
+            sim::NeuronModel::Lif,
+            sim::Learning::Stdp,
+        );
+        let source = source_runner
+            .export_network_json()
+            .expect("export snapshot");
+        let target = decode_snapshot_with_profile_backfill(&source)
+            .expect("decode source")
+            .net;
+
+        let aligned =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .expect("preserve matching snapshot");
+
+        assert_eq!(aligned, source);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_rng_seed_gets_a_stable_alignment_seed() {
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&zero_width_snapshot()).expect("parse test snapshot");
+        legacy["rng_seed"] = serde_json::Value::Null;
+        let source = serde_json::to_string(&legacy).expect("serialise legacy snapshot");
+        let target = NetworkConfig {
+            num_sensory_neurons: 4,
+            num_output_neurons: 2,
+            num_hidden_layers: 1,
+            num_hidden_per_layer_initial: 8,
+            growth_enabled: false,
+            use_morphology: false,
+            ..NetworkConfig::default()
+        };
+
+        let first =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .expect("align first legacy copy");
+        let second =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .expect("align second legacy copy");
+
+        assert_eq!(first, second);
+        let aligned = decode_snapshot_with_profile_backfill(&first).expect("decode aligned data");
+        assert_eq!(aligned.rng_seed, Some(stable_snapshot_seed(&source)));
     }
 }
 

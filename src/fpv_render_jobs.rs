@@ -6,8 +6,11 @@
 //! Rendering reads only the captured display/activity projection and never
 //! steps or mutates the live network.
 
-use crate::morphology_contract::{AnatomicalId, DisplaySnapshot, Vec3};
+use crate::morphology_contract::{AnatomicalId, DisplayRole, DisplaySnapshot, Vec3};
 use crate::shared_fs::{atomic_write, read_json_if_exists, try_acquire_lease, write_json_pretty};
+use crate::visualization::{
+    VISUALIZATION_POLICY_VERSION, VisualizationStage, automatic_target, highest_supported_stage,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,10 +60,28 @@ pub struct FpvRenderRequest {
     pub zoom: f64,
     #[serde(default = "default_true")]
     pub focus_active_regions: bool,
+    /// Manual or automatic detail selected independently at each route point.
+    #[serde(default)]
+    pub visualization_keyframes: Vec<FpvVisualizationKeyframe>,
+    /// Resolver version captured so resumed workers remain reproducible.
+    #[serde(default = "default_visualization_policy_version")]
+    pub visualization_policy_version: u16,
+    /// Planner-side p95 visualisation cost, captured so all render workers
+    /// resolve automatic stages identically regardless of worker load/order.
+    #[serde(default = "default_auto_visualization_latency_ms")]
+    pub auto_visualization_latency_ms: f64,
     /// Optional isolated playback. The snapshot is removed from the render
     /// manifest and persisted separately when the job is created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<FpvReplaySpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FpvVisualizationKeyframe {
+    pub waypoint_id: AnatomicalId,
+    pub automatic: bool,
+    pub stage: u8,
+    pub zoom: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +134,12 @@ fn default_frame_count() -> u32 {
 fn default_zoom() -> f64 {
     1.0
 }
+fn default_auto_visualization_latency_ms() -> f64 {
+    16.0
+}
+fn default_visualization_policy_version() -> u16 {
+    VISUALIZATION_POLICY_VERSION
+}
 fn default_true() -> bool {
     true
 }
@@ -160,6 +187,12 @@ pub struct FpvRenderJobStatus {
     pub replay_frames_total: u32,
     #[serde(default)]
     pub replay_frames_completed: u32,
+    /// Immutable effective complexity stage for each rendered frame.
+    #[serde(default)]
+    pub visualization_stage_track: Vec<u8>,
+    /// Resolver version used to produce the per-frame stage track.
+    #[serde(default)]
+    pub visualization_policy_version: u16,
 }
 
 #[derive(Debug, Error)]
@@ -184,6 +217,12 @@ impl FpvRenderRequest {
     }
 
     fn validate_inner(&self, require_replay_snapshot: bool) -> Result<(), FpvRenderError> {
+        if self.visualization_policy_version != VISUALIZATION_POLICY_VERSION {
+            return Err(FpvRenderError::Invalid(format!(
+                "unsupported visualisation policy version {}",
+                self.visualization_policy_version
+            )));
+        }
         if self.schema_version != FPV_RENDER_JOB_SCHEMA_VERSION {
             return Err(FpvRenderError::Invalid(format!(
                 "unsupported FPV job schema version {}",
@@ -249,6 +288,31 @@ impl FpvRenderRequest {
             return Err(FpvRenderError::Invalid(
                 "camera zoom must be finite and within 0.2..=4.0".to_owned(),
             ));
+        }
+        if !self.auto_visualization_latency_ms.is_finite()
+            || !(0.0..=10_000.0).contains(&self.auto_visualization_latency_ms)
+        {
+            return Err(FpvRenderError::Invalid(
+                "automatic visualisation latency must be finite and bounded".to_owned(),
+            ));
+        }
+        if !self.visualization_keyframes.is_empty()
+            && self.visualization_keyframes.len() != self.waypoint_ids.len()
+        {
+            return Err(FpvRenderError::Invalid(
+                "visualisation keyframes must align with camera waypoints".to_owned(),
+            ));
+        }
+        for (index, keyframe) in self.visualization_keyframes.iter().enumerate() {
+            if keyframe.waypoint_id != self.waypoint_ids[index]
+                || VisualizationStage::from_number(keyframe.stage).is_none()
+                || !keyframe.zoom.is_finite()
+                || !(0.2..=4.0).contains(&keyframe.zoom)
+            {
+                return Err(FpvRenderError::Invalid(
+                    "visualisation keyframe identity, stage or zoom is invalid".to_owned(),
+                ));
+            }
         }
         let nodes = self
             .scene
@@ -615,6 +679,8 @@ pub fn submit_job(
             0
         },
         replay_frames_completed: 0,
+        visualization_stage_track: visualization_stage_track(&request),
+        visualization_policy_version: request.visualization_policy_version,
     };
     write_json_pretty(&path.join("request.json"), &request)
         .map_err(|error| FpvRenderError::Storage(error.to_string()))?;
@@ -1249,12 +1315,99 @@ struct ProjectedPoint {
     depth: f64,
 }
 
+fn visualization_stage_track(request: &FpvRenderRequest) -> Vec<u8> {
+    (0..request.frame_count)
+        .map(|frame| visualization_for_frame(request, frame).0)
+        .collect()
+}
+
+/// Resolve a route frame solely from the immutable request. Actual worker
+/// timing is deliberately excluded, so parallel claims render the same image.
+fn visualization_for_frame(request: &FpvRenderRequest, frame_index: u32) -> (u8, f64) {
+    let highest = highest_supported_stage(None, Some(&request.scene))
+        .unwrap_or(VisualizationStage::SyntheticPixels);
+    let route_length = request.waypoint_ids.len().max(2);
+    let progress = if request.frame_count <= 1 {
+        0.0
+    } else {
+        f64::from(frame_index.min(request.frame_count - 1)) / f64::from(request.frame_count - 1)
+    };
+    let route_position = progress * (route_length - 1) as f64;
+    let index = (route_position.floor() as usize).min(route_length - 2);
+    let local = route_position - index as f64;
+    let resolve = |keyframe: Option<&FpvVisualizationKeyframe>| {
+        let Some(keyframe) = keyframe else {
+            return (VisualizationStage::AnatomicalContacts, request.zoom);
+        };
+        let requested = VisualizationStage::from_number(keyframe.stage)
+            .unwrap_or(VisualizationStage::AnatomicalContacts);
+        let stage = if keyframe.automatic {
+            automatic_target(
+                keyframe.zoom,
+                request.auto_visualization_latency_ms,
+                highest,
+            )
+        } else {
+            requested.min(highest)
+        };
+        (stage, keyframe.zoom)
+    };
+    let (left_stage, left_zoom) = resolve(request.visualization_keyframes.get(index));
+    let (right_stage, right_zoom) = resolve(request.visualization_keyframes.get(index + 1));
+    let interpolated = f64::from(left_stage.number())
+        + (f64::from(right_stage.number()) - f64::from(left_stage.number())) * local;
+    let stage = (interpolated.round() as u8).clamp(1, highest.number());
+    let zoom = (left_zoom + (right_zoom - left_zoom) * local).clamp(0.2, 4.0);
+    (stage, zoom)
+}
+
+fn synthetic_column_positions(scene: &DisplaySnapshot) -> BTreeMap<AnatomicalId, Vec3> {
+    let hidden_layers = scene
+        .nodes
+        .iter()
+        .filter(|node| node.role == DisplayRole::Hidden)
+        .filter_map(|node| node.layer)
+        .max()
+        .map_or(0, |layer| layer + 1);
+    let output_column = hidden_layers + 1;
+    let columns = output_column + 1;
+    let column_for = |node: &crate::morphology_contract::DisplayNode| match node.role {
+        DisplayRole::Sensory => 0,
+        DisplayRole::Hidden => node.layer.unwrap_or(0).min(hidden_layers.saturating_sub(1)) + 1,
+        DisplayRole::Output | DisplayRole::Unassigned => output_column,
+    };
+    let mut rank = BTreeMap::<usize, usize>::new();
+    let mut counts = BTreeMap::<usize, usize>::new();
+    for node in &scene.nodes {
+        *counts.entry(column_for(node)).or_default() += 1;
+    }
+    scene
+        .nodes
+        .iter()
+        .map(|node| {
+            let column = column_for(node);
+            let row = rank.entry(column).or_default();
+            let centred = *row as f64 - (counts[&column].saturating_sub(1) as f64 * 0.5);
+            *row += 1;
+            (
+                node.id,
+                Vec3 {
+                    x: column as f64 - (columns.saturating_sub(1) as f64 * 0.5),
+                    y: -centred * 0.04,
+                    z: 0.0,
+                },
+            )
+        })
+        .collect()
+}
+
 fn render_frame_ppm(
     request: &FpvRenderRequest,
     frame_index: u32,
 ) -> Result<Vec<u8>, FpvRenderError> {
     let width = request.width as usize;
     let height = request.height as usize;
+    let (visualization_stage, camera_zoom) = visualization_for_frame(request, frame_index);
     let pixels = width
         .checked_mul(height)
         .and_then(|count| count.checked_mul(3))
@@ -1264,12 +1417,16 @@ fn render_frame_ppm(
         .map_err(|error| FpvRenderError::Render(format!("frame allocation failed: {error}")))?;
     rgb.resize(pixels, 8);
 
-    let node_positions = request
-        .scene
-        .nodes
-        .iter()
-        .map(|node| (node.id, node.position_mm))
-        .collect::<BTreeMap<_, _>>();
+    let node_positions = if visualization_stage <= 3 {
+        synthetic_column_positions(&request.scene)
+    } else {
+        request
+            .scene
+            .nodes
+            .iter()
+            .map(|node| (node.id, node.position_mm))
+            .collect::<BTreeMap<_, _>>()
+    };
     let waypoints = request
         .waypoint_ids
         .iter()
@@ -1321,7 +1478,7 @@ fn render_frame_ppm(
     for position in node_positions.values() {
         extent = extent.max(length(sub(*position, target)));
     }
-    let distance = (extent / request.zoom).max(0.05);
+    let distance = (extent / camera_zoom).max(0.05);
     let focal = height as f64 * 0.72;
     let camera = add(
         sub(target, scale(forward, distance)),
@@ -1341,23 +1498,61 @@ fn render_frame_ppm(
         .iter()
         .filter_map(|(id, point)| project(*point).map(|screen| (*id, screen)))
         .collect::<BTreeMap<_, _>>();
+    let display_nodes = request
+        .scene
+        .nodes
+        .iter()
+        .map(|node| (node.id, node))
+        .collect::<BTreeMap<_, _>>();
 
-    for edge in &request.scene.edges {
-        let points = if edge.points_mm.len() >= 2 {
-            edge.points_mm.as_slice()
-        } else {
-            continue;
-        };
-        for segment in points.windows(2) {
-            if let (Some(from), Some(to)) = (project(segment[0]), project(segment[1])) {
-                draw_line(&mut rgb, width, height, from, to, [28, 67, 90]);
+    if (2..=6).contains(&visualization_stage) {
+        let mut used_sources = BTreeSet::new();
+        let mut used_targets = BTreeSet::new();
+        for edge in &request.scene.edges {
+            if !node_positions.contains_key(&edge.source)
+                || !node_positions.contains_key(&edge.target)
+            {
+                continue;
             }
+            if visualization_stage == 5
+                && (!used_sources.insert(edge.source) || !used_targets.insert(edge.target))
+            {
+                continue;
+            }
+            let (Some(from), Some(to)) = (
+                project(node_positions[&edge.source]),
+                project(node_positions[&edge.target]),
+            ) else {
+                continue;
+            };
+            draw_line(&mut rgb, width, height, from, to, [28, 67, 90], 1);
         }
     }
-    for path in &request.scene.paths {
-        for segment in path.points_mm.windows(2) {
-            if let (Some(from), Some(to)) = (project(segment[0]), project(segment[1])) {
-                draw_line(&mut rgb, width, height, from, to, [24, 59, 76]);
+    if visualization_stage >= 7 && request.scene.coverage.volumetric_clearance_verified {
+        for path in &request.scene.paths {
+            for segment in path.points_mm.windows(2) {
+                if let (Some(from), Some(to)) = (project(segment[0]), project(segment[1])) {
+                    let stroke = if visualization_stage >= 8 {
+                        let depth = (from.depth + to.depth) * 0.5;
+                        2.0 * path.radius_mm * focal / depth.max(1.0e-9)
+                    } else {
+                        1.0
+                    };
+                    // Keep perspective-scaled physical diameters inside the
+                    // frame budget; centre-line positions remain the exact
+                    // committed 3D samples in either case.
+                    let bounded_stroke =
+                        stroke.round().clamp(1.0, width.min(height).max(1) as f64) as i32;
+                    draw_line(
+                        &mut rgb,
+                        width,
+                        height,
+                        from,
+                        to,
+                        [24, 59, 76],
+                        bounded_stroke,
+                    );
+                }
             }
         }
     }
@@ -1367,9 +1562,24 @@ fn render_frame_ppm(
     for (id, point) in ordered_nodes {
         let is_active = active.contains(&id);
         let colour = if is_active {
-            [255, 130, 54]
+            [255, 255, 255]
         } else {
-            [91, 164, 198]
+            [45, 92, 118]
+        };
+        let radius = if visualization_stage == 3 {
+            1
+        } else if visualization_stage >= 8 && request.scene.coverage.volumetric_clearance_verified {
+            display_nodes
+                .get(&id)
+                .and_then(|node| node.soma_radius_mm)
+                .map(|radius_mm| {
+                    (radius_mm * focal / point.depth.max(1.0e-9))
+                        .round()
+                        .clamp(0.0, width.min(height).max(1) as f64) as i32
+                })
+                .unwrap_or(0)
+        } else {
+            0
         };
         draw_disc(
             &mut rgb,
@@ -1377,9 +1587,24 @@ fn render_frame_ppm(
             height,
             point.x.round() as i32,
             point.y.round() as i32,
-            if is_active { 5 } else { 2 },
+            radius,
             colour,
         );
+    }
+    if visualization_stage >= 9 && request.scene.coverage.volumetric_clearance_verified {
+        for marker in &request.scene.markers {
+            if let Some(point) = project(marker.position_mm) {
+                draw_disc(
+                    &mut rgb,
+                    width,
+                    height,
+                    point.x.round() as i32,
+                    point.y.round() as i32,
+                    2,
+                    [255, 220, 130],
+                );
+            }
+        }
     }
     let header = format!("P6\n{} {}\n255\n", request.width, request.height);
     let mut ppm = Vec::new();
@@ -1417,6 +1642,7 @@ fn draw_line(
     from: ProjectedPoint,
     to: ProjectedPoint,
     colour: [u8; 3],
+    stroke_width: i32,
 ) {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
@@ -1426,12 +1652,13 @@ fn draw_line(
     }
     for step in 0..=steps {
         let t = step as f64 / steps as f64;
-        put_pixel(
+        draw_disc(
             rgb,
             width,
             height,
             (from.x + dx * t).round() as i32,
             (from.y + dy * t).round() as i32,
+            stroke_width.saturating_sub(1) / 2,
             colour,
         );
     }
@@ -1536,6 +1763,7 @@ mod tests {
             coverage: DisplayCoverage {
                 complete: true,
                 truncated: false,
+                volumetric_clearance_verified: false,
                 unavailable_reason: None,
                 region: None,
                 membrane: Some(DisplayMembrane {
@@ -1562,6 +1790,7 @@ mod tests {
                         z: 0.0,
                     },
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: Some(0.05),
                     colour_slot: 0,
                 },
                 DisplayNode {
@@ -1574,6 +1803,7 @@ mod tests {
                         z: 0.0,
                     },
                     kind: AnatomicalKind::Soma,
+                    soma_radius_mm: Some(0.05),
                     colour_slot: 1,
                 },
             ],
@@ -1619,6 +1849,9 @@ mod tests {
             frame_count: 3,
             zoom: 1.0,
             focus_active_regions: true,
+            visualization_keyframes: Vec::new(),
+            visualization_policy_version: VISUALIZATION_POLICY_VERSION,
+            auto_visualization_latency_ms: 16.0,
             replay: None,
         }
     }
@@ -1634,6 +1867,111 @@ mod tests {
     }
 
     #[test]
+    fn waypoint_stages_interpolate_deterministically_and_clamp_to_snapshot_geometry() {
+        let mut request = request();
+        request.visualization_keyframes = request
+            .waypoint_ids
+            .iter()
+            .enumerate()
+            .map(|(index, waypoint_id)| FpvVisualizationKeyframe {
+                waypoint_id: *waypoint_id,
+                automatic: false,
+                stage: if index == 0 { 1 } else { 9 },
+                zoom: 1.0,
+            })
+            .collect();
+        assert_eq!(visualization_stage_track(&request), vec![1, 4, 6]);
+
+        // The stage-eight/nine ceiling is available only when the immutable
+        // scene carries physical radii and a producer clearance witness.
+        request.scene.coverage.volumetric_clearance_verified = true;
+        request
+            .scene
+            .paths
+            .push(crate::morphology_contract::DisplayPath {
+                id: AnatomicalId::new(3, 1).unwrap(),
+                owner: request.scene.nodes[0].id,
+                kind: crate::morphology_contract::AnatomicalKind::Axon,
+                points_mm: vec![
+                    Vec3 {
+                        x: -1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    Vec3 {
+                        x: 0.0,
+                        y: 0.25,
+                        z: 0.0,
+                    },
+                    Vec3 {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                ],
+                radius_mm: 0.02,
+            });
+        request
+            .scene
+            .markers
+            .push(crate::morphology_contract::DisplayMarker {
+                id: AnatomicalId::new(4, 1).unwrap(),
+                owner: request.scene.nodes[0].id,
+                kind: crate::morphology_contract::AnatomicalKind::Synapse,
+                position_mm: Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                synapse_id: None,
+            });
+        request.visualization_keyframes[1].stage = 9;
+        assert_eq!(visualization_stage_track(&request), vec![1, 5, 9]);
+    }
+
+    #[test]
+    fn automatic_waypoints_use_captured_zoom_and_latency_not_worker_timing() {
+        let mut request = request();
+        request.visualization_keyframes = request
+            .waypoint_ids
+            .iter()
+            .map(|waypoint_id| FpvVisualizationKeyframe {
+                waypoint_id: *waypoint_id,
+                automatic: true,
+                stage: 9,
+                zoom: 4.0,
+            })
+            .collect();
+        request.auto_visualization_latency_ms = 90.0;
+        assert_eq!(visualization_stage_track(&request), vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn stage_filtered_frame_renders_hide_connections_at_the_simplest_level() {
+        let mut request = request();
+        request.visualization_keyframes = request
+            .waypoint_ids
+            .iter()
+            .map(|waypoint_id| FpvVisualizationKeyframe {
+                waypoint_id: *waypoint_id,
+                automatic: false,
+                stage: 1,
+                zoom: 1.0,
+            })
+            .collect();
+        let simple = render_frame_ppm(&request, 1).unwrap();
+        request
+            .visualization_keyframes
+            .iter_mut()
+            .for_each(|keyframe| keyframe.stage = 6);
+        let connected = render_frame_ppm(&request, 1).unwrap();
+        assert_ne!(
+            simple, connected,
+            "stage 1 must omit graph connections drawn at stage 6"
+        );
+    }
+
+    #[test]
     fn request_rejects_unbounded_projection_and_foreign_waypoints() {
         let mut request = request();
         request.schema_version = FPV_RENDER_JOB_SCHEMA_VERSION + 1;
@@ -1644,6 +1982,27 @@ mod tests {
         request.waypoint_ids[0] = request.scene.nodes[0].id;
         request.frame_count = FPV_RENDER_MAX_FRAMES + 1;
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn visualization_policy_version_is_captured_and_unknown_versions_fail_closed() {
+        let mut invalid_request = request();
+        invalid_request.visualization_policy_version += 1;
+        assert!(matches!(
+            invalid_request.validate(),
+            Err(FpvRenderError::Invalid(message)) if message.contains("unsupported visualisation policy version")
+        ));
+
+        let mut stored = serde_json::to_value(request()).unwrap();
+        stored
+            .as_object_mut()
+            .unwrap()
+            .remove("visualization_policy_version");
+        let restored: FpvRenderRequest = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            restored.visualization_policy_version,
+            VISUALIZATION_POLICY_VERSION
+        );
     }
 
     #[test]
@@ -1737,6 +2096,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aarnn-fpv-test-{}", now_ms()));
         let job = submit_job(&root, "alice", request()).unwrap();
         assert_eq!(job.state, FpvRenderState::Queued);
+        assert_eq!(
+            job.visualization_policy_version,
+            VISUALIZATION_POLICY_VERSION
+        );
+        assert_eq!(job.visualization_stage_track, vec![6, 6, 6]);
         assert_eq!(list_jobs(&root, "alice").unwrap(), vec![job.clone()]);
         assert!(list_jobs(&root, "bob").unwrap().is_empty());
         assert!(get_job_status(&root, &job.job_id, "bob").is_err());

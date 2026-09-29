@@ -106,6 +106,20 @@ impl Frame {
         self.origin + egui::vec2(dot(d, self.x) as f32, dot(d, self.y) as f32)
     }
 
+    /// Project a physical sphere radius into pixels using the current camera
+    /// matrix's largest singular value. This preserves the 3D soma scale under
+    /// yaw and pitch instead of assigning a renderer-specific glyph size.
+    pub fn screen_radius(&self, radius_mm: f64) -> f32 {
+        if !radius_mm.is_finite() || radius_mm <= 0.0 {
+            return 0.0;
+        }
+        let xx = dot(self.x, self.x);
+        let xy = dot(self.x, self.y);
+        let yy = dot(self.y, self.y);
+        let discriminant = ((xx - yy).powi(2) + 4.0 * xy * xy).max(0.0).sqrt();
+        (radius_mm * ((xx + yy + discriminant) * 0.5).sqrt()) as f32
+    }
+
     pub fn cloud(&self, painter: &egui::Painter) {
         if self.boundary.len() < 3 {
             return;
@@ -313,6 +327,7 @@ mod tests {
                     z: 0.0,
                 },
                 kind: AnatomicalKind::Soma,
+                soma_radius_mm: None,
                 colour_slot: 1,
             }],
             vec![],

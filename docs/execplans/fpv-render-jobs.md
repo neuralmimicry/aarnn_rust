@@ -35,6 +35,10 @@ continues its normal distributed execution throughout capture and rendering.
 - UI traffic and inter-worker transfer use bounded chunks. Total snapshot or
   artifact size has no 64 MiB protocol ceiling; storage and process allocation
   failures are reported as job failures with resumable progress.
+- The shared nine-stage visualisation selector is available while planning a
+  route. Each camera waypoint stores either a manual stage or `Auto`; immutable
+  jobs resolve those keyframes per frame and publish the selected-stage track
+  with the MP4 metadata. FPV geometry remains a read-only projection.
 
 ## Implementation Checklist
 
@@ -66,6 +70,13 @@ continues its normal distributed execution throughout capture and rendering.
   MP4 publication, retry, and storage bounds are covered.
 - [x] Add Rust CLI commands (`fpv jobs`, `fpv status`, `fpv cancel`, `fpv retry`)
   against the same authenticated API used by the UI clients.
+- [x] Carry manual/automatic per-waypoint visualisation stages through Rust,
+  web and Android planners into the persistent render request; test deterministic
+  route interpolation and stage-filtered frame output. Rust tests cover
+  immutable zoom/latency-based Auto selection and per-frame stage tracks,
+  including policy-version persistence and rejection of unknown versions; the
+  shared browser fixture checks stage and label parity; Android unit tests and
+  Kotlin compilation pass.
 
 ## Current Status
 
@@ -77,6 +88,11 @@ selection currently scans the source layer arrays, so a spatial index is still
 needed to keep tile lookup latency low for billion-neuron networks. Optional
 replay uses timestamped sensory events on a separately imported snapshot; file
 decoders for raw video/audio/AER formats remain outside this worker contract.
+VIS-12 waypoint settings and the policy version are captured in the durable
+request and resolved into an immutable per-frame stage track. Validation covers
+route interpolation, stage-filtered frame output and fail-closed version
+handling. Android tests pass on Java 21 with the installed SDK; this client
+boundary has no iOS FPV planner.
 
 CLI examples (the token and API URL can instead be supplied with
 `NM_AARNN_ACCESS_TOKEN` and `NM_AARNN_API_URL`):

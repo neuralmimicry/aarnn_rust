@@ -155,6 +155,8 @@ pub mod stimuli;
 #[cfg(feature = "superdense_executor")]
 /// Feature-gated local superdense adapter for the legacy biological kernel.
 pub mod superdense;
+/// Shared presentation-only visualisation stages and adaptive detail policy.
+pub mod visualization;
 
 #[cfg(feature = "robot_io")]
 /// Bridge for interfacing with external robotic systems or simulators (e.g., Webots).

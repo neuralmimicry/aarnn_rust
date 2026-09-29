@@ -138,6 +138,12 @@ pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
 pub const EXTERNAL_SENSORY_LAYER_INDEX: u32 = u32::MAX;
 /// Bound externally admitted sensory frames before they reach a worker queue.
 const MAX_EXTERNAL_SENSORY_SPIKES: usize = 16 * 1024 * 1024;
+const SENSORY_INPUT_FRAME_SCHEMA_VERSION: u32 = 1;
+const EXTERNAL_SENSORY_RESERVATION_TTL: Duration = Duration::from_secs(5);
+const EXTERNAL_SENSORY_INGRESS_TIMEOUT: Duration = Duration::from_secs(8);
+/// Retry one idempotent preparation when a busy worker delays its acknowledgement.
+const EXTERNAL_SENSORY_PREPARE_ATTEMPTS: u8 = 2;
+const EXTERNAL_SENSORY_PREPARE_RETRY_DELAY: Duration = Duration::from_millis(10);
 /// Default timeout budget for burst-mode spike forwarding fallback.
 const DEFAULT_SPIKE_BURST_TIMEOUT_MS: u64 = 120;
 /// Timeout budget for short-lived gRPC connections used by burst forwarding.
@@ -152,6 +158,13 @@ const MAX_PENDING_COMMANDS_PER_NODE: usize = 64;
 /// heartbeat indefinitely. The result is diagnostic data, never executable
 /// input.
 const MAX_COMMAND_RESULT_ERROR_BYTES: usize = 2048;
+
+fn sensory_prepare_status_is_retryable(code: tonic::Code) -> bool {
+    matches!(
+        code,
+        tonic::Code::Cancelled | tonic::Code::DeadlineExceeded | tonic::Code::Unavailable
+    )
+}
 
 fn stable_registration_to_proto(
     registration: StableWorkerRegistration,
@@ -1996,6 +2009,18 @@ const MAX_CAUSAL_INGRESS_SPIKES: usize = 16 * 1024 * 1024;
 const MAX_CAUSAL_INGRESS_BYTES: usize = 64 * 1024 * 1024;
 
 fn capture_channel_state(net: &ManagedNetwork) -> ManagedChannelState {
+    capture_channel_state_excluding(net, None)
+}
+
+fn capture_channel_state_excluding(
+    net: &ManagedNetwork,
+    consumed_sensory: Option<&ExternalSensoryFrameIdentity>,
+) -> ManagedChannelState {
+    let queued_sensory = lock_external_sensory_ingress(&net.external_sensory_ingress)
+        .committed
+        .as_ref()
+        .filter(|frame| Some(&frame.identity) != consumed_sensory)
+        .map(|frame| frame.spikes.clone());
     ManagedChannelState {
         remote_spikes_fwd: net
             .remote_spikes_fwd
@@ -2017,7 +2042,7 @@ fn capture_channel_state(net: &ManagedNetwork) -> ManagedChannelState {
             .iter()
             .map(|(key, value)| (*key, *value))
             .collect(),
-        external_sensory_spikes: net.external_sensory_spikes.clone(),
+        external_sensory_spikes: net.external_sensory_spikes.clone().or(queued_sensory),
     }
 }
 
@@ -2032,6 +2057,14 @@ fn restore_channel_state(net: &mut ManagedNetwork, state: ManagedChannelState) {
 
 fn local_channel_state_json(net: &ManagedNetwork) -> Result<String, String> {
     serde_json::to_string(&capture_channel_state(net)).map_err(|error| error.to_string())
+}
+
+fn local_channel_state_json_after_sensory_step(
+    net: &ManagedNetwork,
+    consumed_sensory: Option<&ExternalSensoryFrameIdentity>,
+) -> Result<String, String> {
+    serde_json::to_string(&capture_channel_state_excluding(net, consumed_sensory))
+        .map_err(|error| error.to_string())
 }
 
 fn local_shard_snapshot(net: &ManagedNetwork) -> Result<(String, String, u64, u64), String> {
@@ -3715,6 +3748,285 @@ fn prioritize_ipc_node(
 }
 
 /// Represents a partial or whole neural network running on this node.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExternalSensoryFrameIdentity {
+    network_id: String,
+    source_node_id: String,
+    session_id: String,
+    sequence: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CommittedExternalSensoryFrame {
+    identity: ExternalSensoryFrameIdentity,
+    spikes: Vec<i8>,
+}
+
+pub(crate) struct PendingExternalSensoryFrame {
+    identity: ExternalSensoryFrameIdentity,
+    spikes: Vec<i8>,
+    reserved_at: std::time::Instant,
+}
+
+/// Short-lived ingress state shared by the RPC handler and simulation worker.
+/// Its mutex protects only metadata and one bounded frame; biological stepping
+/// never holds it, so a long Runner step cannot starve frame preparation.
+struct ExternalSensoryIngress {
+    sensory_width: usize,
+    sensory_target_layer: u32,
+    assigned_layers: Vec<u32>,
+    playing: bool,
+    pending: Option<PendingExternalSensoryFrame>,
+    committed: Option<CommittedExternalSensoryFrame>,
+    last_committed: Option<ExternalSensoryFrameIdentity>,
+    last_committed_digest: Option<[u8; 32]>,
+    legacy_slot_pending: bool,
+}
+
+type ExternalSensoryIngressHandle = Arc<std::sync::Mutex<ExternalSensoryIngress>>;
+
+impl ExternalSensoryIngress {
+    fn new(
+        sensory_width: usize,
+        sensory_target_layer: u32,
+        assigned_layers: Vec<u32>,
+        playing: bool,
+        legacy_slot_pending: bool,
+    ) -> Self {
+        Self {
+            sensory_width,
+            sensory_target_layer,
+            assigned_layers,
+            playing,
+            pending: None,
+            committed: None,
+            last_committed: None,
+            last_committed_digest: None,
+            legacy_slot_pending,
+        }
+    }
+
+    fn sync_network_metadata(&mut self, net: &ManagedNetwork) {
+        self.sensory_width = net.runner.net.num_sensory_neurons;
+        self.sensory_target_layer = net.runner.net.sensory_target_layer.unwrap_or(0) as u32;
+        self.assigned_layers = net.assigned_layers.clone();
+        self.playing = net.playing;
+    }
+}
+
+fn lock_external_sensory_ingress(
+    ingress: &ExternalSensoryIngressHandle,
+) -> std::sync::MutexGuard<'_, ExternalSensoryIngress> {
+    // Recover the small metadata mailbox after an unrelated task panic. The
+    // state remains bounded and every operation validates its frame identity.
+    ingress
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Prepare one frame synchronously while holding only the ingress mailbox.
+/// `None` means the one-frame slot is still occupied and the caller may wait
+/// without retaining a mutex guard across an async suspension.
+fn try_prepare_external_sensory_frame(
+    ingress: &ExternalSensoryIngressHandle,
+    identity: &ExternalSensoryFrameIdentity,
+    spikes: &[i8],
+    wire_spikes: &[u8],
+) -> Result<Option<bool>, Status> {
+    let mut state = lock_external_sensory_ingress(ingress);
+    if !state.playing {
+        return Err(Status::failed_precondition("managed network is paused"));
+    }
+    if !state.assigned_layers.is_empty()
+        && !state.assigned_layers.contains(&state.sensory_target_layer)
+    {
+        return Err(Status::permission_denied(format!(
+            "worker does not own sensory target layer {}",
+            state.sensory_target_layer
+        )));
+    }
+    if spikes.len() != state.sensory_width {
+        return Err(Status::invalid_argument(format!(
+            "external sensory width {} does not match network width {}",
+            spikes.len(),
+            state.sensory_width
+        )));
+    }
+    if state.last_committed.as_ref() == Some(identity) {
+        if state.last_committed_digest != Some(external_sensory_spike_digest(wire_spikes)) {
+            return Err(Status::invalid_argument(
+                "a sensory frame sequence was reused with different spike values",
+            ));
+        }
+        return Ok(Some(true));
+    }
+    if state.last_committed.as_ref().is_some_and(|last| {
+        last.source_node_id == identity.source_node_id
+            && last.session_id == identity.session_id
+            && identity.sequence < last.sequence
+    }) {
+        return Err(Status::failed_precondition(
+            "external sensory frame sequence is stale",
+        ));
+    }
+
+    let now = std::time::Instant::now();
+    if state.pending.as_ref().is_some_and(|pending| {
+        now.duration_since(pending.reserved_at) > EXTERNAL_SENSORY_RESERVATION_TTL
+    }) {
+        state.pending = None;
+    }
+    if let Some(pending) = state.pending.as_ref() {
+        if pending.identity == *identity {
+            if pending.spikes != spikes {
+                return Err(Status::invalid_argument(
+                    "a sensory frame sequence was reused with different spike values",
+                ));
+            }
+            return Ok(Some(false));
+        }
+        return Ok(None);
+    }
+    if state.committed.is_some() || state.legacy_slot_pending {
+        return Ok(None);
+    }
+
+    state.pending = Some(PendingExternalSensoryFrame {
+        identity: identity.clone(),
+        spikes: spikes.to_vec(),
+        reserved_at: now,
+    });
+    Ok(Some(false))
+}
+
+fn external_sensory_identity(frame: &proto::SensoryInputFrame) -> ExternalSensoryFrameIdentity {
+    ExternalSensoryFrameIdentity {
+        network_id: frame.network_id.clone(),
+        source_node_id: frame.source_node_id.clone(),
+        session_id: frame.session_id.clone(),
+        sequence: frame.frame_sequence,
+    }
+}
+
+fn sensory_frame_id(identity: &ExternalSensoryFrameIdentity) -> proto::SensoryInputFrameId {
+    proto::SensoryInputFrameId {
+        schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+        network_id: identity.network_id.clone(),
+        source_node_id: identity.source_node_id.clone(),
+        session_id: identity.session_id.clone(),
+        frame_sequence: identity.sequence,
+    }
+}
+
+fn validate_sensory_frame_id(frame_id: &proto::SensoryInputFrameId) -> Result<(), Status> {
+    if frame_id.schema_version != SENSORY_INPUT_FRAME_SCHEMA_VERSION
+        || frame_id.network_id.trim().is_empty()
+        || frame_id.source_node_id.trim().is_empty()
+        || frame_id.session_id.trim().is_empty()
+        || frame_id.session_id.len() > 128
+    {
+        return Err(Status::invalid_argument(
+            "sensory frame identity fields are missing or exceed their bounds",
+        ));
+    }
+    Ok(())
+}
+
+fn external_sensory_spike_digest(spikes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(spikes).into()
+}
+
+fn external_sensory_i8_digest(spikes: &[i8]) -> [u8; 32] {
+    let encoded = spikes.iter().map(|spike| *spike as u8).collect::<Vec<_>>();
+    external_sensory_spike_digest(&encoded)
+}
+
+/// Resolve the single active owner of the configured sensory target layer.
+/// That owner is the cluster's sensory I/O bridge: input is admitted there and
+/// normal direct inter-node spike routes carry resulting activity onwards.
+/// Ambiguous ownership fails closed rather than duplicating input.
+fn resolve_external_sensory_ingress_owner(
+    distribution: &HashMap<String, proto::LayerRange>,
+    configured_target_layer: Option<u32>,
+) -> Result<Option<String>, String> {
+    let Some(target_layer) = configured_target_layer.or_else(|| {
+        distribution
+            .values()
+            .flat_map(|assignment| assignment.layers.iter().copied())
+            .min()
+    }) else {
+        return Ok(None);
+    };
+    let mut owners = distribution
+        .iter()
+        .filter(|(_, assignment)| assignment.layers.contains(&target_layer))
+        .map(|(node_id, _)| node_id.as_str());
+    let Some(owner) = owners.next() else {
+        return Err(format!(
+            "sensory target layer {target_layer} has no active I/O bridge owner"
+        ));
+    };
+    if owners.next().is_some() {
+        return Err(format!(
+            "sensory target layer {target_layer} has multiple active I/O bridge owners"
+        ));
+    }
+    Ok(Some(owner.to_owned()))
+}
+
+fn resolve_network_sensory_ingress_owner(
+    status: &proto::NetworkStatus,
+) -> Result<Option<String>, String> {
+    let configured_target_layer = network_config_from_payload(&status.config_json)
+        .and_then(|config| config.sensory_target_layer)
+        .and_then(|layer| u32::try_from(layer).ok());
+    resolve_external_sensory_ingress_owner(&status.distribution, configured_target_layer)
+}
+
+/// A placement-selected executor is ready for sensory ingress only after it
+/// has reported the network in a heartbeat. Peer connectivity and desired
+/// placement alone can precede the worker's asynchronous `LoadNetwork` apply.
+fn sensory_ingress_owner_is_ready(
+    state: &NodeState,
+    network_id: &str,
+    owner_node_id: &str,
+) -> bool {
+    if owner_node_id == state.node_id {
+        return state.networks.contains_key(network_id);
+    }
+    state.peers.contains_key(owner_node_id)
+        && state
+            .network_runtime_metrics
+            .get(network_id)
+            .is_some_and(|workers| workers.contains_key(owner_node_id))
+}
+
+fn validate_sensory_rpc_source<T>(
+    request: &Request<T>,
+    source_node_id: &str,
+) -> Result<(), Status> {
+    if source_node_id.trim().is_empty() {
+        return Err(Status::invalid_argument(
+            "sensory frame source node identity is required",
+        ));
+    }
+    if live_causal_transport_enabled() {
+        validate_live_request(request)?;
+        let authenticated_source = request
+            .metadata()
+            .get("x-aarnn-node-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if authenticated_source != source_node_id {
+            return Err(Status::permission_denied(
+                "sensory frame source does not match its authenticated node session",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub struct ManagedNetwork {
     pub id: String,
     pub runner: Runner,
@@ -3745,6 +4057,10 @@ pub struct ManagedNetwork {
     pub remote_spike_steps_bwd: HashMap<u32, i64>,
     /// Optional external sensory spikes to apply on the next step.
     pub external_sensory_spikes: Option<Vec<i8>>,
+    /// One bounded ingress mailbox is shared with RPC handlers. It stays
+    /// separate from the Runner lock so input admission remains responsive
+    /// while a biological step is running.
+    external_sensory_ingress: ExternalSensoryIngressHandle,
     pub avg_step_time_ms: f32,
     pub desired_aarnn_depth: u32,
     pub playing: bool,
@@ -3847,6 +4163,14 @@ impl ManagedNetwork {
         initial_lif: LIFParams,
         initial_stdp: STDPParams,
     ) -> Self {
+        let external_sensory_ingress =
+            Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+                runner.net.num_sensory_neurons,
+                runner.net.sensory_target_layer.unwrap_or(0) as u32,
+                Vec::new(),
+                false,
+                false,
+            )));
         Self {
             id,
             runner,
@@ -3864,6 +4188,7 @@ impl ManagedNetwork {
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
+            external_sensory_ingress,
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: initial_config.aarnn_layer_depth as u32,
             playing: false,
@@ -4029,7 +4354,7 @@ impl ManagedNetwork {
         sensory: Option<&[i8]>,
         previous_channel_state: ManagedChannelState,
     ) -> Result<crate::runner::StepOut, String> {
-        self.step_and_commit_durable_with_outbox(sensory, previous_channel_state, &[])
+        self.step_and_commit_durable_with_outbox(sensory, previous_channel_state, &[], None)
             .map(|(out, _)| out)
     }
 
@@ -4043,6 +4368,7 @@ impl ManagedNetwork {
         sensory: Option<&[i8]>,
         previous_channel_state: ManagedChannelState,
         outbox_peers: &[String],
+        consumed_sensory: Option<&ExternalSensoryFrameIdentity>,
     ) -> Result<(crate::runner::StepOut, Vec<SpikeBatch>), String> {
         #[cfg(feature = "stable_executor_live")]
         if self.stable_executor.is_some() {
@@ -4126,16 +4452,17 @@ impl ManagedNetwork {
                 return Err(error.to_string());
             }
         };
-        let channel_state = match local_channel_state_json(self) {
-            Ok(channel_state) => channel_state,
-            Err(error) => {
-                if let Some(previous_runner) = previous_runner.as_ref() {
-                    let _ = self.runner.import_network_json(previous_runner);
+        let channel_state =
+            match local_channel_state_json_after_sensory_step(self, consumed_sensory) {
+                Ok(channel_state) => channel_state,
+                Err(error) => {
+                    if let Some(previous_runner) = previous_runner.as_ref() {
+                        let _ = self.runner.import_network_json(previous_runner);
+                    }
+                    restore_channel_state(self, rollback_channel_state);
+                    return Err(error);
                 }
-                restore_channel_state(self, rollback_channel_state);
-                return Err(error);
-            }
-        };
+            };
         let owner = self
             .durable_owner
             .as_mut()
@@ -4351,6 +4678,9 @@ struct SpikeTransportStats {
 pub struct NodeState {
     pub node_id: String,
     pub networks: HashMap<String, Arc<RwLock<ManagedNetwork>>>,
+    /// Bounded input state is indexed separately so workers and clients do not
+    /// need to acquire a Runner lock merely to inspect or admit sensory data.
+    sensory_ingress_mailboxes: HashMap<String, ExternalSensoryIngressHandle>,
     /// Explicitly registered partial stable-shard workers. Registration is
     /// an embedding seam: discovery and placement observations never create
     /// an executor or grant it writer authority.
@@ -4361,6 +4691,10 @@ pub struct NodeState {
     pub workspace_bindings: HashMap<String, NetworkWorkspaceBinding>,
     pub peers: HashMap<String, String>, // node_id -> address
     pub network_peers: HashMap<String, Vec<String>>, // network_id -> node ids
+    /// Orchestrator-discovered direct I/O bridge for each cluster network.
+    /// The orchestrator supplies this route, while external frame payloads
+    /// travel directly to the selected bridge.
+    pub network_sensory_ingress_node: HashMap<String, String>,
     pub peer_last_seen: HashMap<String, std::time::Instant>,
     pub clients: HashMap<
         String,
@@ -4414,6 +4748,19 @@ pub struct NodeState {
 }
 
 impl NodeState {
+    /// Register a local managed brain together with its independently locked
+    /// sensory ingress metadata. Callers should use this instead of inserting
+    /// directly into `networks`, which would leave the dashboard and RPC
+    /// bridge without the brain's sensory contract.
+    pub fn insert_managed_network(&mut self, network_id: String, mut network: ManagedNetwork) {
+        lock_external_sensory_ingress(&network.external_sensory_ingress)
+            .sync_network_metadata(&network);
+        self.sensory_ingress_mailboxes
+            .insert(network_id.clone(), network.external_sensory_ingress.clone());
+        self.networks
+            .insert(network_id, Arc::new(RwLock::new(network)));
+    }
+
     pub fn prune_peer_maps(&mut self, now: std::time::Instant, ttl: Duration) {
         self.peer_last_seen
             .retain(|_, last| now.duration_since(*last) <= ttl);
@@ -4658,6 +5005,7 @@ struct WorkspaceAutosaveJob {
 
 struct NetworkWorkerHandles {
     network: Arc<RwLock<ManagedNetwork>>,
+    sensory_ingress: ExternalSensoryIngressHandle,
     worker: tokio::task::JoinHandle<()>,
     output: tokio::task::JoinHandle<()>,
     autosave: tokio::task::JoinHandle<()>,
@@ -4684,10 +5032,12 @@ impl DistributedNode {
             state: Arc::new(RwLock::new(NodeState {
                 node_id,
                 networks: HashMap::new(),
+                sensory_ingress_mailboxes: HashMap::new(),
                 partial_shard_runtimes: HashMap::new(),
                 workspace_bindings: load_workspace_bindings_from_env(),
                 peers: HashMap::new(),
                 network_peers: HashMap::new(),
+                network_sensory_ingress_node: HashMap::new(),
                 peer_last_seen: HashMap::new(),
                 clients: HashMap::new(),
                 _orchestrator_addr: None,
@@ -5621,85 +5971,565 @@ impl DistributedNode {
         .map_err(|status| status.to_string())
     }
 
-    /// Admit a bounded sensory frame from a governed UI/peripheral source.
-    ///
-    /// The frame is admitted at the orchestrator's current logical-step
-    /// boundary and then forwarded through the same `SpikeBatch` transport as
-    /// inter-shard activity.  The local slot is single-entry by design: when
-    /// the managed step has not consumed the previous frame, this method waits
-    /// with bounded backpressure instead of overwriting an admitted sample.
+    /// Return whether the selected cluster sensory I/O bridge is ready.
+    /// Assigned workers become ready only after their heartbeat reports the
+    /// network; `None` means the node-state lock is busy, so callers should
+    /// retain their last route decision in that case.
+    pub fn has_external_sensory_ingress(&self, network_id: &str) -> Option<bool> {
+        let state = self.state.try_read().ok()?;
+        if state.stable_network_ids.contains(network_id) {
+            return Some(false);
+        }
+        let local_network = state.networks.contains_key(network_id);
+        if !state.is_orchestrator {
+            if let Some(ingress_node_id) = state.network_sensory_ingress_node.get(network_id) {
+                return Some(if ingress_node_id == &state.node_id {
+                    local_network
+                } else {
+                    state.peers.contains_key(ingress_node_id)
+                });
+            }
+            // Older orchestrators do not publish bridge metadata. Permit a
+            // standalone/local network, but never mistake an arbitrary shard
+            // worker for the cluster's sensory bridge.
+            return Some(
+                local_network
+                    && state
+                        .network_peers
+                        .get(network_id)
+                        .is_none_or(|peers| peers.is_empty()),
+            );
+        }
+        let Some(status) = state.network_registry.get(network_id) else {
+            return Some(local_network);
+        };
+        if status.distribution.is_empty() {
+            return Some(local_network);
+        }
+        let ingress_node_id = match resolve_network_sensory_ingress_owner(status) {
+            Ok(Some(owner)) => owner,
+            Ok(None) | Err(_) => return Some(false),
+        };
+        Some(sensory_ingress_owner_is_ready(
+            &state,
+            network_id,
+            &ingress_node_id,
+        ))
+    }
+
+    /// Return the cached sensory width without reading the live Runner. Runner
+    /// steps may hold its lock for seconds while morphology evolves; the
+    /// ingress contract is stable between explicit network-load updates.
+    pub fn external_sensory_input_count(&self, network_id: &str) -> Option<usize> {
+        let state = self.state.try_read().ok()?;
+        if state.stable_network_ids.contains(network_id) {
+            return None;
+        }
+        let ingress = state.sensory_ingress_mailboxes.get(network_id)?.clone();
+        drop(state);
+        Some(lock_external_sensory_ingress(&ingress).sensory_width)
+    }
+
+    /// Return the placement-selected sensory I/O bridge for UI route status.
+    /// This exposes route metadata only; sensory payloads are sent directly to
+    /// the returned node rather than through an orchestrator RPC proxy.
+    pub fn external_sensory_ingress_node(&self, network_id: &str) -> Option<String> {
+        let state = self.state.try_read().ok()?;
+        if state.stable_network_ids.contains(network_id) {
+            return None;
+        }
+        if state.is_orchestrator {
+            let status = state.network_registry.get(network_id)?;
+            if status.distribution.is_empty() {
+                return state
+                    .networks
+                    .contains_key(network_id)
+                    .then(|| state.node_id.clone());
+            }
+            let owner = resolve_network_sensory_ingress_owner(status)
+                .ok()
+                .flatten()?;
+            return sensory_ingress_owner_is_ready(&state, network_id, &owner).then_some(owner);
+        }
+        state
+            .network_sensory_ingress_node
+            .get(network_id)
+            .cloned()
+            .or_else(|| {
+                (state.networks.contains_key(network_id)
+                    && state
+                        .network_peers
+                        .get(network_id)
+                        .is_none_or(|peers| peers.is_empty()))
+                .then(|| state.node_id.clone())
+            })
+    }
+
+    /// Admit one bounded external sensory frame at the cluster's first-layer
+    /// I/O bridge. The orchestrator resolves the bridge from placement and the
+    /// workstation sends frame payloads directly to that node; the cluster's
+    /// existing peer routes carry resulting neural activity onwards.
     pub async fn inject_external_sensory_spikes(
         &self,
         network_id: &str,
         step_index: i64,
         spikes: &[i8],
     ) -> Result<(), String> {
+        self.inject_external_sensory_frame(
+            network_id,
+            "direct-input",
+            step_index.max(0) as u64,
+            step_index,
+            spikes,
+        )
+        .await
+    }
+
+    pub async fn inject_external_sensory_frame(
+        &self,
+        network_id: &str,
+        session_id: &str,
+        frame_sequence: u64,
+        step_index: i64,
+        spikes: &[i8],
+    ) -> Result<(), String> {
         if network_id.trim().is_empty() {
             return Err("external sensory injection requires a network id".to_owned());
+        }
+        if session_id.trim().is_empty() || session_id.len() > 128 {
+            return Err("external sensory injection requires a bounded session id".to_owned());
         }
         if step_index < 0 {
             return Err("external sensory injection requires a non-negative step".to_owned());
         }
+        if frame_sequence != step_index as u64 {
+            return Err("external sensory frame sequence must match its source step".to_owned());
+        }
         if spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES {
             return Err("external sensory frame exceeds the configured spike bound".to_owned());
         }
+        if spikes.iter().any(|spike| !(-1..=1).contains(spike)) {
+            return Err("external sensory spikes must be -1, 0 or 1".to_owned());
+        }
 
-        let exchange = encode_exchange(step_index as u64, 0, spikes);
-        let batch = SpikeBatch {
+        if live_causal_transport_enabled() {
+            return Err(
+                "legacy sensory ingress is disabled by the authoritative causal profile".to_owned(),
+            );
+        }
+
+        let (source_node_id, local_ingress, targets) =
+            self.external_sensory_participants(network_id).await?;
+        let has_local_ingress = local_ingress.is_some();
+        let frame = proto::SensoryInputFrame {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
             network_id: network_id.to_owned(),
-            layer_index: EXTERNAL_SENSORY_LAYER_INDEX,
+            source_node_id,
+            session_id: session_id.to_owned(),
+            frame_sequence,
             step_index,
-            spike_indices: exchange.spike_indices,
-            is_backward: false,
-            aer_payload: exchange.aer_payload,
-            aer_base: exchange.aer_base,
+            spikes: spikes.iter().map(|spike| *spike as u8).collect(),
         };
+        let identity = external_sensory_identity(&frame);
 
-        loop {
-            let (network, is_orchestrator) = {
-                let state = self.state.read().await;
-                (
-                    state.networks.get(network_id).cloned(),
-                    state.is_orchestrator,
-                )
-            };
-            let Some(network) = network else {
-                return Err(format!("network {network_id} is not loaded on this node"));
-            };
+        // Prepare the selected bridge before commit. This two-phase boundary
+        // prevents a lost acknowledgement from replacing an unconsumed input.
+        if let Some(ingress) = local_ingress.as_ref() {
+            self.prepare_local_sensory_frame(ingress, &frame)
+                .await
+                .map_err(|status| status.to_string())?;
+        }
+        let preparation = if let Some((node_id, address)) = targets.first() {
+            self.prepare_remote_sensory_frame(node_id, address, frame.clone())
+                .await
+                .map_err(|error| format!("I/O bridge {node_id}: {error}"))
+        } else {
+            Ok(())
+        };
+        if let Err(error) = preparation {
+            self.abort_prepared_sensory_frame(&identity, has_local_ingress, &targets)
+                .await;
+            return Err(format!(
+                "sensory frame {} was not admitted: {error}",
+                frame.frame_sequence
+            ));
+        }
 
-            let mut net = network.write().await;
-            if !net.playing {
-                return Err(format!("network {network_id} is paused"));
+        // Commits are idempotent, so retry an ambiguous acknowledgement once.
+        // The bridge is the sole sensory owner for this frame. Keeping one
+        // direct RPC avoids making the orchestrator a payload fan-out hop.
+        let control = sensory_frame_id(&identity);
+        let local_commit = async {
+            if let Some(ingress) = local_ingress.as_ref() {
+                self.commit_local_sensory_frame(ingress, &identity)
+                    .await
+                    .map(|_| ())
+            } else {
+                Ok(())
             }
-            let sensory_len = net.runner.net.num_sensory_neurons;
-            if spikes.len() != sensory_len {
+        };
+        let remote_commit = async {
+            if let Some((node_id, address)) = targets.first() {
+                let first = self
+                    .commit_remote_sensory_frame(node_id, address, control.clone())
+                    .await;
+                if first.is_ok() {
+                    first
+                } else {
+                    self.commit_remote_sensory_frame(node_id, address, control.clone())
+                        .await
+                }
+            } else {
+                Ok(())
+            }
+        };
+        let (local_result, remote_result) = tokio::join!(local_commit, remote_commit);
+        local_result.map_err(|error| {
+            format!(
+                "sensory frame {} may be partially committed; local commit failed: {error}",
+                frame.frame_sequence
+            )
+        })?;
+        if let (Some((node_id, _)), Err(error)) = (targets.first(), remote_result) {
+            return Err(format!(
+                "sensory frame {} may be partially committed; I/O bridge {node_id}: {error}",
+                frame.frame_sequence
+            ));
+        }
+        Ok(())
+    }
+
+    async fn external_sensory_participants(
+        &self,
+        network_id: &str,
+    ) -> Result<
+        (
+            String,
+            Option<ExternalSensoryIngressHandle>,
+            Vec<(String, String)>,
+        ),
+        String,
+    > {
+        let state = self.state.read().await;
+        if state.stable_network_ids.contains(network_id) {
+            return Err(format!(
+                "network {network_id} uses stable sensory ingress, which is not exposed by the legacy UI route"
+            ));
+        }
+        let source_node_id = state.node_id.clone();
+        let local_network_candidate = state.networks.get(network_id).cloned();
+        let local_ingress_candidate = state.sensory_ingress_mailboxes.get(network_id).cloned();
+        let mut local_ingress = None;
+        let mut targets = Vec::new();
+        let bridge_node_id = if state.is_orchestrator {
+            match state.network_registry.get(network_id) {
+                Some(status) if status.distribution.is_empty() => local_network_candidate
+                    .as_ref()
+                    .map(|_| source_node_id.clone()),
+                Some(status) => resolve_network_sensory_ingress_owner(status)?,
+                None => local_network_candidate
+                    .as_ref()
+                    .map(|_| source_node_id.clone()),
+            }
+        } else {
+            state
+                .network_sensory_ingress_node
+                .get(network_id)
+                .cloned()
+                .or_else(|| {
+                    state
+                        .network_peers
+                        .get(network_id)
+                        .is_none_or(|peers| peers.is_empty())
+                        .then(|| source_node_id.clone())
+                })
+        };
+        let Some(bridge_node_id) = bridge_node_id else {
+            return Err(format!(
+                "network {network_id} has no published sensory I/O bridge"
+            ));
+        };
+        if bridge_node_id == source_node_id {
+            if local_network_candidate.is_none() || local_ingress_candidate.is_none() {
                 return Err(format!(
-                    "external sensory width {} does not match network width {}",
-                    spikes.len(),
-                    sensory_len
+                    "sensory I/O bridge {} has no local network or ingress mailbox for {network_id}",
+                    source_node_id
                 ));
             }
-            let decoded = spikes_from_transport(
-                &batch.aer_payload,
-                batch.aer_base,
-                &batch.spike_indices,
-                sensory_len,
-            )
-            .map_err(|error| format!("invalid external sensory frame: {error}"))?;
-            if net.external_sensory_spikes.is_some() {
-                drop(net);
-                tokio::time::sleep(Duration::from_millis(1)).await;
-                continue;
+            local_ingress = local_ingress_candidate;
+        } else {
+            let Some(address) = state.peers.get(&bridge_node_id) else {
+                return Err(format!(
+                    "sensory I/O bridge {bridge_node_id} for {network_id} is disconnected"
+                ));
+            };
+            if !sensory_ingress_owner_is_ready(&state, network_id, &bridge_node_id) {
+                return Err(format!(
+                    "sensory I/O bridge {bridge_node_id} has not reported network {network_id} as loaded"
+                ));
             }
-            net.external_sensory_spikes = Some(decoded);
-            drop(net);
-
-            if is_orchestrator {
-                self.send_spike_batches(network_id, std::slice::from_ref(&batch), None)
-                    .await;
-            }
-            return Ok(());
+            targets.push((bridge_node_id, address.clone()));
         }
+        drop(state);
+
+        if local_ingress.is_none() && targets.is_empty() {
+            return Err(format!(
+                "network {network_id} has no connected sensory ingress owner"
+            ));
+        }
+        Ok((source_node_id, local_ingress, targets))
+    }
+
+    async fn prepare_local_sensory_frame(
+        &self,
+        ingress: &ExternalSensoryIngressHandle,
+        frame: &proto::SensoryInputFrame,
+    ) -> Result<bool, Status> {
+        let identity = external_sensory_identity(frame);
+        let spikes = frame
+            .spikes
+            .iter()
+            .map(|spike| *spike as i8)
+            .collect::<Vec<_>>();
+        let deadline = tokio::time::Instant::now() + EXTERNAL_SENSORY_RESERVATION_TTL;
+        loop {
+            if let Some(already_applied) =
+                try_prepare_external_sensory_frame(ingress, &identity, &spikes, &frame.spikes)?
+            {
+                return Ok(already_applied);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(Status::deadline_exceeded(
+                    "timed out waiting for the preceding sensory frame to be consumed",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    async fn commit_local_sensory_frame(
+        &self,
+        ingress: &ExternalSensoryIngressHandle,
+        identity: &ExternalSensoryFrameIdentity,
+    ) -> Result<bool, Status> {
+        let mut state = lock_external_sensory_ingress(ingress);
+        if state.last_committed.as_ref() == Some(identity) {
+            return Ok(true);
+        }
+        let Some(pending) = state.pending.take() else {
+            return Err(Status::failed_precondition(
+                "sensory frame was not prepared",
+            ));
+        };
+        if &pending.identity != identity {
+            state.pending = Some(pending);
+            return Err(Status::failed_precondition(
+                "a different sensory frame owns the prepared slot",
+            ));
+        }
+        if state.legacy_slot_pending || state.committed.is_some() {
+            state.pending = Some(pending);
+            return Err(Status::resource_exhausted(
+                "the previous sensory frame has not been consumed",
+            ));
+        }
+        let digest = external_sensory_i8_digest(&pending.spikes);
+        state.last_committed_digest = Some(digest);
+        state.last_committed = Some(identity.clone());
+        state.committed = Some(CommittedExternalSensoryFrame {
+            identity: pending.identity,
+            spikes: pending.spikes,
+        });
+        Ok(false)
+    }
+
+    async fn abort_local_sensory_frame(
+        &self,
+        ingress: &ExternalSensoryIngressHandle,
+        identity: &ExternalSensoryFrameIdentity,
+    ) {
+        let mut ingress = lock_external_sensory_ingress(ingress);
+        if ingress
+            .pending
+            .as_ref()
+            .is_some_and(|pending| &pending.identity == identity)
+        {
+            ingress.pending = None;
+        }
+    }
+
+    fn local_sensory_ingress(&self, network_id: &str) -> Option<ExternalSensoryIngressHandle> {
+        self.state
+            .try_read()
+            .ok()?
+            .sensory_ingress_mailboxes
+            .get(network_id)
+            .cloned()
+    }
+
+    fn finish_local_sensory_step(
+        &self,
+        ingress: &ExternalSensoryIngressHandle,
+        identity: Option<&ExternalSensoryFrameIdentity>,
+        consumed_legacy_slot: bool,
+    ) {
+        let mut state = lock_external_sensory_ingress(ingress);
+        if let Some(identity) = identity
+            && state
+                .committed
+                .as_ref()
+                .is_some_and(|frame| &frame.identity == identity)
+        {
+            state.committed = None;
+        }
+        if consumed_legacy_slot {
+            state.legacy_slot_pending = false;
+        }
+    }
+
+    fn committed_sensory_frame(
+        ingress: &ExternalSensoryIngressHandle,
+    ) -> Option<CommittedExternalSensoryFrame> {
+        lock_external_sensory_ingress(ingress).committed.clone()
+    }
+
+    async fn prepare_remote_sensory_frame(
+        &self,
+        node_id: &str,
+        address: &str,
+        frame: proto::SensoryInputFrame,
+    ) -> Result<(), String> {
+        let cached_client = self.state.read().await.clients.get(node_id).cloned();
+        let mut client = match cached_client {
+            Some(client) => client,
+            None => connect_peer_with_timeout(address, EXTERNAL_SENSORY_INGRESS_TIMEOUT).await?,
+        };
+        let sender = self.state.read().await.node_id.clone();
+        let expected_sequence = frame.frame_sequence;
+        let mut retries = 0;
+        let response = loop {
+            let request = authenticated_request(frame.clone(), &sender)?;
+            match tokio::time::timeout(
+                EXTERNAL_SENSORY_INGRESS_TIMEOUT,
+                client.prepare_sensory_input(request),
+            )
+            .await
+            {
+                Ok(Ok(response)) => break response.into_inner(),
+                Ok(Err(status))
+                    if retries + 1 < EXTERNAL_SENSORY_PREPARE_ATTEMPTS
+                        && sensory_prepare_status_is_retryable(status.code()) =>
+                {
+                    retries += 1;
+                    nm_log!(
+                        "[distributed-input] retrying sensory prepare for {} frame {} after transient status {}",
+                        node_id,
+                        expected_sequence,
+                        status.code()
+                    );
+                    tokio::time::sleep(EXTERNAL_SENSORY_PREPARE_RETRY_DELAY).await;
+                }
+                Ok(Err(status)) => {
+                    return Err(format!("prepare request to {node_id} failed: {status}"));
+                }
+                Err(_) if retries + 1 < EXTERNAL_SENSORY_PREPARE_ATTEMPTS => {
+                    retries += 1;
+                    nm_log!(
+                        "[distributed-input] retrying sensory prepare for {} frame {} after acknowledgement timeout",
+                        node_id,
+                        expected_sequence
+                    );
+                    tokio::time::sleep(EXTERNAL_SENSORY_PREPARE_RETRY_DELAY).await;
+                }
+                Err(_) => {
+                    return Err(format!("prepare request to {node_id} timed out"));
+                }
+            }
+        };
+        if response.schema_version != SENSORY_INPUT_FRAME_SCHEMA_VERSION
+            || !response.accepted
+            || response.frame_sequence != expected_sequence
+        {
+            return Err(format!(
+                "prepare acknowledgement from {node_id} did not match frame {expected_sequence}"
+            ));
+        }
+        Ok(())
+    }
+
+    async fn commit_remote_sensory_frame(
+        &self,
+        node_id: &str,
+        address: &str,
+        frame_id: proto::SensoryInputFrameId,
+    ) -> Result<(), String> {
+        let cached_client = self.state.read().await.clients.get(node_id).cloned();
+        let mut client = match cached_client {
+            Some(client) => client,
+            None => connect_peer_with_timeout(address, EXTERNAL_SENSORY_INGRESS_TIMEOUT).await?,
+        };
+        let sender = self.state.read().await.node_id.clone();
+        let expected_sequence = frame_id.frame_sequence;
+        let request = authenticated_request(frame_id, &sender)?;
+        let response = tokio::time::timeout(
+            EXTERNAL_SENSORY_INGRESS_TIMEOUT,
+            client.commit_sensory_input(request),
+        )
+        .await
+        .map_err(|_| format!("commit request to {node_id} timed out"))?
+        .map_err(|status| format!("commit request to {node_id} failed: {status}"))?
+        .into_inner();
+        if response.schema_version != SENSORY_INPUT_FRAME_SCHEMA_VERSION
+            || !response.accepted
+            || response.frame_sequence != expected_sequence
+        {
+            return Err(format!(
+                "commit acknowledgement from {node_id} did not match frame {expected_sequence}"
+            ));
+        }
+        Ok(())
+    }
+
+    async fn abort_remote_sensory_frame(
+        &self,
+        node_id: &str,
+        address: &str,
+        frame_id: proto::SensoryInputFrameId,
+    ) {
+        let cached_client = self.state.read().await.clients.get(node_id).cloned();
+        let Ok(mut client) = (match cached_client {
+            Some(client) => Ok(client),
+            None => connect_peer_with_timeout(address, EXTERNAL_SENSORY_INGRESS_TIMEOUT).await,
+        }) else {
+            return;
+        };
+        let sender = self.state.read().await.node_id.clone();
+        let Ok(request) = authenticated_request(frame_id, &sender) else {
+            return;
+        };
+        let _ = tokio::time::timeout(
+            EXTERNAL_SENSORY_INGRESS_TIMEOUT,
+            client.abort_sensory_input(request),
+        )
+        .await;
+    }
+
+    async fn abort_prepared_sensory_frame(
+        &self,
+        identity: &ExternalSensoryFrameIdentity,
+        has_local: bool,
+        targets: &[(String, String)],
+    ) {
+        if has_local {
+            if let Some(ingress) = self.local_sensory_ingress(&identity.network_id) {
+                self.abort_local_sensory_frame(&ingress, identity).await;
+            }
+        }
+        let frame_id = sensory_frame_id(identity);
+        futures_util::future::join_all(targets.iter().map(|(node_id, address)| {
+            self.abort_remote_sensory_frame(node_id, address, frame_id.clone())
+        }))
+        .await;
     }
 
     #[cfg(feature = "replicated_durability")]
@@ -6130,6 +6960,8 @@ impl DistributedNode {
             match net_arc.try_write() {
                 Ok(mut net) => {
                     apply_control_to_managed_network(&mut net, action);
+                    lock_external_sensory_ingress(&net.external_sensory_ingress)
+                        .sync_network_metadata(&net);
                 }
                 Err(_) => {
                     local_busy = true;
@@ -6243,6 +7075,37 @@ impl DistributedNode {
             return Err("Local network busy; command queued for cluster nodes".to_string());
         }
         Ok(())
+    }
+
+    /// Retry a control operation while the short-lived cluster-state lock is
+    /// contended. UI callers must use this from a background task so the
+    /// immediate-mode render thread never waits for distributed state.
+    pub async fn apply_network_control_with_retry(
+        &self,
+        network_id: &str,
+        action: proto::control_update::Action,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match self.apply_network_control(network_id, action) {
+                Err(error) if error == "Cluster state busy" => {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
+                        return Err(format!(
+                            "timed out waiting to apply control for network {network_id}"
+                        ));
+                    }
+                    tokio::time::sleep(
+                        deadline
+                            .saturating_duration_since(now)
+                            .min(Duration::from_millis(10)),
+                    )
+                    .await;
+                }
+                result => return result,
+            }
+        }
     }
 
     pub async fn start_discovery_beacon(
@@ -7061,7 +7924,22 @@ impl DistributedNode {
                     sensory_len,
                 )
                 .unwrap_or_else(|_| vec![0i8; sensory_len]);
-                net.external_sensory_spikes = Some(spikes);
+                let ingress_handle = net.external_sensory_ingress.clone();
+                let mut ingress = lock_external_sensory_ingress(&ingress_handle);
+                if net.external_sensory_spikes.is_none()
+                    && ingress.pending.is_none()
+                    && ingress.committed.is_none()
+                    && !ingress.legacy_slot_pending
+                {
+                    net.external_sensory_spikes = Some(spikes);
+                    ingress.legacy_slot_pending = true;
+                } else {
+                    nm_err!(
+                        "[distributed-input] rejected legacy sensory batch for {} at step {} because its bounded input slot is occupied",
+                        batch.network_id,
+                        batch.step_index
+                    );
+                }
             } else {
                 let layer_index = batch.layer_index as usize;
                 let layer_size = net.runner.layer_size(layer_index);
@@ -8407,6 +9285,8 @@ impl DistributedNode {
                             }
                         }
                     }
+                    lock_external_sensory_ingress(&net.external_sensory_ingress)
+                        .sync_network_metadata(&net);
                 } else {
                     nm_log!(
                         "[info] Loading network {} with layers {:?} (redundant: {:?}, depth: {}, model: {}, learning: {})",
@@ -8590,6 +9470,18 @@ impl DistributedNode {
                     #[cfg(not(feature = "replicated_durability"))]
                     let shard_runtime = None;
 
+                    let playing = distributed_autostart_enabled();
+                    let sensory_ingress =
+                        Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+                            runner.net.num_sensory_neurons,
+                            runner.net.sensory_target_layer.unwrap_or(0) as u32,
+                            active_layers.clone(),
+                            playing,
+                            recovered_channel.external_sensory_spikes.is_some(),
+                        )));
+                    state
+                        .sensory_ingress_mailboxes
+                        .insert(network_id.clone(), sensory_ingress.clone());
                     state.networks.insert(
                         network_id.clone(),
                         Arc::new(RwLock::new(ManagedNetwork {
@@ -8621,9 +9513,10 @@ impl DistributedNode {
                                 .into_iter()
                                 .collect(),
                             external_sensory_spikes: recovered_channel.external_sensory_spikes,
+                            external_sensory_ingress: sensory_ingress,
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
-                            playing: distributed_autostart_enabled(),
+                            playing,
                             initial_config: net_cfg,
                             initial_model: model,
                             initial_learning: learning,
@@ -8648,6 +9541,7 @@ impl DistributedNode {
                     }
                 }
                 if state.networks.remove(&cmd.network_id).is_some() {
+                    state.sensory_ingress_mailboxes.remove(&cmd.network_id);
                     nm_log!("[info] Unloaded network {} from local node", cmd.network_id);
                 }
             }
@@ -8656,6 +9550,8 @@ impl DistributedNode {
                     let mut net = net_arc.write().await;
                     if let Some(action) = control_action_from_command(cmd_type) {
                         apply_control_to_managed_network(&mut net, action);
+                        lock_external_sensory_ingress(&net.external_sensory_ingress)
+                            .sync_network_metadata(&net);
                         if cmd_type == CommandType::Start {
                             nm_log!(
                                 "[distributed] simulator network {} armed (playing={})",
@@ -8747,13 +9643,23 @@ impl DistributedNode {
                 state
                     .networks
                     .iter()
-                    .map(|(network_id, network)| (network_id.clone(), network.clone()))
+                    .filter_map(|(network_id, network)| {
+                        Some((
+                            network_id.clone(),
+                            (
+                                network.clone(),
+                                state.sensory_ingress_mailboxes.get(network_id)?.clone(),
+                            ),
+                        ))
+                    })
                     .collect::<HashMap<_, _>>()
             };
 
-            for (network_id, net_arc) in &networks {
+            for (network_id, (net_arc, sensory_ingress)) in &networks {
                 if let Some(existing) = workers.get(network_id) {
-                    if Arc::ptr_eq(&existing.network, net_arc) {
+                    if Arc::ptr_eq(&existing.network, net_arc)
+                        && Arc::ptr_eq(&existing.sensory_ingress, sensory_ingress)
+                    {
                         continue;
                     }
                     // The map entry was replaced at a topology/workspace
@@ -8787,12 +9693,14 @@ impl DistributedNode {
                 let worker_node = self.clone();
                 let worker_network_id = network_id.clone();
                 let worker_network = net_arc.clone();
+                let worker_sensory_ingress = sensory_ingress.clone();
                 let worker_shutdown = shutdown.clone();
                 let worker_task = tokio::spawn(async move {
                     worker_node
                         .run_network_worker(
                             worker_network_id,
                             worker_network,
+                            worker_sensory_ingress,
                             autosave_tx,
                             output_tx,
                             worker_shutdown,
@@ -8803,6 +9711,7 @@ impl DistributedNode {
                     network_id.clone(),
                     NetworkWorkerHandles {
                         network: net_arc.clone(),
+                        sensory_ingress: sensory_ingress.clone(),
                         worker: worker_task,
                         output: output_task,
                         autosave: autosave_task,
@@ -8858,6 +9767,7 @@ impl DistributedNode {
         &self,
         network_id: String,
         net_arc: Arc<RwLock<ManagedNetwork>>,
+        sensory_ingress: ExternalSensoryIngressHandle,
         autosave_tx: mpsc::Sender<WorkspaceAutosaveJob>,
         output_tx: mpsc::Sender<Vec<SpikeBatch>>,
         mut shutdown: watch::Receiver<bool>,
@@ -8924,6 +9834,7 @@ impl DistributedNode {
                 // available.
                 if !net.remote_spikes_fwd.is_empty() || !net.remote_spikes_bwd.is_empty() {
                     net.playing = false;
+                    lock_external_sensory_ingress(&sensory_ingress).sync_network_metadata(&net);
                     nm_err!(
                         "[error] Pausing stable network {} because it received work outside its local stable-shard profile",
                         net.id
@@ -8931,11 +9842,14 @@ impl DistributedNode {
                     continue;
                 }
                 let external_sensory = net.external_sensory_spikes.take();
+                let consumed_legacy_slot = external_sensory.is_some()
+                    && lock_external_sensory_ingress(&sensory_ingress).legacy_slot_pending;
                 let stable_start = std::time::Instant::now();
                 let poll = match net.poll_stable_executor_sensory(external_sensory.as_deref()) {
                     Ok(poll) => poll,
                     Err(error) => {
                         net.playing = false;
+                        lock_external_sensory_ingress(&sensory_ingress).sync_network_metadata(&net);
                         nm_err!(
                             "[error] Pausing stable network {} after authoritative poll failure: {}",
                             net.id,
@@ -8944,6 +9858,7 @@ impl DistributedNode {
                         continue;
                     }
                 };
+                self.finish_local_sensory_step(&sensory_ingress, None, consumed_legacy_slot);
                 let elapsed = stable_start.elapsed().as_secs_f32() * 1000.0;
                 if net.avg_step_time_ms == 0.0 {
                     net.avg_step_time_ms = elapsed;
@@ -8970,6 +9885,18 @@ impl DistributedNode {
             // before the step. Keep an owned pre-step image so a failed
             // durable publication can retry the exact same admission
             // without silently losing queued causal input.
+            let had_legacy_sensory_slot = net.external_sensory_spikes.is_some();
+            let queued_sensory = Self::committed_sensory_frame(&sensory_ingress);
+            let consumed_sensory_identity = if !had_legacy_sensory_slot {
+                queued_sensory.as_ref().map(|frame| frame.identity.clone())
+            } else {
+                None
+            };
+            if !had_legacy_sensory_slot && let Some(frame) = queued_sensory.as_ref() {
+                net.external_sensory_spikes = Some(frame.spikes.clone());
+            }
+            let consumed_legacy_slot = had_legacy_sensory_slot
+                && lock_external_sensory_ingress(&sensory_ingress).legacy_slot_pending;
             #[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
             let previous_channel_state = capture_channel_state(&net);
 
@@ -9024,6 +9951,7 @@ impl DistributedNode {
                 external_sensory.as_deref(),
                 previous_channel_state.clone(),
                 &live_outbox_peers,
+                consumed_sensory_identity.as_ref(),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -9058,6 +9986,15 @@ impl DistributedNode {
             } else {
                 net.runner.step(None)
             };
+
+            // Complete admission only after the biological state transition
+            // (and durable publication where enabled) has succeeded. Until
+            // then the same committed frame remains available for retry.
+            self.finish_local_sensory_step(
+                &sensory_ingress,
+                consumed_sensory_identity.as_ref(),
+                consumed_legacy_slot,
+            );
 
             #[cfg(not(feature = "replicated_durability"))]
             let step_index = out.t as i64;
@@ -9713,7 +10650,18 @@ impl DistributedNeuromorphic for DistributedNode {
                     .filter(|node_id| peer_map.contains_key(*node_id))
                     .cloned()
                     .collect::<Vec<_>>();
-                network_peers.insert(net_id.clone(), proto::NetworkPeerList { node_ids: nodes });
+                let sensory_ingress_node_id = resolve_network_sensory_ingress_owner(net)
+                    .ok()
+                    .flatten()
+                    .filter(|owner| sensory_ingress_owner_is_ready(&state, net_id, owner))
+                    .unwrap_or_default();
+                network_peers.insert(
+                    net_id.clone(),
+                    proto::NetworkPeerList {
+                        node_ids: nodes,
+                        sensory_ingress_node_id,
+                    },
+                );
             }
         }
 
@@ -9782,6 +10730,147 @@ impl DistributedNeuromorphic for DistributedNode {
     type StreamSpikesStream = tokio_stream::wrappers::ReceiverStream<Result<SpikeBatch, Status>>;
     type StreamNetworkSnapshotStream =
         tokio_stream::wrappers::ReceiverStream<Result<NetworkSnapshotChunk, Status>>;
+
+    async fn prepare_sensory_input(
+        &self,
+        request: Request<proto::SensoryInputFrame>,
+    ) -> Result<Response<proto::SensoryInputFrameAck>, Status> {
+        let frame = request.get_ref();
+        validate_sensory_rpc_source(&request, &frame.source_node_id)?;
+        if live_causal_transport_enabled() {
+            return Err(Status::failed_precondition(
+                "legacy sensory ingress is disabled by the authoritative causal profile",
+            ));
+        }
+        if frame.schema_version != SENSORY_INPUT_FRAME_SCHEMA_VERSION
+            || frame.network_id.trim().is_empty()
+            || frame.session_id.trim().is_empty()
+            || frame.session_id.len() > 128
+            || frame.step_index < 0
+            || frame.frame_sequence != frame.step_index as u64
+            || frame.spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES
+            || frame
+                .spikes
+                .iter()
+                .any(|spike| !(-1..=1).contains(&(*spike as i8)))
+        {
+            return Err(Status::invalid_argument("invalid bounded sensory frame"));
+        }
+        {
+            let state = self.state.read().await;
+            if state.is_orchestrator {
+                return Err(Status::permission_denied(
+                    "sensory frames must be admitted by an assigned executor worker",
+                ));
+            }
+            if state.stable_network_ids.contains(&frame.network_id) {
+                return Err(Status::failed_precondition(
+                    "stable networks require the authoritative sensory data plane",
+                ));
+            }
+        }
+        let ingress = {
+            let state = self.state.read().await;
+            state
+                .sensory_ingress_mailboxes
+                .get(&frame.network_id)
+                .cloned()
+        }
+        .ok_or_else(|| Status::not_found("sensory network is not loaded on this worker"))?;
+        let already_applied = self.prepare_local_sensory_frame(&ingress, frame).await?;
+        Ok(Response::new(proto::SensoryInputFrameAck {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            accepted: true,
+            already_applied,
+            frame_sequence: frame.frame_sequence,
+        }))
+    }
+
+    async fn commit_sensory_input(
+        &self,
+        request: Request<proto::SensoryInputFrameId>,
+    ) -> Result<Response<proto::SensoryInputFrameAck>, Status> {
+        let frame_id = request.get_ref();
+        validate_sensory_frame_id(frame_id)?;
+        validate_sensory_rpc_source(&request, &frame_id.source_node_id)?;
+        if live_causal_transport_enabled() {
+            return Err(Status::failed_precondition(
+                "legacy sensory ingress is disabled by the authoritative causal profile",
+            ));
+        }
+        {
+            let state = self.state.read().await;
+            if state.is_orchestrator {
+                return Err(Status::permission_denied(
+                    "sensory frames must be committed by an assigned executor worker",
+                ));
+            }
+        }
+        let identity = ExternalSensoryFrameIdentity {
+            network_id: frame_id.network_id.clone(),
+            source_node_id: frame_id.source_node_id.clone(),
+            session_id: frame_id.session_id.clone(),
+            sequence: frame_id.frame_sequence,
+        };
+        let ingress = {
+            let state = self.state.read().await;
+            state
+                .sensory_ingress_mailboxes
+                .get(&identity.network_id)
+                .cloned()
+        }
+        .ok_or_else(|| Status::not_found("sensory network is not loaded on this worker"))?;
+        let already_applied = self.commit_local_sensory_frame(&ingress, &identity).await?;
+        Ok(Response::new(proto::SensoryInputFrameAck {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            accepted: true,
+            already_applied,
+            frame_sequence: frame_id.frame_sequence,
+        }))
+    }
+
+    async fn abort_sensory_input(
+        &self,
+        request: Request<proto::SensoryInputFrameId>,
+    ) -> Result<Response<proto::SensoryInputFrameAck>, Status> {
+        let frame_id = request.get_ref();
+        validate_sensory_frame_id(frame_id)?;
+        validate_sensory_rpc_source(&request, &frame_id.source_node_id)?;
+        if live_causal_transport_enabled() {
+            return Err(Status::failed_precondition(
+                "legacy sensory ingress is disabled by the authoritative causal profile",
+            ));
+        }
+        {
+            let state = self.state.read().await;
+            if state.is_orchestrator {
+                return Err(Status::permission_denied(
+                    "sensory frame reservations are worker-owned",
+                ));
+            }
+        }
+        let identity = ExternalSensoryFrameIdentity {
+            network_id: frame_id.network_id.clone(),
+            source_node_id: frame_id.source_node_id.clone(),
+            session_id: frame_id.session_id.clone(),
+            sequence: frame_id.frame_sequence,
+        };
+        let ingress = {
+            let state = self.state.read().await;
+            state
+                .sensory_ingress_mailboxes
+                .get(&identity.network_id)
+                .cloned()
+        }
+        .ok_or_else(|| Status::not_found("sensory network is not loaded on this worker"))?;
+        self.abort_local_sensory_frame(&ingress, &identity).await;
+        Ok(Response::new(proto::SensoryInputFrameAck {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            accepted: true,
+            already_applied: false,
+            frame_sequence: frame_id.frame_sequence,
+        }))
+    }
 
     async fn stream_spikes(
         &self,
@@ -10076,6 +11165,8 @@ impl DistributedNeuromorphic for DistributedNode {
         if let (Some(net_arc), Some(action)) = (local_net_arc, local_control) {
             let mut net = net_arc.write().await;
             apply_control_to_managed_network(&mut net, action);
+            lock_external_sensory_ingress(&net.external_sensory_ingress)
+                .sync_network_metadata(&net);
         }
         if needs_rebalance {
             self.rebalance_networks().await;
@@ -10844,8 +11935,15 @@ impl DistributedNeuromorphic for DistributedNode {
         };
 
         let (sensory, hidden, output, output_history, sim_step, sim_time_ms) =
-            tokio::task::spawn_blocking(move || {
-                let net = net_arc.blocking_read();
+            tokio::task::spawn_blocking(move || -> Result<_, Status> {
+                // Activity is an optional UI projection. Do not queue a
+                // blocking reader behind neural traversal: Tokio's fair
+                // RwLock can otherwise let this observer delay the next
+                // authoritative writer. A busy worker returns a retryable
+                // status and the display polls again later.
+                let net = net_arc
+                    .try_read()
+                    .map_err(|_| Status::unavailable("network is busy; retry activity later"))?;
                 let ts_us = (net.runner.t_ms * 1000.0) as u64;
                 let sim_step = net.runner.t as u64;
                 let sim_time_ms = net.runner.t_ms;
@@ -10897,17 +11995,17 @@ impl DistributedNeuromorphic for DistributedNode {
                         }
                     })
                     .collect::<Vec<_>>();
-                (
+                Ok((
                     sensory,
                     hidden,
                     output,
                     output_history,
                     sim_step,
                     sim_time_ms,
-                )
+                ))
             })
             .await
-            .map_err(|e| Status::internal(format!("activity task failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("activity task failed: {}", e)))??;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
@@ -11870,6 +12968,23 @@ mod tests {
         assert_eq!(response.sensory.expect("sensory envelope").indices, vec![1]);
         assert_eq!(response.hidden[0].indices, vec![2]);
         assert_eq!(response.output.expect("output envelope").indices, vec![0]);
+
+        let network = {
+            let state = node.state.read().await;
+            state
+                .networks
+                .get("activity")
+                .expect("network loaded")
+                .clone()
+        };
+        let _writer = network.write().await;
+        let busy = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "activity".to_string(),
+            }))
+            .await
+            .expect_err("display polling must not wait behind neural traversal");
+        assert_eq!(busy.code(), tonic::Code::Unavailable);
     }
 
     #[tokio::test]
@@ -11933,6 +13048,13 @@ mod tests {
             Some(&root.join("warm")),
         )
         .expect("durable live owner");
+        let sensory_ingress = Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+            runner.net.num_sensory_neurons,
+            runner.net.sensory_target_layer.unwrap_or(0) as u32,
+            Vec::new(),
+            true,
+            false,
+        )));
         let mut network = ManagedNetwork {
             id: "live-managed".to_owned(),
             runner,
@@ -11949,6 +13071,7 @@ mod tests {
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
+            external_sensory_ingress: sensory_ingress,
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 0,
             playing: true,
@@ -12013,6 +13136,13 @@ mod tests {
         )
         .expect("durable owner");
         runner.step(None);
+        let sensory_ingress = Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+            runner.net.num_sensory_neurons,
+            runner.net.sensory_target_layer.unwrap_or(0) as u32,
+            Vec::new(),
+            false,
+            false,
+        )));
         let net = ManagedNetwork {
             id: "projection".to_owned(),
             runner,
@@ -12029,6 +13159,7 @@ mod tests {
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
+            external_sensory_ingress: sensory_ingress,
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 0,
             playing: false,
@@ -13277,10 +14408,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_sensory_injection_is_shape_checked_and_admitted_once() {
+    async fn network_control_retries_after_cluster_state_lock_contention() {
+        let node = DistributedNode::new("orchestrator-a".to_owned(), true);
+        node.state.write().await.network_registry.insert(
+            "audio-brain".to_owned(),
+            NetworkStatus {
+                network_id: "audio-brain".to_owned(),
+                playing: false,
+                ..Default::default()
+            },
+        );
+
+        let state_guard = node.state.write().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let retry_node = node.clone();
+        let retry = tokio::spawn(async move {
+            let _ = started_tx.send(());
+            retry_node
+                .apply_network_control_with_retry(
+                    "audio-brain",
+                    proto::control_update::Action::Start,
+                    Duration::from_secs(1),
+                )
+                .await
+        });
+        started_rx.await.expect("retry task started");
+        tokio::task::yield_now().await;
+        assert!(!retry.is_finished(), "the locked attempt must stay pending");
+
+        drop(state_guard);
+        retry
+            .await
+            .expect("join retry task")
+            .expect("control applies after lock becomes available");
+        assert!(
+            node.state
+                .read()
+                .await
+                .network_registry
+                .get("audio-brain")
+                .expect("network status")
+                .playing
+        );
+    }
+
+    #[tokio::test]
+    async fn external_sensory_injection_is_shape_checked_and_admitted_once_without_runner_lock() {
         let node = DistributedNode::new("test-node".to_string(), true);
         let mut config = NetworkConfig::default();
-        config.num_sensory_neurons = 2;
+        config.num_sensory_neurons = 1;
         node.handle_command(NetworkCommand {
             r#type: proto::network_command::CommandType::LoadNetwork as i32,
             network_id: "alpha".to_string(),
@@ -13295,37 +14471,484 @@ mod tests {
         })
         .await;
 
-        let sensory_len = {
+        let (network, ingress) = {
             let state = node.state.read().await;
-            let network = state.networks.get("alpha").expect("network loaded");
-            let mut network = network.write().await;
-            if network.runner.net.num_sensory_neurons == 0 {
-                network.runner.resize_sensory(2);
-            }
-            network.playing = true;
-            network.runner.net.num_sensory_neurons
+            (
+                state.networks.get("alpha").expect("network loaded").clone(),
+                state
+                    .sensory_ingress_mailboxes
+                    .get("alpha")
+                    .expect("sensory ingress loaded")
+                    .clone(),
+            )
         };
-        let mut spikes = vec![0i8; sensory_len];
-        spikes[0] = 1;
-        node.inject_external_sensory_spikes("alpha", 7, &spikes)
-            .await
-            .expect("sensory frame admitted");
+        let mut locked_network = network.write().await;
+        if locked_network.runner.net.num_sensory_neurons == 0 {
+            locked_network.runner.resize_sensory(1);
+        }
+        locked_network.playing = true;
+        let sensory_len = locked_network.runner.net.num_sensory_neurons;
+        lock_external_sensory_ingress(&ingress).sync_network_metadata(&locked_network);
+        let spikes = vec![1i8; sensory_len];
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            node.inject_external_sensory_spikes("alpha", 7, &spikes),
+        )
+        .await
+        .expect("sensory admission must not wait for a slow Runner step")
+        .expect("single-neuron sensory frame admitted while Runner write lock is held");
 
-        let state = node.state.read().await;
-        let network = state.networks.get("alpha").expect("network loaded");
-        let network = network.read().await;
+        let ingress = lock_external_sensory_ingress(&ingress);
         assert_eq!(
-            network.external_sensory_spikes.as_deref(),
-            Some(spikes.as_slice())
+            ingress
+                .committed
+                .as_ref()
+                .map(|frame| frame.spikes.as_slice()),
+            Some(spikes.as_slice()),
+            "an acknowledged sensory frame stays in the bounded mailbox until a biological step consumes it"
         );
-        drop(network);
-        drop(state);
+        drop(ingress);
+        drop(locked_network);
 
         let error = node
-            .inject_external_sensory_spikes("alpha", 8, &[1])
+            .inject_external_sensory_spikes("alpha", 8, &[1, 0])
             .await
-            .expect_err("a second frame must apply backpressure while the slot is occupied");
+            .expect_err("a frame wider than the single sensory input must be rejected");
         assert!(error.contains("width"));
+    }
+
+    #[test]
+    fn sensory_prepare_retries_only_transient_rpc_failures() {
+        for code in [
+            tonic::Code::Cancelled,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Unavailable,
+        ] {
+            assert!(sensory_prepare_status_is_retryable(code));
+        }
+        for code in [
+            tonic::Code::InvalidArgument,
+            tonic::Code::FailedPrecondition,
+            tonic::Code::PermissionDenied,
+        ] {
+            assert!(!sensory_prepare_status_is_retryable(code));
+        }
+    }
+
+    #[test]
+    fn sensory_ingress_resolves_to_the_first_layer_owner_only() {
+        let distribution = HashMap::from([
+            (
+                "bridge-a".to_owned(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    ..Default::default()
+                },
+            ),
+            (
+                "worker-b".to_owned(),
+                LayerRange {
+                    layers: vec![2, 3],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert_eq!(
+            resolve_external_sensory_ingress_owner(&distribution, None).expect("valid ownership"),
+            Some("bridge-a".to_owned())
+        );
+    }
+
+    #[test]
+    fn configured_sensory_target_layer_selects_its_direct_bridge() {
+        let distribution = HashMap::from([
+            (
+                "first-layer-owner".to_owned(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    ..Default::default()
+                },
+            ),
+            (
+                "sensory-target-owner".to_owned(),
+                LayerRange {
+                    layers: vec![2, 3],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert_eq!(
+            resolve_external_sensory_ingress_owner(&distribution, Some(2))
+                .expect("configured sensory target owner"),
+            Some("sensory-target-owner".to_owned())
+        );
+    }
+
+    #[test]
+    fn sensory_ingress_rejects_ambiguous_first_layer_ownership() {
+        let distribution = HashMap::from([
+            (
+                "worker-a".to_owned(),
+                LayerRange {
+                    layers: vec![0],
+                    ..Default::default()
+                },
+            ),
+            (
+                "worker-b".to_owned(),
+                LayerRange {
+                    layers: vec![0, 1],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert!(
+            resolve_external_sensory_ingress_owner(&distribution, None)
+                .expect_err("ambiguous active ownership must fail closed")
+                .contains("multiple active I/O bridge owners")
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_sends_audio_directly_to_the_configured_sensory_bridge() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphicServer;
+        use tokio_stream::wrappers::TcpListenerStream;
+
+        let worker = DistributedNode::new("worker-a".to_owned(), false);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 1;
+        config.sensory_target_layer = Some(1);
+        worker
+            .handle_command(NetworkCommand {
+                r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                network_id: "audio-brain".to_owned(),
+                config_json: serde_json::to_vec(&config).expect("encode network config"),
+                layers: vec![0],
+                redundant_layers: Vec::new(),
+                desired_aarnn_depth: 1,
+                neuron_model: "aarnn".to_owned(),
+                learning_rule: "aarnn".to_owned(),
+            })
+            .await;
+        {
+            let state = worker.state.read().await;
+            let network = state.networks.get("audio-brain").expect("worker network");
+            network.write().await.playing = true;
+        }
+
+        let downstream_worker = DistributedNode::new("worker-b".to_owned(), false);
+        downstream_worker
+            .handle_command(NetworkCommand {
+                r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                network_id: "audio-brain".to_owned(),
+                config_json: serde_json::to_vec(&config).expect("encode network config"),
+                layers: vec![1],
+                redundant_layers: Vec::new(),
+                desired_aarnn_depth: 1,
+                neuron_model: "aarnn".to_owned(),
+                learning_rule: "aarnn".to_owned(),
+            })
+            .await;
+        {
+            let state = downstream_worker.state.read().await;
+            let network = state
+                .networks
+                .get("audio-brain")
+                .expect("downstream network");
+            network.write().await.playing = true;
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test worker RPC listener");
+        let worker_address = listener.local_addr().expect("worker listener address");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let worker_for_server = worker.clone();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(DistributedNeuromorphicServer::new(worker_for_server))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("serve test worker RPC");
+        });
+
+        let downstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind downstream worker RPC listener");
+        let downstream_address = downstream_listener
+            .local_addr()
+            .expect("downstream worker listener address");
+        let (downstream_shutdown_tx, downstream_shutdown_rx) =
+            tokio::sync::oneshot::channel::<()>();
+        let downstream_for_server = downstream_worker.clone();
+        let downstream_server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(DistributedNeuromorphicServer::new(downstream_for_server))
+                .serve_with_incoming_shutdown(
+                    TcpListenerStream::new(downstream_listener),
+                    async move {
+                        let _ = downstream_shutdown_rx.await;
+                    },
+                )
+                .await
+                .expect("serve downstream worker RPC");
+        });
+
+        let orchestrator = DistributedNode::new("orchestrator-a".to_owned(), true);
+        {
+            let mut state = orchestrator.state.write().await;
+            state
+                .peers
+                .insert("worker-a".to_owned(), format!("http://{worker_address}"));
+            state.peers.insert(
+                "worker-b".to_owned(),
+                format!("http://{downstream_address}"),
+            );
+            state.network_registry.insert(
+                "audio-brain".to_owned(),
+                NetworkStatus {
+                    network_id: "audio-brain".to_owned(),
+                    distribution: HashMap::from([
+                        (
+                            "worker-a".to_owned(),
+                            LayerRange {
+                                layers: vec![0],
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            "worker-b".to_owned(),
+                            LayerRange {
+                                layers: vec![1],
+                                ..Default::default()
+                            },
+                        ),
+                    ]),
+                    config_json: serde_json::to_string(&config).expect("encode config JSON"),
+                    playing: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(
+            orchestrator.has_external_sensory_ingress("audio-brain"),
+            Some(false),
+            "a connected placement owner is not ready until it reports the network loaded"
+        );
+        let waiting = orchestrator
+            .inject_external_sensory_frame("audio-brain", "session-a", 0, 0, &[1])
+            .await
+            .expect_err("the route must wait for the assigned worker's load heartbeat");
+        assert!(waiting.contains("has not reported network audio-brain as loaded"));
+
+        orchestrator
+            .state
+            .write()
+            .await
+            .network_runtime_metrics
+            .entry("audio-brain".to_owned())
+            .or_default()
+            .insert("worker-b".to_owned(), NetworkResources::default());
+        assert_eq!(
+            orchestrator.has_external_sensory_ingress("audio-brain"),
+            Some(true),
+            "the worker's hosted-network heartbeat makes the route eligible"
+        );
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            orchestrator.inject_external_sensory_frame("audio-brain", "session-a", 0, 0, &[1]),
+        )
+        .await
+        .expect("frame admission remains bounded")
+        .expect("orchestrator forwards and receives an admission acknowledgement");
+        {
+            let state = worker.state.read().await;
+            let ingress = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("worker ingress");
+            let ingress = lock_external_sensory_ingress(ingress);
+            assert!(
+                ingress.committed.is_none(),
+                "audio must be admitted by the configured sensory target owner"
+            );
+        }
+        {
+            let state = downstream_worker.state.read().await;
+            let network = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("downstream ingress");
+            let network = lock_external_sensory_ingress(network);
+            assert!(
+                network
+                    .committed
+                    .as_ref()
+                    .is_some_and(|frame| frame.spikes.as_slice() == [1]),
+                "sensory payloads go directly to the configured I/O bridge only"
+            );
+        }
+
+        // Retrying the same sequence after a lost acknowledgement must not
+        // queue the same sensory transition twice.
+        orchestrator
+            .inject_external_sensory_frame("audio-brain", "session-a", 0, 0, &[1])
+            .await
+            .expect("duplicate frame retry is idempotent");
+        let changed_retry = orchestrator
+            .inject_external_sensory_frame("audio-brain", "session-a", 0, 0, &[0])
+            .await
+            .expect_err("a reused frame sequence cannot change its spike payload");
+        assert!(changed_retry.contains("reused with different spike values"));
+        {
+            let state = downstream_worker.state.read().await;
+            let ingress = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("configured bridge ingress");
+            let identity = lock_external_sensory_ingress(ingress)
+                .committed
+                .as_ref()
+                .expect("committed first frame")
+                .identity
+                .clone();
+            downstream_worker.finish_local_sensory_step(ingress, Some(&identity), false);
+        }
+
+        orchestrator
+            .inject_external_sensory_frame("audio-brain", "session-a", 1, 1, &[0])
+            .await
+            .expect("the next frame is admitted after consumption");
+        {
+            let state = downstream_worker.state.read().await;
+            let network = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("configured bridge ingress");
+            let network = lock_external_sensory_ingress(network);
+            assert!(
+                network
+                    .committed
+                    .as_ref()
+                    .is_some_and(|frame| frame.spikes.as_slice() == [0])
+            );
+        }
+
+        let _ = shutdown_tx.send(());
+        server.await.expect("join test worker RPC server");
+        let _ = downstream_shutdown_tx.send(());
+        downstream_server
+            .await
+            .expect("join downstream worker RPC server");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_publishes_sensory_bridge_after_worker_load_report() {
+        let orchestrator = DistributedNode::new("orchestrator-a".to_owned(), true);
+        {
+            let mut state = orchestrator.state.write().await;
+            state.nodes.insert(
+                "observer".to_owned(),
+                NodeStatus {
+                    node_id: "observer".to_owned(),
+                    ..Default::default()
+                },
+            );
+            state
+                .peers
+                .insert("worker-a".to_owned(), "http://127.0.0.1:50075".to_owned());
+            state
+                .last_heartbeat
+                .insert("worker-a".to_owned(), std::time::Instant::now());
+            state.network_registry.insert(
+                "audio-brain".to_owned(),
+                NetworkStatus {
+                    network_id: "audio-brain".to_owned(),
+                    distribution: HashMap::from([(
+                        "worker-a".to_owned(),
+                        LayerRange {
+                            layers: vec![0],
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let request = || {
+            Request::new(proto::HeartbeatRequest {
+                node_id: "observer".to_owned(),
+                ..Default::default()
+            })
+        };
+        let waiting = orchestrator
+            .heartbeat(request())
+            .await
+            .expect("heartbeat before bridge load")
+            .into_inner();
+        assert_eq!(
+            waiting
+                .network_peers
+                .get("audio-brain")
+                .map(|route| route.sensory_ingress_node_id.as_str()),
+            Some(""),
+            "a connected worker must not be advertised as ready before loading"
+        );
+
+        orchestrator
+            .state
+            .write()
+            .await
+            .network_runtime_metrics
+            .entry("audio-brain".to_owned())
+            .or_default()
+            .insert("worker-a".to_owned(), NetworkResources::default());
+        let ready = orchestrator
+            .heartbeat(request())
+            .await
+            .expect("heartbeat after bridge load")
+            .into_inner();
+        assert_eq!(
+            ready
+                .network_peers
+                .get("audio-brain")
+                .map(|route| route.sensory_ingress_node_id.as_str()),
+            Some("worker-a"),
+            "the loaded bridge is advertised after its heartbeat"
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_rejects_missing_sensory_owners_before_admission() {
+        let orchestrator = DistributedNode::new("orchestrator-a".to_owned(), true);
+        orchestrator.state.write().await.network_registry.insert(
+            "audio-brain".to_owned(),
+            NetworkStatus {
+                network_id: "audio-brain".to_owned(),
+                distribution: HashMap::from([(
+                    "worker-missing".to_owned(),
+                    LayerRange {
+                        layers: vec![0],
+                        ..Default::default()
+                    },
+                )]),
+                playing: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            orchestrator.has_external_sensory_ingress("audio-brain"),
+            Some(false)
+        );
+        let error = orchestrator
+            .inject_external_sensory_frame("audio-brain", "session-a", 0, 0, &[1])
+            .await
+            .expect_err("a disconnected assigned worker must not be reported as routed");
+        assert!(error.contains("worker-missing") && error.contains("disconnected"));
     }
 
     #[tokio::test]
@@ -13547,6 +15170,13 @@ mod tests {
             deferred_from_nonconvergence: false,
             sender_node_id: String::new(),
         };
+        let sensory_ingress = Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+            runner.net.num_sensory_neurons,
+            runner.net.sensory_target_layer.unwrap_or(0) as u32,
+            vec![0],
+            true,
+            false,
+        )));
         let network = ManagedNetwork {
             id: "causal-live".to_owned(),
             runner,
@@ -13562,6 +15192,7 @@ mod tests {
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
+            external_sensory_ingress: sensory_ingress.clone(),
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 1,
             playing: true,
@@ -13574,11 +15205,15 @@ mod tests {
             workspace_binding: None,
         };
         let node = DistributedNode::new("node-b".to_owned(), false);
-        node.state
-            .write()
-            .await
-            .networks
-            .insert("causal-live".to_owned(), Arc::new(RwLock::new(network)));
+        {
+            let mut state = node.state.write().await;
+            state
+                .networks
+                .insert("causal-live".to_owned(), Arc::new(RwLock::new(network)));
+            state
+                .sensory_ingress_mailboxes
+                .insert("causal-live".to_owned(), sensory_ingress);
+        }
         let causal = crate::data_plane::CausalEnvelope::try_from(frame.clone())
             .expect("wire frame converts");
         let ingress: CausalSpikeIngress =

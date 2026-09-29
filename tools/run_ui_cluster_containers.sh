@@ -99,7 +99,8 @@ find_free_port() {
   echo ""; return 1
 }
 
-ORCH_PORT="$(find_free_port 50051)"; reserve_port "$ORCH_PORT"
+ORCH_PORT_START="${AARNN_ORCH_PORT_START:-$((30000 + RANDOM % 20000))}"
+ORCH_PORT="$(find_free_port "$ORCH_PORT_START")"; reserve_port "$ORCH_PORT"
 NODE_BASE_PORT="${NODE_BASE_PORT:-50075}"
 
 CONFIG_ARG=()
@@ -136,6 +137,8 @@ COMMON_OPTS=(
   -e MESA_GL_VERSION_OVERRIDE=3.3
   -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
   -e NMD_TFLITE_ALLOW_LARGE=1
+  -e NM_DISTRIBUTE_STARTUP_SNAPSHOT=1
+  -e NM_DISTRIBUTED_AUTOSTART=1
   -v "$XAUTH:/tmp/.Xauthority:ro"
   -v "$UI_CACHE_DIR:/tmp/cache:Z"
   -v "$OUTPUT_DIR:/app/outputs:Z"
@@ -168,6 +171,11 @@ cleanup() {
 trap cleanup SIGINT SIGTERM EXIT
 
 echo "Selected ports -> Orchestrator gRPC: $ORCH_PORT"
+EXECUTION_ARGS=(
+  --execution-mode "distributed,sharded"
+  --execution-scope cluster
+  --execution-desired-shards "$NODE_COUNT"
+)
 
 # Orchestrator
 ORCH_LOG="$LOG_DIR/orchestrator.log"
@@ -179,6 +187,7 @@ podman run --rm --name "$ORCH_NAME" \
   --orchestrator --brain-id "$BRAIN_ID_ORCH" \
   --grpc-addr "0.0.0.0:$ORCH_PORT" \
   "${CONFIG_ARG[@]}" "${NETWORK_ARG[@]}" \
+  "${EXECUTION_ARGS[@]}" \
   --ui --quiet \
   > "$ORCH_LOG" 2>&1 &
 PIDS+=("$!")
@@ -191,6 +200,7 @@ sleep 2
 # Nodes
 for i in $(seq 1 "$NODE_COUNT"); do
   NODE_PORT="$(find_free_port $((NODE_BASE_PORT + i - 1)))"; reserve_port "$NODE_PORT"
+  NODE_ID="node_${i}"
   NODE_NAME="nm-node-${i}-${RUN_ID}"
   NODE_LOG="$LOG_DIR/node_${i}.log"
   CONTAINERS+=("$NODE_NAME")
@@ -198,21 +208,24 @@ for i in $(seq 1 "$NODE_COUNT"); do
   podman run --rm --name "$NODE_NAME" \
     "${COMMON_OPTS[@]}" \
     "$NODE_IMAGE_NAME" \
-    --node --brain-id "node_${i}" \
+    --node --node-id "$NODE_ID" --brain-id "$BRAIN_ID_ORCH" \
     --grpc-addr "0.0.0.0:$NODE_PORT" \
-    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" --quiet \
+    --advertise-addr "127.0.0.1:$NODE_PORT" \
+    --orchestrator-addr "http://127.0.0.1:$ORCH_PORT" \
+    "${EXECUTION_ARGS[@]}" --quiet \
     > "$NODE_LOG" 2>&1 &
   PIDS+=("$!")
 
-  echo "Node ${i} started (log: $NODE_LOG)"
+  echo "Worker ${NODE_ID} for brain ${BRAIN_ID_ORCH} started (log: $NODE_LOG)"
   sleep 1
  done
 
 echo "----------------------------------------------------------------"
 echo "Cluster running in containers."
+echo "Local cluster master / I/O ingress brain: $BRAIN_ID_ORCH"
 echo "Orchestrator UI should be visible on your X11 display."
 echo "Orchestrator log: $ORCH_LOG"
-echo "Nodes logs: $LOG_DIR/node_1.log, $LOG_DIR/node_2.log"
+echo "Worker logs: $LOG_DIR/node_*.log"
 echo "Press Ctrl+C to stop all containers."
 echo "----------------------------------------------------------------"
 

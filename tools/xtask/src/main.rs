@@ -260,6 +260,46 @@ fn qa_suite(root: &Path, suite: &str) -> bool {
             }
             scenario_manifest_is_complete(root, "MORPH-VIS-001") && run(root, "python3", &args)
         }
+        "staged-visualisation" => {
+            scenario_manifest_is_complete(root, "MORPH-VIS-003")
+                && run(root, "node", &["scripts/qa/test_visualization_policy.cjs"])
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--features",
+                        "ui,engine_runtime,morpho,growth3d",
+                        "visualization::tests",
+                        "--lib",
+                    ],
+                )
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--features",
+                        "ui,engine_runtime,morpho,growth3d",
+                        "fpv_render_jobs::tests",
+                        "--lib",
+                    ],
+                )
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--features",
+                        "ui,engine_runtime,morpho,growth3d",
+                        "engine::tests::live_morphology_display_contains_paths_and_keeps_mode_ids_stable",
+                        "--lib",
+                    ],
+                )
+        }
         "anatomical-growth" => {
             scenario_manifest_is_complete(root, "MORPH-VIS-002")
                 && run(

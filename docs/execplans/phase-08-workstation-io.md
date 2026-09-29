@@ -120,6 +120,356 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [x] `2026-09-29 08:21Z` Diagnosed and fixed the frozen output raster as a split data
+  source: canvas brightness consumed fresh `GetNetworkActivity` worker polls,
+  while the raster only advanced from aggregate cluster snapshots. The worker
+  RPC already returned up to 128 output-history frames, but the UI discarded
+  them. The native view now carries those sparse histories, merges owners by
+  simulation step, includes silent steps, ignores a poll behind the raster
+  cursor, and clears history on an actual step rewind. The regression confirms
+  scrolling zero-output steps and merged multi-owner spikes; all 29 native
+  presentation tests pass. `./run_examples.sh` built the release example and
+  passed readiness checks with both workers joined and managed audio input
+  acknowledged. The captured dashboard showed stage-three connections and
+  192 output spikes in the raster. That single screenshot confirms live raster
+  data, while deterministic tests verify advancement across simulation steps.
+
+- [x] `2026-09-29 03:34Z` The stage-three paint trace showed that acknowledged
+  audio activity and cached synthetic edges were present, and that the neuron
+  pass emitted opaque one-device-pixel rectangles above the connections. Egui
+  0.34's rectangle tessellator simplifies rectangles no wider than its
+  feathering threshold into line segments, which can leave a one-pixel neuron
+  without a covered fragment. Replaced per-neuron `rect_filled` calls with one
+  batched mesh of framebuffer-aligned coloured quads and removed the temporary
+  white paint marker/trace. The new mesh geometry/brightness regression and all
+  28 native topology/presentation tests pass. `cargo fmt --check`,
+  `bash -n run_examples.sh` and `git diff --check` pass. A fresh all-features
+  `./run_examples.sh` run built the release binaries, verified both workers
+  joined `cluster_master`, acknowledged the first 64-wide sensory frame at
+  `node_2`, and captured stage three with 1,637 connections and eight active
+  neurons at `/tmp/aarnn-stage3-pixel-20260929.png`. The framebuffer shows
+  brighter blue sensory pixels over the synthetic connection lines. The
+  launcher was terminated after capture and ran its cleanup trap (exit 143 is
+  the expected SIGTERM status after all readiness/capture checks passed).
+
+- [x] `2026-09-29 03:05Z` Three further `./run_examples.sh` captures confirmed the
+  cluster audio route was acknowledged and stage three contained 1,573–2,119
+  projected edges, yet still showed no activity pixels. An opt-in native paint
+  trace reports the expected 64/300/96 sensory/hidden/output positions and
+  verifies that a clipped diagnostic shape appears at the first sensory
+  coordinate. Egui drains only registered area layers, so the neuron pass was
+  moved back to the active canvas painter after its connections. The later
+  paint trace ruled out visibility, colour and painter order; the remaining
+  rasterisation issue is resolved by the 03:34Z mesh fix above. The stage-three
+  capture readiness condition also waits for a managed frame acknowledgement
+  for the selected brain.
+
+- [x] `2026-09-29 02:33Z` Repeated the required live run with
+  `./run_examples.sh` after the 01:45Z stage-three fix. The capture showed
+  2,100 synthetic connections and reported activity, but no distinct neuron
+  pixels. The first capture also preceded the managed route acknowledgement;
+  a second run showed the sensory display could become active from local audio
+  preview while that route was still waiting. Pixel-stage colours now remain
+  opaque over edge strokes, and markers use a clipped topmost painter. The
+  stage-three capture gate now additionally requires an acknowledged managed
+  sensory frame for the selected brain, so preview activity cannot satisfy
+  cluster-input readiness. The subsequent trace isolated the egui rectangle
+  rasterisation failure, and the 03:34Z capture above verifies the completed
+  repair with acknowledged `message.wav` input.
+
+- [x] `2026-09-29 01:45Z` Reproduced the user's stage-three report with the existing live
+  checks: the cluster had a cached edge projection and fresh worker activity,
+  but static and live connection strokes were painted after the neuron pixels
+  and obscured their activity brightness. Pixel-stage nodes are now deferred
+  until all edge layers have been painted, then rendered as framebuffer-aligned
+  single-pixel mesh quads; placement rings are omitted at pixel detail to preserve
+  the requested geometry. The new one-pixel-grid regression and all 26 native
+  topology/presentation tests pass, as do workspace formatting, launcher shell
+  syntax and git diff --check. The required live stage-three capture through
+  ./run_examples.sh with message.wav is verified by the 03:34Z capture above.
+
+- [x] `2026-09-29 01:24Z` Reopened native stage-three validation after the live
+  capture showed zero activity and no completed edge projection. The cluster
+  edge worker subsequently reported 2,124 edges, while `GetNetworkActivity`
+  returned live worker spikes and the WAV sensory bridge acknowledged frames.
+  The native `ClusterGlobal` view still reads activity from its aggregate
+  snapshot only; it does not refresh current spikes from assigned worker
+  owners. Its stage-three soma radius is also larger than one framebuffer
+  pixel, and the screenshot timer can fire before the edge/activity projection
+  is ready. Planned work is a bounded, parallel, display-only activity poll
+  fenced to the current network assignment, single-pixel stage-one-to-seven
+  markers, and opt-in readiness-gated stage-three capture. These changes must
+  not wait on or mutate neural traversal. Verification will include focused
+  worker-activity/render tests and the manual-stage-three `./run_examples.sh`
+  run with the selected WAV; the completed evidence is recorded above.
+
+- [~] `2026-09-29 00:40Z` The user's manual stage-three cluster screenshot shows
+  active audio acknowledgement and populated synthetic neuron columns, but
+  `Per-layer connections: (busy)` remains indefinitely and no edge lines or
+  distinct activity brightness appear. Live API inspection confirms non-zero
+  sensory weights plus active sensory/hidden indices. The native UI discarded
+  its edge cache on every refreshed cluster cut and fenced the asynchronous
+  visual projection to exact snapshot-tick equality, so same-assignment results
+  could be invalidated while the neural cut advanced. The projection now stays
+  visible across newer cuts, accepts a result only when its network,
+  assignment, generation and non-future tick still match, and refreshes if the
+  neural cut advanced during projection. Network/assignment changes and time
+  rewinds still invalidate the cache. The focused presentation suite passed
+  21 tests; `cargo fmt --check` and `git diff --check` passed. The scripted live
+  run confirmed both workers, non-zero sensory/hidden activity and 12,888
+  non-zero sensory weights. Its framebuffer still used Auto because initial
+  cluster-view selection overwrote the manual launch override, so it did not
+  verify stage-three rendering.
+
+- [x] `2026-09-29 00:48Z` Made explicit native visualisation startup overrides
+  survive the distributed dashboard's automatic cluster-view selection, then
+  reapply the selected stage through the same layout/cache path used by manual
+  slider changes. Extended the launch-override regression to cover manual
+  stage-three mode. The later all-features `run_examples.sh` capture with the
+  selected WAV verified the override.
+
+- [~] `2026-09-28 23:41Z` Traced the reported stage-three visual mismatch through
+  the native and browser renderers. The native synthetic overlay was suppressed
+  whenever a complete biological topology happened to be cached, even though
+  stage three had selected the conventional synthetic arrangement. The browser
+  renderer also passed an empty activity list to every sensory neuron. Fixes
+  now remove the unrelated topology gate, give stage-three activity a stronger
+  bounded brightness mapping, and wire browser sensory activity into the
+  canvas renderer. Focused native and browser regressions are being added;
+  live `./run_examples.sh` verification remains pending.
+
+- [~] `2026-09-28 23:57Z` The first requested `./run_examples.sh` live run built
+  both all-features binaries, verified `node_1` and `node_2` under
+  `cluster_master`, and returned non-zero sensory indices from
+  `/api/activity` at step 92. It also reproduced timeouts in the orchestrator's
+  aggregate cluster-snapshot requests while sensory delivery was applying
+  bounded backpressure. The native UI therefore needed a display-only fallback
+  for acknowledged sensory frames while snapshots lag; that path now uses a
+  non-blocking lock and rejects unacknowledged provider samples. Focused Rust
+  tests (16 topology/render policy cases), browser canvas stage/activity checks,
+  `rustfmt --check` and `git diff --check` pass. A final live run and all-feature
+  executable rebuild remain pending.
+
+- [~] `2026-09-29 00:08Z` The user screenshot confirms accepted audio frames
+  but no visible stage-three links or changing neuron brightness. The local
+  native dashboard was decoding the orchestrator's aggregate snapshot as if it
+  had to include a shard named after the orchestrator; the active layer owner
+  can instead be a worker. The activity fallback also replayed the same last
+  acknowledged frame on every redraw, preventing its brightness trace from
+  decaying. The snapshot selector now keeps worker validation strict while
+  allowing an aggregate orchestrator projection, and acknowledged display
+  frames now carry network/session/sequence provenance and are applied once.
+  The 18 focused native presentation tests, both browser visualisation suites,
+  `rustfmt --check` and `git diff --check` pass. The requested live
+  `./run_examples.sh` run with the selected WAV remains pending.
+
+- [~] `2026-09-29 00:23Z` The scripted live cluster joined both workers,
+  acknowledged the selected WAV directly at a 64-input bridge, returned active
+  sensory/hidden indices, and began publishing aggregate snapshots. Its first
+  native capture was too early to assess the populated canvas, and the second
+  used the application's default automatic detail mode rather than the user's
+  manually selected stage three. Added bounded `NM_UI_VISUALIZATION_STAGE` and
+  `NM_UI_VISUALIZATION_AUTO` launch overrides for reproducible capture runs, a
+  test proving the cluster edge projection retains non-zero sensory/output
+  links, and a regression for the orchestrator aggregate-shard selection. All
+  20 focused native tests and both browser visualisation suites pass; a manual
+  stage-three `./run_examples.sh` capture remains pending.
+
+- [x] `2026-09-28 22:58Z` Fixed transient sensory bridge timeouts dropping a
+  managed audio route. A bounded retry resends the same frame/session identity
+  for up to 120 seconds when gRPC reports timeout, deadline, cancellation or
+  resource-pressure errors; the bounded UI producer channel pauses further
+  provider reads behind it. Permanent shape/ownership/pause errors close that
+  route generation so later frames cannot conceal a gap. A regression admits
+  a one-neuron frame while the managed Runner write lock is held. `cargo test
+  --locked --all-features --lib sensory -- --nocapture` passed 35 tests, the
+  retry-policy test passed, all 18 `run_examples_launcher` tests passed, four
+  audio-I/O contract tests and six local cluster/credential tests passed, and
+  `rustfmt --check`, `bash -n` and `git diff --check` passed. The required
+  `./run_examples.sh` run decoded `/home/pbisaacs/Downloads/message.wav` at
+  8 kHz/192,160 samples with S=64, verified both workers in `cluster_master`,
+  activated the direct sensory route to `node_2`, and returned non-zero
+  sensory indices from `/api/activity` at step 621. Transient gRPC cancellation
+  was logged as ordered backpressure and the route stayed active until clean
+  shutdown. The run ended with a frame still waiting behind worker computation,
+  so complete file delivery under sustained load remains unverified and the
+  Phase 8 gate stays open.
+
+- [x] `2026-09-28 22:04Z` Fixed the live `run_examples.sh` audio path across
+  the complete `--all-features` profile. A focused worker-startup regression
+  confirms that the compatibility Runner honours `NM_DISTRIBUTED_AUTOSTART`
+  even when `stable_executor_live` is compiled but no stable manifest is
+  registered. The live rerun then exposed a second race: example workers had
+  preloaded the checked-in zero-width `config.json`, began growth, and reported
+  a hosted network before applying the orchestrator's aligned S=64 snapshot.
+  Both worker launches now set `NM_PRELOAD_NODE_NETWORK=0`, so the distributed
+  snapshot is the first network they load. With `message.wav`, the launcher
+  reported both workers ready, activated the direct route to `node_1`, logged
+  acknowledgement of frame 0 at width 64, and `/api/activity` reported
+  non-zero sensory indices at step 157. No paused-network or width-mismatch
+  errors occurred. Later frame preparations 77, 81, 132, 197 and 259 timed out
+  during the CPU/morphology-loaded run, so uninterrupted full-file delivery
+  remains unverified. The focused autostart test, all 18 launcher integration
+  tests, four Python I/O-contract tests, `bash -n`, targeted Rust formatting,
+  `git diff --check`, and the release build performed by `./run_examples.sh`
+  passed; launcher cleanup left no service processes or listeners. The Phase 8
+  workstation-I/O gate remains open.
+
+- [x] `2026-09-28 21:30Z` Investigated the report that an audio file is
+  selected while the cluster dashboard shows no managed sensory frames. The
+  reproduced startup contract is zero-width in both `config.json` and
+  `network.json`; `run_examples.sh` only prepares a positive run-local I/O
+  contract when `AARNN_AUDIO_FILE` is supplied before launch. The native UI's
+  later file selection cannot change the already-distributed topology. A
+  positive config contract also currently updates `net_cfg` while the startup
+  snapshot JSON remains zero-width, so orchestrator distribution can still
+  publish a snapshot without the sensory matrix columns. The run-local I/O
+  helper now prepares positive input capacity even when the file is selected
+  after startup; the canonical Runner resize aligns snapshot matrices and
+  runtime arrays before distribution. Focused snapshot QA passes, and the
+  live route is covered by the 22:04Z entry below. The workspace root and
+  package set were verified with `cargo metadata --locked --no-deps`; unrelated
+  dirty files were preserved.
+
+- [x] `2026-09-28 21:47Z` The focused snapshot tests pass and the release
+  launcher reaches a two-worker ready state with an aligned S=64 snapshot.
+  Live I/O exposed a separate startup-state mismatch: `/api/status` reported
+  the orchestrator registry as playing, but the direct ingress owner rejected
+  frames as `managed network is paused`. The initial diagnosis blamed a missing
+  worker environment export; later inspection corrected this because the
+  launcher already exported `NM_DISTRIBUTED_AUTOSTART=1` to every process.
+  Instead, the `#[cfg(not(feature = "stable_executor_live"))]` fallback was
+  absent in the launcher's all-features build, leaving a preloaded compatibility
+  Runner paused when no stable manifest was supplied. The 22:04Z entry records
+  the feature-independent policy fix and live evidence.
+
+- [x] `2026-09-28 19:26Z` Reproduced the missing cluster members with
+  `AARNN_NATIVE_UI=0 ./run_examples.sh`. The runtime cache contained the local
+  gRPC certificate issued on 18 September and expired on 19 September; the
+  environment helper previously reused it based only on file presence. Both
+  workers then logged `connect: transport error`, `/api/status` returned 503,
+  and the orchestrator reported zero connected nodes even though the launcher
+  announced that the processes had started. The helper now checks certificate
+  validity, CA-chain verification and private-key matches, rotating stale
+  local material. The launcher waits for both worker addresses in the same
+  authenticated status response used by the dashboard before reporting ready,
+  and prints recent service logs on timeout. `python3
+  scripts/qa/test_local_management_env.py` passed both reuse/rotation tests;
+  `cargo test --locked --test run_examples_launcher` passed all 14 tests;
+  `python3 -m py_compile ...`, `bash -n run_examples.sh` and `git diff
+  --check` passed. The post-fix release run recovered the expired credentials,
+  reported `node_1_775090649` and `node_2_1587868789` joined at ports 50075 and
+  50087, and `/api/status` showed both nodes plus `cluster_master` distributed
+  across two nodes (node 1 active, node 2 backup for layer 0). The orchestrator
+  log reported `Nodes connected: 2`; shutdown left no service processes or
+  listeners. The overall Phase 8 workstation-I/O gate remains open.
+
+- [x] `2026-09-28 15:45Z` Re-ran the live cluster test through
+  `AARNN_AUDIO_FILE=/home/pbisaacs/Downloads/message.wav
+  AARNN_AUDIO_SENSORY_NEURONS=64
+  EXAMPLE_RUNTIME_ROOT=/tmp/aarnn-run-examples-audio-managed-wait
+  ./run_examples.sh`. The screenshot's `cluster_master` had zero connected
+  nodes and no layer distribution, so it had no worker to act as the direct
+  sensory I/O bridge; the WAV was decoded but could not be admitted. In the
+  launcher run the route first reported that it was waiting, then activated
+  directly to `node_1_926099529` at width 64 and logged acknowledgement of
+  frame 0. `/api/status` showed layer 0 assigned to that worker and the
+  network playing; `/api/activity?network_id=cluster_master` returned 18
+  active sensory indices at step 1685. The UI had also been advancing the
+  audio provider in its unrelated standalone Runner while a managed route was
+  waiting. `SimControl::SetDistributedInput` now carries managed-view state;
+  the simulation controller waits without advancing that Runner or consuming
+  the file until the direct route is available. Wait and route changes are
+  logged once for diagnosis. `cargo test --locked --all-features --lib
+  sensory -- --nocapture` passed 33 tests, including the new managed-view wait
+  test; `python3 scripts/qa/test_audio_io_contract.py` passed four tests;
+  `rustfmt --check --edition 2024 src/ui.rs` and `git diff --check` passed.
+  The release build in `./run_examples.sh` passed and launcher shutdown left no
+  child processes. The complete Phase 8 gate remains open.
+
+- [~] `2026-09-28 15:11Z` Re-ran the requested launcher with the selected WAV
+  after the earlier sensory-width fix. `cargo metadata --locked --no-deps
+  --format-version 1` confirms the canonical workspace and the native UI and
+  distributed runtime live in `src/ui.rs` and `src/distributed.rs`. The
+  run-local contract correctly changed both zero-width inputs to `S=64`, but
+  `logs/nm-1790607888.log` records 4,732 rejected frames from 15:04:53Z through
+  15:04:58Z while `cluster_master` was still being loaded; the first worker
+  load is logged at 15:04:58Z. The assigned worker then appears in the
+  orchestrator's hosted-network heartbeat metrics. This is a placement/readiness
+  race: distribution plus a connected peer was treated as a live I/O bridge.
+  Gate route publication and admission on the assigned worker reporting the
+  network loaded, then verify that the retained file provider starts once the
+  route becomes ready. The earlier launcher left three orphaned test processes;
+  they were confirmed by PID, command line and private runtime root and stopped
+  before the next run. Live acknowledgement evidence remains pending.
+
+- [x] `2026-09-28 14:27Z` Revalidated the managed Start-to-audio repair after
+  acknowledgement-schema validation was added. The two-worker integration test
+  now sets a configured sensory target on the second worker and proves that
+  only that worker receives frames directly, with prepare/commit acknowledgements,
+  duplicate retry idempotency and changed-payload rejection. The lock-contention
+  retry test passes; `cargo test --locked --all-features --lib sensory --
+  --nocapture` passes all 30 matching tests. The all-features `aarnn_rust` and
+  `web_ui` binary check, workspace format check and `git diff --check` pass.
+  The orchestrator keeps route/control metadata scoped to each managed cluster
+  network; input payloads go to that network's selected I/O bridge. Interactive
+  desktop Start-to-playback verification remains outstanding.
+
+- [x] `2026-09-28 12:09Z` Repaired the bounded native audio-to-sensory adapter for
+  networks with fewer sensory neurons than audio feature bands. Its current
+  rounded band-to-neuron ranges can be empty, silently discarding parts of the
+  source. Keep the network's configured sensory width and heuristically map
+  every source band onto an available input; where width is insufficient,
+  multiple bands select the same neuron and each input receives the strongest
+  mapped activity. The shared mapper serves audio-file and microphone
+  providers, reuses bounded projection scratch, and leaves the neural topology
+  unchanged. `cargo test --locked --features ui --lib providers::tests --
+  --nocapture` passed all 10 provider tests, including deterministic mapping
+  coverage from 1–64 inputs and low/high tones into a one-neuron network.
+  `cargo build --release --locked --all-features --bin aarnn_rust --bin
+  web_ui` also passes (5m20s; repository compiler warnings remain).
+  `cargo fmt --all -- --check` and `git diff --check` pass. This is a bounded
+  legacy UI transducer improvement; it does not close the governed Phase 8
+  admission/transducer gate.
+
+- [x] `2026-09-28 12:42Z` Cross-checked the reported silent sensory probe and
+  found that the audio provider was sized from the workstation's local Runner,
+  while managed input admission validates against the selected brain's sensory
+  width. The provider's `last sensory spikes: 13/64` counter therefore showed
+  generated local frames, not proof that a 64-wide frame had been admitted by a
+  one-input managed brain. Startup audio also lacked a route when the UI opened
+  directly on an already-playing managed view. Size providers from the live
+  managed Runner (or its registry config), change provider width before enabling
+  the route, start the route on selection of an already-playing managed view,
+  and restore local width on stop/view change. Unknown managed width leaves the
+  route disabled with a visible status. Audio-file selection in managed views
+  no longer resizes the local Runner. Four route-sizing tests and the dynamic
+  64-to-1 audio-provider regression pass; `cargo check --locked --features ui
+  --lib`, workspace formatting and `git diff --check` pass with existing
+  warnings. A live `run_examples.sh` cluster rerun remains outstanding.
+
+- [x] `2026-09-28 13:06Z` Rechecked route activation from managed-view selection
+  through provider generation and distributed admission. The start decision
+  treated a stale registry `playing=false` as authoritative, even when the live
+  managed Runner or local playing cache said the network was running; that
+  could leave a preloaded audio source emitting 64-wide local frames while the
+  selected one-input brain received none. Prefer live managed state, reconcile
+  route state on every UI update (including starts/stops from another client),
+  and track target width so network growth refreshes provider shape. A live
+  zero-width Runner is authoritative and remains unavailable; stale config must
+  not turn it into a false one-input target. Add a visible mapping target and
+  distinguish provider-generated frame counts from managed admission. A saved
+  audio path alone does not indicate that its provider is active after a source
+  change; managed mic input is stopped before provider replacement. All nine
+  `sensory_input_route_tests` pass, including stale-registry precedence, route
+  eligibility, and zero/one-input handling. The
+  low/high-tone 64-to-1 provider regression and the distributed single-neuron
+  sensory-admission/shape-rejection test pass. `cargo check --locked
+  --all-features --bin aarnn_rust --bin web_ui`, `cargo fmt --all -- --check`
+  and `git diff --check` pass; existing warnings remain. A live `run_examples.sh`
+  sensory probe was not performed in this pass, so live admission evidence
+  remains open.
+
 - [x] `2026-08-23 12:00Z` Implemented and tested the governed peripheral/effect
   reference contracts, independent channel state, bounded payload admission
   and per-device-epoch duplicate-sequence rejection in `src/peripheral.rs`;
@@ -289,6 +639,37 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   `Runner::log_gpu_cpu_fallback` calls in the already-dirty `src/runner.rs`;
   it reports no diagnostics in the webcam changes. The physical camera path
   remains unverified.
+- [x] `2026-09-28 13:18Z` Fixed the native audio-file picker regression
+  against the already-dirty checkout. `cargo metadata --format-version 1
+  --no-deps` confirms the canonical workspace contains `aarnn_rust`,
+  `aarnn-biox6-exporter` and `xtask`; the affected native path is
+  `src/ui.rs`, with WAV decoding owned by `src/providers.rs`. The chooser
+  had constructed the provider only when the selected view had a known,
+  positive managed sensory width. This left the selected path empty when
+  managed width was unavailable. Provider sizing is now independent from route
+  eligibility: known valid managed widths remain preferred; otherwise a
+  bounded local/configured width permits decode and path retention while the
+  managed route remains fail-closed. Twelve `sensory_input_route_tests` and
+  ten `providers::tests` pass. `cargo check --locked --all-features --bin
+  aarnn_rust --bin web_ui`, `cargo fmt --all -- --check` and `git diff --check`
+  pass with existing repository warnings. No interactive desktop picker run
+  was available. Unrelated dirty visualization, morphology, mobile and Webots
+  files were preserved.
+- [x] `2026-09-28 14:21Z` Repaired the native managed-audio Start path. A
+  contended orchestrator state lock no longer drops Start while reporting
+  optimistic success: the control retries on a background task with a bounded
+  timeout and the UI shows its pending state. The orchestrator publishes the
+  selected sensory I/O bridge in additive heartbeat route metadata; frame
+  payloads go directly to the node owning the configured sensory target layer
+  (or the first active layer when no target is configured). That bridge alone
+  reserves and acknowledges each frame, then existing direct peer routes carry
+  neural activity through the cluster. Duplicate frame sequences with changed
+  spike data and ambiguous bridge ownership fail closed. The lock-contention
+  test, direct two-worker bridge test, bridge-selection tests and 27-test
+  sensory suite pass. `cargo check --locked --all-features --bin aarnn_rust
+  --bin web_ui`, `cargo fmt --all -- --check` and `git diff --check` pass with
+  repository warnings. Live desktop/cluster Start verification is outstanding;
+  the Phase 8 gate remains open.
 
 ## Validation and acceptance
 
@@ -323,6 +704,51 @@ Browser/native media and USB AER adapters, scientific fixtures, federation,
 device timing and migration evidence are absent; layer-group paths remain
 reachable for rollback.
 
+The output raster and neuron brightness were reading different fresh-data
+paths. Brightness used the asynchronous per-worker activity poll, but raster
+columns depended only on the aggregate snapshot. The activity RPC already
+contained recent output history; the dashboard had been ignoring it. When an
+aggregate snapshot stalled, the equaliser and live neuron projection could
+continue updating while the raster retained its previous columns. Reusing the
+bounded worker history keeps the raster moving independently of snapshot
+refresh and does not block the simulation or render loop.
+
+The stage-three live trace isolated the missing neuron pixels to the egui
+primitive choice. Its rectangle tessellator deliberately converts very thin
+filled rectangles into feathered line segments; a one-device-pixel neuron can
+therefore disappear despite correct positions, opaque activity colours, and
+registered painter order. Direct coloured mesh quads preserve exact pixel
+geometry and allow all markers to be submitted in one draw shape. The
+acknowledged audio frame and synthetic connections were already available in
+this reproduction, so this fix stays entirely in the display projection and
+does not enter the neural traversal or sensory admission path.
+
+The current screenshot's `Provider frames: 0` is consistent with an audio
+provider waiting for a valid managed route, not evidence that the WAV decoder
+failed: it displays a decoded 8 kHz mono file, while both checked-in startup
+documents declare `num_sensory_neurons: 0`. Because users select files after
+the dashboard opens, the launcher now prepares a private sensory I/O contract
+on every run without starting playback. The orchestrator aligns the imported
+snapshot matrices and runtime arrays to that contract before distribution, so
+the distributed network and provider agree on sensory width without changing
+the checked-in documents.
+
+The initial live S=64 diagnosis was wrong: `run_examples.sh` already exported
+`NM_DISTRIBUTED_AUTOSTART=1` to the orchestrator and workers. The all-features
+build instead compiled out the fallback that applies this policy to a
+preloaded compatibility Runner when no stable runtime manifest is present. Once
+that was corrected, the live test exposed a second race. The workers preloaded
+the repository's zero-width default config, began autonomous growth, and
+reported the placeholder network as hosted before the orchestrator delivered
+the run-local S=64 snapshot. The example workers now disable local preload and
+wait for the authoritative `LoadNetwork` snapshot; the loaded network is then
+playing with the expected width before route readiness is published. The live
+run acknowledged its first 64-wide frame and reported sensory activity, while
+five later prepare requests timed out under the loaded morphology workload.
+Those timeouts leave uninterrupted full-file delivery unverified; preserve
+worker-side acknowledgements and backpressure evidence rather than treating
+peer presence or a ready dashboard as proof of input delivery.
+
 The Rust webcam preview slice currently calls the blocking Nokhwa frame read
 from the simulation controller thread. A disconnected or stalled driver can
 therefore stall neural stepping as well as preview refresh. The egui camera
@@ -337,13 +763,157 @@ construction; camera opening, streaming and user-triggered enumeration refresh
 run on background workers. A physical webcam was not available for verification
 in this session.
 
+The audio-file status counter measures spikes emitted by the local sensory
+provider before distributed ingress. Managed ingress independently requires
+the frame width to match the selected brain. Because the workstation Runner
+and selected managed brain can have different input widths, displaying local
+provider activity did not prove that the selected brain received it. The UI
+also did not enable the provider route when it opened directly on a managed
+brain that was already playing. The route now uses the managed sensory width
+and is activated on that view transition. It also reports bridge
+acknowledgement separately from local provider output. The 22:04Z live launcher
+evidence confirms that the first frame reached the managed network.
+
+The follow-up route audit found a second activation race: `resolve_view_playing`
+consulted the registry before the live managed Runner. A stale `false` is a
+known value, so it prevented fallback to a live `true` and skipped the route
+start on view selection. Remote starts/stops could also occur after initial
+selection without reconfiguring the workstation route. The UI now prioritises
+live state, reconciles the selected route continuously, and updates provider
+width when the managed sensory layer grows. Remote-only mode has no local
+managed ingress consumer, so it must report that input as unavailable rather
+than claiming a route. A live zero-width Runner also cannot be replaced with a
+one-input assumption from stale registry config; it must wait for an actual
+managed sensory input to exist. A remembered audio filename likewise does not
+prove that the active provider is still an audio-file source after switching
+to another input; route readiness now follows the live provider state.
+
+The latest file-picker report exposed an unintended coupling in that safety
+fix: an unknown managed sensory width correctly disables distributed routing,
+but the chooser also used that route-eligibility result to decide whether it
+could decode and remember the audio file at all. Provider construction needs a
+bounded positive local width; the managed route must continue to require an
+authoritative positive target width.
+
+The subsequent “Start did not change the input” report exposed a separate
+distributed ingress gap. The UI marked the route active and emitted shaped
+provider frames, but `DistributedNode::inject_external_sensory_spikes` first
+required `NodeState.networks[network_id]` on the UI process. In orchestrator
+mode that map is commonly empty: the live network is owned by workers and is
+represented locally by `network_registry`. The existing fallback stream has
+no per-frame acknowledgement and can overwrite a worker's pending single
+sensory slot, so it is not a safe admission path for recorded audio.
+
+The initial acknowledged-ingress change fanned frames from the orchestrator to
+every assigned worker. The user clarified that each cluster master/I/O bridge
+receives the stream directly and that the orchestrator supplies route
+discovery/control only. The final route now resolves the configured sensory
+target layer to one active owner, publishes that bridge identity in heartbeat
+route metadata, and sends frame payloads directly to that peer. Cluster
+activity then uses its existing direct inter-node spike routes.
+
+The Start report also exposed a dropped-control race: `apply_network_control`
+returns before enqueuing if the cluster-state lock is contended, while the UI
+previously treated that result as accepted. The UI now retries away from the
+render thread and waits for authoritative route reconciliation.
+
+The live launcher exposed a distinct startup-readiness race. The native UI
+started its selected audio provider as soon as the placement registry named an
+owner, even though that worker had not yet applied its queued `LoadNetwork`
+command. A connected peer and desired placement are not proof that the assigned
+I/O bridge is ready; the UI now waits for the worker's hosted-network heartbeat
+and keeps the bounded provider idle until route readiness. A follow-up run also
+showed that preloading the worker's unrelated zero-width repository config
+could make that heartbeat describe a placeholder network. The local example
+therefore disables worker preload and uses the orchestrator's aligned snapshot
+as the worker's first network. The live run now acknowledges its first input at
+the configured width; later request timeouts remain under investigation.
+
+The supplied cluster screenshot showed zero connected nodes and an empty
+distribution for `cluster_master`. In that state the decoded file has no
+assigned sensory bridge and cannot be admitted. A separate launcher run with
+workers confirmed that this is a placement/readiness condition, not WAV
+recognition: once the worker heartbeat reported the loaded network, direct
+input was acknowledged and appeared in the cluster's sensory activity. While
+waiting, the managed UI must keep the file provider's cursor still instead of
+feeding its local preview Runner.
+
+The follow-up launcher reproduction found that the missing worker records had
+a separate operational cause: the local development CA and client/server
+certificate were issued for one day, then cached indefinitely because the
+helper checked only for non-empty files. The orchestrator and workers required
+mutual TLS, so expired cached credentials turned successful process startup
+into repeated gRPC transport errors. `/api/status` itself returned 503, while
+`run_examples.sh` only checked process liveness and web asset readiness. The
+local helper now renews expired or mismatched generated credentials, and the
+launcher waits until both expected node endpoints appear in the authenticated
+cluster status before claiming success. The retry evidence includes a healthy
+two-node `cluster_master` distribution; this is developer-launcher TLS
+recovery evidence and does not claim production credential lifecycle closure.
+
+The next run showed that a loaded worker can still exceed the gRPC sensory
+prepare/commit acknowledgement window while its Runner is busy. Tonic surfaces
+the timeout as `Cancelled`/`Timeout expired`, rather than only as a deadline
+error. Retrying that same frame identity preserves sequence and lets the
+bounded producer queue apply backpressure without advancing the WAV provider.
+The live run continued to show non-zero sensory activity while transient
+timeouts were retried. A frame remained pending when the smoke run was stopped,
+so this proves active ingress and neural observation but not completion of the
+full recording under load.
+
+The reported stage-three native view also had a caller/aggregate mismatch:
+the orchestrator obtains a complete cluster cut whose authoritative shard IDs
+are workers, yet the local UI decoder required the orchestrator's own node ID
+to be one of those shards. That rejected projection kept the edge-cache worker
+from receiving fresh cluster matrices. Separately, displaying the most recent
+acknowledged input by merging it on every UI repaint turned a transient spike
+into constant brightness. Presentation now accepts the complete orchestrator
+projection and consumes each acknowledged sensory frame once, independent of
+the provider's pending frame cursor.
+
+The follow-up manual stage-three capture showed that edge projections could
+still starve after snapshots began arriving. Every newer cut cleared the last
+edge list and advanced its worker generation, while a projection result was
+accepted only for the exact current tick. A small display worker could thus
+finish against a cut that had already been superseded, leaving the UI without
+any edges or connection counts. The current implementation retains the last
+projection across monotonic cuts for the same assignment, accepts safely
+lagging results, and refreshes if the cut advanced during computation. A
+network/layer reassignment or time rewind still rejects that projection.
+
 ## Decision Log
 
+- `2026-09-29 / DEC-0085R`: populate the cluster output raster from the same
+  bounded worker activity responses that drive cluster neuron brightness.
+  Merge sparse outputs by simulation step, retain zero-spike steps so the
+  raster scrolls while outputs are silent, and reject histories older than the
+  displayed raster cursor. An actual step rewind clears the display trace.
+  Aggregate snapshots remain a valid source and dedupe by the same cursor.
+  Authority: Sections 16.22 and 21.12; presentation-only, with no neural-state
+  or event-admission effect.
+- `2026-09-29 / DEC-0085S`: render stage-one-to-seven single-pixel neurons as
+  framebuffer-aligned coloured mesh quads, batched per frame. Egui's thin
+  rectangle simplification may rasterise the equivalent `rect_filled` marker
+  as an invisible feathered line. Keep marker intensity in opaque RGB and
+  place the mesh after graph strokes so activity remains visible. This is a
+  presentation-only decision; neural state, admitted stimuli and logical time
+  are unaffected. Authority: Sections 16.22 and 21.12.
 - Initial decision: capture/device time plus a versioned mapping determines biological eligibility; USB completion or network arrival time is used only when the device lacks a clock and its uncertainty is recorded. Authority: Sections 3.4 and 16.18.
 - Initial decision: USB AER is a separately sequenced bidirectional peripheral modality that may run concurrently with A/V/HID; it is not an internal shard transport. Authority: Sections 16.15–16.20.
 - Initial decision: browser input is focused/consented and browser global HID output is unavailable. Authority: Sections 16.21 and 16.23.
 - Initial decision: native/global HID is optional and remains independently safety-gated after general workstation I/O completion. Authority: Sections 16.15, 16.19 and 16.23.
 - Initial decision: federation links use positive minimum delay unless a separately approved component design proves otherwise. Authority: Sections 12.2–12.3.
+- `2026-09-28 / DEC-0085H`: route sensory frames directly to one cluster I/O
+  bridge: the owner of the configured sensory target layer, or the first
+  active layer when no target is configured. The orchestrator publishes that
+  route identity but does not proxy or fan out frame payloads. The bridge uses
+  bounded prepare/commit/abort admission with per-frame acknowledgement and
+  waits for the previous slot to be consumed. Reject ambiguous/missing bridge
+  ownership; do not treat local provider frame counts as managed admission.
+  The cluster's ordinary direct peer transport moves subsequent neural
+  activity. This remains a compatibility-path fix rather than the complete
+  governed peripheral session/data-plane implementation. Authority: Sections
+  16.17, 16.18, 16.20, 16.22 and 16.24, plus `INV-007` and `INV-015`.
 - `2026-09-18 / DEC-0085A`: use one canonical source vocabulary (`video-file`
   and `camera`) across Rust UI, web, Android, iOS and CLI. Preview pixels are
   latest-frame UI state only and never become biological timestamps or causal
@@ -361,6 +931,103 @@ in this session.
   with bounded backoff, and stop never joins a potentially blocked driver
   call. Authority: Sections 16.17, 16.22 and 16.24. This is a legacy local UI
   adapter fix, not the complete governed peripheral pipeline.
+- `2026-09-28 / DEC-0085D`: size a workstation sensory provider from the
+  selected managed brain's live sensory width, with its registry configuration
+  as the fallback; never resize the managed brain to fit the workstation
+  provider. Apply the provider resize and route target in one ordered
+  simulation-control message, activate an already-playing brain when its view
+  is selected, and fail closed while width is unknown. Authority: Sections
+  16.16, 16.17, 16.24 and `INV-007`.
+- `2026-09-28 / DEC-0085E`: route activation follows the freshest managed
+  playing state, reconciling changes from both this UI and other clients. A
+  route is active only when a local distributed ingress is available, the
+  selected managed brain is playing, and an audio-file/microphone provider is
+  ready. A remembered file path is insufficient after provider replacement.
+  Track the routed sensory width so managed growth resizes subsequent frames;
+  a live zero-width Runner is unavailable and never coerced to one. Label
+  provider output separately from the managed mapping target. Authority:
+  Sections 16.17 and 16.24 and the Phase 8 workstation boundary.
+- `2026-09-28 / DEC-0085F`: selecting and decoding an audio file is independent
+  of managed-route eligibility. If a managed target width is unavailable,
+  construct the local provider at a bounded local/configured width, retain the
+  selected path and keep managed ingress disabled until an authoritative
+  positive width exists. Never resize the managed Runner to fit the local
+  provider. Authority: Sections 16.17 and 16.22 and `INV-007`.
+- `2026-09-28 / DEC-0085G`: a contended orchestrator state lock must not cause
+  the UI to claim a Start/Stop command was accepted or to activate sensory
+  routing from an optimistic value. Retry the short enqueue off the render
+  thread with a bounded deadline, report pending/failure state, and let the
+  accepted registry/live Runner state drive route reconciliation. Authority:
+  Sections 16.17 and 16.22 and `INV-007`.
+- `2026-09-28 / DEC-0085I`: managed sensory input readiness requires evidence
+  that the placement-selected bridge has loaded the network. A connected peer
+  and assigned layer describe desired placement, not admission readiness. The
+  orchestrator exposes the bridge to clients only after its heartbeat reports
+  the network, rejects ingress before that evidence exists, and lets the
+  workstation retain the bounded selected provider until route reconciliation
+  can safely activate it. Authority: Sections 16.16, 16.17 and 16.24 and
+  `INV-007`, `INV-015`.
+- `2026-09-28 / DEC-0085J`: a selected managed view owns advancement of its
+  sensory provider. While that network is paused or its direct bridge is
+  loading/unavailable, keep the bounded audio provider intact and idle the
+  workstation's unrelated local Runner; resume provider advancement only
+  after route reconciliation activates the placement-selected bridge. Preserve
+  an explicit wait reason and log route activation/acknowledgement without
+  routing media through the orchestrator. Authority: Sections 16.17, 16.22
+  and 16.24, plus `INV-007` and `INV-015`.
+- `2026-09-28 / DEC-0085K`: generated local launcher credentials are reused
+  only while their CA and leaf certificates remain valid, the leaf verifies
+  under that CA, and both certificate/private-key pairs match. Stale local
+  material is rotated; explicitly supplied deployment credentials remain
+  caller-managed. A local example reports ready only after both worker
+  endpoints appear in orchestrator status. This is launcher reliability
+  behaviour and does not relax mutual-TLS identity requirements. Authority:
+  local management profile and Phase 8 workstation testability boundary.
+- `2026-09-28 / DEC-0085L`: the local example may seed an otherwise zero-width
+  network with a bounded default sensory population so a user can select an
+  input after startup. This changes only the private run-local startup
+  snapshot, leaves playback opt-in, preserves any already-positive sensory
+  width, and uses the canonical Runner resize path with deterministic
+  initialisation. Keep the UI route fail-closed until the selected cluster
+  brain and its loaded sensory bridge are ready. Authority: Sections 16.16,
+  16.17 and 16.24; `INV-007` and `INV-015`.
+- `2026-09-28 / DEC-0085M`: the local example exports the same autostart
+  policy to its orchestrator and worker processes. Registry `playing` state
+  alone does not activate a worker's local Runner; direct sensory admission
+  remains gated by the worker's own loaded/playing state and per-frame
+  acknowledgement. Authority: Sections 16.17 and 16.24 and `INV-007`.
+- `2026-09-28 / DEC-0085N`: apply distributed autostart independently of
+  whether `stable_executor_live` is compiled; a registered stable runtime may
+  start, otherwise the compatibility Runner follows the explicit distributed
+  autostart policy. Example workers that do not share the orchestrator's
+  run-local snapshot must disable local preload and wait for `LoadNetwork`
+  before advertising the sensory bridge as ready. The bridge remains the
+  direct payload recipient and validates the actual sensory width. Authority:
+  Sections 16.16, 16.17 and 16.24 and `INV-007`, `INV-015`.
+
+- `2026-09-28 / DEC-0085O`: when a managed sensory frame is not acknowledged
+  because the bridge is busy or a gRPC acknowledgement times out, retry the
+  same frame/session identity for a bounded 120-second window. The existing
+  bounded provider queue then backpressures source advancement. A permanent
+  route or shape error stops that session instead of forwarding later frames
+  across an unrecorded gap. Authority: Sections 16.17 and 16.24 and
+  `INV-007`, `INV-015`.
+- `2026-09-29 / DEC-0085P`: the local native orchestrator decodes its complete
+  aggregate cluster snapshot without requiring its control-plane identity to
+  own a neural shard; worker snapshot selection remains strict. For the
+  display-only sensory trace, retain the acknowledged frame's brain, session
+  and sequence identity and merge it once. Do not replay an old frame on each
+  repaint or use a not-yet-acknowledged provider frame as evidence of neural
+  activity. Authority: Phase 8 visualisation isolation boundary and
+  `INV-007`, `INV-015`.
+- `2026-09-29 / DEC-0085Q`: synthetic connection projection is presentation
+  state, so the last valid edge list may remain visible while a worker builds
+  edges from a newer cut of the same network assignment. Accept a completed
+  projection only for the selected network, unchanged assignment and cache
+  generation, with a cut no newer than the current snapshot. Reassignment or
+  time rewind invalidates it. This keeps visualisation non-blocking without
+  changing neural traversal, admission or commitment. Authority: Phase 8
+  visualisation isolation boundary and `INV-007`.
 
 ## Outcomes & Retrospective
 
@@ -374,3 +1041,40 @@ are display state only, source changes close stale previews, and each shipped
 surface has the same `video-file`/`camera` vocabulary and source-ready pop-out
 state. Mobile remains a preview/reference shell until its signed packaging and
 governed admission integrations are delivered.
+
+The native audio route now follows the live managed playing state and sensory
+width, distinguishes an active file provider from a remembered path, and reports
+its mapping target separately from provider output. Focused regression coverage
+passes. Live cluster admission and durable peripheral semantics remain open, so
+the Phase 8 workstation-I/O gate is not claimed.
+
+The audio chooser can now decode and retain a selected file when managed input
+width is not yet available, using only a bounded local provider width. The
+existing zero-width managed-route guard remains covered and passing. The native
+dialog itself still needs a manual workstation run for end-to-end confirmation.
+
+The Start control now survives brief state-lock contention without blocking UI
+rendering or silently losing the command. The orchestrator supplies bridge
+discovery metadata, while audio frames travel directly to the sensory-target
+owner and receive per-frame acknowledgements. The 2026-09-28 `run_examples.sh`
+run confirms worker-readiness wait, direct route activation, acknowledgement
+of the first S=64 managed audio frame, and non-zero sensory activity. Five
+later frame preparations timed out under the CPU/morphology workload, so
+uninterrupted full-file delivery remains unverified. The Phase 8 gate remains
+open for that throughput/recovery evidence plus governed production peripheral
+sessions, USB-AER, federation, scientific validation, migration/rollback and
+legacy removal evidence.
+
+The example launcher now also detects expired cached developer mTLS
+certificates and waits for both expected workers to join before announcing
+cluster readiness. The live status and orchestrator telemetry confirm that
+both launched nodes appear in the cluster. This developer profile does not
+replace production certificate rotation, identity enrolment or revocation
+evidence.
+
+The managed input sender now retries a transiently unacknowledged frame and
+lets its bounded upstream queue apply backpressure. The required launcher
+confirmed that the selected WAV reached the sensory-target worker and
+produced non-zero cluster sensory activity. Full-file completion at this
+worker load remains an open validation item; the Phase 8 workstation-I/O gate
+is not claimed.
