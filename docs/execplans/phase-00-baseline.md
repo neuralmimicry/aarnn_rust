@@ -71,6 +71,28 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
 
 ## Progress
 
+- [x] `2026-09-29 18:46Z` Verified the test-contract correction in Unified CI
+  run `36579172049`: both Verify jobs, Release Metadata, Wiki sync and all four
+  Linux package jobs succeeded, including the X64 integration tests and Phase 0
+  fixture. The separate `Publish Release` job failed at
+  `Create or update GitHub release` because `gh` was not installed on sm00
+  (`gh: command not found`, exit 127). `ssh pbisaacs@192.168.1.66` confirmed
+  Ubuntu 26.04 and `apt-cache policy gh` reported an Ubuntu Universe candidate
+  (`2.46.0-4`); the runner currently has no `gh` executable. The workflow
+  already supplies `GH_TOKEN` to its `gh release` calls, so this failure is a
+  missing CLI prerequisite rather than token rejection.
+- [~] `2026-09-29 18:46Z` Add an idempotent GitHub CLI installation/authentication
+  preflight to `.github/workflows/build-and-release.yml`'s `publish-release`
+  job before artifact download, then verify the updated release job in Actions.
+- [x] `2026-09-29 18:50Z` `git diff --check` and
+  `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck=off
+  .github/workflows/build-and-release.yml` pass. The workflow check reports no
+  YAML, expression or action errors; the new shell preflight is clean. Default
+  actionlint also surfaces existing ShellCheck warnings at lines 498 and 764,
+  outside the changed step.
+- [~] `2026-09-29 18:50Z` Commit and push the workflow fix to `main`; confirm a
+  fresh Actions run passes `Publish Release` using the preflight-installed CLI.
+
 - [x] `2026-09-29 13:56Z` Diagnosed the X64 gate in Actions run
   `36569004274` (job `109407994726`): sm00 now acquires and completes the job;
   formatting, lint, build and library/browser tests pass, but the all-features

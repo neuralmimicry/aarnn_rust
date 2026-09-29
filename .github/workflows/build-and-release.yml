@@ -728,6 +728,21 @@ jobs:
             exit 1
           fi
 
+      - name: Install and authenticate GitHub CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes gh
+          fi
+          command -v gh
+          gh --version
+          gh auth status --hostname github.com
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@v8
         with:
