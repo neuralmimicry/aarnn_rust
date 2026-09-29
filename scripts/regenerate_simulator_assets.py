@@ -50,10 +50,10 @@ def generated_assets():
             text = text.replace(ref, f'../protos/{name}.proto')
         yield root / 'webots_world/worlds/drosophila_neuroworld.wbt', text
         generated_multi_worlds = [
-            ('multi_neuroworld.wbt', 'hexapod', 'hexapod_01',
-             root / 'webots_world/protos/HexapodRobot.proto'),
-            ('multi_neuroworld_test.wbt', 'celegans', 'celegans_01,celegans_02',
+            ('multi_neuroworld.wbt', 'celegans', 'celegans_01,celegans_02',
              root / 'webots_world/protos/CelegansRobot.proto'),
+            ('multi_neuroworld_test.wbt', 'hexapod', 'hexapod_01',
+             root / 'webots_world/protos/HexapodRobot.proto'),
         ]
         for filename, kind, brains, proto in generated_multi_worlds:
             subprocess.run([sys.executable, str(root / 'scripts/build_webots_multi_world.py'), '--world', str(scratch),

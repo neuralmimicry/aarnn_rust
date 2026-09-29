@@ -146,14 +146,17 @@ class ContentParity(unittest.TestCase):
         self.assertTrue(all(y < 0 for s, _, values, _ in attachments[3:]
                             for y in [float(values.split()[1])]))
 
-        # Both maintained Webots entry worlds currently instantiate the
-        # articulated HexapodRobot PROTO rather than a single-body placeholder.
-        # The mixed scene remains editor-configurable, so this check is separate
-        # from generated-asset freshness.
-        for world_name in ('hexapod_neuroworld.wbt', 'multi_neuroworld.wbt'):
+        # Keep the dedicated hexapod world and the alternate mixed-scene fixture
+        # on the articulated robot; the primary mixed scene demonstrates two worms.
+        for world_name in ('hexapod_neuroworld.wbt', 'multi_neuroworld_test.wbt'):
             world = (ROOT / 'webots_world/worlds' / world_name).read_text()
             self.assertIn('HexapodRobot.proto', world)
             self.assertRegex(world, r'(?m)^HexapodRobot\s*\{')
+
+        multi_world = (ROOT / 'webots_world/worlds/multi_neuroworld.wbt').read_text()
+        self.assertEqual(len(re.findall(r'(?m)^CelegansRobot\s*\{', multi_world)), 2)
+        self.assertEqual(re.findall(r'"NM_BRAINS=([^"]+)"', multi_world),
+                         ['celegans_01', 'celegans_02'])
 
         unity = (ROOT / 'sim/unity/Assets/NeuralMimicry/Runtime/Robots/NmHexapodRobot.cs').read_text()
         for marker in (
