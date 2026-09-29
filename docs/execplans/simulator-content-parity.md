@@ -171,6 +171,14 @@ compatibility sensor/transport discrepancies are recorded instead of claimed equ
   AARNN or Webots processes. The bounded run also exposed only existing burst
   transport timeout warnings during teardown; they were not startup or UI
   failures.
+- [~] `2026-09-29 12:32Z` GitHub Actions run
+  `36558832919`, ARM64 job `109374484256`, found that the merged
+  `webots_world/worlds/multi_neuroworld.wbt` was stale: the file had
+  `fieldOfView 0.72` while the canonical generator produced `0.80`. Regenerated
+  only that world from `scripts/regenerate_simulator_assets.py`'s
+  `generated_assets()` output. The generator already defines the primary mixed
+  world as two C. elegans and the alternate test world as one hexapod. The
+  hosted simulator-content rerun is pending.
 
 ## Validation and acceptance
 
@@ -296,8 +304,9 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   parity was implicit: Webots used named motors, Unreal and Unity used ordered
   arrays, and WebGL resolved suffixes at runtime. The new oracle makes the shared
   order and all six front/middle/rear attachment rows a checked contract. The
-  multi-neuroworld remains a valid live hexapod scene and is now covered by the
-  world generator as the canonical single-hexapod mixed-world fixture.
+  current generated-world contract uses two C. elegans in
+  `multi_neuroworld.wbt` and one hexapod in `multi_neuroworld_test.wbt`; an earlier
+  progress entry records the prior fixture assignment.
 - Webots’ earlier six transforms were radially distributed around the body: the
   left/right mid roots were on the front/rear centerline. This was structurally
   different from the shared insect-style three-left/three-right contract even
@@ -332,6 +341,12 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   left, with three attachment roots at longitudinal X positions on each fixed
   lateral side. Use outward coxa rotations with front/rear splay; retain the
   canonical actuator ordering and all existing motor limits.
+- `2026-09-29 SIM-007`: The current generated mixed-world assignment is two
+  C. elegans in `multi_neuroworld.wbt` and one hexapod in
+  `multi_neuroworld_test.wbt`, as defined by
+  `scripts/regenerate_simulator_assets.py` and asserted by
+  `scripts/qa/test_simulator_content.py`. Resolve generated-world conflicts by
+  regenerating from that source instead of manually combining generated files.
 
 ## Outcomes & Retrospective
 
