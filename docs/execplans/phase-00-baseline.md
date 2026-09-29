@@ -150,17 +150,17 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
 - [ ] `2026-09-28 06:02Z` Merge the tested change and validate the main-branch
   manifest assembly, Skopeo platform checks, immutable SHA tag and `latest`
   publication.
-- [~] `2026-09-29 10:54Z` Integrating the local Podman branch into `main` after
-  `cargo metadata --no-deps --format-version 1` confirmed the workspace packages
-  and `git merge-tree --write-tree main codex/fix-webots-container-podman-20260928`
-  identified one content conflict at `webots_world/worlds/multi_neuroworld.wbt`.
-  The canonical workflow and Containerfile paths are
-  `.github/workflows/webots-container.yml` and `webots_service/Containerfile`;
-  the incoming tip also includes cross-phase view/morphology work tracked by its
-  own ExecPlans. `main` has two C. elegans instances and the incoming scene has
-  the newer habitat with one instance, so the merge keeps the newer habitat and
-  both instances. No tests are being run in this branch-cleanup task; final
-  publication and cross-product acceptance remain pending and Phase 0 stays open.
+- [x] `2026-09-29 10:57Z` Merged the local Podman branch into `main` as
+  `fd57e3a`. `cargo metadata --no-deps --format-version 1` confirmed the
+  workspace packages; `git merge-tree --write-tree main
+  codex/fix-webots-container-podman-20260928` identified one conflict at
+  `webots_world/worlds/multi_neuroworld.wbt`. Kept the incoming habitat and both
+  C. elegans instances. `git diff --cached --check` passed before commit. Pushed
+  `main` to `origin` and removed the eight local codex branches and five remote
+  codex heads. The self-hosted-runner commit was patch-equivalent to a commit
+  already in `main`; the other branch tips were ancestors after the merge. Local
+  build/test suites were not run for this branch-cleanup task. Cross-product
+  acceptance and the Phase 0 gate remain open.
 
 ## Validation and acceptance
 
