@@ -18,6 +18,9 @@ service DistributedNeuromorphic {
   rpc PrepareSensoryInput(SensoryInputFrame) returns (SensoryInputFrameAck);
   rpc CommitSensoryInput(SensoryInputFrameId) returns (SensoryInputFrameAck);
   rpc AbortSensoryInput(SensoryInputFrameId) returns (SensoryInputFrameAck);
+  // Trusted API ingress asks the orchestrator to resolve the current bridge
+  // and run the existing bounded Prepare/Commit transaction on its behalf.
+  rpc InjectExternalSensoryFrame(SensoryInputFrame) returns (SensoryInputFrameAck);
   
   // Control and growth updates
   rpc UpdateNetwork(NetworkUpdateRequest) returns (NetworkUpdateResponse);
@@ -450,6 +453,11 @@ message SensoryInputFrame {
   int64 step_index = 6;
   // Signed spike values encoded as their i8 byte representation.
   bytes spikes = 7;
+  // Optional sparse +1 input used by trusted external gateways. The
+  // orchestrator expands indices against the registered network sensory width
+  // before forwarding the dense frame through the existing worker protocol.
+  repeated uint32 active_spike_indices = 8;
+  bool active_spike_indices_present = 9;
 }
 
 message SensoryInputFrameId {

@@ -138,7 +138,7 @@ pub const PEER_STALE_AFTER: Duration = Duration::from_secs(20);
 pub const EXTERNAL_SENSORY_LAYER_INDEX: u32 = u32::MAX;
 /// Bound externally admitted sensory frames before they reach a worker queue.
 const MAX_EXTERNAL_SENSORY_SPIKES: usize = 16 * 1024 * 1024;
-const SENSORY_INPUT_FRAME_SCHEMA_VERSION: u32 = 1;
+pub const SENSORY_INPUT_FRAME_SCHEMA_VERSION: u32 = 1;
 const EXTERNAL_SENSORY_RESERVATION_TTL: Duration = Duration::from_secs(5);
 const EXTERNAL_SENSORY_INGRESS_TIMEOUT: Duration = Duration::from_secs(8);
 /// Retry one idempotent preparation when a busy worker delays its acknowledgement.
@@ -3507,6 +3507,18 @@ fn preserve_sharded_node_assignments(
     Some(assignments)
 }
 
+fn primary_owner_missing_from_network_affinity(
+    primary_node: Option<&str>,
+    active_network_nodes: &[String],
+) -> bool {
+    primary_node.is_some_and(|primary| {
+        !active_network_nodes.is_empty()
+            && !active_network_nodes
+                .iter()
+                .any(|node_id| node_id == primary)
+    })
+}
+
 /// Return whether a heartbeat changes the layer placement shape.
 ///
 /// A larger count for an already hosted layer is biological growth. It must
@@ -4000,6 +4012,50 @@ fn sensory_ingress_owner_is_ready(
             .network_runtime_metrics
             .get(network_id)
             .is_some_and(|workers| workers.contains_key(owner_node_id))
+}
+
+fn validate_external_sensory_gateway_request<T>(request: &Request<T>) -> Result<(), Status> {
+    let configured_token = ["NM_ORCHESTRATOR_BEARER_TOKEN", "NM_MANAGEMENT_BEARER_TOKEN"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .map(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or(&value)
+                .trim()
+                .to_owned()
+        })
+        .find(|value| !value.is_empty());
+    validate_external_sensory_gateway_authorization(request, configured_token.as_deref())
+}
+
+fn validate_external_sensory_gateway_authorization<T>(
+    request: &Request<T>,
+    configured_token: Option<&str>,
+) -> Result<(), Status> {
+    let Some(expected) = configured_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        // Reference deployments keep the gRPC API on the trusted cluster
+        // network and may not configure a management bearer. Production
+        // deployments that do configure one must present it on this route.
+        return Ok(());
+    };
+    let supplied = request
+        .metadata()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim);
+    if supplied != Some(expected) {
+        return Err(Status::unauthenticated(
+            "valid trusted sensory-ingress credentials are required",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sensory_rpc_source<T>(
@@ -6093,23 +6149,95 @@ impl DistributedNode {
         step_index: i64,
         spikes: &[i8],
     ) -> Result<(), String> {
-        if network_id.trim().is_empty() {
+        let frame = proto::SensoryInputFrame {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            network_id: network_id.to_owned(),
+            source_node_id: String::new(),
+            session_id: session_id.to_owned(),
+            frame_sequence,
+            step_index,
+            spikes: spikes.iter().map(|spike| *spike as u8).collect(),
+            active_spike_indices: Vec::new(),
+            active_spike_indices_present: false,
+        };
+        self.inject_external_sensory_payload(frame).await
+    }
+
+    pub async fn inject_external_sensory_indices(
+        &self,
+        network_id: &str,
+        session_id: &str,
+        frame_sequence: u64,
+        step_index: i64,
+        active_spike_indices: &[u32],
+    ) -> Result<(), String> {
+        let (configured_width, local_ingress) = {
+            let state = self.state.read().await;
+            let configured_width = state
+                .network_registry
+                .get(network_id)
+                .and_then(|status| network_config_from_payload(&status.config_json))
+                .map(|config| config.num_sensory_neurons);
+            (
+                configured_width,
+                state.sensory_ingress_mailboxes.get(network_id).cloned(),
+            )
+        };
+        let sensory_width = configured_width
+            .or_else(|| {
+                local_ingress
+                    .as_ref()
+                    .map(|ingress| lock_external_sensory_ingress(ingress).sensory_width)
+            })
+            .ok_or_else(|| format!("network {network_id} has no known sensory width"))?;
+        if sensory_width > MAX_EXTERNAL_SENSORY_SPIKES {
+            return Err("network sensory width exceeds the external input frame bound".to_owned());
+        }
+        let mut spikes = vec![0i8; sensory_width];
+        for index in active_spike_indices {
+            let Some(spike) = spikes.get_mut(*index as usize) else {
+                return Err(format!(
+                    "external sensory index {index} exceeds network sensory width {sensory_width}"
+                ));
+            };
+            *spike = 1;
+        }
+        self.inject_external_sensory_frame(
+            network_id,
+            session_id,
+            frame_sequence,
+            step_index,
+            &spikes,
+        )
+        .await
+    }
+
+    async fn inject_external_sensory_payload(
+        &self,
+        mut frame: proto::SensoryInputFrame,
+    ) -> Result<(), String> {
+        if frame.network_id.trim().is_empty() {
             return Err("external sensory injection requires a network id".to_owned());
         }
-        if session_id.trim().is_empty() || session_id.len() > 128 {
+        if frame.session_id.trim().is_empty() || frame.session_id.len() > 128 {
             return Err("external sensory injection requires a bounded session id".to_owned());
         }
-        if step_index < 0 {
+        if frame.step_index < 0 {
             return Err("external sensory injection requires a non-negative step".to_owned());
         }
-        if frame_sequence != step_index as u64 {
+        if frame.frame_sequence != frame.step_index as u64 {
             return Err("external sensory frame sequence must match its source step".to_owned());
         }
-        if spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES {
-            return Err("external sensory frame exceeds the configured spike bound".to_owned());
-        }
-        if spikes.iter().any(|spike| !(-1..=1).contains(spike)) {
-            return Err("external sensory spikes must be -1, 0 or 1".to_owned());
+        if frame.spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES
+            || frame.active_spike_indices.len() > MAX_EXTERNAL_SENSORY_SPIKES
+            || frame
+                .spikes
+                .iter()
+                .any(|spike| !(-1..=1).contains(&(*spike as i8)))
+            || (frame.active_spike_indices_present && !frame.spikes.is_empty())
+            || (!frame.active_spike_indices_present && !frame.active_spike_indices.is_empty())
+        {
+            return Err("external sensory frame has an invalid or oversized payload".to_owned());
         }
 
         if live_causal_transport_enabled() {
@@ -6118,18 +6246,13 @@ impl DistributedNode {
             );
         }
 
-        let (source_node_id, local_ingress, targets) =
-            self.external_sensory_participants(network_id).await?;
+        let (source_node_id, local_ingress, targets) = self
+            .external_sensory_participants(&frame.network_id)
+            .await?;
+        // The authenticated orchestrator owns source identity. Never accept a
+        // client-selected source_node_id for the committed frame identity.
+        frame.source_node_id = source_node_id;
         let has_local_ingress = local_ingress.is_some();
-        let frame = proto::SensoryInputFrame {
-            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
-            network_id: network_id.to_owned(),
-            source_node_id,
-            session_id: session_id.to_owned(),
-            frame_sequence,
-            step_index,
-            spikes: spikes.iter().map(|spike| *spike as u8).collect(),
-        };
         let identity = external_sensory_identity(&frame);
 
         // Prepare the selected bridge before commit. This two-phase boundary
@@ -6286,15 +6409,35 @@ impl DistributedNode {
         frame: &proto::SensoryInputFrame,
     ) -> Result<bool, Status> {
         let identity = external_sensory_identity(frame);
-        let spikes = frame
-            .spikes
-            .iter()
-            .map(|spike| *spike as i8)
-            .collect::<Vec<_>>();
+        let sensory_width = lock_external_sensory_ingress(ingress).sensory_width;
+        let spikes = if frame.active_spike_indices_present {
+            if sensory_width > MAX_EXTERNAL_SENSORY_SPIKES {
+                return Err(Status::resource_exhausted(
+                    "network sensory width exceeds the external input frame bound",
+                ));
+            }
+            let mut dense = vec![0i8; sensory_width];
+            for index in &frame.active_spike_indices {
+                let Some(spike) = dense.get_mut(*index as usize) else {
+                    return Err(Status::invalid_argument(format!(
+                        "external sensory index {index} exceeds network sensory width {sensory_width}"
+                    )));
+                };
+                *spike = 1;
+            }
+            dense
+        } else {
+            frame
+                .spikes
+                .iter()
+                .map(|spike| *spike as i8)
+                .collect::<Vec<_>>()
+        };
+        let wire_spikes = spikes.iter().map(|spike| *spike as u8).collect::<Vec<_>>();
         let deadline = tokio::time::Instant::now() + EXTERNAL_SENSORY_RESERVATION_TTL;
         loop {
             if let Some(already_applied) =
-                try_prepare_external_sensory_frame(ingress, &identity, &spikes, &frame.spikes)?
+                try_prepare_external_sensory_frame(ingress, &identity, &spikes, &wire_spikes)?
             {
                 return Ok(already_applied);
             }
@@ -8776,11 +8919,32 @@ impl DistributedNode {
                         .map(|cap| (node_id.clone(), cap))
                 })
                 .collect();
+            let active_network_nodes = network_affinity
+                .get(net_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let stale_primary_owner = primary_owner_missing_from_network_affinity(
+                existing_primary_nodes.get(net_id).map(String::as_str),
+                active_network_nodes,
+            );
             // Affinity preserves placement for single-target networks, but it
             // must not prevent a sharded network from expanding onto workers
             // that joined or restarted after the initial assignment.
             let mut target_node_capacities = if shard_across_nodes {
-                node_capacities.clone()
+                if stale_primary_owner {
+                    let loaded_candidates = node_capacities
+                        .iter()
+                        .filter(|(node_id, _)| active_network_nodes.contains(node_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if loaded_candidates.is_empty() {
+                        node_capacities.clone()
+                    } else {
+                        loaded_candidates
+                    }
+                } else {
+                    node_capacities.clone()
+                }
             } else {
                 affinity_node_capacities
             };
@@ -8841,6 +9005,9 @@ impl DistributedNode {
             // is absent from node_capacity_map and is still removed here.
             if shard_across_nodes {
                 for node_id in &previous_nodes {
+                    if stale_primary_owner && !active_network_nodes.contains(node_id) {
+                        continue;
+                    }
                     if target_node_capacities
                         .iter()
                         .any(|(candidate, _)| candidate == node_id)
@@ -8931,6 +9098,7 @@ impl DistributedNode {
                     .then_some(ipc_owner_id.as_str());
                 let planner_home = existing_primary_nodes
                     .get(net_id)
+                    .filter(|node_id| eligible_nodes.contains(*node_id))
                     .map(String::as_str)
                     .or(preferred_ipc_node)
                     .or_else(|| {
@@ -10731,6 +10899,52 @@ impl DistributedNeuromorphic for DistributedNode {
     type StreamNetworkSnapshotStream =
         tokio_stream::wrappers::ReceiverStream<Result<NetworkSnapshotChunk, Status>>;
 
+    async fn inject_external_sensory_frame(
+        &self,
+        request: Request<proto::SensoryInputFrame>,
+    ) -> Result<Response<proto::SensoryInputFrameAck>, Status> {
+        validate_external_sensory_gateway_request(&request)?;
+        let frame = request.into_inner();
+        if !self.state.read().await.is_orchestrator {
+            return Err(Status::permission_denied(
+                "external sensory frames must be admitted by the cluster orchestrator",
+            ));
+        }
+        let result = if frame.active_spike_indices_present {
+            DistributedNode::inject_external_sensory_indices(
+                self,
+                &frame.network_id,
+                &frame.session_id,
+                frame.frame_sequence,
+                frame.step_index,
+                &frame.active_spike_indices,
+            )
+            .await
+        } else {
+            let spikes = frame
+                .spikes
+                .iter()
+                .map(|spike| *spike as i8)
+                .collect::<Vec<_>>();
+            DistributedNode::inject_external_sensory_frame(
+                self,
+                &frame.network_id,
+                &frame.session_id,
+                frame.frame_sequence,
+                frame.step_index,
+                &spikes,
+            )
+            .await
+        };
+        result.map_err(Status::unavailable)?;
+        Ok(Response::new(proto::SensoryInputFrameAck {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            accepted: true,
+            already_applied: false,
+            frame_sequence: frame.frame_sequence,
+        }))
+    }
+
     async fn prepare_sensory_input(
         &self,
         request: Request<proto::SensoryInputFrame>,
@@ -10749,6 +10963,9 @@ impl DistributedNeuromorphic for DistributedNode {
             || frame.step_index < 0
             || frame.frame_sequence != frame.step_index as u64
             || frame.spikes.len() > MAX_EXTERNAL_SENSORY_SPIKES
+            || frame.active_spike_indices.len() > MAX_EXTERNAL_SENSORY_SPIKES
+            || (frame.active_spike_indices_present && !frame.spikes.is_empty())
+            || (!frame.active_spike_indices_present && !frame.active_spike_indices.is_empty())
             || frame
                 .spikes
                 .iter()
@@ -13707,6 +13924,68 @@ mod tests {
         assert!(distribution.contains_key("node-c"));
     }
 
+    #[tokio::test]
+    async fn sharded_rebalance_replaces_a_primary_that_no_longer_hosts_the_network() {
+        let node = DistributedNode::new("orch".to_string(), true);
+        {
+            let mut state = node.state.write().await;
+            for (node_id, active_networks) in [
+                ("sm00", Vec::new()),
+                ("qc02", vec!["celegans_01".to_string()]),
+                ("qc04", vec!["celegans_01".to_string()]),
+            ] {
+                state.nodes.insert(
+                    node_id.to_string(),
+                    NodeStatus {
+                        node_id: node_id.to_string(),
+                        address: format!("{node_id}:50051"),
+                        resources: Some(Resources::default()),
+                        active_networks,
+                        stable_executors: Vec::new(),
+                        stable_executor_capabilities: Vec::new(),
+                    },
+                );
+            }
+            state.network_registry.insert(
+                "celegans_01".to_string(),
+                proto::NetworkStatus {
+                    network_id: "celegans_01".to_string(),
+                    num_layers: 3,
+                    distribution: HashMap::from([(
+                        "sm00".to_string(),
+                        LayerRange {
+                            layers: vec![0, 1, 2],
+                            layer_neuron_counts: HashMap::from([(0, 24), (1, 32), (2, 96)]),
+                            backup_layers: Vec::new(),
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+
+        node.rebalance_networks().await;
+
+        let state = node.state.read().await;
+        let distribution = &state
+            .network_registry
+            .get("celegans_01")
+            .expect("network retained")
+            .distribution;
+        assert!(!distribution.contains_key("sm00"));
+        assert!(!distribution.is_empty());
+        assert!(
+            distribution
+                .keys()
+                .all(|node_id| node_id == "qc02" || node_id == "qc04")
+        );
+        assert!(
+            distribution
+                .values()
+                .any(|assignment| assignment.layers.contains(&0))
+        );
+    }
+
     #[test]
     fn sharded_rebalance_rebuilds_when_a_new_target_joins() {
         let previous = HashMap::from([
@@ -14536,6 +14815,39 @@ mod tests {
     }
 
     #[test]
+    fn external_sensory_gateway_enforces_the_configured_bearer() {
+        let request = Request::new(());
+        assert_eq!(
+            validate_external_sensory_gateway_authorization(
+                &request,
+                Some("trusted-ingress-token")
+            )
+            .expect_err("missing gateway credential must be rejected")
+            .code(),
+            tonic::Code::Unauthenticated
+        );
+
+        let mut request = Request::new(());
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer trusted-ingress-token".parse().unwrap(),
+        );
+        validate_external_sensory_gateway_authorization(&request, Some("trusted-ingress-token"))
+            .expect("configured gateway credential is accepted");
+
+        let mut wrong = Request::new(());
+        wrong
+            .metadata_mut()
+            .insert("authorization", "Bearer other-token".parse().unwrap());
+        assert_eq!(
+            validate_external_sensory_gateway_authorization(&wrong, Some("trusted-ingress-token"))
+                .expect_err("wrong gateway credential must be rejected")
+                .code(),
+            tonic::Code::Unauthenticated
+        );
+    }
+
+    #[test]
     fn sensory_ingress_resolves_to_the_first_layer_owner_only() {
         let distribution = HashMap::from([
             (
@@ -14819,23 +15131,86 @@ mod tests {
         }
 
         orchestrator
-            .inject_external_sensory_frame("audio-brain", "session-a", 1, 1, &[0])
+            .inject_external_sensory_indices("audio-brain", "session-a", 1, 1, &[0])
             .await
-            .expect("the next frame is admitted after consumption");
+            .expect("sparse sensory indices are expanded before forwarding to the bridge");
         {
             let state = downstream_worker.state.read().await;
-            let network = state
+            let ingress = state
                 .sensory_ingress_mailboxes
                 .get("audio-brain")
                 .expect("configured bridge ingress");
-            let network = lock_external_sensory_ingress(network);
+            let network = lock_external_sensory_ingress(ingress);
             assert!(
                 network
                     .committed
                     .as_ref()
+                    .is_some_and(|frame| frame.spikes.as_slice() == [1])
+            );
+            let identity = network
+                .committed
+                .as_ref()
+                .expect("committed sparse frame")
+                .identity
+                .clone();
+            drop(network);
+            downstream_worker.finish_local_sensory_step(ingress, Some(&identity), false);
+        }
+
+        orchestrator
+            .inject_external_sensory_indices("audio-brain", "session-a", 1, 1, &[0])
+            .await
+            .expect("retrying the same sparse frame is idempotent");
+        let changed_sparse_retry = orchestrator
+            .inject_external_sensory_indices("audio-brain", "session-a", 1, 1, &[])
+            .await
+            .expect_err("a sparse retry cannot change its admitted input");
+        assert!(changed_sparse_retry.contains("reused with different spike values"));
+        {
+            let state = downstream_worker.state.read().await;
+            let ingress = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("configured bridge ingress");
+            let identity = lock_external_sensory_ingress(ingress)
+                .last_committed
+                .clone()
+                .expect("sparse frame identity retained");
+            downstream_worker.finish_local_sensory_step(ingress, Some(&identity), false);
+        }
+
+        orchestrator
+            .inject_external_sensory_indices("audio-brain", "session-a", 2, 2, &[])
+            .await
+            .expect("an empty sparse frame is a valid all-silent input");
+        {
+            let state = downstream_worker.state.read().await;
+            let ingress_handle = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("configured bridge ingress");
+            let ingress = lock_external_sensory_ingress(ingress_handle);
+            assert!(
+                ingress
+                    .committed
+                    .as_ref()
                     .is_some_and(|frame| frame.spikes.as_slice() == [0])
             );
+            let identity = ingress
+                .committed
+                .as_ref()
+                .expect("committed silent sparse frame")
+                .identity
+                .clone();
+            drop(ingress);
+            downstream_worker.finish_local_sensory_step(ingress_handle, Some(&identity), false);
         }
+
+        let invalid_index = orchestrator
+            .inject_external_sensory_indices("audio-brain", "session-a", 3, 3, &[1])
+            .await
+            .expect_err("indices beyond the loaded sensory width are rejected");
+        assert!(invalid_index.contains("exceeds network sensory width"));
 
         let _ = shutdown_tx.send(());
         server.await.expect("join test worker RPC server");

@@ -120,6 +120,35 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [~] `2026-09-29 20:19Z` Added the Webots-to-AARNN sparse sensory ingress
+  slice on top of the existing bounded Prepare/Commit bridge. The API now
+  forwards non-worker-targeted sparse `spike_indices` to the orchestrator;
+  the orchestrator expands them against the registered network sensory width
+  before forwarding a dense frame through the existing worker protocol, so
+  native worker upgrades are not required. Webots assigns one session ID
+  per robot process and uses its increasing simulation step as the idempotency
+  sequence. Activity discovery prefers the current output-layer owner and
+  checks remaining placements if the first source has no output. Rust web UI
+  compilation, the remote sparse-ingress integration test (including empty and
+  out-of-range frames), existing bounded-ingress and stale-placement tests,
+  API access-control test, and the C++ controller build pass. The live AARNN
+  API image has not been updated, so hosted robot input/output is not yet
+  verified. The compatibility ingress still fails closed when live causal
+  transport is enabled; supporting that profile requires its governed stable
+  sensory data plane, not this compatibility route. Commands: `cargo check
+  --bin web_ui`; `cargo test --lib
+  distributed::tests::orchestrator_sends_audio_directly_to_the_configured_sensory_bridge
+  -- --nocapture`; `cargo test --lib
+  distributed::tests::external_sensory_injection_is_shape_checked_and_admitted_once_without_runner_lock
+  -- --nocapture`; `cargo test --lib
+  distributed::tests::sharded_rebalance_replaces_a_primary_that_no_longer_hosts_the_network
+  -- --nocapture`; `cargo test --bin web_ui
+  tests::api_access_requirement_maps_runtime_routes -- --nocapture`; `cargo test
+  --lib distributed::tests::external_sensory_gateway_enforces_the_configured_bearer
+  -- --nocapture`; `cargo fmt
+  --check`; and `make -C
+  /home/pbisaacs/Developer/neuralmimicry/simulation_environment/webots_world/controllers/nm_api_robot_controller`.
+
 - [x] `2026-09-29 08:21Z` Diagnosed and fixed the frozen output raster as a split data
   source: canvas brightness consumed fresh `GetNetworkActivity` worker polls,
   while the raster only advanced from aggregate cluster snapshots. The worker
@@ -670,6 +699,20 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   --bin web_ui`, `cargo fmt --all -- --check` and `git diff --check` pass with
   repository warnings. Live desktop/cluster Start verification is outstanding;
   the Phase 8 gate remains open.
+- [x] `2026-09-30 00:36Z` Closed the Webots sensory-ingress authorization gap.
+  `NM_PERIPHERAL_INPUT_GRANTS_JSON` now grants per-network rights to explicit
+  authenticated principals; an absent grant or `AuthMode::None` denies input.
+  AER inject/infer/stream and networked LLM mirror input are gated, and
+  `/api/peripheral/input-grants` exposes only the caller's scopes. The
+  placement-aware gRPC endpoint now fails closed if no orchestrator bearer is
+  configured. `CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target cargo test --locked --all-features --bin web_ui` passed all 17 tests;
+  `CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target cargo test --locked --all-features --lib external_sensory_gateway_enforces_the_configured_bearer` passed; `cargo fmt --all` and `git diff --check` passed. The protected Webots token identifies
+  service principal `webots`, scoped to the five configured world networks.
+  Deployment code now provisions the separate gRPC bearer and applies only
+  the orchestrator/Web UI image and environment changes. The production
+  Deployment currently has no shared orchestrator bearer; the new AARNN image,
+  grant map and persistent world are not yet rolled out. Hosted acceptance and
+  stable-causal execution remain open.
 
 ## Validation and acceptance
 
@@ -881,23 +924,48 @@ projection across monotonic cuts for the same assignment, accepts safely
 lagging results, and refreshes if the cut advanced during computation. A
 network/layer reassignment or time rewind still rejects that projection.
 
-The candidate `codex/webots-api-ingress-20260929` branch was reviewed on
-2026-09-30. Its new external sensory gRPC method accepts requests without a
-credential when neither shared bearer variable is configured, and the HTTP
-route grants only general `aarnn:use` access (with `AuthMode::None` also
-bypassing session authentication). This does not establish the separate,
-scoped peripheral-input authorisation required by Section 16.5 and `INV-017`.
-The hosted Webots path is also unverified. Keep that ingress unmerged until a
-revocable peripheral-input grant and hosted acceptance evidence exist.
+The Webots controller's sparse input reached the public `/api/aer/inject`
+endpoint through the generic legacy `SpikeBatch` stream. That endpoint did not
+resolve a placement-selected sensory bridge, so requests to the orchestrator
+could wait indefinitely even though explicit worker targeting worked. Routing
+the sparse frame through the existing ingress RPC preserves bridge selection,
+single-slot admission and prepare/commit idempotency without sending a full
+network snapshot. Returning the first successful activity query could also
+pin a robot to a placement host with no output activity; the API now checks
+the output-layer owner first and falls through only when no output is
+available. The candidate now also requires a separate `NM_PERIPHERAL_INPUT_GRANTS_JSON`
+policy mapping each network ID to authenticated principal IDs. Missing grants
+and `AuthMode::None` deny sensory input; AER inject/infer/stream and networked
+LLM mirror stimulation all check this policy. `GET /api/peripheral/input-grants`
+shows only the caller's scopes. Revocation removes the principal/network pair
+and rolls the Web UI deployment. The gRPC ingress now also rejects requests
+when neither `NM_ORCHESTRATOR_BEARER_TOKEN` nor
+`NM_MANAGEMENT_BEARER_TOKEN` is configured. The existing Webots token resolves
+to service principal `webots`; its deployment grant is limited to
+`celegans_01`, `celegans_02`, `hexapod_01`, `neuralmimicry-shared-snn`, and
+`tenant-aarnn`. The live AARNN Deployment does not yet contain the required
+orchestrator bearer, and the new policy has not been configured or rolled out.
+Hosted acceptance remains unverified, and stable causal execution remains
+explicitly outside this legacy ingress path.
 
 ## Decision Log
 
 - `2026-09-30 / DEC-0085U`: keep the candidate Webots ingress unmerged until
-  external sensory injection enforces a dedicated, scoped and revocable
-  peripheral-input grant. An optional shared bearer plus general `aarnn:use`
-  does not satisfy Section 16.5 or `INV-017`; hosted Webots acceptance is also
-  unverified. The unrelated 64K HWE image-manifest fix may be consolidated
-  independently. Authority: Section 16.5 and `INV-017`.
+  hosted Webots acceptance evidence exists. The ingress must enforce a
+  dedicated, scoped and revocable peripheral-input grant; an optional shared
+  bearer plus general `aarnn:use` does not satisfy Section 16.5 or `INV-017`.
+  The unrelated 64K HWE image-manifest fix may be consolidated independently.
+  Authority: Section 16.5 and `INV-017`.
+
+- `2026-09-30 / DEC-0085V`: gate all external AER sensory input and networked
+  LLM mirror stimulation on the authenticated principal's explicit
+  network-scoped entry in `NM_PERIPHERAL_INPUT_GRANTS_JSON`. The default is
+  deny, including `AuthMode::None`; the authenticated read endpoint reveals
+  only the caller's grants. Remove a principal/network pair and roll out the
+  Web UI Deployment to revoke it. The placement-aware gRPC method separately
+  requires the configured orchestrator bearer. This is deployment-managed
+  authorisation and does not change neural execution or stable-causal
+  semantics. Authority: Section 16.5 and `INV-017`.
 
 - `2026-09-29 / DEC-0085R`: populate the cluster output raster from the same
   bounded worker activity responses that drive cluster neuron brightness.
@@ -914,6 +982,15 @@ revocable peripheral-input grant and hosted acceptance evidence exist.
   place the mesh after graph strokes so activity remains visible. This is a
   presentation-only decision; neural state, admitted stimuli and logical time
   are unaffected. Authority: Sections 16.22 and 21.12.
+- `2026-09-29 / DEC-0085T`: route sparse external `spike_indices` through a
+  trusted orchestrator RPC that invokes the existing placement-selected,
+  bounded Prepare/Commit ingress. Expand indices at the orchestrator using
+  the registered network sensory width, preserve a per-controller session/step
+  identity for retries, and inspect the output-layer owner first when selecting
+  an activity source. This is a legacy-compatibility integration only; live
+  causal execution must use its authoritative peripheral/data-plane admission.
+  Authority: Sections 16.17, 16.18, 16.20, 16.22 and 16.24, and `INV-007`,
+  `INV-015`, `INV-017`.
 - Initial decision: capture/device time plus a versioned mapping determines biological eligibility; USB completion or network arrival time is used only when the device lacks a clock and its uncertainty is recorded. Authority: Sections 3.4 and 16.18.
 - Initial decision: USB AER is a separately sequenced bidirectional peripheral modality that may run concurrently with A/V/HID; it is not an internal shard transport. Authority: Sections 16.15–16.20.
 - Initial decision: browser input is focused/consented and browser global HID output is unavailable. Authority: Sections 16.21 and 16.23.
@@ -1094,3 +1171,12 @@ confirmed that the selected WAV reached the sensory-target worker and
 produced non-zero cluster sensory activity. Full-file completion at this
 worker load remains an open validation item; the Phase 8 workstation-I/O gate
 is not claimed.
+
+The Webots controller and AARNN gateway now share a retry-stable session and
+step identity in the local source tree, and sparse input has a tested path
+through the placement-selected compatibility ingress. This does not yet prove
+hosted robot interaction: the API image must be built and rolled out, the
+updated controller must be installed, and at least one bound robot must show
+acknowledged sensory admission followed by new motor activity. The production
+deployment context was not available in this session, and the stable causal
+sensory path remains an explicit open gate.

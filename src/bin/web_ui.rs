@@ -15,8 +15,8 @@ use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
     ClusterNetworkSnapshotRequest, ConfigUpdate, ControlUpdate, DisplayProjectionRequest,
     NetworkActivityRequest, NetworkActivityResponse, NetworkSnapshotRequest,
-    NetworkSnapshotResponse, NetworkUpdateRequest, SpikeBatch, SpikeIndices, StatusRequest,
-    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    NetworkSnapshotResponse, NetworkUpdateRequest, SensoryInputFrame, SpikeBatch, SpikeIndices,
+    StatusRequest, control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request,
 };
 use aarnn_rust::engine::{EngineSpec, RunnerEngine};
@@ -1564,6 +1564,7 @@ struct AerInjectPayload {
     addr: Option<String>,
     network_id: String,
     node_id: Option<String>,
+    session_id: Option<String>,
     step_index: Option<i64>,
     time_ms: Option<f32>,
     dt_ms: Option<f32>,
@@ -2881,6 +2882,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                   "addr": { "type": "string", "nullable": true, "description": "Orchestrator address; defaults to server config." },
                   "network_id": { "type": "string" },
                   "node_id": { "type": "string", "nullable": true, "description": "Optional specific node target." },
+                  "session_id": { "type": "string", "nullable": true, "maxLength": 128, "description": "Stable input-session identity for retry-safe placement-aware sensory admission." },
                   "step_index": { "type": "integer", "format": "int64", "nullable": true },
                   "time_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional physical time for temporal encoders such as phase coding." },
                   "dt_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional timestep used for temporal encoders when `time_ms` is omitted." },
@@ -2899,6 +2901,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "accepted": { "type": "integer", "format": "uint64" },
               "target": { "type": "string" },
               "network_id": { "type": "string" },
+              "frame_sequence": { "type": "integer", "format": "uint64", "nullable": true },
               "frames": { "type": "integer", "format": "uint64", "nullable": true },
               "mode": { "type": "string", "nullable": true }
             },
@@ -3326,7 +3329,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "post": {
                 "tags": ["network"],
                 "summary": "Inject one AER exchange into a running network",
-                "description": "Injects sensory spikes into the next simulation step. Accepts raw spike transports (`aer_payload_hex`, `spike_indices`) or continuous `input_values` that are encoded using the provided `spike_io` policy.",
+                "description": "Injects sensory spikes into the next simulation step. Sparse `spike_indices` without an explicit `node_id` use the orchestrator's placement-aware bounded sensory admission path; provide a stable `session_id` so retries remain idempotent. Other transports retain the compatibility path. Continuous `input_values` are encoded using the provided `spike_io` policy.",
             "operationId": "injectAerExchange",
             "security": [{ "cookieAuth": [] }],
             "requestBody": {
@@ -5836,11 +5839,17 @@ async fn snapshot(
         }
     };
 
-    let target_addrs =
-        match resolve_network_addrs(addr.clone(), &network_id, query.node_id.clone()).await {
-            Ok(addrs) => addrs,
-            Err(resp) => return resp.into_response(),
-        };
+    let target_addrs = match resolve_network_addrs(
+        addr.clone(),
+        &network_id,
+        query.node_id.clone(),
+        false,
+    )
+    .await
+    {
+        Ok(addrs) => addrs,
+        Err(resp) => return resp.into_response(),
+    };
 
     let mut last_error = String::from("no candidate target attempted");
     for target_addr in target_addrs {
@@ -6718,12 +6727,17 @@ async fn activity(
     };
 
     let target_addrs =
-        match resolve_network_addrs(addr.clone(), &network_id, query.node_id.clone()).await {
+        match resolve_network_addrs(addr.clone(), &network_id, query.node_id.clone(), true).await {
             Ok(addrs) => addrs,
             Err(resp) => return resp.into_response(),
         };
+    // The primary activity candidate is the output-layer owner; one active
+    // fallback is enough to skip a stale compatibility placement without
+    // turning every Webots poll into a full-cluster fan-out.
+    let target_addrs = target_addrs.into_iter().take(2).collect::<Vec<_>>();
 
     let mut last_error = String::from("no candidate target attempted");
+    let mut best_activity: Option<(bool, u64, Value)> = None;
     for target_addr in target_addrs {
         let mut client = match connect_cluster_client(target_addr.clone()).await {
             Ok(client) => client,
@@ -6758,25 +6772,43 @@ async fn activity(
                     })
                     .collect::<Vec<_>>();
 
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "network_id": resp.network_id,
-                        "sim_step": sim_step,
-                        "sim_time_ms": sim_time_ms,
-                        "sensory": { "indices": sensory },
-                        "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
-                        "output": { "indices": output },
-                        "output_history": output_history,
-                        "source": target_addr,
-                    })),
-                )
-                    .into_response();
+                let has_output = !output.is_empty()
+                    || output_history.iter().any(|frame| {
+                        frame
+                            .get("indices")
+                            .and_then(Value::as_array)
+                            .is_some_and(|indices| !indices.is_empty())
+                    });
+                let body = json!({
+                    "network_id": resp.network_id,
+                    "sim_step": sim_step,
+                    "sim_time_ms": sim_time_ms,
+                    "sensory": { "indices": sensory },
+                    "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
+                    "output": { "indices": output },
+                    "output_history": output_history,
+                    "source": target_addr,
+                });
+                if has_output {
+                    return (StatusCode::OK, Json(body)).into_response();
+                }
+                if best_activity
+                    .as_ref()
+                    .is_none_or(|(best_has_output, best_step, _)| {
+                        (has_output, sim_step) > (*best_has_output, *best_step)
+                    })
+                {
+                    best_activity = Some((has_output, sim_step, body));
+                }
             }
             Err(e) => {
                 last_error = format!("activity failed via {}: {}", target_addr, e);
             }
         }
+    }
+
+    if let Some((_, _, body)) = best_activity {
+        return (StatusCode::OK, Json(body)).into_response();
     }
 
     (
@@ -7155,7 +7187,7 @@ async fn export(
         }
     };
 
-    let target_addrs = match resolve_network_addrs(addr.clone(), &network_id, None).await {
+    let target_addrs = match resolve_network_addrs(addr.clone(), &network_id, None, false).await {
         Ok(addrs) => addrs,
         Err(resp) => return resp.into_response(),
     };
@@ -8458,6 +8490,94 @@ async fn aer_inject(
         orchestrator_addr
     };
 
+    // Webots and other external sensor gateways send sparse sensory indices.
+    // Admit those through the orchestrator's bounded placement-aware
+    // Prepare/Commit path instead of the legacy SpikeBatch stream, which is a
+    // worker-to-worker compatibility transport and can stall at the
+    // orchestrator. Explicit worker-target requests retain their legacy
+    // behaviour for compatibility with existing integrations.
+    if payload.node_id.is_none()
+        && payload
+            .aer_payload_hex
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        && payload.input_values.as_ref().is_none_or(Vec::is_empty)
+        && payload.spike_indices.is_some()
+    {
+        let step_index = payload.step_index.unwrap_or(0);
+        if step_index < 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "step_index must be non-negative for external sensory input" })),
+            )
+                .into_response();
+        }
+        let session_id = payload
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("api-{:016x}", fastrand::u64(..)));
+        if session_id.len() > 128 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "session_id must be at most 128 bytes" })),
+            )
+                .into_response();
+        }
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": format!("connect failed: {error}") })),
+                )
+                    .into_response();
+            }
+        };
+        let mut request = authenticated_grpc_request(SensoryInputFrame {
+            schema_version: aarnn_rust::distributed::SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            network_id: payload.network_id.clone(),
+            source_node_id: String::new(),
+            session_id,
+            frame_sequence: step_index as u64,
+            step_index,
+            spikes: Vec::new(),
+            active_spike_indices: payload.spike_indices.unwrap_or_default(),
+            active_spike_indices_present: true,
+        });
+        request.set_timeout(Duration::from_secs(20));
+        return match client.inject_external_sensory_frame(request).await {
+            Ok(response)
+                if response.get_ref().accepted
+                    && response.get_ref().frame_sequence == step_index as u64 =>
+            {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "accepted": 1,
+                        "target": target_addr,
+                        "network_id": payload.network_id,
+                        "frame_sequence": step_index,
+                        "mode": "placement-aware-sensory-ingress",
+                    })),
+                )
+                    .into_response()
+            }
+            Ok(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "orchestrator returned a mismatched sensory-frame acknowledgement" })),
+            )
+                .into_response(),
+            Err(error) => (
+                grpc_status_to_http(&error),
+                Json(json!({ "error": format!("sensory input admission failed: {error}") })),
+            )
+                .into_response(),
+        };
+    }
+
     let batch = match build_aer_batch(
         &target_addr,
         payload.network_id.clone(),
@@ -8737,6 +8857,7 @@ async fn resolve_network_addrs(
     orchestrator_addr: String,
     network_id: &str,
     node_id: Option<String>,
+    prefer_output_owner: bool,
 ) -> Result<Vec<String>, ApiError> {
     let mut client = connect_cluster_client(orchestrator_addr.clone())
         .await
@@ -8786,10 +8907,13 @@ async fn resolve_network_addrs(
 
     // Prefer the node that currently reports the largest shard for this network.
     if let Some(net) = status.networks.iter().find(|n| n.network_id == network_id) {
+        let output_layer = net.num_layers.checked_sub(1);
         let mut ranked = net
             .distribution
             .iter()
             .map(|(nid, range)| {
+                let owns_output = prefer_output_owner
+                    && output_layer.is_some_and(|layer| range.layers.contains(&layer));
                 let covered_layers = range.layers.len();
                 let covered_neurons = range
                     .layer_neuron_counts
@@ -8797,17 +8921,18 @@ async fn resolve_network_addrs(
                     .copied()
                     .map(u64::from)
                     .sum::<u64>();
-                (covered_layers, covered_neurons, nid.clone())
+                (owns_output, covered_layers, covered_neurons, nid.clone())
             })
             .collect::<Vec<_>>();
 
         ranked.sort_by(|a, b| {
             b.0.cmp(&a.0)
                 .then_with(|| b.1.cmp(&a.1))
-                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.3.cmp(&b.3))
         });
 
-        for (_, _, nid) in ranked {
+        for (_, _, _, nid) in ranked {
             if let Some(node) = status
                 .nodes
                 .iter()
@@ -8867,7 +8992,7 @@ async fn resolve_network_addr(
     network_id: &str,
     node_id: Option<String>,
 ) -> Result<String, ApiError> {
-    let targets = resolve_network_addrs(orchestrator_addr, network_id, node_id).await?;
+    let targets = resolve_network_addrs(orchestrator_addr, network_id, node_id, false).await?;
     match targets.first() {
         Some(addr) => Ok(addr.clone()),
         None => Err((
@@ -8995,6 +9120,10 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/aer/infer"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/aer/inject"),
             Some(AccessRequirement::aarnn_use())
         );
         assert_eq!(
