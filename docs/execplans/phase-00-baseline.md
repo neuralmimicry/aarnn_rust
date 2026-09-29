@@ -71,6 +71,23 @@ Repeat the supported scenarios from a clean environment, compare artefacts, insp
 
 ## Progress
 
+- [x] `2026-09-29 13:56Z` Diagnosed the X64 gate in Actions run
+  `36569004274` (job `109407994726`): sm00 now acquires and completes the job;
+  formatting, lint, build and library/browser tests pass, but the all-features
+  integration step fails only
+  `connectome_display_contract_is_exposed_across_supported_ui_sources` at
+  `tests/web_ui_browser_compat.rs:304`. The iOS view correctly chooses
+  `.syntheticColumns` through `views.snapshot`, while the source-contract test
+  recognised only wire-name, upper-camel enum and display-label spellings.
+  Updated the test to recognise Swift's lower-camel property spelling and
+  assert that the iOS view selects both shared snapshots. This changes no
+  runtime or specification semantics. `cargo test --locked --all-features
+  --test web_ui_browser_compat` passes all 14 tests;
+  `cargo fmt --all --check` and `git diff --check` pass.
+- [~] `2026-09-29 13:57Z` Commit and push the test-only correction to `main`, then
+  verify a fresh Unified CI run completes the X64 integration gate and the
+  remaining queued jobs.
+
 - [x] `2026-08-23 12:00Z` Recorded the workspace, manifests, canonical Rust,
   protobuf, UI, persistence and deployment paths with `cargo metadata`, source
   inspection and `rg`; the active cross-review records the dirty-worktree
@@ -212,6 +229,13 @@ Webots Containerfile. Its equivalent bytecode-compilation/removal operation is
 now expressed as a Python `-c` command; both native architectures must pass
 before publication.
 
+The 2026-09-29 Unified CI X64 job reached integration tests after the sm00
+runner recovered. Its only failure was a source-contract assertion that omitted
+Swift's lower-camel `syntheticColumns` spelling. The iOS view already selected
+the shared synthetic and anatomical snapshots; the test now checks those
+bindings directly rather than treating a naming-style difference as a missing
+display mode.
+
 ## Decision Log
 
 - Initial decision: Phase 0 is observational and must not repair known distributed defects. Authority: Section 20.1.
@@ -235,6 +259,11 @@ before publication.
 - `2026-09-28` Keep the Webots Containerfile build step compatible with Podman
   by avoiding BuildKit-only heredoc syntax while preserving the bytecode-only
   package transformation.
+- `2026-09-29` Preserve the iOS display contract and extend the cross-product
+  source test to recognise its existing lower-camel Swift property spelling;
+  explicitly assert the iOS view selects both shared display snapshots.
+  Authority: Phase 0's CI safety net and unchanged cross-product display
+  contract.
 
 ## Outcomes & Retrospective
 

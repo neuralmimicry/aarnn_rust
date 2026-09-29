@@ -304,6 +304,7 @@ fn connectome_display_contract_is_exposed_across_supported_ui_sources() {
         assert!(
             source.contains("synthetic_columns")
                 || source.contains("SyntheticColumns")
+                || source.contains("syntheticColumns")
                 || source.contains("Synthetic columns"),
             "synthetic display mode is missing from one UI source"
         );
@@ -325,6 +326,9 @@ fn connectome_display_contract_is_exposed_across_supported_ui_sources() {
     );
     assert!(
         ios_view.contains("AarnnConnectomeView")
+            && ios_view.contains("views.snapshot(for:")
+            && ios_view.contains(".syntheticColumns")
+            && ios_view.contains(".anatomical")
             && ios_view.contains("pointsMM")
             && ios_view.contains("snapshot.markers")
             && ios_view.contains("radiusMM")
