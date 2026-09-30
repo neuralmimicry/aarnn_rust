@@ -5148,6 +5148,9 @@ impl NodeState {
 pub struct DistributedNode {
     pub state: Arc<RwLock<NodeState>>,
     pub system: Arc<RwLock<System>>,
+    /// Serializes placement passes so heartbeats can request work without
+    /// stacking redundant rebalances behind a slow planner pass.
+    rebalance_gate: Arc<tokio::sync::Mutex<()>>,
     /// Node-owned management dispatch registry. Keeping this handle on the
     /// node makes live-runtime registration explicit and prevents `main` from
     /// accidentally creating a registry disconnected from worker state.
@@ -5259,6 +5262,7 @@ impl DistributedNode {
                     .with_cpu(CpuRefreshKind::everything())
                     .with_memory(MemoryRefreshKind::everything()),
             ))),
+            rebalance_gate: Arc::new(tokio::sync::Mutex::new(())),
             migration_executor_registry:
                 crate::migration_executor::MigrationExecutorRegistry::default(),
             stable_shard_data_plane,
@@ -8788,6 +8792,26 @@ impl DistributedNode {
     }
 
     pub async fn rebalance_networks(&self) {
+        let _guard = self.rebalance_gate.clone().lock_owned().await;
+        self.rebalance_networks_locked().await;
+    }
+
+    /// Queue a single placement pass without putting it on the worker's
+    /// heartbeat response path. The gate is acquired before spawning so
+    /// repeated worker reports cannot create a backlog of full placement
+    /// calculations.
+    fn schedule_rebalance(&self) {
+        let Ok(guard) = self.rebalance_gate.clone().try_lock_owned() else {
+            return;
+        };
+        let node = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            node.rebalance_networks_locked().await;
+        });
+    }
+
+    async fn rebalance_networks_locked(&self) {
         let transition_now = std::time::Instant::now();
         let autonomous_transition_plans: Vec<_> = {
             let state = self.state.read().await;
@@ -11160,7 +11184,7 @@ impl DistributedNeuromorphic for DistributedNode {
             }
         }
         if needs_rebalance {
-            self.rebalance_networks().await;
+            self.schedule_rebalance();
         }
         response
     }
@@ -12655,6 +12679,56 @@ mod tests {
                 .last_heartbeat
                 .contains_key("pruned-worker")
         );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_response_does_not_wait_for_an_active_rebalance() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        {
+            let mut state = node.state.write().await;
+            state.nodes.insert(
+                "worker-a".to_owned(),
+                NodeStatus {
+                    node_id: "worker-a".to_owned(),
+                    address: "127.0.0.1:65534".to_owned(),
+                    ..Default::default()
+                },
+            );
+            state
+                .last_heartbeat
+                .insert("worker-a".to_owned(), std::time::Instant::now());
+        }
+
+        // A new network observation requests placement work. Hold the
+        // rebalance gate to model a planner pass already running; the worker
+        // still needs its acknowledgement within the heartbeat RPC budget.
+        let _rebalance_guard = node.rebalance_gate.clone().lock_owned().await;
+        let request = HeartbeatRequest {
+            node_id: "worker-a".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: HashMap::from([(
+                "new-network".to_owned(),
+                NetworkResources {
+                    num_neurons: 2,
+                    layer_neuron_counts: HashMap::from([(0, 2)]),
+                    avg_step_time_ms: 1.0,
+                    load_fingerprint: 0,
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            node.heartbeat(Request::new(request)),
+        )
+        .await
+        .expect("heartbeat must not wait for placement work")
+        .expect("registered worker heartbeat succeeds")
+        .into_inner();
+        assert!(response.acknowledged);
     }
 
     #[cfg(feature = "stable_executor_live")]
