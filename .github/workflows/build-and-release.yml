@@ -38,7 +38,7 @@ on:
         description: "Immutable container build ID to promote (defaults to current SHA)"
         required: false
       container_workload:
-        description: "Container workload to promote"
+        description: "Container workload to build or promote"
         required: false
         type: choice
         options: [orchestrator, node, web-ui]
@@ -853,7 +853,12 @@ jobs:
 
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.variant }}, ${{ matrix.runner_arch }})
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       !inputs.publish_only &&
+       inputs.container_workload != '' &&
+       matrix.workload == inputs.container_workload)
     needs:
       - verify
       - package-linux
@@ -1166,7 +1171,13 @@ jobs:
         (github.event_name == 'push' &&
          needs.container-build.result == 'success' &&
          needs.release-meta.result == 'success') ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_only)
+        (github.event_name == 'workflow_dispatch' && inputs.publish_only) ||
+        (github.event_name == 'workflow_dispatch' &&
+         !inputs.publish_only &&
+         inputs.container_workload != '' &&
+         matrix.workload == inputs.container_workload &&
+         needs.container-build.result == 'success' &&
+         needs.release-meta.result == 'success')
       )
     needs:
       - container-build

@@ -362,6 +362,13 @@ struct AppState {
     /// decisions come from the existing orchestrator Policy; this process-local
     /// registry remains reference-only until Phase 7 authority can replicate it.
     peripheral_sessions: Arc<StdMutex<PeripheralSessionRegistry>>,
+    /// Exact deployment grants remain available in the compatibility profile
+    /// that does not configure persisted management authority.
+    configured_peripheral_input_grants: HashSet<(String, String)>,
+    /// Server-managed virtual simulation gateways are authorised separately
+    /// from workstation peripheral sessions. Brain scope still comes only
+    /// from an exact persisted or deployment-configured PeripheralInput grant.
+    simulation_ingress_principals: HashSet<String>,
     /// In-memory migration journals are used only when the reference web
     /// profile has no `NM_MIGRATION_JOURNAL_DIR`. Production deployments set
     /// that directory so every transition uses the crash-safe journal.
@@ -600,6 +607,7 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         | ("POST", ["api", "fpv", "jobs", _, "cancel"])
         | ("POST", ["api", "fpv", "jobs", _, "retry"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "simulation", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "infer"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "stream"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "llm", "mirror"]) => Some(AccessRequirement::aarnn_use()),
@@ -1852,6 +1860,35 @@ struct PeripheralSessionCreatePayload {
     ttl_secs: u64,
 }
 
+fn simulation_ingress_principals_from_env() -> anyhow::Result<HashSet<String>> {
+    let Some(raw) = env_opt("NM_SIMULATION_INGRESS_PRINCIPALS") else {
+        return Ok(HashSet::new());
+    };
+    parse_simulation_ingress_principals(&raw)
+}
+
+fn parse_simulation_ingress_principals(raw: &str) -> anyhow::Result<HashSet<String>> {
+    let mut principals = HashSet::new();
+    for principal in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if principal.len() > 256 {
+            anyhow::bail!("simulation ingress principals must be at most 256 bytes");
+        }
+        principals.insert(principal.to_owned());
+        if principals.len() > 64 {
+            anyhow::bail!("NM_SIMULATION_INGRESS_PRINCIPALS exceeds the 64-principal bound");
+        }
+    }
+    Ok(principals)
+}
+
+fn is_simulation_ingress_principal(user: &AuthUser, principals: &HashSet<String>) -> bool {
+    user.role == "service_account" && principals.contains(&user.username)
+}
+
 const fn default_peripheral_session_ttl() -> u64 {
     300
 }
@@ -2045,6 +2082,7 @@ async fn main() -> anyhow::Result<()> {
         allowed_origins: cors_allowed_origins_from_env(),
     };
     let peripheral_input_grants = peripheral_input_grants_from_env()?;
+    let simulation_ingress_principals = simulation_ingress_principals_from_env()?;
 
     // The browser management client is enabled only when an explicit
     // persisted orchestrator state path is supplied. This keeps the
@@ -2134,6 +2172,8 @@ async fn main() -> anyhow::Result<()> {
         runtime,
         management,
         peripheral_sessions: Arc::new(StdMutex::new(PeripheralSessionRegistry::default())),
+        configured_peripheral_input_grants: peripheral_input_grants.iter().cloned().collect(),
+        simulation_ingress_principals,
         migration_journals: Arc::new(StdMutex::new(BTreeMap::new())),
         chain,
         token_pricing,
@@ -2225,6 +2265,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/activity", get(activity))
         .route("/export", get(export))
         .route("/aer/inject", post(aer_inject))
+        .route("/simulation/aer/inject", post(aer_simulation_inject))
         .route("/aer/infer", post(aer_infer))
         .route("/aer/stream", post(aer_stream))
         .route("/llm/mirror", post(llm_mirror))
@@ -3516,6 +3557,30 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
             }
           },
+        "/api/simulation/aer/inject": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Inject a virtual simulation sensory frame",
+            "description": "Server-managed virtual simulations only. Requires an authenticated service account on the simulation-ingress allow-list, `aarnn:use`, and an exact brain-scoped PeripheralInput grant. It does not create or accept a workstation PeripheralSession and cannot authorise physical devices. Every frame must provide a stable producer `session_id` and non-negative `step_index` from the shared world clock.",
+            "operationId": "injectSimulationAerExchange",
+            "security": [{ "cookieAuth": [] }, { "bearerAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/AerInjectPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Virtual sensory frame accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
+              "400": { "description": "Invalid payload, missing stable source step/session, or target override.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Service identity or exact brain input grant denied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Target connection or sensory admission unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
         "/api/aer/infer": {
           "post": {
             "tags": ["network"],
@@ -7902,7 +7967,11 @@ fn has_explicit_peripheral_input_grant(
     brain_id: &str,
 ) -> bool {
     let Some(management) = &state.management else {
-        return false;
+        return has_configured_peripheral_input_grant(
+            &state.configured_peripheral_input_grants,
+            principal_id,
+            brain_id,
+        );
     };
     let Ok(management) = management.lock() else {
         return false;
@@ -7914,6 +7983,14 @@ fn has_explicit_peripheral_input_grant(
         brain_id,
         &ManagementCapability::PeripheralInput,
     )
+}
+
+fn has_configured_peripheral_input_grant(
+    grants: &HashSet<(String, String)>,
+    principal_id: &str,
+    brain_id: &str,
+) -> bool {
+    grants.contains(&(principal_id.to_owned(), brain_id.to_owned()))
 }
 
 async fn create_peripheral_session(
@@ -8121,6 +8198,62 @@ fn authorize_peripheral_aer_input(
             now_ts(),
         )
         .map_err(|error| peripheral_failure(StatusCode::FORBIDDEN, error))
+}
+
+fn authorize_simulation_aer_input(
+    state: &AppState,
+    user: &AuthUser,
+    brain_id: &str,
+) -> Result<(), Response> {
+    let allowlisted_service =
+        is_simulation_ingress_principal(user, &state.simulation_ingress_principals);
+    let has_brain_grant = allowlisted_service
+        && has_explicit_peripheral_input_grant(state, &user.username, brain_id.trim());
+    if let Some(message) =
+        simulation_aer_input_denial(state.auth.mode, allowlisted_service, has_brain_grant)
+    {
+        return Err(peripheral_failure(StatusCode::FORBIDDEN, message));
+    }
+    Ok(())
+}
+
+fn simulation_aer_input_denial(
+    auth_mode: AuthMode,
+    allowlisted_service: bool,
+    has_brain_grant: bool,
+) -> Option<&'static str> {
+    if auth_mode == AuthMode::None {
+        Some("simulation ingress is disabled when web authentication is set to none")
+    } else if !allowlisted_service {
+        Some("an allow-listed simulation service identity is required")
+    } else if !has_brain_grant {
+        Some("the simulation service has no exact input grant for this brain")
+    } else {
+        None
+    }
+}
+
+fn validate_simulation_aer_frame_metadata(
+    session_id: Option<&str>,
+    step_index: Option<i64>,
+    has_address_override: bool,
+    has_node_override: bool,
+) -> Result<(), &'static str> {
+    if has_address_override || has_node_override {
+        return Err("simulation ingress does not accept target address or node overrides");
+    }
+    match session_id.map(str::trim).filter(|value| !value.is_empty()) {
+        None => return Err("stable producer session_id is required for simulation ingress"),
+        Some(value) if value.len() > 128 => {
+            return Err("simulation producer session_id must be at most 128 bytes");
+        }
+        Some(_) => {}
+    }
+    match step_index {
+        Some(step) if step >= 0 => Ok(()),
+        Some(_) => Err("simulation step_index must be non-negative"),
+        None => Err("shared-world step_index is required for simulation ingress"),
+    }
 }
 
 async fn aer_infer(
@@ -8841,7 +8974,26 @@ async fn aer_inject(
     Extension(user): Extension<AuthUser>,
     headers: HeaderMap,
     Json(payload): Json<AerInjectPayload>,
-) -> impl IntoResponse {
+) -> Response {
+    aer_inject_with_authority(state, user, headers, payload, false).await
+}
+
+async fn aer_simulation_inject(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(payload): Json<AerInjectPayload>,
+) -> Response {
+    aer_inject_with_authority(state, user, headers, payload, true).await
+}
+
+async fn aer_inject_with_authority(
+    state: Arc<AppState>,
+    user: AuthUser,
+    headers: HeaderMap,
+    payload: AerInjectPayload,
+    simulation_ingress: bool,
+) -> Response {
     if payload.network_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -8849,10 +9001,23 @@ async fn aer_inject(
         )
             .into_response();
     }
-    if let Err(response) =
+    let authorization = if simulation_ingress {
+        authorize_simulation_aer_input(&state, &user, &payload.network_id)
+    } else {
         authorize_peripheral_aer_input(&state, &user, &headers, &payload.network_id)
-    {
+    };
+    if let Err(response) = authorization {
         return response;
+    }
+    if simulation_ingress {
+        if let Err(message) = validate_simulation_aer_frame_metadata(
+            payload.session_id.as_deref(),
+            payload.step_index,
+            payload.addr.is_some(),
+            payload.node_id.is_some(),
+        ) {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
+        }
     }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
@@ -8876,9 +9041,9 @@ async fn aer_inject(
     };
 
     // Sparse external sensory input must enter through the orchestrator's
-    // placement-aware prepare/commit path. The browser-facing route has
-    // already checked the exact PeripheralInput grant and active local
-    // session before this internal service-authenticated RPC is made.
+    // placement-aware prepare/commit path. The HTTP route above has checked
+    // either the workstation's active local session or the explicitly
+    // allow-listed simulation service identity and exact brain grant.
     if payload.node_id.is_none()
         && payload
             .aer_payload_hex
@@ -9445,6 +9610,117 @@ mod tests {
     }
 
     #[test]
+    fn configured_peripheral_input_grants_work_without_management_state_and_stay_scoped() {
+        let grants =
+            parse_peripheral_input_grants_json(r#"[{"principal":"webots","brain_id":"brain-a"}]"#)
+                .expect("valid deployment grant list")
+                .into_iter()
+                .collect::<HashSet<_>>();
+        assert!(has_configured_peripheral_input_grant(
+            &grants, "webots", "brain-a"
+        ));
+        assert!(!has_configured_peripheral_input_grant(
+            &grants, "webots", "brain-b"
+        ));
+        assert!(!has_configured_peripheral_input_grant(
+            &grants,
+            "another-service",
+            "brain-a"
+        ));
+    }
+
+    #[test]
+    fn simulation_ingress_allowlist_accepts_only_bounded_service_principals() {
+        let principals =
+            parse_simulation_ingress_principals("webots, batch-sim, webots").expect("allow-list");
+        assert_eq!(principals.len(), 2);
+        assert!(principals.contains("webots"));
+        assert!(principals.contains("batch-sim"));
+        assert!(parse_simulation_ingress_principals(&"x".repeat(257)).is_err());
+        let too_many = (0..65)
+            .map(|index| format!("sim-{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(parse_simulation_ingress_principals(&too_many).is_err());
+    }
+
+    #[test]
+    fn simulation_ingress_requires_an_allowlisted_service_account() {
+        let principals = HashSet::from(["webots".to_owned()]);
+        let mut user = AuthUser::default();
+        user.username = "webots".to_owned();
+        user.role = "service_account".to_owned();
+        assert!(is_simulation_ingress_principal(&user, &principals));
+
+        user.role = "user".to_owned();
+        assert!(!is_simulation_ingress_principal(&user, &principals));
+        user.role = "service_account".to_owned();
+        user.username = "another-service".to_owned();
+        assert!(!is_simulation_ingress_principal(&user, &principals));
+        assert!(!is_simulation_ingress_principal(&user, &HashSet::new()));
+    }
+
+    #[test]
+    fn simulation_ingress_authorization_fails_closed() {
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::None, true, true),
+            Some("simulation ingress is disabled when web authentication is set to none")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Oidc, false, true),
+            Some("an allow-listed simulation service identity is required")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Local, true, false),
+            Some("the simulation service has no exact input grant for this brain")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Oidc, true, true),
+            None
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Local, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn simulation_ingress_requires_stable_identity_and_shared_world_step() {
+        assert!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), false, false)
+                .is_ok()
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(None, Some(42), false, false),
+            Err("stable producer session_id is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("  "), Some(42), false, false),
+            Err("stable producer session_id is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some(&"x".repeat(129)), Some(42), false, false),
+            Err("simulation producer session_id must be at most 128 bytes")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), None, false, false),
+            Err("shared-world step_index is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(-1), false, false),
+            Err("simulation step_index must be non-negative")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), true, false),
+            Err("simulation ingress does not accept target address or node overrides")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), false, true),
+            Err("simulation ingress does not accept target address or node overrides")
+        );
+    }
+
+    #[test]
     fn remote_grpc_requests_carry_bearer_credentials() {
         let mut request = Request::new(StatusRequest {});
         attach_grpc_bearer(&mut request, "remote-token");
@@ -9559,6 +9835,13 @@ mod tests {
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/aer/infer"),
             Some(AccessRequirement::aarnn_use())
+        );
+        let simulation_requirement =
+            api_access_requirement(&Method::POST, "/api/simulation/aer/inject");
+        assert_eq!(simulation_requirement, Some(AccessRequirement::aarnn_use()));
+        assert!(
+            !AuthUser::default()
+                .can_access(simulation_requirement.expect("simulation ingress access requirement"))
         );
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/peripheral/sessions"),

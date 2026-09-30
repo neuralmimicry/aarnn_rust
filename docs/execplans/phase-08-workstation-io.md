@@ -20,6 +20,7 @@ Phases 0–7 must be green, including production fencing and peripheral/federati
 ## Scope
 
 - Implement a secure peripheral gateway and session/binding state machines governed by Phase 7 resources, grants, generations and actuator leases.
+- Implement a separate server-managed virtual-simulation ingress for allow-listed workload identities. Reuse exact brain-scoped input grants; do not bypass or weaken workstation PeripheralSession/local-consent checks.
 - Implement versioned external-clock calibration with drift, uncertainty, discontinuity, late policy and immutable capture-to-logical-time mapping.
 - Implement bounded modality pipelines and deterministic transducers for microphone/audio, camera/video, display capture, focused keyboard and pointer input.
 - Implement a bidirectional USB AER adapter with device capability negotiation, address/event mapping, device or host capture timestamps, sequence/CRC/overflow evidence, bounded asynchronous transfers, hot-plug epochs and independent input/output channels.
@@ -125,6 +126,20 @@ Federation preserves independent `BrainId`, time domains, quotas and authority. 
 
 Implement peripheral session/binding state machines, capability/grant checks and a single-thread reference clock mapper/admission path. Golden-test drift, uncertainty, mapping discontinuity, reorder, duplicate, gap, coalescing and late policies before live devices.
 
+### Milestone 8.1.1 — Persistent virtual-simulation ingress
+
+Add a distinct authenticated server route for virtual-world sensor frames so a
+managed Webots service may continue while browser viewers disconnect. Require
+an allow-listed service-account identity, `aarnn:use`, an exact brain-scoped
+`PeripheralInput` grant, a stable producer session ID and the bounded
+placement-aware sensory admission path. Keep `/api/aer/inject` workstation
+sessions unchanged. The route cannot represent local device consent or permit
+physical/global actuation. Verify denials for auth mode `none`, user identities,
+unlisted services and out-of-scope brains, then verify service/grant revocation
+blocks later frames. Production rollout also requires the service allow-list
+and network grants to be applied together from the simulation_environment
+Ansible profile.
+
 ### Milestone 8.2 — Deterministic sensory transducers and replay
 
 Implement versioned audio, visual, USB-AER, keyboard and pointer transforms with units, parameter provenance and scientific fixtures. Record raw input plus pinned device epoch, clock mapping and transform and prove exact admitted-event replay in the deterministic profile.
@@ -190,6 +205,23 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   the check to `95006716`; production OpenAPI and
   `/api/peripheral/input-grants` were read on 2026-09-30, alongside `sm00`
   controller logs from 09:37–09:39Z.
+
+- [~] `2026-09-30 09:53Z` Accepted ADR-0007 and amended the v1.1 specification
+  to distinguish virtual server-managed simulation input from workstation
+  capture. The integration will use a separate endpoint; local PeripheralSession
+  consent remains mandatory on workstation routes. Implementation and route
+  verification are in progress, and the production feature must remain
+  fail-closed unless both the service identity and exact brain grant are set.
+
+- [~] `2026-09-30 10:05Z` A read-only inspection of the live `aarnn-web-ui`
+  deployment found `NM_PERIPHERAL_INPUT_GRANTS_JSON` configured but no
+  `NM_MANAGEMENT_STATE_PATH`. The compatibility UI therefore has no persisted
+  management policy to consult. Keep exact principal/brain grant checks by
+  falling back to that validated deployment grant list only when persisted
+  management authority is absent; if configured authority exists but cannot be
+  read, deny. This is required for the currently deployed configuration and
+  does not relax workstation-session consent. The AARNN implementation now
+  includes this fallback and scoped tests; production rollout remains pending.
 
 - [~] `2026-09-30 09:45Z` The same live controller journal shows
   `neuralmimicry-shared-snn` sensory frames being admitted (about 1,095 by
@@ -1084,6 +1116,14 @@ acceptance and Phase 7 replicated session authority remain unverified.
   keep production media/AER profiles disabled until Phase 7 authority and
   Phase 8 hardware/client gates pass. Authority: `INV-017`, Sections 16.5,
   16.16, 16.23–16.24 and 21.10/API-013–019.
+- `2026-09-30 / DEC-WEBOTS-SIMULATION-INGRESS` (ADR-0007): server-managed
+  virtual-world sensors use a distinct route guarded by an allow-listed service
+  account, `aarnn:use` and the existing exact brain-scoped `PeripheralInput`
+  policy. This route never creates or impersonates a workstation session and
+  grants no physical device or global actuation access. A viewer disconnect
+  does not stop the server simulation; stopping the world or revoking the grant
+  stops later admission. Authority: explicit persistent-Webots user request,
+  `INV-002`, `INV-007`, `INV-015`, `INV-017`, and ADR-0007.
 - `2026-09-30 / DEC-SHARED-ROBOT-CLOCK`: use one shared monotonic wall-clock
   reference across the robot fleet for pacing, deadline and computation/
   latency measurements. A network with lower neuron count may complete its
