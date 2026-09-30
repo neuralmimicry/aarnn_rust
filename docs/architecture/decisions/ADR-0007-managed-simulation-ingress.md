@@ -45,14 +45,24 @@ the viewer's connection.
    service-principal allow-list and exact brain-scoped grant are configured.
    Log the service principal, network, producer session and source step, never
    the bearer or raw neural payload.
+7. In a multi-robot deployment, use one shared monotonic wall-clock reference
+   for pacing deadlines and measuring per-network computation/communication
+   latency. Record versioned host-clock mappings and uncertainty. A network
+   that finishes a cycle earlier may proceed independently; the shared
+   reference never advances or orders biological events and creates no
+   slowest-network barrier. Each brain retains its own logical clock and
+   source-time mapping, as specified in Section 3.4.
 
 ## Consequences
 
 The server-side ecology can continue after the browser disconnects without
 falsifying workstation consent or introducing a fleet-wide neural barrier.
 Network/API latency affects when a motor output reaches its simulator, while
-the common Webots world clock continues independently. Each AARNN brain keeps
-its own logical time and versioned source-time mapping.
+the common Webots world clock continues independently. Controllers use the
+shared monotonic reference to measure cycle deadlines and per-network latency;
+a faster network need not wait for a slower one. Each AARNN brain keeps its
+own logical time and versioned source-time mapping, and that wall-clock
+reference never determines causal order.
 
 Revocation is enforced on every input request through the authenticated
 principal and existing brain-scoped grant. Rollout must update the API route
