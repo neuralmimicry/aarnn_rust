@@ -122,18 +122,21 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 - [~] `2026-09-29 20:19Z` Added the Webots-to-AARNN sparse sensory ingress
   slice on top of the existing bounded Prepare/Commit bridge. The API now
-  forwards non-worker-targeted sparse `spike_indices` to the orchestrator;
-  the orchestrator expands them against the registered network sensory width
-  before forwarding a dense frame through the existing worker protocol, so
-  native worker upgrades are not required. Webots assigns one session ID
+  forwards non-worker-targeted sparse `spike_indices` to the orchestrator.
+  The initial implementation assumed the orchestrator always retained a
+  registered sensory width and that current workers already served the
+  Prepare/Commit RPCs. The 2026-09-30 live rollout disproved both assumptions:
+  some active network registry entries omit config JSON, and installed native
+  worker binaries predate the RPC. Sparse frames now remain sparse until the
+  selected bridge validates them against its loaded network, and active worker
+  binaries must be rolled forward. Webots assigns one session ID
   per robot process and uses its increasing simulation step as the idempotency
   sequence. Activity discovery prefers the current output-layer owner and
   checks remaining placements if the first source has no output. Rust web UI
   compilation, the remote sparse-ingress integration test (including empty and
   out-of-range frames), existing bounded-ingress and stale-placement tests,
-  API access-control test, and the C++ controller build pass. The live AARNN
-  API image has not been updated, so hosted robot input/output is not yet
-  verified. The compatibility ingress still fails closed when live causal
+  API access-control test, and the C++ controller build pass. The compatibility
+  ingress still fails closed when live causal
   transport is enabled; supporting that profile requires its governed stable
   sensory data plane, not this compatibility route. Commands: `cargo check
   --bin web_ui`; `cargo test --lib
@@ -708,11 +711,15 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   configured. `CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target cargo test --locked --all-features --bin web_ui` passed all 17 tests;
   `CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target cargo test --locked --all-features --lib external_sensory_gateway_enforces_the_configured_bearer` passed; `cargo fmt --all` and `git diff --check` passed. The protected Webots token identifies
   service principal `webots`, scoped to the five configured world networks.
-  Deployment code now provisions the separate gRPC bearer and applies only
-  the orchestrator/Web UI image and environment changes. The production
-  Deployment currently has no shared orchestrator bearer; the new AARNN image,
-  grant map and persistent world are not yet rolled out. Hosted acceptance and
-  stable-causal execution remain open.
+  Deployment code provisions the separate gRPC bearer and network grants. The
+  orchestrator/Web UI images and persistent world were rolled out on
+  2026-09-30; the protected grant endpoint returns exactly the five configured
+  network IDs. The live Webots service is persistent and its controllers are
+  running, but hosted sensory admission failed because the orchestrator could
+  not infer widths from some registry entries and native workers did not yet
+  implement Prepare/Commit. The sparse-frame fix is tested locally; worker and
+  orchestrator image updates and successful motor-output evidence remain open.
+  Stable-causal execution remains outside this compatibility path.
 
 ## Validation and acceptance
 
@@ -943,10 +950,11 @@ when neither `NM_ORCHESTRATOR_BEARER_TOKEN` nor
 `NM_MANAGEMENT_BEARER_TOKEN` is configured. The existing Webots token resolves
 to service principal `webots`; its deployment grant is limited to
 `celegans_01`, `celegans_02`, `hexapod_01`, `neuralmimicry-shared-snn`, and
-`tenant-aarnn`. The live AARNN Deployment does not yet contain the required
-orchestrator bearer, and the new policy has not been configured or rolled out.
-Hosted acceptance remains unverified, and stable causal execution remains
-explicitly outside this legacy ingress path.
+`tenant-aarnn`. The live Deployment now contains the orchestrator bearer and
+grant policy, and the protected grant endpoint returns HTTP 200 for `webots`.
+Live robot input is still failing against pre-RPC worker binaries; hosted
+interaction remains unverified, and stable causal execution remains explicitly
+outside this legacy ingress path.
 
 ## Decision Log
 
@@ -1172,11 +1180,13 @@ produced non-zero cluster sensory activity. Full-file completion at this
 worker load remains an open validation item; the Phase 8 workstation-I/O gate
 is not claimed.
 
-The Webots controller and AARNN gateway now share a retry-stable session and
-step identity in the local source tree, and sparse input has a tested path
-through the placement-selected compatibility ingress. This does not yet prove
-hosted robot interaction: the API image must be built and rolled out, the
-updated controller must be installed, and at least one bound robot must show
-acknowledged sensory admission followed by new motor activity. The production
-deployment context was not available in this session, and the stable causal
-sensory path remains an explicit open gate.
+The Webots controller and AARNN gateway share a retry-stable session and step
+identity, and the hosted `/webots` route and protected broker respond with HTTP
+200/401 respectively (the broker requires an authenticated browser session).
+The AARNN token identifies the `webots` principal and reads its five scoped
+grants. Live rollout logs show that sensory frames are not yet accepted: the
+orchestrator image needs the sparse-width fix and active worker binaries need
+the Prepare/Commit RPC implementation. At least one bound robot must show
+acknowledged sensory admission followed by new motor activity before hosted
+acceptance can pass. Stable-causal sensory execution remains an explicit open
+gate.

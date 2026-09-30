@@ -6170,45 +6170,22 @@ impl DistributedNode {
         step_index: i64,
         active_spike_indices: &[u32],
     ) -> Result<(), String> {
-        let (configured_width, local_ingress) = {
-            let state = self.state.read().await;
-            let configured_width = state
-                .network_registry
-                .get(network_id)
-                .and_then(|status| network_config_from_payload(&status.config_json))
-                .map(|config| config.num_sensory_neurons);
-            (
-                configured_width,
-                state.sensory_ingress_mailboxes.get(network_id).cloned(),
-            )
-        };
-        let sensory_width = configured_width
-            .or_else(|| {
-                local_ingress
-                    .as_ref()
-                    .map(|ingress| lock_external_sensory_ingress(ingress).sensory_width)
-            })
-            .ok_or_else(|| format!("network {network_id} has no known sensory width"))?;
-        if sensory_width > MAX_EXTERNAL_SENSORY_SPIKES {
-            return Err("network sensory width exceeds the external input frame bound".to_owned());
-        }
-        let mut spikes = vec![0i8; sensory_width];
-        for index in active_spike_indices {
-            let Some(spike) = spikes.get_mut(*index as usize) else {
-                return Err(format!(
-                    "external sensory index {index} exceeds network sensory width {sensory_width}"
-                ));
-            };
-            *spike = 1;
-        }
-        self.inject_external_sensory_frame(
-            network_id,
-            session_id,
+        // The orchestrator may know placement without holding a current copy
+        // of the network config or sensory mailbox. Preserve the bounded sparse
+        // frame through routing so the selected I/O bridge can expand and
+        // validate indices against its loaded Runner's authoritative width.
+        let frame = proto::SensoryInputFrame {
+            schema_version: SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            network_id: network_id.to_owned(),
+            source_node_id: String::new(),
+            session_id: session_id.to_owned(),
             frame_sequence,
             step_index,
-            &spikes,
-        )
-        .await
+            spikes: Vec::new(),
+            active_spike_indices: active_spike_indices.to_vec(),
+            active_spike_indices_present: true,
+        };
+        self.inject_external_sensory_payload(frame).await
     }
 
     async fn inject_external_sensory_payload(
@@ -14941,7 +14918,7 @@ mod tests {
                 r#type: proto::network_command::CommandType::LoadNetwork as i32,
                 network_id: "audio-brain".to_owned(),
                 config_json: serde_json::to_vec(&config).expect("encode network config"),
-                layers: vec![0],
+                layers: vec![1],
                 redundant_layers: Vec::new(),
                 desired_aarnn_depth: 1,
                 neuron_model: "aarnn".to_owned(),
@@ -14960,7 +14937,7 @@ mod tests {
                 r#type: proto::network_command::CommandType::LoadNetwork as i32,
                 network_id: "audio-brain".to_owned(),
                 config_json: serde_json::to_vec(&config).expect("encode network config"),
-                layers: vec![1],
+                layers: vec![0],
                 redundant_layers: Vec::new(),
                 desired_aarnn_depth: 1,
                 neuron_model: "aarnn".to_owned(),
@@ -15032,19 +15009,22 @@ mod tests {
                         (
                             "worker-a".to_owned(),
                             LayerRange {
-                                layers: vec![0],
+                                layers: vec![1],
                                 ..Default::default()
                             },
                         ),
                         (
                             "worker-b".to_owned(),
                             LayerRange {
-                                layers: vec![1],
+                                layers: vec![0],
                                 ..Default::default()
                             },
                         ),
                     ]),
-                    config_json: serde_json::to_string(&config).expect("encode config JSON"),
+                    // Live orchestrator registry entries can retain placement
+                    // while omitting the payload; the bridge still owns the
+                    // authoritative sensory width in its loaded Runner.
+                    config_json: String::new(),
                     playing: true,
                     ..Default::default()
                 },
@@ -15139,7 +15119,7 @@ mod tests {
         orchestrator
             .inject_external_sensory_indices("audio-brain", "session-a", 1, 1, &[0])
             .await
-            .expect("sparse sensory indices are expanded before forwarding to the bridge");
+            .expect("sparse sensory indices are expanded by the loaded bridge");
         {
             let state = downstream_worker.state.read().await;
             let ingress = state
