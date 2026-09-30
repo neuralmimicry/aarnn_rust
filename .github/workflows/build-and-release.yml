@@ -131,7 +131,7 @@ jobs:
       github.event_name != 'workflow_dispatch' ||
       (!inputs.run_version_bump && !inputs.sync_wiki && inputs.environment == '' &&
        !inputs.publish_only)
-    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && matrix.runner_arch == 'X64' && 'ubuntu-24.04' || fromJSON(matrix.runs_on) }}
     timeout-minutes: 90
     env:
       # The ARM runner also serves cluster workloads. Bound verification
@@ -340,7 +340,7 @@ jobs:
     name: Release Metadata
     needs: verify
     if: needs.verify.result == 'success'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish_only && 'ubuntu-24.04' || fromJSON('["self-hosted","Linux","X64"]') }}
     defaults:
       run:
         working-directory: repo-build-release
@@ -421,7 +421,7 @@ jobs:
       - verify
       - release-meta
     if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
-    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && matrix.runner_arch == 'X64' && 'ubuntu-24.04' || fromJSON(matrix.runs_on) }}
     # Package and container matrix jobs share the single ARM64 self-hosted
     # runner. The runner itself serializes execution; the lock is unique per
     # Ubuntu artifact so GitHub retains every queued matrix entry instead of
@@ -932,7 +932,7 @@ jobs:
             runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
-    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && matrix.runner_arch == 'X64' && 'ubuntu-24.04' || fromJSON(matrix.runs_on) }}
     env:
       # The ARM self-hosted runner also serves live cluster workloads. Keep
       # container package compilation single-threaded so the runner remains
@@ -1185,7 +1185,7 @@ jobs:
       max-parallel: 3
       matrix:
         workload: [orchestrator, node, web-ui]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish_only && 'ubuntu-24.04' || fromJSON('["self-hosted","Linux","X64"]') }}
     env:
       # Recovery publication must point at the immutable build that already
       # exists in GHCR, rather than at the SHA of this recovery dispatch.
