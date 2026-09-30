@@ -826,6 +826,7 @@ fn apply_control_to_managed_network(
                 net.initial_model.clone(),
                 net.initial_learning.clone(),
             );
+            restore_configured_io_dimensions(&mut runner, &net.initial_config, &net.id);
             if !net.assigned_layers.is_empty() {
                 if let (Some(min), Some(max)) = (
                     net.assigned_layers.iter().min(),
@@ -1369,6 +1370,55 @@ fn network_config_shape_compatible(
         && current_cfg.num_hidden_per_layer_initial == requested_cfg.num_hidden_per_layer_initial
         && current_cfg.num_output_neurons == requested_cfg.num_output_neurons
         && current_cfg.io_channels_are_biological == requested_cfg.io_channels_are_biological
+}
+
+/// Materialize configured I/O slots on a distributed runner after load.
+///
+/// `Runner::new` intentionally starts unprofiled biological AARNNs with no
+/// sensory or output neurons so growth can form those populations over time.
+/// A distributed network config, however, is also the I/O contract consumed
+/// by external devices. Preserve any explicit configured dimensions so a
+/// worker reload cannot publish a zero-width sensory mailbox for a network
+/// that was configured for external input.
+fn restore_configured_io_dimensions(runner: &mut Runner, config: &NetworkConfig, network_id: &str) {
+    let previous_sensory = runner.net.num_sensory_neurons;
+    let previous_output = runner.net.num_output_neurons;
+    if config.num_sensory_neurons > runner.net.num_sensory_neurons {
+        let seed = configured_io_resize_seed(network_id, "sensory", config.num_sensory_neurons);
+        runner.resize_sensory_seeded(config.num_sensory_neurons, seed);
+    }
+    if config.num_output_neurons > runner.net.num_output_neurons {
+        let seed = configured_io_resize_seed(network_id, "output", config.num_output_neurons);
+        runner.resize_output_seeded(config.num_output_neurons, seed);
+    }
+    #[cfg(feature = "growth3d")]
+    {
+        runner.target_num_sensory = runner.target_num_sensory.max(config.num_sensory_neurons);
+        runner.target_num_output = runner.target_num_output.max(config.num_output_neurons);
+    }
+    if previous_sensory != runner.net.num_sensory_neurons
+        || previous_output != runner.net.num_output_neurons
+    {
+        nm_log!(
+            "[info] Restored configured I/O dimensions for network {}: sensory {}->{}, output {}->{}",
+            network_id,
+            previous_sensory,
+            runner.net.num_sensory_neurons,
+            previous_output,
+            runner.net.num_output_neurons
+        );
+    }
+}
+
+fn configured_io_resize_seed(network_id: &str, population: &str, width: usize) -> u64 {
+    // Resizing a config-only load must give every worker the same initial I/O
+    // connections. Keep this independent of process-local RNG state.
+    let seed_input = format!("aarnn-explicit-io-v1:{network_id}:{population}:{width}");
+    seed_input
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
 }
 
 /// Number of distributed computational layers. External sensory and motor
@@ -9568,11 +9618,13 @@ impl DistributedNode {
                     net.remote_spike_steps_bwd.clear();
 
                     let mut config_applied = !config_changed;
+                    let mut loaded_config = None;
                     if config_changed {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
                         if let Ok(_snap) =
                             crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
                         {
+                            loaded_config = Some(_snap.net.clone());
                             #[cfg(feature = "growth3d")]
                             let has_snapshot_topo = _snap.topo.is_some();
                             match net.runner.import_network_json(&cfg_str) {
@@ -9605,11 +9657,22 @@ impl DistributedNode {
                             }
                         } else if let Ok(new_cfg) = serde_json::from_str::<NetworkConfig>(&cfg_str)
                         {
+                            loaded_config = Some(new_cfg.clone());
                             net.runner.apply_config(new_cfg);
                             #[cfg(feature = "superdense_executor")]
                             net.superdense.reset();
                             net.last_config_fingerprint = incoming_cfg_fp;
                             config_applied = true;
+                        }
+                    }
+                    if config_applied {
+                        if let Some(config) = loaded_config.as_ref() {
+                            let network_id = net.id.clone();
+                            restore_configured_io_dimensions(&mut net.runner, config, &network_id);
+                            // Store the effective dimensions after snapshot
+                            // matrix reconciliation so Reset recreates the
+                            // same externally visible I/O contract.
+                            net.initial_config = net.runner.net.clone();
                         }
                     }
                     if layers_changed && !cmd.layers.is_empty() {
@@ -9730,6 +9793,7 @@ impl DistributedNode {
                             );
                         }
                     }
+                    restore_configured_io_dimensions(&mut runner, &net_cfg, &cmd.network_id);
 
                     let active_layers = cmd
                         .layers
@@ -9755,6 +9819,7 @@ impl DistributedNode {
                     }
 
                     let network_id = cmd.network_id.clone();
+                    let initial_config = runner.net.clone();
                     let workspace_binding = state.workspace_bindings.get(&network_id).cloned();
                     #[cfg(feature = "replicated_durability")]
                     let durable_owner =
@@ -9884,7 +9949,7 @@ impl DistributedNode {
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
                             playing,
-                            initial_config: net_cfg,
+                            initial_config,
                             initial_model: model,
                             initial_learning: learning,
                             initial_lif: lif,
@@ -15024,6 +15089,9 @@ mod tests {
         let node = DistributedNode::new("test-node".to_string(), true);
         let mut config = NetworkConfig::default();
         config.num_sensory_neurons = 1;
+        config.num_output_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 4;
         node.handle_command(NetworkCommand {
             r#type: proto::network_command::CommandType::LoadNetwork as i32,
             network_id: "alpha".to_string(),
@@ -15050,9 +15118,12 @@ mod tests {
             )
         };
         let mut locked_network = network.write().await;
-        if locked_network.runner.net.num_sensory_neurons == 0 {
-            locked_network.runner.resize_sensory(1);
-        }
+        assert_eq!(locked_network.runner.net.num_sensory_neurons, 1);
+        assert_eq!(locked_network.runner.net.num_output_neurons, 2);
+        #[cfg(feature = "growth3d")]
+        assert_eq!(locked_network.runner.target_num_sensory, 1);
+        #[cfg(feature = "growth3d")]
+        assert_eq!(locked_network.runner.target_num_output, 2);
         locked_network.playing = true;
         let sensory_len = locked_network.runner.net.num_sensory_neurons;
         lock_external_sensory_ingress(&ingress).sync_network_metadata(&locked_network);
@@ -15082,6 +15153,89 @@ mod tests {
             .await
             .expect_err("a frame wider than the single sensory input must be rejected");
         assert!(error.contains("width"));
+    }
+
+    #[tokio::test]
+    async fn worker_reload_restores_explicit_biological_io_from_snapshot_and_reset() {
+        let node = DistributedNode::new("test-node".to_string(), true);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 3;
+        config.num_output_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 4;
+
+        // A fresh biological Runner has empty I/O matrices even though this
+        // snapshot's config declares the external channels the network owns.
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            config.clone(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        let mut snapshot = runner.snapshot();
+        snapshot.net = config.clone();
+        let snapshot_json = serde_json::to_vec(&snapshot).expect("serialize test snapshot");
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "snapshot-io".to_string(),
+            config_json: snapshot_json,
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "aarnn".to_string(),
+            learning_rule: "aarnn".to_string(),
+        })
+        .await;
+
+        let (network, ingress) = {
+            let state = node.state.read().await;
+            (
+                state
+                    .networks
+                    .get("snapshot-io")
+                    .expect("network loaded")
+                    .clone(),
+                state
+                    .sensory_ingress_mailboxes
+                    .get("snapshot-io")
+                    .expect("sensory ingress loaded")
+                    .clone(),
+            )
+        };
+        {
+            let network = network.read().await;
+            assert_eq!(network.runner.net.num_sensory_neurons, 3);
+            assert_eq!(network.runner.net.num_output_neurons, 2);
+            #[cfg(feature = "growth3d")]
+            assert_eq!(network.runner.target_num_sensory, 3);
+            #[cfg(feature = "growth3d")]
+            assert_eq!(network.runner.target_num_output, 2);
+            assert_eq!(
+                lock_external_sensory_ingress(&ingress).sensory_width,
+                network.runner.net.num_sensory_neurons
+            );
+        }
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::Reset as i32,
+            network_id: "snapshot-io".to_string(),
+            config_json: Vec::new(),
+            layers: Vec::new(),
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: String::new(),
+            learning_rule: String::new(),
+        })
+        .await;
+        let network = network.read().await;
+        assert_eq!(network.runner.net.num_sensory_neurons, 3);
+        assert_eq!(network.runner.net.num_output_neurons, 2);
+        assert_eq!(
+            lock_external_sensory_ingress(&ingress).sensory_width,
+            network.runner.net.num_sensory_neurons
+        );
     }
 
     #[test]
