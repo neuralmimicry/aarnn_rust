@@ -888,6 +888,7 @@ async fn distributed_activation_gate_waits_for_command_and_registration_evidence
                 num_neurons: 4,
                 layer_neuron_counts: BTreeMap::from([(0, 4)]).into_iter().collect(),
                 avg_step_time_ms: 1.0,
+                load_fingerprint: 0,
             },
         )])
         .into_iter()
@@ -936,6 +937,7 @@ async fn distributed_activation_gate_waits_for_command_and_registration_evidence
                 num_neurons: 4,
                 layer_neuron_counts: BTreeMap::from([(0, 4)]).into_iter().collect(),
                 avg_step_time_ms: 1.0,
+                load_fingerprint: 0,
             },
         )])
         .into_iter()
@@ -1101,6 +1103,7 @@ async fn distributed_activation_gate_waits_for_all_target_workers() {
                     num_neurons: 4,
                     layer_neuron_counts: BTreeMap::from([(0, 4)]).into_iter().collect(),
                     avg_step_time_ms: 1.0,
+                    load_fingerprint: 0,
                 },
             )])
             .into_iter()
@@ -1154,6 +1157,7 @@ async fn distributed_activation_gate_waits_for_all_target_workers() {
                 num_neurons: 4,
                 layer_neuron_counts: BTreeMap::from([(0, 4)]).into_iter().collect(),
                 avg_step_time_ms: 1.0,
+                load_fingerprint: 0,
             },
         )])
         .into_iter()
@@ -1384,6 +1388,7 @@ async fn remote_migration_activates_real_target_worker_and_reports_durable_regis
                     num_neurons: 4,
                     layer_neuron_counts: HashMap::from([(0, 4)]),
                     avg_step_time_ms: 1.0,
+                    load_fingerprint: 0,
                 },
             )]),
             stable_executors: Vec::new(),
@@ -1478,6 +1483,7 @@ async fn remote_migration_activates_real_target_worker_and_reports_durable_regis
                         num_neurons: 4,
                         layer_neuron_counts: HashMap::from([(0, 4)]),
                         avg_step_time_ms: 1.0,
+                        load_fingerprint: 0,
                     },
                 )]),
                 stable_executors: target_for_driver.get_stable_executor_registrations().await,

@@ -223,6 +223,18 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   step from `230a4ee`. Push and verify a fresh run after consolidation; then
   remove the reviewed Codex branches and worktrees.
 
+- [~] `2026-09-30 08:20Z` The fresh run `36684684809` confirmed the X64 build
+  and lint checks, then exposed 13 test-only `NetworkResources` initializers
+  missing the new `load_fingerprint` field. Added neutral zero fingerprints
+  to those unit and integration fixtures. Reviewed and retained commit
+  `b8b91ad`, which restores explicitly configured biological I/O dimensions
+  after worker reload/reset using deterministic resize seeds. Local
+  verification passed with all features: 558 library tests and 18 web UI
+  tests, the worker-reload I/O regression (1), and compile-only checks for
+  `live_migration_registration` and `stable_activation_heartbeat`; formatting
+  passed. Publish this fix and verify the replacement Actions run before
+  closing the workflow recovery item.
+
 - [x] `2026-09-29 08:21Z` Diagnosed and fixed the frozen output raster as a split data
   source: canvas brightness consumed fresh `GetNetworkActivity` worker polls,
   while the raster only advanced from aggregate cluster snapshots. The worker

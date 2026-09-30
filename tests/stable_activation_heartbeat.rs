@@ -45,6 +45,7 @@ fn network_resources() -> std::collections::HashMap<String, NetworkResources> {
             num_neurons: 2,
             layer_neuron_counts: std::collections::HashMap::from([(0, 2)]),
             avg_step_time_ms: 1.0,
+            load_fingerprint: 0,
         },
     )])
 }
