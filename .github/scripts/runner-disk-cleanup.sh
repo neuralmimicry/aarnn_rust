@@ -90,13 +90,16 @@ cleanup_stale_temp() {
     remove_tree "$candidate"
   done < <(find "$runner_temp" -mindepth 1 -maxdepth 1 -type d -mmin +180 -print0)
 
-  while IFS= read -r -d '' candidate; do
-    if [[ "$candidate" == *"${GITHUB_RUN_ID:-}"* ]]; then
-      continue
-    fi
-    echo "Removing stale temporary Podman directory: $candidate"
-    remove_tree "$candidate"
-  done < <(find /tmp -mindepth 1 -maxdepth 1 -type d -name 'aarnn-p*' -mmin +180 -print0 2>/dev/null)
+  local temp_root
+  for temp_root in /tmp /var/tmp; do
+    while IFS= read -r -d '' candidate; do
+      if [[ "$candidate" == *"${GITHUB_RUN_ID:-}"* ]]; then
+        continue
+      fi
+      echo "Removing stale temporary Podman directory: $candidate"
+      remove_tree "$candidate"
+    done < <(find "$temp_root" -mindepth 1 -maxdepth 1 -type d -name 'aarnn-p*' -mmin +180 -print0 2>/dev/null)
+  done
 }
 
 cleanup_stale_buildah() {
@@ -136,7 +139,7 @@ remove_job_temp_outputs() {
     value="${!variable:-}"
     [[ -n "$value" ]] || continue
     case "$value" in
-      "$runner_temp"/*|/tmp/aarnn-p*) remove_tree "$value" ;;
+      "$runner_temp"/*|/tmp/aarnn-p*|/var/tmp/aarnn-p*) remove_tree "$value" ;;
     esac
   done
 
@@ -159,7 +162,7 @@ prune_job_podman() {
   local graphroot
   graphroot="$(podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || true)"
   case "$graphroot" in
-    "$runner_temp"/*|/tmp/aarnn-ps-*)
+    "$runner_temp"/*|/tmp/aarnn-ps-*|/var/tmp/aarnn-ps-*)
       echo "Pruning isolated rootless Podman storage: $graphroot"
       timeout 120 podman system prune --all --force --volumes || true
       ;;

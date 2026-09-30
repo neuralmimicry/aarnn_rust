@@ -1192,6 +1192,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Prepare self-hosted container runner disk
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
+
       - name: Verify Podman is available
         run: |
           if ! command -v podman >/dev/null 2>&1; then
@@ -1338,6 +1342,11 @@ jobs:
 
           verify_ref "${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
 
+      - name: Clean self-hosted container runner artifacts
+        if: always()
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
+
   container-latest:
     name: Promote Latest Container Aliases
     needs: container-manifest
@@ -1364,6 +1373,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Prepare self-hosted container runner disk
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
 
       - name: Verify Podman is available
         run: |
@@ -1452,6 +1465,11 @@ jobs:
           verify_ref "${image}:latest" "linux/amd64"
           verify_ref "${image}:latest" "linux/arm64"
           echo "Promoted GHCR latest aliases from build ${build}"
+
+      - name: Clean self-hosted container runner artifacts
+        if: always()
+        shell: bash
+        run: bash .github/scripts/runner-disk-cleanup.sh finish
 
   container-promote:
     name: Container Promote

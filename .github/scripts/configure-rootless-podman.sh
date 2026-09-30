@@ -11,9 +11,13 @@ conf_dir="${HOME}/.config/containers"
 # limit (REQ-CI-001).
 job_identity="${GITHUB_JOB:-job}-${BASHPID}"
 job_key="$(printf '%s' "${job_identity}" | sha256sum | cut -c1-12)"
-runtime_dir="/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
-storage_root="/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
-podman_tmp="/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
+# /tmp is a size-limited tmpfs on sm00. Container layers for the three
+# manifest jobs can remain resident long enough to exhaust it before the
+# latest-alias promotion starts. Keep Podman's runroot below 50 characters,
+# but put its potentially multi-gigabyte graphroot on the disk-backed volume.
+runtime_dir="/var/tmp/aarnn-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
+storage_root="/var/tmp/aarnn-ps-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
+podman_tmp="/var/tmp/aarnn-pt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${uid}-${job_key}"
 
 mkdir -p "${conf_dir}"
 rm -rf "${runtime_dir}" "${storage_root}" "${podman_tmp}"
